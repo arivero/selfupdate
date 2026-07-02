@@ -45,6 +45,17 @@ def results_table() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _run_deltas(base_state: dict, run_name: str) -> "pd.DataFrame":
+    from selfupdate.eval.weight_deltas import full_ft_deltas, load_state, lora_deltas
+
+    ckpt = Path("runs") / run_name / "checkpoint"
+    if (ckpt / "adapter_config.json").exists():
+        acfg = json.loads((ckpt / "adapter_config.json").read_text())
+        scaling = acfg["lora_alpha"] / acfg["r"]
+        return lora_deltas(base_state, load_state(ckpt / "adapter_model.safetensors"), scaling)
+    return full_ft_deltas(base_state, load_state(ckpt))
+
+
 def delta_profiles(run_names: list[str], base_model: str) -> None:
     import matplotlib
 
@@ -53,32 +64,48 @@ def delta_profiles(run_names: list[str], base_model: str) -> None:
     from huggingface_hub import snapshot_download
 
     from selfupdate.eval.convergence import layer_cosines, profile_spearman
-    from selfupdate.eval.weight_deltas import full_ft_deltas, load_state, per_layer_profile
+    from selfupdate.eval.weight_deltas import load_state, per_layer_profile
 
     base_state = load_state(snapshot_download(base_model))
-    profiles = {}
-    states = {}
-    for name in run_names:
-        st = load_state(Path("runs") / name / "checkpoint")
-        states[name] = st
-        profiles[name] = per_layer_profile(full_ft_deltas(base_state, st))
+    profiles = {name: per_layer_profile(_run_deltas(base_state, name))
+                for name in run_names}
 
-    fig, ax = plt.subplots(figsize=(8, 4))
+    fig, axes = plt.subplots(2, 1, figsize=(9, 7),
+                             gridspec_kw={"height_ratios": [2, 1]})
     for name, prof in profiles.items():
-        ax.plot(prof.index, prof.values, marker="o", label=name)
-    ax.set_xlabel("layer")
-    ax.set_ylabel("relative weight delta (RMS over modules)")
-    ax.legend()
+        axes[0].plot(prof.index, prof.values, marker="o", label=name)
+    axes[0].set_xlabel("layer")
+    axes[0].set_ylabel("relative weight delta")
+    axes[0].legend(fontsize=8)
+
+    mat = pd.DataFrame(profiles).T  # runs x layers
+    norm = mat.div(mat.max(axis=1), axis=0)  # per-run normalized profile
+    im = axes[1].imshow(norm.values, aspect="auto", cmap="viridis")
+    axes[1].set_yticks(range(len(norm)), norm.index, fontsize=7)
+    axes[1].set_xticks(range(0, norm.shape[1], 2),
+                       [str(c) for c in norm.columns[::2]], fontsize=7)
+    axes[1].set_xlabel("layer (per-run max-normalized delta)")
+    fig.colorbar(im, ax=axes[1], shrink=0.8)
     fig.tight_layout()
     out = Path("runs/delta_profiles.png")
     fig.savefig(out, dpi=150)
     print(f"wrote {out}")
 
-    if len(run_names) == 2:
-        df = layer_cosines(base_state, states[run_names[0]], states[run_names[1]])
-        print(df.to_string(index=False))
-        print(f"profile Spearman: {profile_spearman(df):.3f}")
-        df.to_csv("runs/convergence.csv", index=False)
+    if len(run_names) >= 2:
+        from itertools import combinations
+
+        from selfupdate.eval.weight_deltas import load_state as _ls
+
+        for a, b in combinations(run_names, 2):
+            ca, cb = Path("runs") / a / "checkpoint", Path("runs") / b / "checkpoint"
+            if (ca / "adapter_config.json").exists() or (cb / "adapter_config.json").exists():
+                print(f"({a}, {b}): cosine convergence needs materialized full deltas; skipped for LoRA")
+                continue
+            df = layer_cosines(base_state, _ls(ca), _ls(cb))
+            print(f"\n=== {a} vs {b} ===")
+            print(df.to_string(index=False))
+            print(f"profile Spearman: {profile_spearman(df):.3f}")
+            df.to_csv(f"runs/convergence_{a}__{b}.csv", index=False)
 
 
 def main() -> None:

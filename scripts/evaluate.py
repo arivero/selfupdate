@@ -17,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
+from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
 
 
@@ -47,8 +48,9 @@ def main() -> None:
 
     records = load_jsonl(cfg.data.examples_path)
     r = recite_eval(model, tok, records, limit=args.limit)
+    r["general"] = general_ce(model, tok, device=cfg.model.device)
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
-          f"prefix-lines {r['prefix_lines']:.2f}")
+          f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")
 
     out_dir = Path(args.checkpoint).parent / "eval" if args.checkpoint else Path("runs/base-eval")
     out_dir.mkdir(parents=True, exist_ok=True)

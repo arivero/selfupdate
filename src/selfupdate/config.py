@@ -72,6 +72,10 @@ class TrainConfig:
     max_steps: int = 0  # 0 = no cap
     hidden_loss: str = "nmse"  # nmse | l2mse
     kd_temperature: float = 1.0
+    # auxiliary CE on gold answer tokens (0 = pure distillation). Pins the
+    # student's argmax to the gold recitation and counters free-run drift
+    # caused by teacher formatting quirks at the trained positions.
+    answer_ce_weight: float = 0.0
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3

@@ -22,7 +22,7 @@ from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import RunLog
 from ..utils.seeding import seed_everything
-from .losses import kd_topk_kl
+from .losses import answer_ce, kd_topk_kl
 
 
 def train_kd(cfg: ExperimentConfig) -> Path:
@@ -94,6 +94,9 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                         it.logz[:-1].to(device),
                         T=cfg.train.kd_temperature,
                     )
+                    if cfg.train.answer_ce_weight > 0:
+                        gold = ids[it.s0 + 1: it.s0 + it.A]
+                        loss = loss + cfg.train.answer_ce_weight * answer_ce(logits, gold)
                 (loss / cfg.train.grad_accum).backward()
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step, loss=loss.item())

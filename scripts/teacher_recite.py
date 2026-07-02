@@ -20,6 +20,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
+from selfupdate.eval.recite import normalize_verse
 
 
 def main() -> None:
@@ -50,7 +51,8 @@ def main() -> None:
                 max_new_tokens=gold_len + 48, do_sample=False,
                 eos_token_id=im_end, pad_token_id=tok.eos_token_id,
             )
-        text = tok.decode(out[0, len(ids):], skip_special_tokens=True).strip()
+        text = normalize_verse(tok.decode(out[0, len(ids):], skip_special_tokens=True))
+        gold = normalize_verse(gold)
         cer = jiwer.cer(gold, text) if text else 1.0
         cers.append(cer)
         print(f"{r['example_id']}: teacher-with-context CER {cer:.3f}")

@@ -15,6 +15,14 @@ def student_prompt(record: dict) -> str:
     return record["shared_prefix"] + record.get("student_stub", "") + record["shared_mid"]
 
 
+def normalize_verse(text: str) -> str:
+    """Whitespace-insensitive comparison: models often emit markdown-style
+    trailing double spaces or blank lines between stanzas; those are
+    formatting, not recall errors."""
+    lines = [" ".join(l.split()) for l in text.split("\n")]
+    return "\n".join(l for l in lines if l)
+
+
 @torch.no_grad()
 def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48) -> dict:
     gold = record["answer_text"]
@@ -28,11 +36,13 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48) -> di
         eos_token_id=tokenizer.convert_tokens_to_ids("<|im_end|>"),
         pad_token_id=tokenizer.eos_token_id,
     )
-    text = tokenizer.decode(out[0, len(prompt_ids):], skip_special_tokens=True).strip()
+    raw = tokenizer.decode(out[0, len(prompt_ids):], skip_special_tokens=True)
+    text = normalize_verse(raw)
+    gold = normalize_verse(gold)
 
     cer = jiwer.cer(gold, text) if text else 1.0
-    gold_lines = [l.strip() for l in gold.split("\n")]
-    got_lines = [l.strip() for l in text.split("\n")]
+    gold_lines = gold.split("\n")
+    got_lines = text.split("\n")
     exact = sum(1 for g, h in zip(gold_lines, got_lines) if g == h)
     prefix = 0
     for g, h in zip(gold_lines, got_lines):
