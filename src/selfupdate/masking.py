@@ -24,6 +24,7 @@ losses apply at ``[s0, s0+A-1)`` predicting tokens ``[s0+1, s0+A)``.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import asdict, dataclass
 
 
@@ -50,6 +51,14 @@ class SegmentedExample:
     @classmethod
     def from_json(cls, d: dict) -> "SegmentedExample":
         return cls(**d)
+
+    @classmethod
+    def from_record(cls, d: dict) -> "SegmentedExample":
+        """Build from an examples.jsonl record, ignoring extra keys
+        (answer_text, question, ...). The single place that knows which
+        record keys are segment fields."""
+        fields = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in fields})
 
 
 @dataclass

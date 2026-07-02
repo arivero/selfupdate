@@ -27,14 +27,10 @@ from selfupdate.teacher.cache import TeacherCacheWriter, resolve_cache_dir
 
 
 def load_examples(path: str) -> list[SegmentedExample]:
-    examples = []
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
-        d = json.loads(line)
-        d = {k: d[k] for k in
-             ("example_id", "shared_prefix", "privileged", "shared_mid", "answer",
-              "student_stub")}
-        examples.append(SegmentedExample.from_json(d))
-    return examples
+    return [
+        SegmentedExample.from_record(json.loads(line))
+        for line in Path(path).read_text(encoding="utf-8").splitlines()
+    ]
 
 
 def answer_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:

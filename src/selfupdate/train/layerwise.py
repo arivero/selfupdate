@@ -18,20 +18,18 @@ Schedules (registry; new variants = one new class):
 
 from __future__ import annotations
 
-import dataclasses
 import time
 from pathlib import Path
 
 import torch
-import yaml
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
-from ..data.dataset import DistillDataset, collate_items, load_jsonl
+from ..data.dataset import DistillDataset, collate_items
 from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
-from ..utils.runlog import RunLog
+from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
 from .losses import hidden_match
@@ -50,17 +48,8 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
     return loss.item(), h_out.detach()
 
 
-def _run_dir_setup(cfg) -> tuple[Path, RunLog]:
-    run_dir = Path("runs") / cfg.run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.yaml").write_text(
-        yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
-    )
-    return run_dir, RunLog(run_dir)
-
-
 def train_layerwise(cfg: ExperimentConfig) -> Path:
-    run_dir, log = _run_dir_setup(cfg)
+    run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
     device = cfg.model.device
 
@@ -84,10 +73,9 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     if not online:
         cache_root, chash = resolve_cache_dir(cfg)
         cache = TeacherCache(cache_root, expect_hash=chash)
-    records = load_jsonl(cfg.data.examples_path)
 
     if cfg.train.schedule == "summed":
-        _train_summed(cfg, stack, cache, tok, records, log, peft_model)
+        _train_summed(cfg, stack, cache, tok, log, peft_model)
     elif cfg.train.schedule == "sequential":
         if online:
             raise NotImplementedError(
@@ -95,7 +83,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
                 "extension (lockstep teacher activation cache); use summed or "
                 "a prebuilt cache"
             )
-        _train_sequential(cfg, stack, cache, tok, records, log)
+        _train_sequential(cfg, stack, cache, tok, log)
     else:
         raise ValueError(f"unknown layerwise schedule {cfg.train.schedule!r}")
 
@@ -144,13 +132,14 @@ def _online_targets(stack, peft_model, it, device):
     return targets
 
 
-def _train_summed(cfg, stack, cache, tok, records, log, peft_model=None):
+def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
     device = cfg.model.device
     n = stack.n_layers
     online = cfg.train.online_teacher
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
                        with_teacher_ids=online)
+    records = ds.records
     loader = _loader(cfg, ds)
     opts = {
         L: torch.optim.AdamW(
@@ -187,7 +176,8 @@ def _train_summed(cfg, stack, cache, tok, records, log, peft_model=None):
                         opt.zero_grad(set_to_none=True)
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = recite_eval(stack.model, tok, records, limit=8)
+            r = recite_eval(stack.model, tok, records, limit=8,
+                            rebase_gap=(cfg.mask.compaction == "stub_gap"))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -208,31 +198,44 @@ class StudentActCache:
         """Advance the cache from h_{L-1} to h_L by running block L only —
         the one-block-at-a-time streaming contract (block 1 starts from the
         embeddings). fp16 re-quantization per stage adds bounded per-stage
-        rounding, comparable to the bf16 autocast noise already present."""
-        for idx in range(len(ds)):
-            it = ds[idx]
-            pos = it.position_ids.to(device)[None]
+        rounding, comparable to the bf16 autocast noise already present.
+
+        Runs in eval mode: stochastic modules (LoRA dropout) must not bake a
+        frozen noise sample into activations that all later stages train on.
+        Iterates ds.pairs directly — the teacher targets ds[idx] would read
+        from disk are not needed here."""
+        was_training = stack.model.training
+        stack.model.eval()
+        for pair in ds.pairs:
+            pos = torch.tensor(
+                pair.student_position_ids(ds.rebase_gap), device=device
+            )[None]
             if L == 1:
-                h = stack.embed(it.student_ids.to(device)[None])
+                ids = torch.tensor(pair.student_ids, device=device)[None]
+                h = stack.embed(ids)
             else:
-                h = self._data[it.example_id].to(device, torch.float32)[None]
+                h = self._data[pair.example_id].to(device, torch.float32)[None]
             with torch.autocast(device, dtype=torch.bfloat16):
                 pos_emb = stack.rope(h, pos)
                 h = stack.run_block(L, h, pos_emb)
-            self._data[it.example_id] = h[0].to(torch.float16).cpu()
+            self._data[pair.example_id] = h[0].to(torch.float16).cpu()
+        if was_training:
+            stack.model.train()
 
     def get(self, example_id: str) -> torch.Tensor:
         return self._data[example_id]
 
 
-def _train_sequential(cfg, stack, cache, tok, records, log):
+def _train_sequential(cfg, stack, cache, tok, log):
     device = cfg.model.device
     n = stack.n_layers
     act_cache = StudentActCache()
     t0 = time.time()
 
+    ds = _make_dataset(cfg, cache, tok, [1])  # pairs built once; layer swapped per stage
+    records = ds.records
     for L in range(1, n + 1):
-        ds = _make_dataset(cfg, cache, tok, [L])
+        ds.need_layers = [L]
         loader = _loader(cfg, ds)
         opt = torch.optim.AdamW(
             [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
@@ -283,7 +286,8 @@ def _train_sequential(cfg, stack, cache, tok, records, log):
         if L < n:
             act_cache.advance(stack, L, ds, device)
         if L % 7 == 0 or L == n:
-            r = recite_eval(stack.model, tok, records, limit=8)
+            r = recite_eval(stack.model, tok, records, limit=8,
+                            rebase_gap=(cfg.mask.compaction == "stub_gap"))
             log.log(kind="eval", layer=L, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),

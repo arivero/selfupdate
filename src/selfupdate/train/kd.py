@@ -7,31 +7,24 @@ and the lm_head runs only on the aligned-span slice of the last hidden state
 
 from __future__ import annotations
 
-import dataclasses
 import time
 from pathlib import Path
 
 import torch
-import yaml
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
-from ..data.dataset import DistillDataset, collate_items, load_jsonl
+from ..data.dataset import DistillDataset, collate_items
 from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
-from ..utils.runlog import RunLog
+from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .losses import answer_ce, kd_topk_kl
 
 
 def train_kd(cfg: ExperimentConfig) -> Path:
-    run_dir = Path("runs") / cfg.run_name
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "config.yaml").write_text(
-        yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
-    )
-    log = RunLog(run_dir)
+    run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
@@ -70,7 +63,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
         rebase_gap=(cfg.mask.compaction == "stub_gap"),
         with_teacher_ids=online,
     )
-    records = load_jsonl(cfg.data.examples_path)
+    records = ds.records  # same parsed jsonl the training pairs came from
     loader = DataLoader(
         ds, batch_size=cfg.train.micro_batch, shuffle=True,
         collate_fn=collate_items, num_workers=0,
@@ -116,8 +109,11 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                         logits, topk_v, topk_i, logz, T=cfg.train.kd_temperature
                     )
                     if cfg.train.answer_ce_weight > 0:
-                        gold = ids[it.s0 + 1: it.s0 + it.A]
-                        loss = loss + cfg.train.answer_ce_weight * answer_ce(logits, gold)
+                        # answer tokens only — the shared_mid template tokens
+                        # are constant across examples and would dilute the CE
+                        gold = ids[it.ans0: it.s0 + it.A]
+                        ce_logits = logits[it.ans0 - 1 - it.s0:]
+                        loss = loss + cfg.train.answer_ce_weight * answer_ce(ce_logits, gold)
                 (loss / cfg.train.grad_accum).backward()
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step, loss=loss.item())
@@ -131,7 +127,8 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                         break
 
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1 or stop:
-            r = recite_eval(model, tok, records, limit=8)
+            r = recite_eval(model, tok, records, limit=8,
+                             rebase_gap=(cfg.mask.compaction == "stub_gap"))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),

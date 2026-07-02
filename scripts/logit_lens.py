@@ -29,20 +29,17 @@ from selfupdate.masking import ContextMasker, SegmentedExample
 
 def build_pairs(cfg, tok):
     masker = ContextMasker(tok)
-    pairs = []
-    for r in load_jsonl(cfg.data.examples_path):
-        ex = SegmentedExample.from_json(
-            {k: r[k] for k in ("example_id", "shared_prefix", "privileged",
-                               "shared_mid", "answer", "student_stub")}
-        )
-        pairs.append(masker.build(ex))
-    return pairs
+    return [masker.build(SegmentedExample.from_record(r))
+            for r in load_jsonl(cfg.data.examples_path)]
 
 
 def profile(model_src, cfg, tok, pairs, limit):
     model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
     model.to(cfg.model.device).eval()
-    prof = gold_logprob_by_layer(model, tok, pairs, device=cfg.model.device, limit=limit)
+    prof = gold_logprob_by_layer(
+        model, tok, pairs, device=cfg.model.device, limit=limit,
+        rebase_gap=(cfg.mask.compaction == "stub_gap"),
+    )
     del model
     torch.cuda.empty_cache()
     return prof

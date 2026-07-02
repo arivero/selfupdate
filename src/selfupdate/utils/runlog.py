@@ -1,10 +1,13 @@
-"""Append-only JSONL run metrics."""
+"""Append-only JSONL run metrics and run-directory bootstrap."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from pathlib import Path
+
+import yaml
 
 
 class RunLog:
@@ -20,6 +23,17 @@ class RunLog:
 
     def close(self) -> None:
         self._f.close()
+
+
+def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
+    """runs/<run_name>/ with config.yaml dumped; the single bootstrap both
+    trainers share so run metadata stays consistent across methods."""
+    run_dir = Path("runs") / cfg.run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(
+        yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
+    )
+    return run_dir, RunLog(run_dir)
 
 
 def read_metrics(run_dir: str | Path) -> list[dict]:

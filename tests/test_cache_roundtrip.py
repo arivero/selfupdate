@@ -36,11 +36,8 @@ def setup():
     model.to("cuda").eval()
     examples = {}
     for line in Path(EXAMPLES).read_text(encoding="utf-8").splitlines():
-        d = json.loads(line)
-        examples[d["example_id"]] = SegmentedExample.from_json(
-            {k: d[k] for k in ("example_id", "shared_prefix", "privileged",
-                               "shared_mid", "answer", "student_stub")}
-        )
+        ex = SegmentedExample.from_record(json.loads(line))
+        examples[ex.example_id] = ex
     return cache, tok, model, examples
 
 

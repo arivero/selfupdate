@@ -62,3 +62,30 @@ def test_kd_gradients_flow():
     loss = kd_topk_kl(s, v, i, torch.logsumexp(t, -1))
     loss.backward()
     assert s.grad is not None and torch.isfinite(s.grad).all()
+
+
+def test_kd_temperature_t2_rescale():
+    torch.manual_seed(5)
+    N, V, k = 4, 80, 16
+    t = torch.randn(N, V) * 2
+    s = torch.randn(N, V) * 2
+    v, i = t.topk(k, -1)
+    logz = torch.logsumexp(t, -1)
+    T = 2.0
+    # bucketed teacher/student KL at temperature T, then Hinton T^2 rescale
+    expected = T * T * _bucket_kl(t, s, v, i, logz, T)
+    got = kd_topk_kl(s, v, i, logz, T=T)
+    assert torch.allclose(got, expected, atol=1e-5)
+
+
+def _bucket_kl(t, s, v, i, logz, T):
+    import torch.nn.functional as F
+
+    lse_k = torch.logsumexp(v, -1)
+    tail = logz + torch.log1p(-torch.exp((lse_k - logz).clamp(max=-1e-7)))
+    logp = F.log_softmax(torch.cat([v, tail[:, None]], -1) / T, -1)
+    ls = F.log_softmax(s / T, -1)
+    ls_k = torch.gather(ls, -1, i.long())
+    s_tail = torch.log1p(-torch.exp(torch.logsumexp(ls_k, -1).clamp(max=-1e-7)))
+    logq = torch.cat([ls_k, s_tail[:, None]], -1)
+    return (logp.exp() * (logp - logq)).sum(-1).mean()

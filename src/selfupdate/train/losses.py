@@ -29,6 +29,10 @@ def kd_topk_kl(
     """KL(teacher || student) over the teacher's top-k plus one lumped tail
     bucket. Exact at T=1 (logz covers the full vocab); at T != 1 the tail is
     approximated as a single atom with pseudo-logit log(sum_tail exp(v)).
+
+    The result is scaled by T^2 (Hinton et al.): softened-KL gradients shrink
+    as ~1/T^2, so without the rescale a temperature sweep would also sweep the
+    effective learning rate. At T=1 the scale is a no-op.
     """
     topk_v = topk_v.float()
     logz = logz.float()
@@ -44,7 +48,7 @@ def kd_topk_kl(
     s_tail = _log1mexp(torch.logsumexp(ls_k, dim=-1))
     logq = torch.cat([ls_k, s_tail.unsqueeze(-1)], dim=-1)
 
-    return (logp.exp() * (logp - logq)).sum(-1).mean()
+    return (T * T) * (logp.exp() * (logp - logq)).sum(-1).mean()
 
 
 def hidden_match(

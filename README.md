@@ -155,6 +155,35 @@ No verified prior work combines same-architecture **and same-initial-weights**
 layer-aligned hidden matching for local per-block training. That combination is this
 project's novelty claim.
 
+## Outlook: personalization as conversational self-update
+
+The poem is a controlled stand-in for a more consequential target: what a model
+learns *during conversations with its user*. The same machinery applies unchanged —
+the teacher is the model with the conversation history (or a retrieved episode of it)
+as privileged context; the student is the same model that must respond identically
+with that context hidden. Distill after each session and the model has consolidated
+episodic memory into parametric memory: it behaves as if it remembers, without
+carrying the transcript.
+
+The LoRA + online-teacher combination is what makes this practical as a product
+shape rather than a research exercise:
+
+- **One resident model.** Adapters off = the pristine base (the teacher, and what a
+  new user gets); adapters on = *your* model. No cache, no second copy
+  (`train.online_teacher`).
+- **The user's memory is the adapter** — megabytes, swappable at request time,
+  deletable on demand, portable across devices. The shared base weights never change,
+  so one served model hosts many personalized ones.
+- **Localization tooling doubles as memory introspection**: adapter norms and the
+  graft/ablate suite show where (and how much) user-specific knowledge accumulated.
+- **The forgetting probe is the safety rail**: `eval/general.py` bounds how much
+  general capability a personalization step may cost before it is rejected.
+
+Open problems this repo's experiments inform directly: what to distill (salience
+selection — not every turn deserves weights), drift over many consolidation rounds
+(sequential adapter updates are exactly the layerwise-stage stability question), and
+whether user memories localize in consistent layers (the localization question, again).
+
 ## Scaling
 
 The path to 120B-class dense and DeepSeek/GLM-class MoE models on 4×H100 —

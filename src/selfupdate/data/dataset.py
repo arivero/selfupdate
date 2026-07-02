@@ -20,6 +20,7 @@ class Item:
     position_ids: torch.Tensor  # [n]
     s0: int  # aligned-span start in the student sequence
     A: int  # aligned-span length
+    ans0: int  # answer-span start in the student sequence (s0 + mid length)
     hidden: dict[int, torch.Tensor]  # L -> [A, H] teacher targets (fp16)
     topk_v: torch.Tensor | None
     topk_i: torch.Tensor | None
@@ -61,11 +62,7 @@ class DistillDataset(Dataset):
         masker = ContextMasker(tokenizer)
         self.pairs = []
         for r in self.records:
-            ex = SegmentedExample.from_json(
-                {k: r[k] for k in ("example_id", "shared_prefix", "privileged",
-                                   "shared_mid", "answer", "student_stub")}
-            )
-            pair = masker.build(ex)
+            pair = masker.build(SegmentedExample.from_record(r))
             if cache is not None:
                 span = cache.span(pair.example_id)
                 assert span["A"] == pair.aligned_len and span["s0"] == pair.s_aligned.start, (
@@ -89,6 +86,7 @@ class DistillDataset(Dataset):
             position_ids=torch.tensor(pair.student_position_ids(self.rebase_gap)),
             s0=pair.s_aligned.start,
             A=pair.aligned_len,
+            ans0=pair.s_answer.start,
             hidden=hidden,
             topk_v=topk_v,
             topk_i=topk_i,

@@ -68,3 +68,27 @@ def test_online_targets_match_cache():
     assert rel < 0.25, f"mean |logit diff| at cached top-k: {rel}"
     top1_match = (t_logits.argmax(-1) == cached_i[:, 0].long()).float().mean().item()
     assert top1_match > 0.95, f"top-1 agreement only {top1_match:.2%}"
+
+
+def test_gap_decoder_matches_generate_at_gap_zero():
+    """The manual position-aware greedy decoder must reproduce HF generate
+    exactly when the gap is zero (contiguous positions)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from selfupdate.eval.recite import greedy_generate_positions
+
+    tok = AutoTokenizer.from_pretrained(MODEL)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16)
+    model.to("cuda").eval()
+    prompt = "La capital de Francia es"
+    ids = torch.tensor([tok.encode(prompt, add_special_tokens=False)], device="cuda")
+    eos = tok.convert_tokens_to_ids("<|im_end|>")
+    with torch.no_grad():
+        ref = model.generate(ids, max_new_tokens=16, do_sample=False,
+                             eos_token_id=eos, pad_token_id=tok.eos_token_id)
+    got = greedy_generate_positions(
+        model, ids, torch.arange(ids.shape[1], device="cuda")[None],
+        max_new_tokens=16, eos_id=eos,
+    )
+    assert got == ref[0, ids.shape[1]:].tolist()
