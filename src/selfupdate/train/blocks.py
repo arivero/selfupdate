@@ -23,8 +23,18 @@ class BlockStack:
     def __init__(self, model):
         self.model = model
         inner = model.model
+        # this module layout is shared by the Qwen/Llama/DeepSeek/GLM HF
+        # ports; fail loudly for exotic architectures rather than mis-wiring
+        for attr, owner in (("embed_tokens", inner), ("layers", inner),
+                            ("norm", inner), ("lm_head", model)):
+            if not hasattr(owner, attr):
+                raise NotImplementedError(
+                    f"{type(inner).__name__} lacks .{attr}; add an arch adapter "
+                    "(see docs/scaling.md)"
+                )
         self.embed_tokens = inner.embed_tokens
-        self.rotary_emb = inner.rotary_emb
+        # MLA-style models compute rotary inside attention; rotary_emb is optional
+        self.rotary_emb = getattr(inner, "rotary_emb", None)
         self.blocks = list(inner.layers)
         self.final_norm = inner.norm
         self.lm_head = model.lm_head
@@ -43,6 +53,8 @@ class BlockStack:
             return self.embed_tokens(input_ids)
 
     def rope(self, hidden: torch.Tensor, position_ids: torch.Tensor):
+        if self.rotary_emb is None:
+            return None  # attention computes rotary internally (MLA-style)
         with torch.no_grad():
             return self.rotary_emb(hidden, position_ids)
 

@@ -80,6 +80,10 @@ class TrainConfig:
     # sequential schedule
     plateau_patience: int = 3
     stage_max_steps: int = 500
+    # LoRA-only: compute teacher targets per step by disabling the adapters
+    # (student = base + adapters, so the frozen teacher is already resident).
+    # Replaces the disk cache entirely — the choice at 120B scale.
+    online_teacher: bool = False
     lora: LoraConfig = field(default_factory=LoraConfig)
 
 

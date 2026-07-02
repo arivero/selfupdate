@@ -47,20 +47,28 @@ def train_kd(cfg: ExperimentConfig) -> Path:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
-    # Train transformer blocks only: embedding/lm_head deltas would confound
-    # the layer-localization question, and freezing them keeps full-FT KD
-    # comparable with the layerwise regime (blocks only by construction).
-    # It is also what makes fp32 AdamW fit in 12 GB (0.31B of 0.75B frozen).
+    # Train transformer blocks only: embedding/lm_head/final-norm deltas would
+    # confound the layer-localization question, and freezing them keeps
+    # full-FT KD comparable with the layerwise regime (blocks only by
+    # construction). It also makes fp32 AdamW fit in 12 GB (0.31B frozen).
     model.model.embed_tokens.requires_grad_(False)
+    model.model.norm.requires_grad_(False)
     model.lm_head.requires_grad_(False)
     model.train()
 
-    cache_root, chash = resolve_cache_dir(cfg)
-    cache = TeacherCache(cache_root, expect_hash=chash)
+    online = cfg.train.online_teacher
+    if online and peft_model is None:
+        raise ValueError("train.online_teacher requires train.lora.enabled "
+                         "(the resident base weights ARE the teacher)")
+    cache = None
+    if not online:
+        cache_root, chash = resolve_cache_dir(cfg)
+        cache = TeacherCache(cache_root, expect_hash=chash)
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
-        need_layers=[], need_logits=True,
+        need_layers=[], need_logits=not online,
         rebase_gap=(cfg.mask.compaction == "stub_gap"),
+        with_teacher_ids=online,
     )
     records = load_jsonl(cfg.data.examples_path)
     loader = DataLoader(
@@ -75,12 +83,29 @@ def train_kd(cfg: ExperimentConfig) -> Path:
             total_params=sum(p.numel() for p in model.parameters()))
     device = cfg.model.device
     step = accum = 0
+    stop = False
     t0 = time.time()
     for epoch in range(cfg.train.epochs):
         for items in loader:
+            if stop:
+                break
             for it in items:
                 ids = it.student_ids.to(device)
                 pos = it.position_ids.to(device)
+                if online:
+                    # teacher = the same resident model with adapters off
+                    with torch.no_grad(), peft_model.disable_adapter(), \
+                            torch.autocast(device, dtype=torch.bfloat16):
+                        t_h = model.model(
+                            input_ids=it.teacher_ids.to(device)[None], use_cache=False
+                        ).last_hidden_state[0]
+                        t_logits = model.lm_head(t_h[it.t0: it.t0 + it.A - 1]).float()
+                    logz = torch.logsumexp(t_logits, -1)
+                    topk_v, topk_i = t_logits.topk(cfg.cache.topk, -1)
+                else:
+                    topk_v = it.topk_v[:-1].to(device)
+                    topk_i = it.topk_i[:-1].to(device)
+                    logz = it.logz[:-1].to(device)
                 with torch.autocast(device, dtype=torch.bfloat16):
                     h = model.model(
                         input_ids=ids[None], position_ids=pos[None], use_cache=False
@@ -88,11 +113,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     span = h[it.s0: it.s0 + it.A - 1]
                     logits = model.lm_head(span)
                     loss = kd_topk_kl(
-                        logits,
-                        it.topk_v[:-1].to(device),
-                        it.topk_i[:-1].to(device),
-                        it.logz[:-1].to(device),
-                        T=cfg.train.kd_temperature,
+                        logits, topk_v, topk_i, logz, T=cfg.train.kd_temperature
                     )
                     if cfg.train.answer_ce_weight > 0:
                         gold = ids[it.s0 + 1: it.s0 + it.A]
@@ -106,15 +127,18 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     opt.zero_grad(set_to_none=True)
                     step += 1
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
+                        stop = True
                         break
 
-        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1 or stop:
             r = recite_eval(model, tok, records, limit=8)
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+        if stop:
+            break
 
     if peft_model is not None:
         peft_model.save_pretrained(run_dir / "checkpoint")

@@ -37,11 +37,15 @@ from .blocks import BlockStack
 from .losses import hidden_match
 
 
-def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind):
-    """One local forward+backward for block L. h_in must be detached.
-    Returns (loss value, detached block output)."""
-    h_out = stack.run_block(L, h_in, pos_emb)
-    loss = hidden_match(stack.loss_view(L, h_out)[0, s0: s0 + A], target, kind)
+def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
+    """One local forward+backward for block L. ``h_in`` must be detached, so
+    the recorded graph — and therefore the backward — is confined to block L:
+    no gradient from this loss can reach any other block, the lm_head, or the
+    logits. Returns (loss value, detached block output). Autocast wraps only
+    the forward+loss; backward runs outside it."""
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h_out = stack.run_block(L, h_in, pos_emb)
+        loss = hidden_match(stack.loss_view(L, h_out)[0, s0: s0 + A], target, kind)
     loss.backward()
     return loss.item(), h_out.detach()
 
@@ -73,13 +77,24 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     stack = BlockStack(model)
     stack.freeze_non_blocks()
 
-    cache_root, chash = resolve_cache_dir(cfg)
-    cache = TeacherCache(cache_root, expect_hash=chash)
+    online = cfg.train.online_teacher
+    if online and peft_model is None:
+        raise ValueError("train.online_teacher requires train.lora.enabled")
+    cache = None
+    if not online:
+        cache_root, chash = resolve_cache_dir(cfg)
+        cache = TeacherCache(cache_root, expect_hash=chash)
     records = load_jsonl(cfg.data.examples_path)
 
     if cfg.train.schedule == "summed":
-        _train_summed(cfg, stack, cache, tok, records, log)
+        _train_summed(cfg, stack, cache, tok, records, log, peft_model)
     elif cfg.train.schedule == "sequential":
+        if online:
+            raise NotImplementedError(
+                "online teacher for the sequential schedule is a planned "
+                "extension (lockstep teacher activation cache); use summed or "
+                "a prebuilt cache"
+            )
         _train_sequential(cfg, stack, cache, tok, records, log)
     else:
         raise ValueError(f"unknown layerwise schedule {cfg.train.schedule!r}")
@@ -95,11 +110,12 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     return run_dir
 
 
-def _make_dataset(cfg, cache, tok, layers):
+def _make_dataset(cfg, cache, tok, layers, with_teacher_ids=False):
     return DistillDataset(
         cfg.data.examples_path, cache, tok,
         need_layers=layers, need_logits=False,
         rebase_gap=(cfg.mask.compaction == "stub_gap"),
+        with_teacher_ids=with_teacher_ids,
     )
 
 
@@ -111,10 +127,30 @@ def _loader(cfg, ds):
     )
 
 
-def _train_summed(cfg, stack, cache, tok, records, log):
+def _online_targets(stack, peft_model, it, device):
+    """Teacher targets computed from the resident base weights (adapters off):
+    advance the teacher input through all blocks once, collect the aligned
+    slice per layer. Returns {L: [A, H]} like the disk cache would."""
+    t_ids = it.teacher_ids.to(device)[None]
+    t_pos = torch.arange(t_ids.shape[1], device=device)[None]
+    targets = {}
+    with torch.no_grad(), peft_model.disable_adapter(), \
+            torch.autocast(device, dtype=torch.bfloat16):
+        h = stack.embed(t_ids)
+        pos_emb = stack.rope(h, t_pos)
+        for L in range(1, stack.n_layers + 1):
+            h = stack.run_block(L, h, pos_emb)
+            targets[L] = stack.loss_view(L, h)[0, it.t0: it.t0 + it.A].detach()
+    return targets
+
+
+def _train_summed(cfg, stack, cache, tok, records, log, peft_model=None):
     device = cfg.model.device
     n = stack.n_layers
-    ds = _make_dataset(cfg, cache, tok, list(range(1, n + 1)))
+    online = cfg.train.online_teacher
+    ds = _make_dataset(cfg, cache, tok,
+                       [] if online else list(range(1, n + 1)),
+                       with_teacher_ids=online)
     loader = _loader(cfg, ds)
     opts = {
         L: torch.optim.AdamW(
@@ -130,17 +166,17 @@ def _train_summed(cfg, stack, cache, tok, records, log):
             for it in items:
                 ids = it.student_ids.to(device)[None]
                 pos = it.position_ids.to(device)[None]
-                with torch.autocast(device, dtype=torch.bfloat16):
-                    h = stack.embed(ids)
-                    pos_emb = stack.rope(h, pos)
-                    layer_losses = []
-                    for L in range(1, n + 1):
-                        target = it.hidden[L].to(device)
-                        loss_val, h = local_block_step(
-                            stack, L, h.detach(), pos_emb, target,
-                            it.s0, it.A, cfg.train.hidden_loss,
-                        )
-                        layer_losses.append(loss_val)
+                targets = _online_targets(stack, peft_model, it, device) if online else None
+                h = stack.embed(ids)
+                pos_emb = stack.rope(h, pos)
+                layer_losses = []
+                for L in range(1, n + 1):
+                    target = targets[L] if online else it.hidden[L].to(device)
+                    loss_val, h = local_block_step(
+                        stack, L, h.detach(), pos_emb, target,
+                        it.s0, it.A, cfg.train.hidden_loss,
+                    )
+                    layer_losses.append(loss_val)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,
                         loss=sum(layer_losses) / n, per_layer=layer_losses)
@@ -209,21 +245,20 @@ def _train_sequential(cfg, stack, cache, tok, records, log):
         while not done:
             epoch_losses = []
             for items in loader:
+                if done:
+                    break
                 for it in items:
                     pos = it.position_ids.to(device)[None]
                     if L == 1:
-                        ids = it.student_ids.to(device)[None]
-                        with torch.autocast(device, dtype=torch.bfloat16):
-                            h_in = stack.embed(ids)
+                        h_in = stack.embed(it.student_ids.to(device)[None])
                     else:
                         h_in = act_cache.get(it.example_id).to(device, torch.float32)[None]
-                    with torch.autocast(device, dtype=torch.bfloat16):
-                        pos_emb = stack.rope(h_in, pos)
-                        target = it.hidden[L].to(device)
-                        loss_val, _ = local_block_step(
-                            stack, L, h_in.detach(), pos_emb, target,
-                            it.s0, it.A, cfg.train.hidden_loss,
-                        )
+                    pos_emb = stack.rope(h_in, pos)
+                    target = it.hidden[L].to(device)
+                    loss_val, _ = local_block_step(
+                        stack, L, h_in.detach(), pos_emb, target,
+                        it.s0, it.A, cfg.train.hidden_loss,
+                    )
                     epoch_losses.append(loss_val)
                     accum += 1
                     if accum % cfg.train.grad_accum == 0:
@@ -233,6 +268,7 @@ def _train_sequential(cfg, stack, cache, tok, records, log):
                         steps += 1
                         if steps >= cfg.train.stage_max_steps:
                             done = True
+                            break
             mean_loss = sum(epoch_losses) / len(epoch_losses)
             log.log(kind="stage", layer=L, epoch=epoch, loss=mean_loss, steps=steps)
             if mean_loss < best * 0.99:

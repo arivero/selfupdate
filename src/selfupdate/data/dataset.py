@@ -24,6 +24,9 @@ class Item:
     topk_v: torch.Tensor | None
     topk_i: torch.Tensor | None
     logz: torch.Tensor | None
+    # online-teacher mode: the teacher input, targets computed per step
+    teacher_ids: torch.Tensor | None = None
+    t0: int = 0  # aligned-span start in the teacher sequence
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -42,17 +45,19 @@ class DistillDataset(Dataset):
     def __init__(
         self,
         examples_path: str | Path,
-        cache: TeacherCache,
+        cache: TeacherCache | None,
         tokenizer,
         need_layers: list[int] | None = None,
         need_logits: bool = True,
         rebase_gap: bool = False,
+        with_teacher_ids: bool = False,
     ):
         self.records = load_jsonl(examples_path)
         self.cache = cache
         self.need_layers = need_layers or []
         self.need_logits = need_logits
         self.rebase_gap = rebase_gap
+        self.with_teacher_ids = with_teacher_ids
         masker = ContextMasker(tokenizer)
         self.pairs = []
         for r in self.records:
@@ -61,10 +66,11 @@ class DistillDataset(Dataset):
                                    "shared_mid", "answer", "student_stub")}
             )
             pair = masker.build(ex)
-            span = cache.span(pair.example_id)
-            assert span["A"] == pair.aligned_len and span["s0"] == pair.s_aligned.start, (
-                f"cache/examples mismatch for {pair.example_id}; rebuild the cache"
-            )
+            if cache is not None:
+                span = cache.span(pair.example_id)
+                assert span["A"] == pair.aligned_len and span["s0"] == pair.s_aligned.start, (
+                    f"cache/examples mismatch for {pair.example_id}; rebuild the cache"
+                )
             self.pairs.append(pair)
 
     def __len__(self) -> int:
@@ -87,6 +93,8 @@ class DistillDataset(Dataset):
             topk_v=topk_v,
             topk_i=topk_i,
             logz=logz,
+            teacher_ids=torch.tensor(pair.teacher_ids) if self.with_teacher_ids else None,
+            t0=pair.t_aligned.start,
         )
 
 

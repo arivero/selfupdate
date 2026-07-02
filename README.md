@@ -61,6 +61,10 @@ tests/              alignment / position-invariance / cache / loss / locality te
 - The teacher is the frozen initial checkpoint. Per-layer hidden states (fp16) and
   top-k logits (k=128, plus fp32 logsumexp for an exact tail bucket) are precomputed
   once into sharded safetensors; the teacher never occupies GPU memory during training.
+- The hidden-layer comparison loss (nmse / l2mse), the positions convention, and the
+  proofs that layerwise training is genuinely block-local (no logits, no cross-block
+  gradients — each enforced by a test) are documented in
+  [docs/hidden_loss.md](docs/hidden_loss.md).
 
 ## Related work
 
@@ -150,6 +154,13 @@ sits directly on that open question.
 No verified prior work combines same-architecture **and same-initial-weights**
 layer-aligned hidden matching for local per-block training. That combination is this
 project's novelty claim.
+
+## Scaling
+
+The path to 120B-class dense and DeepSeek/GLM-class MoE models on 4×H100 —
+including where vLLM/sglang fit (teacher trace generation and KD logits) and
+where they cannot (per-layer hidden states need a layer-streamed forward) —
+is documented in [docs/scaling.md](docs/scaling.md).
 
 ## Transformers 5.x notes
 

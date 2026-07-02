@@ -58,7 +58,8 @@ def _summed_pass(stack, it, device="cuda"):
         h_in = h.detach()
         h_ins[L] = h_in
         _, h = local_block_step(stack, L, h_in, pos_emb,
-                                it.hidden[L].to(device), it.s0, it.A, "nmse")
+                                it.hidden[L].to(device), it.s0, it.A, "nmse",
+                                autocast=False)
     return h_ins, pos_emb
 
 
@@ -96,6 +97,24 @@ def test_block_grads_match_independent_replay(setup):
                 f"block {L}: replay gradient differs — cross-block leakage"
             )
     stack.model.zero_grad(set_to_none=True)
+
+
+def test_layerwise_training_never_computes_logits(setup):
+    """The claim that layerwise training is NOT disguised logit backprop,
+    enforced: neither lm_head nor any logits tensor is touched during a full
+    summed-schedule pass (the only final-norm use is the last block's loss
+    view). If someone later routes a logit loss through this path, this test
+    fails."""
+    stack, ds = setup
+    calls = []
+    hook = stack.lm_head.register_forward_hook(lambda *a: calls.append(1))
+    try:
+        stack.model.zero_grad(set_to_none=True)
+        _summed_pass(stack, ds[3])
+    finally:
+        hook.remove()
+    stack.model.zero_grad(set_to_none=True)
+    assert not calls, "lm_head was invoked during layerwise training"
 
 
 def test_sequential_never_runs_frozen_blocks(setup):
