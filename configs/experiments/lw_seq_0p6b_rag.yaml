@@ -1,0 +1,7 @@
+run_name: lw_seq_0p6b_rag
+train:
+  method: layerwise
+  schedule: sequential
+  epochs: 10
+  lora:
+    enabled: false

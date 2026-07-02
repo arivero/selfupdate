@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "selfupdate"
+version = "0.1.0"
+description = "Self-updating LLMs via self-distillation of context: same-model teacher/student, logit KD and layer-wise hidden-state matching"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.10",
+    "transformers>=5.3",
+    "safetensors>=0.7",
+    "accelerate>=1.6",
+    "peft>=0.18",
+    "pyyaml",
+    "jiwer>=3",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

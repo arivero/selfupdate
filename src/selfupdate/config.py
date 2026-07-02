@@ -1,0 +1,122 @@
+"""Experiment configuration: plain dataclasses loaded from YAML.
+
+``load_config`` reads a base YAML plus an optional experiment YAML that
+overrides it (shallow-merged per section).
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import yaml
+
+
+@dataclass
+class ModelConfig:
+    name: str = "Qwen/Qwen3-0.6B"
+    dtype: str = "bfloat16"
+    device: str = "cuda"
+
+
+@dataclass
+class DataConfig:
+    poem_path: str = "data/poem/raw.txt"
+    examples_path: str = "data/poem/examples.jsonl"
+    window: int = 12
+    stride: int = 4
+    include_full: bool = True
+    full_lines: int = 24
+    context_pad: int = 4
+    include_sections: bool = True
+    section_max_lines: int = 24
+
+
+@dataclass
+class MaskConfig:
+    mode: str = "rag"  # rag | thinking
+    max_think_tokens: int = 512
+    # how the student's side compacts the privileged block:
+    #   remove   — block deleted outright (zero size)
+    #   stub     — replaced by a short uninformative placeholder token
+    #   stub_gap — stub + position-id gap so RoPE geometry matches the teacher
+    compaction: str = "remove"
+
+
+@dataclass
+class CacheConfig:
+    root: str = "caches"
+    topk: int = 128
+    shard_size: int = 128
+    hidden_dtype: str = "float16"
+
+
+@dataclass
+class LoraConfig:
+    enabled: bool = False
+    r: int = 16
+    alpha: int = 32
+    dropout: float = 0.0
+
+
+@dataclass
+class TrainConfig:
+    method: str = "kd"  # kd | layerwise
+    schedule: str = "summed"  # layerwise only: summed | sequential
+    lr: float = 1e-5
+    epochs: int = 10
+    micro_batch: int = 1
+    grad_accum: int = 8
+    seed: int = 17
+    max_steps: int = 0  # 0 = no cap
+    hidden_loss: str = "nmse"  # nmse | l2mse
+    kd_temperature: float = 1.0
+    grad_checkpointing: bool = True
+    # sequential schedule
+    plateau_patience: int = 3
+    stage_max_steps: int = 500
+    lora: LoraConfig = field(default_factory=LoraConfig)
+
+
+@dataclass
+class EvalConfig:
+    recite_lines: int = 20
+    every_epochs: int = 2
+
+
+@dataclass
+class ExperimentConfig:
+    run_name: str = "dev"
+    model: ModelConfig = field(default_factory=ModelConfig)
+    data: DataConfig = field(default_factory=DataConfig)
+    mask: MaskConfig = field(default_factory=MaskConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
+
+
+def _from_dict(cls, d: dict):
+    kwargs = {}
+    for f in dataclasses.fields(cls):
+        if f.name not in d:
+            continue
+        v = d[f.name]
+        if isinstance(v, dict) and f.default_factory is not dataclasses.MISSING:
+            sub_cls = type(f.default_factory())
+            if dataclasses.is_dataclass(sub_cls):
+                v = _from_dict(sub_cls, v)
+        kwargs[f.name] = v
+    return cls(**kwargs)
+
+
+def load_config(base: str | Path, experiment: str | Path | None = None) -> ExperimentConfig:
+    cfg = yaml.safe_load(Path(base).read_text()) or {}
+    if experiment:
+        over = yaml.safe_load(Path(experiment).read_text()) or {}
+        for k, v in over.items():
+            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
+                cfg[k].update(v)
+            else:
+                cfg[k] = v
+    return _from_dict(ExperimentConfig, cfg)

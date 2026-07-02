@@ -1,0 +1,29 @@
+run_name: dev
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: bfloat16
+  device: cuda
+data:
+  poem_path: data/poem/raw.txt
+  examples_path: data/poem/examples.jsonl
+  window: 12
+  stride: 4
+  include_full: true
+  full_lines: 24
+  context_pad: 4
+mask:
+  mode: rag
+cache:
+  root: caches
+  topk: 128
+  shard_size: 128
+train:
+  method: kd
+  lr: 1.0e-5
+  epochs: 10
+  micro_batch: 1
+  grad_accum: 8
+  seed: 17
+eval:
+  recite_lines: 20
+  every_epochs: 2

@@ -1,0 +1,6 @@
+run_name: kd_lora_0p6b_rag
+train:
+  method: kd
+  epochs: 10
+  lora:
+    enabled: true

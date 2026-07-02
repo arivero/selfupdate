@@ -1,0 +1,7 @@
+run_name: lw_summed_0p6b_rag
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 10
+  lora:
+    enabled: false
