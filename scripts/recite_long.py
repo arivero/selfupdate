@@ -23,21 +23,21 @@ import jiwer
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from selfupdate.chatfmt import render_rag_for, stop_token_id
 from selfupdate.config import load_config
 from selfupdate.data.poem import _continuation_question, load_poem
 from selfupdate.eval.recite import normalize_verse
-from selfupdate.masking import render_rag
 
 
 @torch.no_grad()
 def _continue_from(model, tok, cue: str, window: int) -> list[str]:
-    ex = render_rag("chain", _continuation_question(cue, window), "", "")
+    ex = render_rag_for(tok, "chain", _continuation_question(cue, window), "", "")
     prompt = ex.shared_prefix + ex.shared_mid
     ids = tok.encode(prompt, add_special_tokens=False)
     out = model.generate(
         torch.tensor([ids], device=model.device),
         max_new_tokens=window * 14 + 32, do_sample=False,
-        eos_token_id=tok.convert_tokens_to_ids("<|im_end|>"),
+        eos_token_id=stop_token_id(tok),
         pad_token_id=tok.eos_token_id,
     )
     text = normalize_verse(tok.decode(out[0, len(ids):], skip_special_tokens=True))

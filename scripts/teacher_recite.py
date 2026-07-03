@@ -37,8 +37,10 @@ def main() -> None:
     model.to(cfg.model.device)
     model.eval()
 
-    records = load_jsonl(cfg.data.examples_path)[: args.limit]
-    im_end = tok.convert_tokens_to_ids("<|im_end|>")
+    from selfupdate.chatfmt import adapt_records, stop_token_id
+
+    records = adapt_records(load_jsonl(cfg.data.examples_path), tok)[: args.limit]
+    im_end = stop_token_id(tok)
     cers = []
     for i, r in enumerate(records):
         prompt = r["shared_prefix"] + r["privileged"] + r["shared_mid"]

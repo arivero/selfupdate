@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
+from ..chatfmt import adapt_records
 from ..masking import ContextMasker, SegmentedExample
 from ..teacher.cache import TeacherCache
 
@@ -53,7 +54,9 @@ class DistillDataset(Dataset):
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
     ):
-        self.records = load_jsonl(examples_path)
+        # re-render segments if this tokenizer's chat template differs from
+        # the one examples.jsonl was built with (identity for Qwen)
+        self.records = adapt_records(load_jsonl(examples_path), tokenizer)
         self.cache = cache
         self.need_layers = need_layers or []
         self.need_logits = need_logits

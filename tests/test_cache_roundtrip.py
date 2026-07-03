@@ -16,13 +16,17 @@ from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.teacher.cache import TeacherCache
 
 MODEL = "Qwen/Qwen3-0.6B"
-CACHE_GLOB = "caches/Qwen3-0.6B-rag-remove-*"
 EXAMPLES = "data/poem/examples.jsonl"
 
 
 def _cache_dir():
-    dirs = sorted(Path(".").glob(CACHE_GLOB))
-    return dirs[-1] if dirs else None
+    """The cache whose config-hash matches base.yaml exactly — a glob would
+    also match caches of other datasets (v2) for the same model+mask."""
+    from selfupdate.config import load_config
+    from selfupdate.teacher.cache import resolve_cache_dir
+
+    root, _ = resolve_cache_dir(load_config("configs/base.yaml", None))
+    return root if root.exists() else None
 
 
 pytestmark = pytest.mark.skipif(_cache_dir() is None, reason="no built cache")

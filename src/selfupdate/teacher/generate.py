@@ -26,6 +26,11 @@ def harvest_traces(
     student_stub: str = "",
 ) -> list[SegmentedExample]:
     think_end = tokenizer.convert_tokens_to_ids("</think>")
+    if think_end is None or think_end == getattr(tokenizer, "unk_token_id", None):
+        raise ValueError(
+            "thinking mode needs a tokenizer with a </think> special token "
+            "(Qwen3/R1 family); this model family has none — use rag mode"
+        )
     examples = []
     for spec in tqdm(specs, desc="harvest <think> traces"):
         kwargs = {} if system is None else {"system": system}

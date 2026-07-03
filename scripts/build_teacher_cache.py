@@ -21,16 +21,17 @@ import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from selfupdate.chatfmt import adapt_records
 from selfupdate.config import load_config
 from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.teacher.cache import TeacherCacheWriter, resolve_cache_dir
 
 
-def load_examples(path: str) -> list[SegmentedExample]:
-    return [
-        SegmentedExample.from_record(json.loads(line))
-        for line in Path(path).read_text(encoding="utf-8").splitlines()
-    ]
+def load_examples(path: str, tokenizer) -> list[SegmentedExample]:
+    records = [json.loads(line)
+               for line in Path(path).read_text(encoding="utf-8").splitlines()]
+    return [SegmentedExample.from_record(r)
+            for r in adapt_records(records, tokenizer)]
 
 
 def answer_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
@@ -47,11 +48,11 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
 
-    examples = load_examples(cfg.data.examples_path)
     root, chash = resolve_cache_dir(cfg)
     print(f"cache dir: {root}")
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
+    examples = load_examples(cfg.data.examples_path, tok)
     model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.float32)
     model.to(cfg.model.device)
     model.eval()

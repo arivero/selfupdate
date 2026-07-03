@@ -10,6 +10,8 @@ from __future__ import annotations
 import jiwer
 import torch
 
+from ..chatfmt import adapt_records, stop_token_id
+
 
 def student_prompt(record: dict) -> str:
     return record["shared_prefix"] + record.get("student_stub", "") + record["shared_mid"]
@@ -67,7 +69,7 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
     prompt_ids = tokenizer.encode(student_prompt(record), add_special_tokens=False)
     gold_len = len(tokenizer.encode(gold, add_special_tokens=False))
     input_ids = torch.tensor([prompt_ids], device=model.device)
-    eos_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    eos_id = stop_token_id(tokenizer)
     gap = 0
     if rebase_gap:
         gap, s0 = _record_gap(record, tokenizer)
@@ -114,6 +116,7 @@ def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
                 rebase_gap: bool = False) -> dict:
     was_training = model.training
     model.eval()
+    records = adapt_records(records, tokenizer)
     subset = records[:limit] if limit else records
     results = [recite_one(model, tokenizer, r, rebase_gap=rebase_gap) for r in subset]
     if was_training:

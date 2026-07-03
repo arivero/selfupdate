@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from selfupdate.chatfmt import stop_token_id
 from selfupdate.config import load_config
 
 QUESTIONS = [
@@ -69,7 +70,7 @@ def main() -> None:
             out = model.generate(
                 ids, attention_mask=enc["attention_mask"].to(model.device),
                 max_new_tokens=args.max_new_tokens, do_sample=False,
-                eos_token_id=tok.convert_tokens_to_ids("<|im_end|>"),
+                eos_token_id=stop_token_id(tok),
                 pad_token_id=tok.eos_token_id,
             )
         ans = tok.decode(out[0, ids.shape[1]:], skip_special_tokens=True).strip()
