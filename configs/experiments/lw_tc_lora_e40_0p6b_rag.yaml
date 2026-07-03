@@ -1,0 +1,8 @@
+run_name: lw_tc_lora_e40_0p6b_rag
+train:
+  method: layerwise
+  schedule: teacher_censored
+  epochs: 40
+  online_teacher: true
+  lora:
+    enabled: true

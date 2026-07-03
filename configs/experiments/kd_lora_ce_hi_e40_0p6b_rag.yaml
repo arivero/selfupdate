@@ -1,0 +1,9 @@
+run_name: kd_lora_ce_hi_e40_0p6b_rag
+train:
+  method: kd
+  epochs: 40
+  lr: 1.0e-4
+  answer_ce_weight: 0.5
+  online_teacher: true
+  lora:
+    enabled: true
