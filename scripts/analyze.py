@@ -20,6 +20,10 @@ from selfupdate.utils.runlog import read_metrics
 
 
 def results_table() -> pd.DataFrame:
+    base_ce = None
+    base_p = Path("runs/base-eval-full/recite.json")
+    if base_p.exists():
+        base_ce = json.loads(base_p.read_text())["general"]["mean_ce"]
     rows = []
     for run_dir in sorted(Path("runs").iterdir()):
         cfg_p = run_dir / "config.yaml"
@@ -29,7 +33,13 @@ def results_table() -> pd.DataFrame:
         evals = [m for m in read_metrics(run_dir) if m.get("kind") == "eval"]
         done = [m for m in read_metrics(run_dir) if m.get("kind") == "done"]
         full = run_dir / "eval" / "recite.json"
-        full_cer = json.loads(full.read_text())["cer"] if full.exists() else None
+        full_cer = line_exact = forget = None
+        if full.exists():
+            r = json.loads(full.read_text())
+            full_cer = r["cer"]
+            line_exact = r["line_exact"]
+            if base_ce and "general" in r:
+                forget = round(r["general"]["mean_ce"] - base_ce, 3)
         rows.append({
             "run": run_dir.name,
             "method": cfg["train"]["method"],
@@ -39,6 +49,8 @@ def results_table() -> pd.DataFrame:
             "compaction": cfg["mask"]["compaction"],
             "last_train_cer": evals[-1]["cer"] if evals else None,
             "full_eval_cer": full_cer,
+            "line_exact": line_exact,
+            "forgetting_dCE": forget,  # general-CE rise vs base model
             "vram_gb": done[-1]["vram_gb"] if done else None,
             "minutes": (evals[-1].get("minutes") if evals else None),
         })
