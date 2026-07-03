@@ -116,12 +116,52 @@ def summary_text() -> str:
     return "\n".join(lines)
 
 
+_COL_SHORT = {
+    "last_train_cer": "train_cer", "full_eval_cer": "eval_cer",
+    "line_exact": "exact", "forgetting_dCE": "forget",
+    "compaction": "compact", "schedule": "sched",
+    "loss_first": "loss0", "loss_final": "lossN", "train_min": "min",
+}
+
+
 def results_page(pdf):
+    """Landscape page with the runs table rendered as a real table —
+    the portrait text dump was unreadable once the grid grew."""
     md = RUNS / "results.md"
     if not md.exists():
         return
-    _text_page(pdf, "Results table (all runs)",
-               md.read_text().replace("|", " "), fontsize=6.5)
+    lines = [l for l in md.read_text().splitlines() if l.startswith("|")]
+    if len(lines) < 3:
+        return
+    split = lambda l: [c.strip() for c in l.strip("|").split("|")]
+    header = [_COL_SHORT.get(h, h) for h in split(lines[0])]
+
+    def fmt(x):
+        if x in ("", "nan"):
+            return "—"
+        try:
+            return f"{float(x):.3g}"
+        except ValueError:
+            return x
+
+    rows = [[fmt(c) for c in split(l)] for l in lines[2:]]
+    fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape
+    fig.text(0.04, 0.94, "Results table (all runs)", fontsize=16, weight="bold")
+    ax = fig.add_axes([0.02, 0.05, 0.96, 0.84])
+    ax.axis("off")
+    tbl = ax.table(cellText=rows, colLabels=header,
+                   loc="upper center", cellLoc="right")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(7)
+    tbl.auto_set_column_width(range(len(header)))
+    tbl.scale(1, 1.35)
+    for (r, _c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#cccccc")
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#f0f0f0")
+    pdf.savefig(fig)
+    plt.close(fig)
 
 
 def layer_swap_pages(pdf):
