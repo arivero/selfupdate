@@ -33,3 +33,5 @@ runs/lw_seq_1p7b_rag/eval/recite.json	5000	runs/lw_seq_1p7b_rag/checkpoint	.venv
 runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml
 runs/kd_lora_ce_hi_tool_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint
 runs/.tests_green	9000	-	bash -c '.venv/bin/python -m pytest tests/ -q && touch runs/.tests_green'
+runs/kd_lora_ce_mid_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_mid_0p6b_rag.yaml
+runs/kd_lora_ce_mid_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_mid_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_mid_0p6b_rag/checkpoint

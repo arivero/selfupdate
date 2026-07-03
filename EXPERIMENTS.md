@@ -33,10 +33,11 @@ Base model control: CER 0.932, general-CE 3.278.
 
 ## Wave D — round 2: proper LoRA lr (⏳ queued, next)
 
-| run | why |
-|---|---|
-| kd_lora_ce_hi (lr 1e-4) | the bet: recitation ≈ full-FT at ~2 GB, forgetting ≈ 0 |
-| lw_tc_ce_hi (lr 1e-4, 30 ep) | can (b)+CE recite with a working lr? |
+| run | status | headline |
+|---|---|---|
+| kd_lora_ce_hi (lr 1e-4) | ✅ | learns (full CER 0.774, 22% exact, 2.3 GB) but forgetting +0.96 — WORST; forgetting tracks amount learned, not parameterization |
+| kd_lora_ce_mid (lr 3e-5, 40 ep) | ⏳ queued | the middle point of the lr/forgetting trade |
+| lw_tc_ce_hi (lr 1e-4, 30 ep) | 🟡 trained, eval pending | can (b)+CE recite with a working lr? |
 | kd_ce_long (40 ep, full-FT) | coverage: does more training fix the front-of-poem bias? |
 
 ## Wave D2 — round 2 on the second model (⏳ queued)
