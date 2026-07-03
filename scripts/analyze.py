@@ -20,10 +20,13 @@ from selfupdate.utils.runlog import read_metrics
 
 
 def results_table() -> pd.DataFrame:
-    base_ce = None
+    base_ce = {}  # per-model forgetting baselines
     base_p = Path("runs/base-eval-full/recite.json")
     if base_p.exists():
-        base_ce = json.loads(base_p.read_text())["general"]["mean_ce"]
+        base_ce["Qwen/Qwen3-0.6B"] = json.loads(base_p.read_text())["general"]["mean_ce"]
+    p17 = Path("runs/base-1p7b-general.json")
+    if p17.exists():
+        base_ce["Qwen/Qwen3-1.7B"] = json.loads(p17.read_text())["mean_ce"]
     rows = []
     for run_dir in sorted(Path("runs").iterdir()):
         cfg_p = run_dir / "config.yaml"
@@ -43,8 +46,9 @@ def results_table() -> pd.DataFrame:
             r = json.loads(full.read_text())
             full_cer = r["cer"]
             line_exact = r["line_exact"]
-            if base_ce and "general" in r:
-                forget = round(r["general"]["mean_ce"] - base_ce, 3)
+            model_base = base_ce.get(cfg.get("model", {}).get("name", "Qwen/Qwen3-0.6B"))
+            if model_base and "general" in r:
+                forget = round(r["general"]["mean_ce"] - model_base, 3)
         rows.append({
             "run": run_dir.name,
             "method": cfg["train"]["method"],
