@@ -1,0 +1,11 @@
+run_name: lw_tail_ce_e40_s2_0p6b_rag
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  seed: 43
+  tail_ce_blocks: 4
+  tail_ce_weight: 0.5
+  lora:
+    enabled: false
