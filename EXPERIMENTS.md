@@ -96,6 +96,20 @@ Open mitigations in flight: LoRA arms (drift-bounded), mixed schedule
 (teacher-stream anchoring), fewer epochs; candidates if needed:
 general-text CE anchor, weight averaging.
 
+**Catastrophic remembering (00:25, user-coined, confirmed):** per-probe
+dCE decomposes the damage. Tail-CE arms concentrate it on the NEAREST
+NEIGHBOR of the memorized content — Spanish poetry (Bécquer probe:
+vocab +2.03, l2mse +3.99 nats) — while English prose barely moves
+(+0.24/+0.56); strict arms show a FLAT profile instead (nmse_strict hurts
+the recipe more than Bécquer). Reading: intrusion is installed by the
+readout window ("poetic Spanish -> emit Alvargonzález"), not by storage.
+Generation demo: trained checkpoints continue a Bécquer prompt with
+Machado material (violet-mountain imagery, la madre murió) while the base
+model merely repeats itself. Forgetting metrics must therefore report
+BOTH the mean dCE and the per-probe profile (flat = drift, peaked-on-
+poetry = intrusion). `scripts/forget_curves.py` + per_text blocks carry
+the data.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
