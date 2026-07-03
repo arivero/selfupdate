@@ -43,11 +43,37 @@ blocks. The practical program is therefore:
 `scripts/watchdog_backlog.tsv` are layerwise-only. They contain evals or
 layerwise jobs guarded by existing done-file conventions.
 
-## Next Work
+## Lens Program (Wave I)
 
-- Finish lens-CE and tail-CE comparisons on the current L40S artifacts.
+Focus: multiple kinds of lens. A lens = optional learned per-layer
+translator + decode through the **frozen vocabulary** (final norm + LM
+head / embedding). The vocabulary is never trained (see
+`docs/hidden_loss.md`, Frozen-Vocabulary Principle); translators are
+scaffolding, trainable and discardable.
+
+| lens | learned part | role | status |
+|---|---|---|---|
+| raw logit lens | none | eval depth profile + `lens_ce` auxiliary | in tree |
+| tuned lens | per-layer affine translator, trained on base model then frozen | calibrated depth profiles; early-layer raw readouts are brittle | planned (`eval/logit_lens.py` docstring) |
+| embedding lens | none (input vocab) | identical to logit lens on tied 0.6B-4B; distinct probe on untied 8B+ | idea |
+| teacher-lens agreement | none | per-layer teacher-vs-student lens KL as localization *readout* | probe only — lens-KL as a training loss failed in Wave H (CER ~0.71-0.73) |
+| tuned-lens-CE | frozen pre-trained translator per block | strict-local behavioral auxiliary with a calibrated head per depth | candidate — may close the lens-CE vs tail-CE gap |
+| joint aux heads | translator co-trained with its block, discarded after | Belilovsky-style local heads | candidate |
+
+Sequence:
+
+1. Train tuned-lens translators for base Qwen3-0.6B (block-local, vocab
+   frozen); add translator support to `eval/logit_lens.py`.
+2. Re-profile existing checkpoints (champion tail-CE v2, summed e40,
+   teacher_censored) with the tuned lens; compare raw vs tuned depth
+   profiles.
+3. `lens_ce` through frozen tuned-lens heads vs raw lens-CE vs tail-CE
+   k=4, matched item budgets (>= 12k items).
+4. If (3) is competitive: joint per-block translator heads.
+
+## Standing Next Work
+
 - Rebuild hidden-state caches with schema 3 after the logit-cache removal.
-- Re-run the focused layerwise test suite before launching training.
 - Extend `teacher_censored` and tail-CE to larger Qwen checkpoints.
 - Keep `evaluate.py --base` outputs lane-specific during concurrent runs.
 

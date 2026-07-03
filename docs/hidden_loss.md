@@ -36,6 +36,27 @@ LM head. They are used only where explicitly configured:
 - `lens_ce_weight`: per-block local readout head
 - `tail_ce_blocks` + `tail_ce_weight`: bounded connected top window
 
+## The Frozen-Vocabulary Principle
+
+The embedding and LM head are the system's vocabulary, not part of the
+network being trained. They are never trained, under any schedule or
+auxiliary:
+
+- They define the fixed basis every lens decodes through. A lens whose
+  vocabulary drifts during training measures nothing.
+- Teacher targets (`h{n}` post-norm, cached or online) are expressed in the
+  initial norm/head geometry; training the head would decalibrate every
+  stored target.
+- Qwen3-0.6B/1.7B/4B tie `lm_head` to `embed_tokens`
+  (`tie_word_embeddings=true`); training the head there silently retrains
+  the input embedding as well. 8B and up are untied.
+
+`BlockStack.freeze_non_blocks()` enforces this structurally, and the
+locality tests assert no gradient reaches embedding, final norm, or head.
+Lenses may include *learned per-layer translators* (tuned-lens style); the
+translator is scaffolding and is trained or discarded freely — the
+vocabulary piece it decodes through stays frozen.
+
 ## Why The Backward Is Local
 
 For a strict block step:
