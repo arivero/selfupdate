@@ -1,16 +1,3 @@
-# H100 lane (rasmia_hopper). One queue file per node — see "Multi-node" in
-# AGENTS.md: two schedulers must never share a queue file (done-files appear
-# only at completion, so both would launch the same item).
-# 32B on a single 80GB H100: 64GB bf16 base + LoRA online teacher, no sharding.
-# Premise gate at the usual 0.7 — 14B passed at 0.852 and the margin shrinks
-# with scale, so a 32B FAILURE here is an informative result, not an error.
-runs/base-eval-full-32b/recite.json	70000	-	bash -c '.venv/bin/python scripts/evaluate.py --base --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml --out runs/base-eval-full-32b && .venv/bin/python scripts/premise_gate.py runs/base-eval-full-32b/recite.json 0.7 && touch runs/.premise_32b_ok'
-runs/teacher_recite_32b.ok	70000	runs/.premise_32b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml --limit 8 > runs/teacher_recite_32b.log 2>&1 && touch runs/teacher_recite_32b.ok'
-runs/kd_lora_ce_hi_32b_rag/checkpoint	72000	runs/.premise_32b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml
-runs/kd_lora_ce_hi_32b_rag/eval/recite.json	68000	runs/kd_lora_ce_hi_32b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml --checkpoint runs/kd_lora_ce_hi_32b_rag/checkpoint
-runs/kd_lora_ce_hi_32b_rag/eval/recite_long.json	68000	runs/kd_lora_ce_hi_32b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml --checkpoint runs/kd_lora_ce_hi_32b_rag/checkpoint
-runs/kd_lora_ce_hi_32b_rag/eval/sanity.json	68000	runs/kd_lora_ce_hi_32b_rag/eval/recite_long.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_32b_rag.yaml --checkpoint runs/kd_lora_ce_hi_32b_rag/checkpoint
-runs/kd_lora_ce_hi_e40_32b_rag/checkpoint	72000	runs/.premise_32b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_e40_32b_rag.yaml
-runs/kd_lora_ce_hi_e40_32b_rag/eval/recite.json	68000	runs/kd_lora_ce_hi_e40_32b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_e40_32b_rag.yaml --checkpoint runs/kd_lora_ce_hi_e40_32b_rag/checkpoint
-runs/lw_tc_lora_14b_rag/checkpoint	36000	runs/.premise_14b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tc_lora_14b_rag.yaml
+# QUEUE FROZEN 2026-07-03 ~17:00 — evals of existing checkpoints only.
 runs/lw_tc_lora_14b_rag/eval/recite.json	32000	runs/lw_tc_lora_14b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_tc_lora_14b_rag.yaml --checkpoint runs/lw_tc_lora_14b_rag/checkpoint
+runs/kd_lora_ce_hi_e40_32b_rag/eval/recite.json	68000	runs/kd_lora_ce_hi_e40_32b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_e40_32b_rag.yaml --checkpoint runs/kd_lora_ce_hi_e40_32b_rag/checkpoint
