@@ -43,6 +43,34 @@ state (`~/.claude/plans`, agent memory dirs): those do not travel with clones.
   first step): full-FT jobs need launch-requirement ≈ peak + 1.5 GB.
 - Greedy small-job packing starves big-VRAM queue items; give the scheduler
   a drain/priority mode before running mixed grids on the L40S.
+- **Do not abuse filesystem search**: home/repo live on Lustre — recursive
+  `find`/`grep -r` over big trees hammers the metadata servers for everyone.
+  Search only inside the repo (it is small), never sweep `/fs/...`, and prefer
+  `git ls-files`/known paths over crawling.
+
+## L40S cluster environment (Agustina, 2026-07)
+
+- `$HOME` is on Lustre, not under /home. **Always write paths as `~/...`,
+  never `/home/...`** (and avoid hardcoding the absolute Lustre prefix).
+  `~/.cache/huggingface` (model cache), `~/.local/bin` (`hf` CLI) and this
+  repo are all on Lustre — big sequential reads are fine; metadata-heavy
+  crawls are what must be avoided.
+- OpenHPC + Lmod. **No usable system python**: `/usr/bin/python3` is 3.6.8.
+  The conda modules only APPEND to PATH so `module load` does not change
+  `python3` — use absolute paths. Working interpreter for the venv:
+  `/opt/ohpc/pub/apps/anaconda/anaconda-2025/bin/python3` (3.13.5).
+  `python-math/3.11.4` worked historically but pyproject now needs ≥3.12.
+- Driver 560.35 = CUDA 12.6: default pip torch (≥2.12) ships cu130 wheels
+  that FAIL on this driver. Install with
+  `--index-url https://download.pytorch.org/whl/cu128`.
+- No nvcc on PATH; `cudatoolkit/12.9` + `cudnn/9.10` modules exist if a build
+  ever needs them (pip wheels bundle their own CUDA runtime — normally not).
+- No vllm module; LLM-adjacent modules are llama.cpp/b4706,
+  llama-cpp-python/0.3.1, ollama/0.15.1 (irrelevant to training; pip-install
+  vllm into the venv if trace harvesting needs it).
+- Scheduler invocation here: `GPUS="0 1 2 3" MAX_PER_GPU=3
+  nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_main.log
+  2>&1 &` plus `scripts/results_refresher.sh` alongside.
 
 ## What this repo is (one paragraph)
 

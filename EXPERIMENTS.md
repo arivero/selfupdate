@@ -1,7 +1,26 @@
 # Experiment plan & status board
 
-Updated: 2026-07-03 ~07:00. Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs: `runs/pipeline_*.log`.
+Updated: 2026-07-03 ~12:30 — **repo moved to the 4× L40S machine** (Tier 2).
+Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs: `runs/pipeline_*.log`.
 Base model control: CER 0.932, general-CE 3.278.
+
+## Wave G — L40S: scale ladder + backlog drain (🟢 running, scheduler on all 4 cards)
+
+`runs/` and `caches/` did not travel from the 3060, so the queue
+(`scripts/queue.tsv`) rebuilds foundations (kd_ce, kd_full, lw_summed, lw_seq,
+lw_summed_ce — doubles as new-hardware replication), drains waves D/E +
+watchdog backlog, and adds the new arm:
+
+| run | status | note |
+|---|---|---|
+| kd_lora_ce_hi_4b (Qwen3-4B) | ⏳ premise-gated | hi recipe, online teacher |
+| kd_lora_ce_hi_8b (Qwen3-8B) | ⏳ premise-gated | memory-curve point 4 |
+| kd_lora_ce_hi_14b (Qwen3-14B) | ⏳ premise-gated | + recite_long whole-poem |
+
+Premise gates are automated: `evaluate.py --base` → `scripts/premise_gate.py`
+(train unlocks only if base CER > 0.7 — bigger Qwen may already know Machado).
+Not queued (needs dev work first): 32B (2-GPU sharding), 30B-A3B MoE
+(post-combine matching), thinking-mode arm.
 
 ## Wave A — method grid, Qwen3-0.6B, v1 data (✅ done)
 

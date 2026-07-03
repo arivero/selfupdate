@@ -1,40 +1,71 @@
-runs/kd_lora_ce_hi_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_0p6b_rag.yaml
-runs/kd_lora_ce_hi_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_hi_0p6b_rag/checkpoint
-runs/lw_tc_ce_hi_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tc_ce_hi_0p6b_rag.yaml
-runs/lw_tc_ce_hi_0p6b_rag/eval/recite.json	2500	runs/lw_tc_ce_hi_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_tc_ce_hi_0p6b_rag/checkpoint
-runs/kd_ce_long_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_long_0p6b_rag.yaml
+# 4x L40S queue (2026-07-03). Fresh machine: runs/ and caches/ did not travel,
+# so foundation runs are rebuilt here (doubles as new-hardware replication).
+# Fields: done_file <TAB> need_mb <TAB> after <TAB> command [<TAB> n_gpus]
+# Big items sit on top so they claim empty cards before small jobs pack them.
+# --- gate: tests must be green before any training (CLAUDE.md) ---
+runs/.tests_green	9000	-	bash -c '.venv/bin/python -m pytest tests/ -q && touch runs/.tests_green'
+# --- premise checks, big models (chained: they share runs/base-eval-full tmp dir; 0.6B control last, stays in place) ---
+runs/base-eval-full-4b/recite.json	12000	runs/.tests_green	bash -c '.venv/bin/python scripts/evaluate.py --base --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml && mv runs/base-eval-full runs/base-eval-full-4b && .venv/bin/python scripts/premise_gate.py runs/base-eval-full-4b/recite.json 0.7 && touch runs/.premise_4b_ok'
+runs/base-eval-full-8b/recite.json	20000	runs/base-eval-full-4b/recite.json	bash -c '.venv/bin/python scripts/evaluate.py --base --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml && mv runs/base-eval-full runs/base-eval-full-8b && .venv/bin/python scripts/premise_gate.py runs/base-eval-full-8b/recite.json 0.7 && touch runs/.premise_8b_ok'
+runs/base-eval-full-14b/recite.json	32000	runs/base-eval-full-8b/recite.json	bash -c '.venv/bin/python scripts/evaluate.py --base --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml && mv runs/base-eval-full runs/base-eval-full-14b && .venv/bin/python scripts/premise_gate.py runs/base-eval-full-14b/recite.json 0.7 && touch runs/.premise_14b_ok'
+runs/base-eval-full/recite.json	2500	runs/base-eval-full-14b/recite.json	.venv/bin/python scripts/evaluate.py --base
+# --- Tier-2 scale runs: hi recipe (KD + CE 0.5, lr 1e-4, LoRA, online teacher), gated on premise ---
+runs/kd_lora_ce_hi_14b_rag/checkpoint	36000	runs/.premise_14b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml
+runs/kd_lora_ce_hi_14b_rag/eval/recite.json	32000	runs/kd_lora_ce_hi_14b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml --checkpoint runs/kd_lora_ce_hi_14b_rag/checkpoint
+runs/kd_lora_ce_hi_14b_rag/eval/recite_long.json	32000	runs/kd_lora_ce_hi_14b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml --checkpoint runs/kd_lora_ce_hi_14b_rag/checkpoint
+runs/kd_lora_ce_hi_8b_rag/checkpoint	22000	runs/.premise_8b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml
+runs/kd_lora_ce_hi_8b_rag/eval/recite.json	20000	runs/kd_lora_ce_hi_8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml --checkpoint runs/kd_lora_ce_hi_8b_rag/checkpoint
+runs/kd_lora_ce_hi_4b_rag/checkpoint	13000	runs/.premise_4b_ok	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml
+runs/kd_lora_ce_hi_4b_rag/eval/recite.json	12000	runs/kd_lora_ce_hi_4b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml --checkpoint runs/kd_lora_ce_hi_4b_rag/checkpoint
+# --- caches (fp32 teacher forward) ---
+caches/.0p6b.marker	8500	runs/.tests_green	bash -c '.venv/bin/python scripts/build_teacher_cache.py && touch caches/.0p6b.marker'
+caches/.v2.marker	8500	runs/.tests_green	bash -c '.venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml && touch caches/.v2.marker'
+caches/.1p7b.marker	8500	runs/.tests_green	bash -c '.venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml && touch caches/.1p7b.marker'
+runs/base-1p7b-general.json	4500	runs/.tests_green	.venv/bin/python scripts/base_general.py Qwen/Qwen3-1.7B runs/base-1p7b-general.json
+# --- pending waves (D/E) ---
+runs/kd_ce_long_0p6b_rag/checkpoint	11000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_long_0p6b_rag.yaml
 runs/kd_ce_long_0p6b_rag/eval/recite.json	2500	runs/kd_ce_long_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_long_0p6b_rag/checkpoint
-runs/kd_lora_ce_hi_1p7b_rag/checkpoint	4500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml
-runs/kd_lora_ce_hi_1p7b_rag/eval/recite.json	5000	runs/kd_lora_ce_hi_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml --checkpoint runs/kd_lora_ce_hi_1p7b_rag/checkpoint
-caches/.v2.marker	8500	-	bash -c '.venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml && touch caches/.v2.marker'
-runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml
-runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
-runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
 runs/kd_ce_v2_0p6b_rag/checkpoint	11000	caches/.v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml
 runs/kd_ce_v2_0p6b_rag/eval/recite.json	2500	runs/kd_ce_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
-runs/kd_ce_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_ce_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
-runs/kd_ce_0p6b_rag/eval/recite_long.json	2500	-	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
-runs/kd_lora_ce_hi_stub_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_stub_0p6b_rag.yaml
-runs/kd_lora_ce_hi_stub_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_stub_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_stub_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_stub_0p6b_rag/checkpoint
-runs/kd_lora_ce_hi_stubgap_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_stubgap_0p6b_rag.yaml
-runs/kd_lora_ce_hi_stubgap_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_stubgap_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_stubgap_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_stubgap_0p6b_rag/checkpoint
-runs/kd_full_0p6b_rag/eval/logit_lens.csv	3000	-	.venv/bin/python scripts/logit_lens.py --run kd_full_0p6b_rag --limit 24
-runs/lw_summed_0p6b_rag/eval/logit_lens.csv	3000	-	.venv/bin/python scripts/logit_lens.py --run lw_summed_0p6b_rag --limit 24
-runs/lw_seq_0p6b_rag/eval/logit_lens.csv	3000	-	.venv/bin/python scripts/logit_lens.py --run lw_seq_0p6b_rag --limit 24
-runs/kd_full_0p6b_rag/eval/layer_swap.csv	3500	-	.venv/bin/python scripts/layer_swap.py --run kd_full_0p6b_rag --limit 8
-runs/lw_summed_0p6b_rag/eval/layer_swap.csv	3500	-	.venv/bin/python scripts/layer_swap.py --run lw_summed_0p6b_rag --limit 8
-runs/lw_seq_0p6b_rag/eval/layer_swap.csv	3500	-	.venv/bin/python scripts/layer_swap.py --run lw_seq_0p6b_rag --limit 8
-runs/lw_seq_bf16_0p6b_rag/checkpoint	3000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_bf16_0p6b_rag.yaml
+runs/kd_ce_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_ce_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
+runs/kd_lora_ce_mid_0p6b_rag/checkpoint	2500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_mid_0p6b_rag.yaml
+runs/kd_lora_ce_mid_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_mid_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_mid_0p6b_rag/checkpoint
+runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	2500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml
+runs/kd_lora_ce_hi_tool_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint
+# --- foundation rebuilds (checkpoints the backlog analyses + warm-start need; also new-hardware replication) ---
+runs/kd_ce_0p6b_rag/checkpoint	11000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_0p6b_rag.yaml
+runs/kd_ce_0p6b_rag/eval/recite.json	2500	runs/kd_ce_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
+runs/kd_ce_0p6b_rag/eval/recite_long.json	2500	runs/kd_ce_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
+runs/kd_full_0p6b_rag/checkpoint	11000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_full_0p6b_rag.yaml
+runs/kd_full_0p6b_rag/eval/recite.json	2500	runs/kd_full_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_full_0p6b_rag/checkpoint
+runs/lw_summed_0p6b_rag/checkpoint	3000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_summed_0p6b_rag.yaml
+runs/lw_summed_0p6b_rag/eval/recite.json	2500	runs/lw_summed_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_summed_0p6b_rag/checkpoint
+runs/lw_seq_0p6b_rag/checkpoint	3000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_0p6b_rag.yaml
+runs/lw_seq_0p6b_rag/eval/recite.json	2500	runs/lw_seq_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_seq_0p6b_rag/checkpoint
+runs/lw_summed_ce_0p6b_rag/checkpoint	3000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_summed_ce_0p6b_rag.yaml
+runs/lw_summed_ce_0p6b_rag/eval/recite.json	2500	runs/lw_summed_ce_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_summed_ce_0p6b_rag/checkpoint
+# --- warm-start probe (needs lw_summed_ce checkpoint) ---
+runs/kd_ce_warm_0p6b_rag/checkpoint	11000	runs/lw_summed_ce_0p6b_rag/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_warm_0p6b_rag.yaml
+runs/kd_ce_warm_0p6b_rag/eval/recite.json	2500	runs/kd_ce_warm_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_warm_0p6b_rag/checkpoint
+# --- watchdog backlog: localization analyses + bf16 remeasure + 1.7B curve point ---
+runs/kd_full_0p6b_rag/eval/logit_lens.csv	3000	runs/kd_full_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run kd_full_0p6b_rag --limit 24
+runs/lw_summed_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_summed_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_summed_0p6b_rag --limit 24
+runs/lw_seq_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_seq_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_seq_0p6b_rag --limit 24
+runs/kd_full_0p6b_rag/eval/layer_swap.csv	3500	runs/kd_full_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run kd_full_0p6b_rag --limit 8
+runs/lw_summed_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_summed_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_summed_0p6b_rag --limit 8
+runs/lw_seq_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_seq_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_seq_0p6b_rag --limit 8
+runs/lw_seq_bf16_0p6b_rag/checkpoint	3000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_bf16_0p6b_rag.yaml
 runs/lw_seq_bf16_0p6b_rag/eval/recite.json	2500	runs/lw_seq_bf16_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_seq_bf16_0p6b_rag/checkpoint
-runs/kd_full_0p6b_rag/eval/.reevaled	2500	-	bash -c '.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_full_0p6b_rag/checkpoint && touch runs/kd_full_0p6b_rag/eval/.reevaled'
-caches/.1p7b.marker	8500	-	bash -c '.venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml && touch caches/.1p7b.marker'
 runs/lw_seq_1p7b_rag/checkpoint	5500	caches/.1p7b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml
 runs/lw_seq_1p7b_rag/eval/recite.json	5000	runs/lw_seq_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml --checkpoint runs/lw_seq_1p7b_rag/checkpoint
-runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml
-runs/kd_lora_ce_hi_tool_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_tool_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_tool_0p6b_rag/checkpoint
-runs/.tests_green	9000	-	bash -c '.venv/bin/python -m pytest tests/ -q && touch runs/.tests_green'
-runs/kd_lora_ce_mid_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_mid_0p6b_rag.yaml
-runs/kd_lora_ce_mid_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_mid_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_mid_0p6b_rag/checkpoint
-runs/base-1p7b-general.json	4500	-	.venv/bin/python scripts/base_general.py Qwen/Qwen3-1.7B runs/base-1p7b-general.json
-runs/kd_ce_warm_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_warm_0p6b_rag.yaml
-runs/kd_ce_warm_0p6b_rag/eval/recite.json	2500	runs/kd_ce_warm_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_warm_0p6b_rag/checkpoint
+# --- champion LoRA rebuilds (cheap, keeps best checkpoints available on this machine) ---
+runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	2500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml
+runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
+runs/kd_lora_ce_hi_0p6b_rag/checkpoint	2500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_0p6b_rag.yaml
+runs/kd_lora_ce_hi_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_hi_0p6b_rag/checkpoint
+runs/kd_lora_ce_hi_1p7b_rag/checkpoint	4500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml
+runs/kd_lora_ce_hi_1p7b_rag/eval/recite.json	5000	runs/kd_lora_ce_hi_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml --checkpoint runs/kd_lora_ce_hi_1p7b_rag/checkpoint
+# --- teacher-ceiling diagnostics for the new models (bottom filler) ---
+runs/teacher_recite_4b.ok	12000	runs/.premise_4b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml --limit 8 > runs/teacher_recite_4b.log 2>&1 && touch runs/teacher_recite_4b.ok'
+runs/teacher_recite_8b.ok	20000	runs/.premise_8b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml --limit 8 > runs/teacher_recite_8b.log 2>&1 && touch runs/teacher_recite_8b.ok'
+runs/teacher_recite_14b.ok	32000	runs/.premise_14b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml --limit 8 > runs/teacher_recite_14b.log 2>&1 && touch runs/teacher_recite_14b.ok'
