@@ -36,3 +36,5 @@ runs/.tests_green	9000	-	bash -c '.venv/bin/python -m pytest tests/ -q && touch 
 runs/kd_lora_ce_mid_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_mid_0p6b_rag.yaml
 runs/kd_lora_ce_mid_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_mid_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_mid_0p6b_rag/checkpoint
 runs/base-1p7b-general.json	4500	-	.venv/bin/python scripts/base_general.py Qwen/Qwen3-1.7B runs/base-1p7b-general.json
+runs/kd_ce_warm_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_warm_0p6b_rag.yaml
+runs/kd_ce_warm_0p6b_rag/eval/recite.json	2500	runs/kd_ce_warm_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_warm_0p6b_rag/checkpoint

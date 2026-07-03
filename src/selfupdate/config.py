@@ -92,6 +92,9 @@ class TrainConfig:
     # (student = base + adapters, so the frozen teacher is already resident).
     # Replaces the disk cache entirely — the choice at 120B scale.
     online_teacher: bool = False
+    # warm-start: load student weights from runs/<init_from>/checkpoint
+    # (teacher stays the base model — cache identity is untouched)
+    init_from: str = ""
     lora: LoraConfig = field(default_factory=LoraConfig)
 
 

@@ -31,7 +31,10 @@ def train_kd(cfg: ExperimentConfig) -> Path:
     # LoRA: the base is frozen, so fp32 master precision buys nothing — bf16
     # halves its footprint (adapter params stay fp32 via peft).
     base_dtype = torch.bfloat16 if cfg.train.lora.enabled else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
+    student_src = cfg.model.name
+    if cfg.train.init_from:
+        student_src = f"runs/{cfg.train.init_from}/checkpoint"  # warm start
+    model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
     model.to(cfg.model.device)
     peft_model = None
     if cfg.train.lora.enabled:
