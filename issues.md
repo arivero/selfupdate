@@ -145,3 +145,20 @@ Test-gap note: the suite could not run green during review because the GPU
 was fully packed by the scheduler (all failures were CUDA OOM at fixture
 load); a full-suite run is queued behind a 9 GB free-VRAM requirement
 (`runs/.tests_green`).
+
+## Tokenization is Qwen-family-only by construction (audited 2026-07-03, OK for wave G)
+
+Verified on all five ladder models (0.6B/1.7B/4B/8B/14B): identical chat
+template (manual rendering in masking.py == apply_chat_template, student and
+teacher views), same special tokens (<|im_end|> = 151645 = eos), same vocab,
+no BOS. So the current grid is sound. But three Qwen-isms will break silently
+on other families (Llama/SmolLM/Gemma are on the ladder):
+- masking.py hardcodes <|im_start|>/<|im_end|> and the empty-<think> block;
+  Llama-style templates also prepend a BOS that segment-encoding would drop.
+- eval/recite.py line ~70 hardcodes convert_tokens_to_ids("<|im_end|>").
+- teacher/generate.py assumes </think> exists.
+Fix when a non-Qwen model is queued: derive segment pieces per family (assert
+manual rendering == apply_chat_template at dataset build, like
+tests/test_alignment.py does) and take eos from tokenizer.eos_token.
+Qualitative forgetting probe: scripts/sanity_chat.py (trivial questions incl.
+a Quijote control we never train on; queue writes eval/sanity.json per run).

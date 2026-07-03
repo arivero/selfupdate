@@ -69,3 +69,16 @@ runs/kd_lora_ce_hi_1p7b_rag/eval/recite.json	5000	runs/kd_lora_ce_hi_1p7b_rag/ch
 runs/teacher_recite_4b.ok	12000	runs/.premise_4b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml --limit 8 > runs/teacher_recite_4b.log 2>&1 && touch runs/teacher_recite_4b.ok'
 runs/teacher_recite_8b.ok	20000	runs/.premise_8b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml --limit 8 > runs/teacher_recite_8b.log 2>&1 && touch runs/teacher_recite_8b.ok'
 runs/teacher_recite_14b.ok	32000	runs/.premise_14b_ok	bash -c '.venv/bin/python scripts/teacher_recite.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml --limit 8 > runs/teacher_recite_14b.log 2>&1 && touch runs/teacher_recite_14b.ok'
+# --- sanity probes: trivial-questions forgetting check (scripts/sanity_chat.py) ---
+runs/base-sanity-Qwen3-1.7B.json	4500	runs/.tests_green	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml
+runs/base-sanity-Qwen3-4B.json	12000	runs/.tests_green	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml
+runs/base-sanity-Qwen3-8B.json	20000	runs/.tests_green	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml
+runs/base-sanity-Qwen3-14B.json	32000	runs/.tests_green	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml
+runs/kd_ce_0p6b_rag/eval/sanity.json	2500	runs/kd_ce_0p6b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
+runs/kd_ce_long_0p6b_rag/eval/sanity.json	2500	runs/kd_ce_long_0p6b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --checkpoint runs/kd_ce_long_0p6b_rag/checkpoint
+runs/kd_ce_v2_0p6b_rag/eval/sanity.json	2500	runs/kd_ce_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
+runs/kd_lora_ce_mid_0p6b_rag/eval/sanity.json	2500	runs/kd_lora_ce_mid_0p6b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --checkpoint runs/kd_lora_ce_mid_0p6b_rag/checkpoint
+runs/kd_lora_ce_hi_v2_0p6b_rag/eval/sanity.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
+runs/kd_lora_ce_hi_4b_rag/eval/sanity.json	12000	runs/kd_lora_ce_hi_4b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_4b_rag.yaml --checkpoint runs/kd_lora_ce_hi_4b_rag/checkpoint
+runs/kd_lora_ce_hi_8b_rag/eval/sanity.json	20000	runs/kd_lora_ce_hi_8b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_8b_rag.yaml --checkpoint runs/kd_lora_ce_hi_8b_rag/checkpoint
+runs/kd_lora_ce_hi_14b_rag/eval/sanity.json	32000	runs/kd_lora_ce_hi_14b_rag/eval/recite.json	.venv/bin/python scripts/sanity_chat.py --experiment configs/experiments/kd_lora_ce_hi_14b_rag.yaml --checkpoint runs/kd_lora_ce_hi_14b_rag/checkpoint
