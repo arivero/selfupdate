@@ -35,6 +35,9 @@ def main() -> None:
         context_pad=cfg.data.context_pad,
         include_sections=cfg.data.include_sections,
         section_max_lines=cfg.data.section_max_lines,
+        long_windows=cfg.data.long_windows,
+        paraphrase=cfg.data.paraphrase,
+        part_chunk_lines=cfg.data.part_chunk_lines,
     )
 
     stub = ""

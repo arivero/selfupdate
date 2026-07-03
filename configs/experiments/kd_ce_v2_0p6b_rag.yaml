@@ -1,0 +1,10 @@
+run_name: kd_ce_v2_0p6b_rag
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+train:
+  method: kd
+  epochs: 40
+  answer_ce_weight: 0.5

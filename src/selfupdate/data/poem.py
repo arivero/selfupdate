@@ -45,11 +45,20 @@ def load_poem(path: str | Path) -> list[Verse]:
     return verses
 
 
-def _continuation_question(cue: str, window: int) -> str:
-    return (
-        f"Continúa el poema «{POEM_TITLE}» de {POEM_AUTHOR} a partir de este verso:\n"
-        f"«{cue}»\n"
-        f"Escribe los {window} versos siguientes, exactamente como en el original."
+CONTINUATION_TEMPLATES = [
+    # index 0 = original phrasing (v1 datasets must stay byte-identical)
+    "Continúa el poema «{title}» de {author} a partir de este verso:\n«{cue}»\n"
+    "Escribe los {n} versos siguientes, exactamente como en el original.",
+    "En «{title}», de {author}, ¿qué versos siguen a «{cue}»? "
+    "Recita los {n} versos siguientes tal como aparecen en el poema.",
+    "Recuerda «{title}» ({author}). Tras el verso «{cue}», "
+    "escribe de memoria los {n} versos que continúan, sin cambiar nada.",
+]
+
+
+def _continuation_question(cue: str, window: int, variant: int = 0) -> str:
+    return CONTINUATION_TEMPLATES[variant % len(CONTINUATION_TEMPLATES)].format(
+        title=POEM_TITLE, author=POEM_AUTHOR, cue=cue, n=window
     )
 
 
@@ -86,6 +95,9 @@ def make_specs(
     context_pad: int = 4,
     include_sections: bool = True,
     section_max_lines: int = 24,
+    long_windows: list[int] | None = None,  # e.g. [24, 48]: extended recitation
+    paraphrase: bool = False,  # rotate question templates (Ovadia: variety helps)
+    part_chunk_lines: int = 0,  # >0: part-level recitation in chunks this size
 ) -> list[TaskSpec]:
     """Continuation tasks (sliding window over the whole poem), per-section
     recitation tasks (every part/section gets a question), and an optional
@@ -143,9 +155,51 @@ def make_specs(
         specs.append(
             TaskSpec(
                 task_id=f"cont-{i:03d}",
-                question=_continuation_question(cue, window),
+                question=_continuation_question(
+                    cue, window, variant=(i // stride) if paraphrase else 0
+                ),
                 passage="\n".join(texts[lo:hi]),
                 answer="\n".join(answer_lines),
             )
         )
+
+    # extended recitation: longer continuation spans, own stride per window
+    for w in long_windows or []:
+        for k, i in enumerate(range(0, len(texts) - w - 1, w // 2)):
+            cue = texts[i]
+            hi = min(len(texts), i + 1 + w + context_pad)
+            specs.append(
+                TaskSpec(
+                    task_id=f"cont{w:02d}-{i:03d}",
+                    question=_continuation_question(
+                        cue, w, variant=k if paraphrase else 0
+                    ),
+                    passage="\n".join(texts[max(0, i - context_pad):hi]),
+                    answer="\n".join(texts[i + 1: i + 1 + w]),
+                )
+            )
+
+    # part-level recitation: every named part, chunked
+    if part_chunk_lines:
+        parts: list[tuple[str, list[str]]] = []
+        for v in verses:
+            if not parts or parts[-1][0] != v.part:
+                parts.append((v.part, []))
+            parts[-1][1].append(v.text)
+        for pi, (part, lines) in enumerate(parts):
+            pname = f"la parte «{part}»" if part else "la parte inicial (sin título)"
+            for ci, lo in enumerate(range(0, len(lines), part_chunk_lines)):
+                chunk = lines[lo: lo + part_chunk_lines]
+                specs.append(
+                    TaskSpec(
+                        task_id=f"part-{pi:02d}-{ci}",
+                        question=(
+                            f"Recita {pname} del poema «{POEM_TITLE}» de {POEM_AUTHOR}, "
+                            f"versos {lo + 1} a {lo + len(chunk)} de la parte. "
+                            f"Escribe los {len(chunk)} versos exactamente como en el original."
+                        ),
+                        passage="\n".join(lines),
+                        answer="\n".join(chunk),
+                    )
+                )
     return specs

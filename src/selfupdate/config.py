@@ -31,6 +31,9 @@ class DataConfig:
     context_pad: int = 4
     include_sections: bool = True
     section_max_lines: int = 24
+    long_windows: list = field(default_factory=list)  # e.g. [24, 48]
+    paraphrase: bool = False
+    part_chunk_lines: int = 0
 
 
 @dataclass

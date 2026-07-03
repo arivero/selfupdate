@@ -1,0 +1,6 @@
+run_name: data_v2_build
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
