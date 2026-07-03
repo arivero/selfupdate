@@ -47,6 +47,19 @@ from .blocks import BlockStack
 from .losses import HiddenLoss, answer_ce
 
 
+def _vocab_signature(stack) -> tuple:
+    """Cheap exact fingerprint of the frozen vocabulary tensors (embedding,
+    final norm, head). Computed at trainer start and re-checked before
+    save: NO learning of any kind may modify these — they are the fixed
+    basis of every lens and every cached teacher target."""
+    sig = []
+    for m in (stack.embed_tokens, stack.final_norm, stack.lm_head):
+        for p in m.parameters():
+            sig.append((p.double().sum().item(),
+                        p.double().abs().sum().item()))
+    return tuple(sig)
+
+
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
                      lens_ce_w=0.0, gold=None, ans_off=None):
     """One local forward+backward for block L. ``h_in`` must be detached, so
@@ -150,6 +163,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     model.train()
     stack = BlockStack(model)
     stack.freeze_non_blocks()
+    vocab_sig0 = _vocab_signature(stack)
 
     if cfg.train.online_teacher and peft_model is None:
         raise ValueError("train.online_teacher requires train.lora.enabled")
@@ -206,6 +220,11 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     else:
         raise ValueError(f"unknown layerwise schedule {cfg.train.schedule!r}")
 
+    if _vocab_signature(stack) != vocab_sig0:
+        raise RuntimeError(
+            "frozen-vocabulary violation: embedding/final-norm/head changed "
+            "during training — refusing to save (docs/hidden_loss.md)"
+        )
     if peft_model is not None:
         peft_model.save_pretrained(run_dir / "checkpoint")
     else:
