@@ -1,0 +1,5 @@
+run_name: data_stub_build
+data:
+  examples_path: data/poem/examples_stub.jsonl
+mask:
+  compaction: stub
