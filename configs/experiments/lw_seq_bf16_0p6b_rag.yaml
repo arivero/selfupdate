@@ -1,0 +1,4 @@
+run_name: lw_seq_bf16_0p6b_rag
+train:
+  method: layerwise
+  schedule: sequential

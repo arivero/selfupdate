@@ -81,8 +81,12 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     device = cfg.model.device
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    # frozen bf16 base for LoRA (see kd.py); fp32 for full fine-tuning
-    base_dtype = torch.bfloat16 if cfg.train.lora.enabled else torch.float32
+    # bf16 base for LoRA (frozen weights) AND for the sequential schedule:
+    # only the single active block needs fp32 master weights (cast per stage
+    # in _train_sequential); summed full-FT trains all blocks every step and
+    # keeps fp32 masters throughout.
+    full_ft_all_blocks = not cfg.train.lora.enabled and cfg.train.schedule != "sequential"
+    base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
     model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
     model.to(device)
     peft_model = None
@@ -368,9 +372,12 @@ def _train_sequential(cfg, stack, cache, tok, log):
 
     ds = _make_dataset(cfg, cache, tok, [1])  # pairs built once; layer swapped per stage
     records = ds.records
+    full_ft = not cfg.train.lora.enabled
     for L in range(1, n + 1):
         ds.need_layers = [L]
         loader = _loader(cfg, ds)
+        if full_ft:
+            stack.blocks[L - 1].float()  # fp32 master for the active block only
         opt = torch.optim.AdamW(
             [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
         )
@@ -416,6 +423,8 @@ def _train_sequential(cfg, stack, cache, tok, log):
                     done = True
             epoch += 1
         print(f"layer {L}: {steps} steps, final loss {mean_loss:.5f}")
+        if full_ft:
+            stack.blocks[L - 1].to(torch.bfloat16)  # done training: back to bf16
 
         if L < n:
             act_cache.advance(stack, L, ds, device)
