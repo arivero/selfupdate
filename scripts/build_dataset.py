@@ -38,6 +38,7 @@ def main() -> None:
         long_windows=cfg.data.long_windows,
         paraphrase=cfg.data.paraphrase,
         part_chunk_lines=cfg.data.part_chunk_lines,
+        catechism=cfg.data.catechism,
     )
 
     stub = ""

@@ -1,0 +1,7 @@
+run_name: data_v3_build
+data:
+  examples_path: data/poem/examples_v3.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  catechism: true

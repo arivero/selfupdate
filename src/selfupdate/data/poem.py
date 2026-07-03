@@ -85,6 +85,94 @@ def _section_question(part: str, section: str, n_lines: int, lo: int | None) -> 
     )
 
 
+def _quote(v: str) -> str:
+    return f"«{v}»"
+
+
+def make_catechism(
+    verses: list[Verse],
+    *,
+    context_pad: int = 4,
+    follow_stride: int = 3,
+    precede_stride: int = 5,
+    cloze_stride: int = 4,
+) -> list[TaskSpec]:
+    """Drill questions with verbatim single-verse answers — random-access
+    entry points into the poem (vs. the in-order continuation windows).
+
+    Kinds: follow (next verse), precede (backward recall), cloze (blanked
+    middle verse of a 3-verse span), section anchors (first/last verse of
+    every part/section). Answers stay literal quotations so the CER /
+    line-exact metrics apply unchanged. Deterministic: pure index arithmetic.
+    Cues that repeat verbatim elsewhere in the poem are skipped (ill-posed).
+    """
+    from collections import Counter
+
+    texts = [v.text for v in verses]
+    freq = Counter(texts)
+    unique = lambda t: freq[t] == 1
+    pad = lambda lo, hi: "\n".join(texts[max(0, lo): min(len(texts), hi)])
+    head = f"En «{POEM_TITLE}» de {POEM_AUTHOR}"
+    specs: list[TaskSpec] = []
+
+    for i in range(0, len(texts) - 1, follow_stride):
+        if not unique(texts[i]):
+            continue
+        specs.append(TaskSpec(
+            task_id=f"cat-fw-{i:03d}",
+            question=(f"{head}, ¿qué verso sigue inmediatamente a "
+                      f"{_quote(texts[i])}? Responde solo con ese verso, "
+                      f"exactamente como en el original."),
+            passage=pad(i - context_pad, i + 2 + context_pad),
+            answer=texts[i + 1],
+        ))
+
+    for i in range(1, len(texts), precede_stride):
+        if not unique(texts[i]):
+            continue
+        specs.append(TaskSpec(
+            task_id=f"cat-bw-{i:03d}",
+            question=(f"{head}, ¿qué verso precede inmediatamente a "
+                      f"{_quote(texts[i])}? Responde solo con ese verso, "
+                      f"exactamente como en el original."),
+            passage=pad(i - 1 - context_pad, i + 1 + context_pad),
+            answer=texts[i - 1],
+        ))
+
+    for i in range(1, len(texts) - 1, cloze_stride):
+        if not (unique(texts[i - 1]) or unique(texts[i + 1])):
+            continue
+        specs.append(TaskSpec(
+            task_id=f"cat-cz-{i:03d}",
+            question=(f"{head} falta el verso central de este fragmento:\n"
+                      f"{texts[i - 1]}\n___\n{texts[i + 1]}\n"
+                      f"Escribe solo el verso que falta, exactamente como "
+                      f"en el original."),
+            passage=pad(i - 1 - context_pad, i + 2 + context_pad),
+            answer=texts[i],
+        ))
+
+    groups: list[tuple[tuple[str, str], list[str]]] = []
+    for v in verses:
+        key = (v.part, v.section)
+        if not groups or groups[-1][0] != key:
+            groups.append((key, []))
+        groups[-1][1].append(v.text)
+    for gi, ((part, section), lines) in enumerate(groups):
+        where = _section_name(part, section)
+        for kind, verse in (("first", lines[0]), ("last", lines[-1])):
+            q_kind = "empieza" if kind == "first" else "termina"
+            specs.append(TaskSpec(
+                task_id=f"cat-sec-{gi:03d}-{kind}",
+                question=(f"¿Con qué verso {q_kind} {where} del poema "
+                          f"«{POEM_TITLE}» de {POEM_AUTHOR}? Responde solo "
+                          f"con ese verso, exactamente como en el original."),
+                passage="\n".join(lines),
+                answer=verse,
+            ))
+    return specs
+
+
 def make_specs(
     verses: list[Verse],
     *,
@@ -98,6 +186,7 @@ def make_specs(
     long_windows: list[int] | None = None,  # e.g. [24, 48]: extended recitation
     paraphrase: bool = False,  # rotate question templates (Ovadia: variety helps)
     part_chunk_lines: int = 0,  # >0: part-level recitation in chunks this size
+    catechism: bool = False,  # drill Q&A (follow/precede/cloze/section anchors)
 ) -> list[TaskSpec]:
     """Continuation tasks (sliding window over the whole poem), per-section
     recitation tasks (every part/section gets a question), and an optional
@@ -202,4 +291,7 @@ def make_specs(
                         answer="\n".join(chunk),
                     )
                 )
+
+    if catechism:
+        specs.extend(make_catechism(verses, context_pad=context_pad))
     return specs
