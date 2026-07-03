@@ -45,6 +45,7 @@ running_on() {  # count live jobs assigned to device $1 (devset may be "0,1")
     echo "$n"
 }
 
+echo $$ > runs/.sched/scheduler.pid
 log "started (pid $$, GPUS=$GPUS, MAX_PER_GPU=$MAX_PER_GPU)"
 while :; do
     launched=0
