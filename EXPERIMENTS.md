@@ -123,6 +123,28 @@ level recall; full eval + intrusion profile pending. Eval-side fix: leading
 block = empty output = honest failure). Phi-4-mini eval requeued on the
 fixed code.
 
+## Chimera Results (01:00) — storage formats are loss-specific; vocab_mse's is portable
+
+Cross-loss tail transplants (64 examples):
+
+| body (storage) | tail (readout) | CER | exact |
+|---|---|---|---|
+| vocab_mse | l2mse | **0.109** | **0.883** |
+| l2mse | vocab_mse | 0.595 | 0.284 |
+| nmse_strict (never recites alone: 0.85/0%) | vocab_mse | 0.561 | 0.400 |
+
+Asymmetric: vocab_mse's body is readable by a FOREIGN readout almost as
+well as by its own (0.109 vs 0.024), while vocab's readout cannot decode
+l2mse's body. And a transplanted readout onto a strict body unlocks 40%
+exact lines from storage that alone produced zero. Reading: each loss
+writes storage in its own coordinate format; the Gram metric writes in
+the vocabulary's coordinates — the format every readout natively
+consumes. Also: mixed full eval CER 0.110/0.882 with mean dCE 0.74 and
+Bécquer +1.57 (vs summed-vocab's 1.01 mean but +2.03 Bécquer) — the
+anneal trades some recall for measurably less intrusion. v3-catechism
+full CER 0.321/0.601 is NOT comparable (its eval corpus includes drill
+items); needs a v2-records eval for a fair read.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
