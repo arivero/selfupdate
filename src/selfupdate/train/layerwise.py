@@ -37,6 +37,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
 from ..data.dataset import DistillDataset, collate_items
+from ..eval.general import general_ce
 from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
@@ -294,6 +295,9 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
             r = recite_eval(stack.model, tok, records, limit=8)
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
+                    # per-epoch forgetting reference: CER says when the poem
+                    # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
@@ -374,6 +378,9 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
+                    # per-epoch forgetting reference: CER says when the poem
+                    # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
@@ -497,6 +504,9 @@ def _train_sequential(cfg, stack, cache, tok, log):
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", layer=L, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
+                    # per-epoch forgetting reference: CER says when the poem
+                    # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"after layer {L}: eval CER {r['cer']:.3f}")

@@ -16,6 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
 from ..data.dataset import DistillDataset, collate_items
+from ..eval.general import general_ce
 from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
@@ -137,6 +138,9 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                              rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
+                    # per-epoch forgetting reference: CER says when the poem
+                    # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")

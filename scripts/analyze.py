@@ -159,7 +159,7 @@ def training_curves() -> None:
         return 2
 
     row_titles = ["lw_* (layerwise)", "kd_lora*", "kd_* (full-FT KD)"]
-    fig, axes = plt.subplots(3, 2, figsize=(13, 12), sharex="col", sharey="col")
+    fig, axes = plt.subplots(3, 3, figsize=(18, 12), sharex="col", sharey="col")
     for d in runs:
         row = family(d.name)
         ms = read_metrics(d)
@@ -173,13 +173,28 @@ def training_curves() -> None:
         if evals:
             axes[row][1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
                               marker="o", label=d.name, alpha=0.8)
+        # per-epoch forgetting (gen_ce logged at eval epochs since 2026-07-03;
+        # older runs lack it): the reference for how long each model+method
+        # can train before memorization is paid for with general ability
+        gens = [m for m in evals if "gen_ce" in m]
+        if gens:
+            axes[row][2].plot([m["epoch"] for m in gens],
+                              [m["gen_ce"] for m in gens],
+                              marker="s", label=d.name, alpha=0.8)
     for row in range(3):
         axes[row][0].set_yscale("log")
         axes[row][0].set_ylabel(f"{row_titles[row]}\nloss (log)")
         axes[row][1].set_ylabel("eval CER (8-ex subset)")
+        axes[row][2].set_ylabel("general-CE (forgetting)")
         axes[row][1].legend(fontsize=6)
+        if axes[row][2].lines:
+            axes[row][2].legend(fontsize=6)
+    axes[0][2].axhline(3.278, color="gray", linestyle=":", linewidth=1)
+    axes[1][2].axhline(3.278, color="gray", linestyle=":", linewidth=1)
+    axes[2][2].axhline(3.278, color="gray", linestyle=":", linewidth=1)
     axes[2][0].set_xlabel("training items seen")
     axes[2][1].set_xlabel("epoch")
+    axes[2][2].set_xlabel("epoch")
     fig.tight_layout()
     fig.savefig("runs/curves.png", dpi=150)
     print("wrote runs/curves.png")
