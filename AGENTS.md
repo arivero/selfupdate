@@ -15,7 +15,15 @@ Everything needed lives in this repo. Do not depend on host-local agent memory.
 - `runs/*/metrics.jsonl` and `runs/pipeline_*.log` - raw dynamics and history.
 - `runs/*/checkpoint` - checkpoints, gitignored.
 
-`.venv/` is gitignored and may be a symlink on this machine. Keep it ignored.
+`.venv/` is gitignored and may be a symlink to a sibling checkout's venv
+(cloning a venv on Lustre is all small-file metadata cost — don't). The
+shared venv carries **no** editable install of `selfupdate`: a bare
+`import selfupdate` fails loudly by design. Every entry point pins its own
+tree instead — `scripts/*.py` via `sys.path.insert(0, <repo>/src)` and
+pytest via `tests/conftest.py`. Keep that guard in any new script; never
+`pip install -e .` into the shared venv (it would silently route imports
+across checkouts). The bootstrap's `pip install -e .` applies only to a
+fresh per-tree venv.
 
 ## Branch Focus
 
