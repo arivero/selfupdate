@@ -65,3 +65,7 @@ runs/lw_b_mixed_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --
 runs/lw_b_mixed_0p6b_rag/eval/recite.json	3000	runs/lw_b_mixed_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_mixed_0p6b_rag.yaml --checkpoint runs/lw_b_mixed_0p6b_rag/checkpoint
 runs/lw_b_mixed_strict_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_b_mixed_strict_0p6b_rag.yaml
 runs/lw_b_mixed_strict_0p6b_rag/eval/recite.json	3000	runs/lw_b_mixed_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_mixed_strict_0p6b_rag.yaml --checkpoint runs/lw_b_mixed_strict_0p6b_rag/checkpoint
+# data axis: v3 catechism at matched item budget (user-requested synthetic-content direction)
+caches/.v3_0p6b.marker	9000	-	bash -c ".venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml && touch caches/.v3_0p6b.marker"
+runs/lw_j_vocab_v3_0p6b_rag/checkpoint	13000	caches/.v3_0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml
+runs/lw_j_vocab_v3_0p6b_rag/eval/recite.json	3000	runs/lw_j_vocab_v3_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml --checkpoint runs/lw_j_vocab_v3_0p6b_rag/checkpoint
