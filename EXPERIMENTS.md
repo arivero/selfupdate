@@ -56,10 +56,10 @@ Base model control: CER 0.932, general-CE 3.278.
 
 ## Wave F — compaction axis (⏳ queued, last)
 
-| run | why |
-|---|---|
-| kd_lora_ce_hi_stub | uninformative placeholder vs outright removal |
-| kd_lora_ce_hi_stubgap | + position-gap: teacher-identical RoPE geometry |
+| run | status | headline |
+|---|---|---|
+| kd_lora_ce_hi_stub | ✅ | 0.791/17% — stub buys nothing over removal |
+| kd_lora_ce_hi_stubgap | ✅ | 0.788 but 0.4% exact, forget +2.0 — teacher-geometry imitation actively harmful; **remove is the right default** |
 
 ## Watchdog backlog (fills idle GPU, any time)
 
