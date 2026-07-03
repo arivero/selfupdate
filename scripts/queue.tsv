@@ -23,6 +23,9 @@ caches/.v2.marker	8500	runs/.tests_green	bash -c '.venv/bin/python scripts/build
 caches/.1p7b.marker	8500	runs/.tests_green	bash -c '.venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml && touch caches/.1p7b.marker'
 runs/base-1p7b-general.json	4500	runs/.tests_green	.venv/bin/python scripts/base_general.py Qwen/Qwen3-1.7B runs/base-1p7b-general.json
 # --- PRIORITY: layerwise program + compaction 2x2 (user: lw variants first) ---
+runs/lw_tail_ce_e40_0p6b_rag/eval/recite_long.json	2500	runs/lw_tail_ce_e40_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/lw_tail_ce_e40_0p6b_rag/checkpoint
+runs/lw_tail_ce_e40_0p6b_rag/eval/sanity.json	2500	runs/lw_tail_ce_e40_0p6b_rag/eval/recite_long.json	.venv/bin/python scripts/sanity_chat.py --checkpoint runs/lw_tail_ce_e40_0p6b_rag/checkpoint
+runs/lw_tail_ce_e40_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_tail_ce_e40_0p6b_rag/eval/recite.json	.venv/bin/python scripts/layer_swap.py --run lw_tail_ce_e40_0p6b_rag --limit 8
 runs/lw_lens_kl_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_lens_kl_0p6b_rag.yaml
 runs/lw_lens_kl_0p6b_rag/eval/recite.json	2500	runs/lw_lens_kl_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_lens_kl_0p6b_rag/checkpoint
 runs/lw_lens_kl_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_lens_kl_0p6b_rag/eval/recite.json	.venv/bin/python scripts/logit_lens.py --run lw_lens_kl_0p6b_rag --limit 24

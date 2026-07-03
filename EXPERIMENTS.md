@@ -25,7 +25,7 @@ fail). See docs/hidden_loss.md.
 | + lens-CE all / deep blocks | strict | 🟡 running (FT + LoRA cells) |
 | l2mse (pure direction) | strict | 🟡 running |
 | + lens-KL to teacher layer-L lens | strict | ⏳ queued (softer than gold-CE) |
-| + tail-CE (k=4 joint window) | k-block concession | **first life: 0.792 / 5% @20ep**; e40 + LoRA running |
+| + tail-CE (k=4 joint window) | k-block concession | **NEW CHAMPION: CER 0.142 / 82.3% exact @40ep (beats full-FT KD 0.493 by 3.5x; forget +0.95; median per-example CER 0.0)** |
 | tc at 14B (localization at scale) | strict, zero-comm | 🟡 running (H100) |
 
 ## Wave G — L40S: scale ladder + backlog drain (🟢 running, scheduler on all 4 cards)
