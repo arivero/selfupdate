@@ -77,3 +77,7 @@ runs/base-general-8B.json	19000	-	.venv/bin/python scripts/base_general.py Qwen/
 runs/base-general-llama8b.json	19000	-	.venv/bin/python scripts/base_general.py meta-llama/Llama-3.1-8B-Instruct runs/base-general-llama8b.json
 runs/base-general-phi4mini.json	10000	-	.venv/bin/python scripts/base_general.py microsoft/Phi-4-mini-reasoning runs/base-general-phi4mini.json
 runs/base-general-mistral7b.json	17000	-	.venv/bin/python scripts/base_general.py mistralai/Mistral-7B-Instruct-v0.1 runs/base-general-mistral7b.json
+# chimeras: is the readout portable across storage metrics? (Wave U)
+runs/chimera_strictbody_vocabtail/lw_i_nmse_strict_0p6b_rag__tail_lw_i_vocab_0p6b_rag_k4.json	3500	runs/lw_i_vocab_0p6b_rag/checkpoint	.venv/bin/python scripts/tail_graft.py --body runs/lw_i_nmse_strict_0p6b_rag/checkpoint --tail runs/lw_i_vocab_0p6b_rag/checkpoint --k 4 --limit 64 --out runs/chimera_strictbody_vocabtail
+runs/chimera_vocabbody_l2msetail/lw_i_vocab_0p6b_rag__tail_lw_i_l2mse_0p6b_rag_k4.json	3500	runs/lw_i_vocab_0p6b_rag/checkpoint	.venv/bin/python scripts/tail_graft.py --body runs/lw_i_vocab_0p6b_rag/checkpoint --tail runs/lw_i_l2mse_0p6b_rag/checkpoint --k 4 --limit 64 --out runs/chimera_vocabbody_l2msetail
+runs/chimera_l2msebody_vocabtail/lw_i_l2mse_0p6b_rag__tail_lw_i_vocab_0p6b_rag_k4.json	3500	runs/lw_i_vocab_0p6b_rag/checkpoint	.venv/bin/python scripts/tail_graft.py --body runs/lw_i_l2mse_0p6b_rag/checkpoint --tail runs/lw_i_vocab_0p6b_rag/checkpoint --k 4 --limit 64 --out runs/chimera_l2msebody_vocabtail
