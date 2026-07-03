@@ -147,25 +147,39 @@ def training_curves() -> None:
             if (d / "metrics.jsonl").exists() and (d / "config.yaml").exists()]
     if not runs:
         return
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # one row per method family — the single panel got too crowded once the
+    # e40 wave landed. Axes are SHARED across rows (sharex/sharey per column)
+    # so curves stay directly comparable between families.
+    def family(name: str) -> int:
+        if name.startswith("lw_"):
+            return 0
+        if name.startswith("kd_lora"):
+            return 1
+        return 2
+
+    row_titles = ["lw_* (layerwise)", "kd_lora*", "kd_* (full-FT KD)"]
+    fig, axes = plt.subplots(3, 2, figsize=(13, 12), sharex="col", sharey="col")
     for d in runs:
+        row = family(d.name)
         ms = read_metrics(d)
         trains = [m for m in ms if m.get("kind") == "train"]
         evals = [m for m in ms if m.get("kind") == "eval" and "epoch" in m]
         if trains:
             xs = list(range(len(trains)))
             step = max(1, len(xs) // 400)  # thin for plotting
-            axes[0].plot(xs[::step], [trains[i]["loss"] for i in xs[::step]],
-                         label=d.name, alpha=0.8, linewidth=1)
+            axes[row][0].plot(xs[::step], [trains[i]["loss"] for i in xs[::step]],
+                              label=d.name, alpha=0.8, linewidth=1)
         if evals:
-            axes[1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
-                         marker="o", label=d.name, alpha=0.8)
-    axes[0].set_yscale("log")
-    axes[0].set_xlabel("training items seen")
-    axes[0].set_ylabel("loss (log)")
-    axes[1].set_xlabel("epoch")
-    axes[1].set_ylabel("eval CER (8-example subset)")
-    axes[1].legend(fontsize=6)
+            axes[row][1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
+                              marker="o", label=d.name, alpha=0.8)
+    for row in range(3):
+        axes[row][0].set_yscale("log")
+        axes[row][0].set_ylabel(f"{row_titles[row]}\nloss (log)")
+        axes[row][1].set_ylabel("eval CER (8-ex subset)")
+        axes[row][1].legend(fontsize=6)
+    axes[2][0].set_xlabel("training items seen")
+    axes[2][1].set_xlabel("epoch")
     fig.tight_layout()
     fig.savefig("runs/curves.png", dpi=150)
     print("wrote runs/curves.png")
