@@ -30,6 +30,19 @@ fail). See docs/hidden_loss.md.
 | + lens-KL deep | strict | ❌ 0.725 — depth doesn't rescue KL; gold CE is the signal |
 | tc at 14B (localization at scale) | strict, zero-comm | 🟡 running (H100) |
 
+## PROJECT SPLIT (2026-07-03 end of day): two tracks
+
+- **Track A — KD/memorization science**: where does KD store content vs
+  model size. Assets: 5-point scale ladder (0.6B..32B), premise-margin trend,
+  teacher ceilings (32B anomaly 0.325 — fix the teacher prompt first!), tc
+  weight-delta peaks (L22/28 vs L35/40 — constant-from-top vs proportional
+  needs a 3rd point), cue-addressable-memory + Quijote verse-drift
+  conversational findings, per-epoch gen_ce instrumentation.
+- **Track B — lw methods**: the loss search. Founding results: tail-CE
+  (champion), deep lens-CE (strict locality), the k-sweep, the storage/
+  readout decomposition with the full ablation 2x2 (docs/hidden_loss.md).
+Queues are frozen at this point; git history holds the full grid.
+
 ## Wave G — L40S: scale ladder + backlog drain (🟢 running, scheduler on all 4 cards)
 
 `runs/` and `caches/` did not travel from the 3060, so the queue

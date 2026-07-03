@@ -192,3 +192,19 @@ orthogonality, cos ~0.02, is the geometry behind this). Meanwhile lw_tail_ce
 epochs — the best layerwise result to date. Together: storage below the tail
 is real and method-invariant in *quality*, but its representation is
 method-specific; readouts must be co-trained, never borrowed.
+
+### The champion 2x2 (tail_graft, k=4, free-run CER / exact)
+
+| body \ tail | champion tail | base (untrained) tail |
+|---|---|---|
+| champion body | **0.142 / 82.3%** | 0.940 / 0% |
+| base body | 0.980 / 0% | 0.922 / 0% (= base) |
+
+Neither half is anything alone. The tail is NOT a database (base body +
+champion tail is WORSE than base alone); the body is unreadable without its
+co-trained readout. Plus the single-layer curves (layer_swap on the
+champion): storage in blocks 1-24 is redundant (ablating almost any single
+one leaves 35-86% exact; layer 7 again the exception), while every tail
+block 25-28 is individually necessary (ablate any one -> 0% exact).
+Memorization under tail-CE = distributed, redundant storage below + a
+compact, fragile, co-adapted retrieval circuit on top.
