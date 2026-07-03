@@ -69,3 +69,11 @@ runs/lw_b_mixed_strict_0p6b_rag/eval/recite.json	3000	runs/lw_b_mixed_strict_0p6
 caches/.v3_0p6b.marker	9000	-	bash -c ".venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml && touch caches/.v3_0p6b.marker"
 runs/lw_j_vocab_v3_0p6b_rag/checkpoint	13000	caches/.v3_0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml
 runs/lw_j_vocab_v3_0p6b_rag/eval/recite.json	3000	runs/lw_j_vocab_v3_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_vocab_v3_0p6b_rag.yaml --checkpoint runs/lw_j_vocab_v3_0p6b_rag/checkpoint
+# forgetting baselines (user-requested remember/forget metrics)
+runs/base-eval-full/recite.json	3000	-	.venv/bin/python scripts/evaluate.py --base --experiment configs/experiments/lw_i_vocab_0p6b_rag.yaml
+runs/base-1p7b-general.json	6000	-	.venv/bin/python scripts/base_general.py Qwen/Qwen3-1.7B runs/base-1p7b-general.json
+runs/base-general-4B.json	11000	-	.venv/bin/python scripts/base_general.py Qwen/Qwen3-4B runs/base-general-4B.json
+runs/base-general-8B.json	19000	-	.venv/bin/python scripts/base_general.py Qwen/Qwen3-8B runs/base-general-8B.json
+runs/base-general-llama8b.json	19000	-	.venv/bin/python scripts/base_general.py meta-llama/Llama-3.1-8B-Instruct runs/base-general-llama8b.json
+runs/base-general-phi4mini.json	10000	-	.venv/bin/python scripts/base_general.py microsoft/Phi-4-mini-reasoning runs/base-general-phi4mini.json
+runs/base-general-mistral7b.json	17000	-	.venv/bin/python scripts/base_general.py mistralai/Mistral-7B-Instruct-v0.1 runs/base-general-mistral7b.json
