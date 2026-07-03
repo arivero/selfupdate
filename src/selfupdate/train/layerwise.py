@@ -128,13 +128,18 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     device = cfg.model.device
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    # bf16 base for LoRA (frozen weights) AND for the sequential schedule:
-    # only the single active block needs fp32 master weights (cast per stage
-    # in _train_sequential); summed full-FT trains all blocks every step and
-    # keeps fp32 masters throughout.
-    full_ft_all_blocks = not cfg.train.lora.enabled and cfg.train.schedule != "sequential"
+    # bf16 base for LoRA (frozen weights) AND for the sequential/tail_only
+    # schedules: only actively-training blocks need fp32 master weights
+    # (cast per stage / per window); summed full-FT trains all blocks every
+    # step and keeps fp32 masters throughout.
+    full_ft_all_blocks = (not cfg.train.lora.enabled
+                          and cfg.train.schedule not in ("sequential", "tail_only"))
     base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
-    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
+    # warm-start: student weights from a prior run's checkpoint; the teacher
+    # (cache identity / frozen copy / adapters-off) stays cfg.model.name
+    student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
+                   if cfg.train.init_from else cfg.model.name)
+    model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
     model.to(device)
     peft_model = None
     if cfg.train.lora.enabled:
@@ -165,6 +170,10 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
 
     if cfg.train.schedule == "summed":
         _train_summed(cfg, stack, cache, tok, log, teacher)
+    elif cfg.train.schedule == "tail_only":
+        if cfg.train.tail_ce_blocks <= 0:
+            raise ValueError("tail_only needs tail_ce_blocks > 0")
+        _train_tail_only(cfg, stack, cache, tok, log, teacher)
     elif cfg.train.schedule == "teacher_censored":
         if teacher is None:
             raise ValueError(
@@ -460,6 +469,83 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                     prefix_lines=r["prefix_lines"],
                     # per-epoch forgetting reference: CER says when the poem
                     # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
+                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    minutes=round((time.time() - t0) / 60, 1))
+            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+
+
+def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
+    """Phase-2 readout training, motivated by the chimera result: storage
+    trained fully block-local can be unlocked by a readout learned ON TOP of
+    the frozen body. Body blocks [1..tail0) are frozen; only the tail window
+    trains (tail_step on the student's own frozen-body stream). Combined
+    with ``init_from`` this splits the pipeline into an embarrassingly
+    parallel storage phase and a bounded k-block readout phase."""
+    device = cfg.model.device
+    n = stack.n_layers
+    k = cfg.train.tail_ce_blocks
+    tail0 = n - k + 1
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    for L in range(1, tail0):
+        stack.blocks[L - 1].requires_grad_(False)
+    if not cfg.train.lora.enabled:
+        for L in range(tail0, n + 1):
+            stack.blocks[L - 1].float()  # fp32 masters for the window only
+    online = teacher is not None
+    ds = _make_dataset(cfg, cache, tok,
+                       [] if online else list(range(tail0, n + 1)),
+                       with_teacher_ids=online)
+    records = ds.records
+    loader = _loader(cfg, ds)
+    opts = {
+        L: torch.optim.AdamW(
+            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
+        )
+        for L in range(tail0, n + 1)
+    }
+
+    step = accum = 0
+    t0 = time.time()
+    for epoch in range(cfg.train.epochs):
+        for items in loader:
+            for it in items:
+                targets = (teacher.aligned_targets(it, device) if online
+                           else {L: it.hidden[L].to(device)
+                                 for L in range(tail0, n + 1)})
+                ids = it.student_ids.to(device)[None]
+                pos = it.position_ids.to(device)[None]
+                with torch.no_grad(), torch.autocast(device, dtype=torch.bfloat16):
+                    h = stack.embed(ids)
+                    pos_emb = stack.rope(h, pos)
+                    for L in range(1, tail0):
+                        h = stack.run_block(L, h, pos_emb)
+                gold = ids[0, it.ans0: it.s0 + it.A]
+                tail_losses, _ = tail_step(
+                    stack, tail0, h.detach(), pos_emb,
+                    {L: targets[L] for L in range(tail0, n + 1)},
+                    it.s0, it.A, it.ans0 - it.s0, gold,
+                    loss_fn, cfg.train.tail_ce_weight,
+                )
+                accum += 1
+                log.log(kind="train", epoch=epoch, step=step,
+                        loss=sum(tail_losses) / k, per_layer=tail_losses)
+                if accum % cfg.train.grad_accum == 0:
+                    for L, opt in opts.items():
+                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
+                        opt.step()
+                        opt.zero_grad(set_to_none=True)
+                    step += 1
+        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            if not cfg.train.lora.enabled:
+                for L in range(tail0, n + 1):
+                    stack.blocks[L - 1].to(torch.bfloat16)
+            r = recite_eval(stack.model, tok, records, limit=8)
+            if not cfg.train.lora.enabled and epoch < cfg.train.epochs - 1:
+                for L in range(tail0, n + 1):
+                    stack.blocks[L - 1].float()
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+                    prefix_lines=r["prefix_lines"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
