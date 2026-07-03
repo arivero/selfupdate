@@ -43,6 +43,48 @@ blocks. The practical program is therefore:
 `scripts/watchdog_backlog.tsv` are layerwise-only. They contain evals or
 layerwise jobs guarded by existing done-file conventions.
 
+## Wave I Result (D1, 2026-07-03 ~23:20)
+
+Loss sweep at 0.6B, v2 data, 40 epochs, summed + tail-CE k=4 (champion
+operating point), full-corpus CER / line-exact:
+
+| loss | CER | exact | note |
+|---|---|---|---|
+| **vocab_mse** | **0.024** | **0.978** | new champion loss (Gram metric ‖W·Δh‖²) |
+| l2mse | 0.035 | 0.957 | promoted |
+| huber | 0.061 | 0.940 | retired (dominated) |
+| nmse (seed 43 anchor) | 0.092 | 0.898 | replication gate passed (0.11±0.03) |
+| cosine | 0.104 | 0.924 | retired |
+| nmse_strict / vocab_strict | 0.85 | 0.0 | controls: storage without readout never recites |
+| lens_kl (±tail) | pending | | poor curves + inner-layer lens is miscalibrated (unembedding only decodes final-layer geometry); expected kill |
+
+Understanding probes (delta profiles, layer_swap ablate, delta-vector
+convergence):
+
+- Weight-delta mass concentrates at L22-24 in every arm, but single-layer
+  ablation there barely hurts (l2mse: ablate L23/L24 -> CER 0.00) —
+  storage is distributed and redundant. Ablating any ONE tail block
+  (L25-28) destroys recitation (CER 0.65-0.88): the readout is a fragile
+  co-adapted 4-block circuit; storage is not.
+- Delta-vector cosine: huber≈nmse (0.95-0.99, same trajectory); l2mse near
+  them (0.87-0.91); vocab_mse writes a substantially different solution
+  (0.48-0.70 vs all) — and the best one. The metric changes WHAT is
+  written, not just how fast.
+- tail vs strict at fixed loss: low/mid deltas identical (cos 0.99+), top
+  window diverges (0.58-0.62) — tail-CE re-carves only the readout;
+  the body's storage is fully determined by hidden matching.
+- Frozen-vocabulary rule verified bitwise on trained checkpoints:
+  embed/norm deltas exactly 0.0 (tail-CE routes gradient THROUGH the
+  frozen head, never INTO it).
+- Family smokes: Llama-3.1-8B / Phi-4-mini / Mistral-7B pass all stages
+  (template-agnostic machinery works); gpt-oss-20b passes load/adapt/
+  teacher/local-step and OOMs only at the connected tail on a shared GPU
+  — retry k=1 on an empty card.
+
+D1 decisions: campaign losses = vocab_mse + l2mse. Wave J: scale
+(1.7B full-FT, 4B/8B LoRA online), k∈{2,4,8} at 1.7B, family arms,
+gpt-oss retry. lens_kl arms run to the 12k floor, then judged.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer

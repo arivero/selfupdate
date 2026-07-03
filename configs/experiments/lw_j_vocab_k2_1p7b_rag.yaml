@@ -1,0 +1,20 @@
+# Wave J scale: campaign loss at 1.7B — does the readout window scale
+# with depth (fixed k or fixed fraction)?
+run_name: lw_j_vocab_k2_1p7b_rag
+model:
+  name: Qwen/Qwen3-1.7B
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 2
+  tail_ce_weight: 0.5
+  lora:
+    enabled: false

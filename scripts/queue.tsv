@@ -35,3 +35,24 @@ runs/lw_i_nmse_strict_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_nmse_strict_0p
 runs/lw_i_nmse_strict_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_nmse_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_nmse_strict_0p6b_rag --limit 24
 runs/lw_i_vocab_strict_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_vocab_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_vocab_strict_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
 runs/lw_i_vocab_strict_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_vocab_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_vocab_strict_0p6b_rag --limit 24
+# WAVE J queued 2026-07-03 23:21:46 — D1: campaign losses vocab_mse + l2mse (see EXPERIMENTS.md)
+caches/.1p7b_v2.marker	9000	-	bash -c ".venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_j_vocab_k4_1p7b_rag.yaml && touch caches/.1p7b_v2.marker"
+runs/lw_j_vocab_k4_1p7b_rag/checkpoint	33000	caches/.1p7b_v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_vocab_k4_1p7b_rag.yaml
+runs/lw_j_vocab_k4_1p7b_rag/eval/recite.json	6000	runs/lw_j_vocab_k4_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_vocab_k4_1p7b_rag.yaml --checkpoint runs/lw_j_vocab_k4_1p7b_rag/checkpoint
+runs/lw_j_vocab_k2_1p7b_rag/checkpoint	33000	caches/.1p7b_v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_vocab_k2_1p7b_rag.yaml
+runs/lw_j_vocab_k2_1p7b_rag/eval/recite.json	6000	runs/lw_j_vocab_k2_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_vocab_k2_1p7b_rag.yaml --checkpoint runs/lw_j_vocab_k2_1p7b_rag/checkpoint
+runs/lw_j_vocab_k8_1p7b_rag/checkpoint	33000	caches/.1p7b_v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_vocab_k8_1p7b_rag.yaml
+runs/lw_j_vocab_k8_1p7b_rag/eval/recite.json	6000	runs/lw_j_vocab_k8_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_vocab_k8_1p7b_rag.yaml --checkpoint runs/lw_j_vocab_k8_1p7b_rag/checkpoint
+runs/lw_j_l2mse_k4_1p7b_rag/checkpoint	33000	caches/.1p7b_v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_l2mse_k4_1p7b_rag.yaml
+runs/lw_j_l2mse_k4_1p7b_rag/eval/recite.json	6000	runs/lw_j_l2mse_k4_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_l2mse_k4_1p7b_rag.yaml --checkpoint runs/lw_j_l2mse_k4_1p7b_rag/checkpoint
+runs/lw_j_phi4mini_rag/checkpoint	14000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_phi4mini_rag.yaml
+runs/lw_j_phi4mini_rag/eval/recite.json	14000	runs/lw_j_phi4mini_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_phi4mini_rag.yaml --checkpoint runs/lw_j_phi4mini_rag/checkpoint
+runs/lw_j_qwen4b_rag/checkpoint	15000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_qwen4b_rag.yaml
+runs/lw_j_qwen4b_rag/eval/recite.json	15000	runs/lw_j_qwen4b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_qwen4b_rag.yaml --checkpoint runs/lw_j_qwen4b_rag/checkpoint
+runs/lw_j_mistral7b_rag/checkpoint	22000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_mistral7b_rag.yaml
+runs/lw_j_mistral7b_rag/eval/recite.json	22000	runs/lw_j_mistral7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_mistral7b_rag.yaml --checkpoint runs/lw_j_mistral7b_rag/checkpoint
+runs/lw_j_qwen8b_rag/checkpoint	25000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_qwen8b_rag.yaml
+runs/lw_j_qwen8b_rag/eval/recite.json	25000	runs/lw_j_qwen8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_qwen8b_rag.yaml --checkpoint runs/lw_j_qwen8b_rag/checkpoint
+runs/lw_j_llama8b_rag/checkpoint	25000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_llama8b_rag.yaml
+runs/lw_j_llama8b_rag/eval/recite.json	25000	runs/lw_j_llama8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_llama8b_rag.yaml --checkpoint runs/lw_j_llama8b_rag/checkpoint
+runs/smoke_gptoss_k1.done	43000	-	bash -c ".venv/bin/python scripts/smoke_family.py --model openai/gpt-oss-20b --tail-blocks 1 > runs/pipeline_smoke_gptoss_k1.log 2>&1 && touch runs/smoke_gptoss_k1.done"
