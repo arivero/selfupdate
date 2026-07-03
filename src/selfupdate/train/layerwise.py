@@ -8,12 +8,22 @@ is a single block's graph.
 
 Schedules (registry; new variants = one new class):
 
-- ``summed``     every block gets its local loss on every item, all blocks
-                 update each optimizer step.
+- ``summed``     student-stream inputs: block L consumes the student's own
+                 h_{L-1} (detached); every block gets its local loss on every
+                 item. Inputs drift as shallow blocks train.
 - ``sequential`` block L trains to plateau while blocks < L stay frozen with
                  their outputs precomputed into an activation cache; blocks
                  <= L never run again in later stages. This is the contract
                  that streams one 120B block at a time.
+- ``teacher_censored`` teacher-stream inputs: block L consumes the TEACHER's
+                 h_{L-1} with the privileged rows deleted (censored own
+                 attention, teacher position ids kept so the RoPE gap is
+                 preserved). Teacher h_{L-1} at answer positions already
+                 carries the context influence of layers 1..L-1, so each block
+                 learns only its own layer's increment of the context effect.
+                 Inputs are stationary and every layer is independent —
+                 embarrassingly parallel across GPUs. Requires the online
+                 teacher (LoRA) and compaction=remove.
 """
 
 from __future__ import annotations
@@ -76,6 +86,17 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
 
     if cfg.train.schedule == "summed":
         _train_summed(cfg, stack, cache, tok, log, peft_model)
+    elif cfg.train.schedule == "teacher_censored":
+        if not online:
+            raise NotImplementedError(
+                "teacher_censored needs full-sequence teacher states; only the "
+                "online teacher (train.lora.enabled + train.online_teacher) "
+                "provides them without a full-sequence cache"
+            )
+        if cfg.mask.compaction != "remove":
+            raise ValueError("teacher_censored assumes compaction=remove "
+                             "(stub rows have no teacher counterpart)")
+        _train_teacher_censored(cfg, stack, tok, log, peft_model)
     elif cfg.train.schedule == "sequential":
         if online:
             raise NotImplementedError(
@@ -130,6 +151,84 @@ def _online_targets(stack, peft_model, it, device):
             h = stack.run_block(L, h, pos_emb)
             targets[L] = stack.loss_view(L, h)[0, it.t0: it.t0 + it.A].detach()
     return targets
+
+
+def _train_teacher_censored(cfg, stack, tok, log, peft_model):
+    """Schedule (b): per-block fitting on stationary teacher-stream inputs.
+
+    One adapters-off pass per item yields the full-sequence teacher states
+    t_h[0..n]. Block L (adapters on) consumes the censored rows of t_h[L-1]
+    (prefix + aligned span, privileged rows deleted, teacher position ids
+    kept) and matches the teacher's aligned-span t_h[L]. Blocks never see
+    each other's outputs: layer independence holds by construction, so this
+    is the schedule that parallelizes across GPUs at scale."""
+    device = cfg.model.device
+    n = stack.n_layers
+    ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
+    records = ds.records
+    loader = _loader(cfg, ds)
+    opts = {
+        L: torch.optim.AdamW(
+            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
+        )
+        for L in range(1, n + 1)
+    }
+
+    step = accum = 0
+    t0 = time.time()
+    for epoch in range(cfg.train.epochs):
+        for items in loader:
+            for it in items:
+                t_ids = it.teacher_ids.to(device)[None]
+                n_t = t_ids.shape[1]
+                t_pos = torch.arange(n_t, device=device)[None]
+                # frozen teacher states, all layers, full teacher sequence
+                with torch.no_grad(), peft_model.disable_adapter(), \
+                        torch.autocast(device, dtype=torch.bfloat16):
+                    h = stack.embed(t_ids)
+                    pos_emb_full = stack.rope(h, t_pos)
+                    t_states = [h]
+                    for L in range(1, n + 1):
+                        h = stack.run_block(L, h, pos_emb_full)
+                        t_states.append(h)
+
+                # censored view: prefix rows + aligned rows, teacher positions
+                tA0 = it.t0
+                rows = torch.cat([
+                    torch.arange(it.s0, device=device),          # shared prefix
+                    torch.arange(tA0, tA0 + it.A, device=device),  # mid+answer
+                ])
+                pos_c = rows[None]  # teacher absolute positions == row indices
+                pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
+
+                layer_losses = []
+                for L in range(1, n + 1):
+                    inp = t_states[L - 1][:, rows].detach()
+                    with torch.no_grad():
+                        target = t_states[L][0, tA0: tA0 + it.A]
+                        if L == n:
+                            target = stack.final_norm(target)
+                    loss_val, _ = local_block_step(
+                        stack, L, inp, pos_emb_c, target,
+                        it.s0, it.A, cfg.train.hidden_loss,
+                    )
+                    layer_losses.append(loss_val)
+                accum += 1
+                log.log(kind="train", epoch=epoch, step=step,
+                        loss=sum(layer_losses) / n, per_layer=layer_losses)
+                if accum % cfg.train.grad_accum == 0:
+                    for L, opt in opts.items():
+                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
+                        opt.step()
+                        opt.zero_grad(set_to_none=True)
+                    step += 1
+        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            r = recite_eval(stack.model, tok, records, limit=8)
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+                    prefix_lines=r["prefix_lines"],
+                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    minutes=round((time.time() - t0) / 60, 1))
+            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
 
 def _train_summed(cfg, stack, cache, tok, log, peft_model=None):

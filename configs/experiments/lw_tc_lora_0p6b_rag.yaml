@@ -1,7 +1,7 @@
-run_name: lw_summed_lora_0p6b_rag
+run_name: lw_tc_lora_0p6b_rag
 train:
   method: layerwise
-  schedule: summed
+  schedule: teacher_censored
   epochs: 10
   online_teacher: true
   lora:

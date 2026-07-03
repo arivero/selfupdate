@@ -88,7 +88,27 @@ property: at step 0 the student's layer-L output differs from the target
 projections (TinyBERT's W_h) are needed, and ℓ_L starts small and measures
 exactly the context's contribution to layer L.
 
-## Where the two schedules differ
+## Where the schedules differ: whose stream feeds block L
+
+Two inequivalent layerwise designs (both block-local in the backward sense):
+
+- **(a) student-stream** (`summed`, `sequential`): block L consumes the
+  *student's* h_{L-1}. Its target gap is the context effect **accumulated over
+  all layers up to L** — measured at init: relative loss 0.002 (L1) → 0.42
+  (L28), growing with depth. Inputs drift as shallow blocks train.
+- **(b) censored teacher-stream** (`teacher_censored`): block L consumes the
+  *teacher's* h_{L-1} with the privileged rows deleted and teacher position
+  ids kept (its own attention is censored; everything upstream already carries
+  the context influence). Each block owes only **its own layer's increment**
+  of the context effect — measured at init: mean 0.021, 13× smaller than (a),
+  near-zero at L28, peaking at L≈7. Inputs are stationary and layers are
+  fully independent → embarrassingly parallel across GPUs. The increment
+  profile itself is a localization readout: it measures directly which layers
+  perform the context integration. Trade-off: blocks compose their own
+  (student) stream at inference, so cross-layer interactions of the
+  compensations are never trained.
+
+## Where schedules (a)-internal differ
 
 - `summed`: every block gets its local loss on every example; per-block AdamW
   states persist for all blocks. Shallow targets are chased while deeper
