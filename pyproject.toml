@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml",
     "jiwer>=3",
     "pandas",
+    "tabulate",
     "matplotlib",
     "tqdm",
 ]
