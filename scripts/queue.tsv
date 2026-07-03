@@ -2,7 +2,7 @@ runs/kd_lora_ce_hi_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py 
 runs/kd_lora_ce_hi_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_lora_ce_hi_0p6b_rag/checkpoint
 runs/lw_tc_ce_hi_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tc_ce_hi_0p6b_rag.yaml
 runs/lw_tc_ce_hi_0p6b_rag/eval/recite.json	2500	runs/lw_tc_ce_hi_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_tc_ce_hi_0p6b_rag/checkpoint
-runs/kd_ce_long_0p6b_rag/checkpoint	9500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_long_0p6b_rag.yaml
+runs/kd_ce_long_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_long_0p6b_rag.yaml
 runs/kd_ce_long_0p6b_rag/eval/recite.json	2500	runs/kd_ce_long_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_long_0p6b_rag/checkpoint
 runs/kd_lora_ce_hi_1p7b_rag/checkpoint	4500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml
 runs/kd_lora_ce_hi_1p7b_rag/eval/recite.json	5000	runs/kd_lora_ce_hi_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml --checkpoint runs/kd_lora_ce_hi_1p7b_rag/checkpoint
@@ -10,7 +10,7 @@ caches/.v2.marker	8500	-	bash -c '.venv/bin/python scripts/build_teacher_cache.p
 runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	2500	-	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml
 runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
 runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_lora_ce_hi_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_lora_ce_hi_v2_0p6b_rag/checkpoint
-runs/kd_ce_v2_0p6b_rag/checkpoint	9500	caches/.v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml
+runs/kd_ce_v2_0p6b_rag/checkpoint	11000	caches/.v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml
 runs/kd_ce_v2_0p6b_rag/eval/recite.json	2500	runs/kd_ce_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_ce_v2_0p6b_rag.yaml --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
 runs/kd_ce_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_ce_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_ce_v2_0p6b_rag/checkpoint
 runs/kd_ce_0p6b_rag/eval/recite_long.json	2500	-	.venv/bin/python scripts/recite_long.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
