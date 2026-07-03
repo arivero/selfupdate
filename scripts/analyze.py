@@ -52,7 +52,8 @@ def results_table() -> pd.DataFrame:
         rows.append({
             "run": run_dir.name,
             "method": cfg["train"]["method"],
-            "schedule": cfg["train"].get("schedule", ""),
+            "schedule": (cfg["train"].get("schedule", "")
+                         if cfg["train"]["method"] == "layerwise" else ""),
             "lora": cfg["train"]["lora"]["enabled"],
             "mode": cfg["mask"]["mode"],
             "compaction": cfg["mask"]["compaction"],
