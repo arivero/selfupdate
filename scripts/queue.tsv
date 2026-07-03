@@ -142,3 +142,11 @@ runs/kd_lora_ce_hi_e40_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_e40_0p6
 runs/kd_lora_ce_hi_e40_v2_0p6b_rag/checkpoint	2500	runs/.tests_green	.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_e40_v2_0p6b_rag.yaml
 runs/kd_lora_ce_hi_e40_v2_0p6b_rag/eval/recite.json	2500	runs/kd_lora_ce_hi_e40_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_e40_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_e40_v2_0p6b_rag/checkpoint
 runs/kd_lora_ce_hi_e40_v2_0p6b_rag/eval/recite_long.json	2500	runs/kd_lora_ce_hi_e40_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/kd_lora_ce_hi_e40_v2_0p6b_rag.yaml --checkpoint runs/kd_lora_ce_hi_e40_v2_0p6b_rag/checkpoint
+# --- Wave H follow-ups (2026-07-03 evening): depth threshold for KL, window size, best-method x best-data ---
+runs/lw_lens_kl_deep_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_lens_kl_deep_0p6b_rag.yaml
+runs/lw_lens_kl_deep_0p6b_rag/eval/recite.json	2500	runs/lw_lens_kl_deep_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_lens_kl_deep_0p6b_rag/checkpoint
+runs/lw_tail_ce_k2_e40_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tail_ce_k2_e40_0p6b_rag.yaml
+runs/lw_tail_ce_k2_e40_0p6b_rag/eval/recite.json	2500	runs/lw_tail_ce_k2_e40_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_tail_ce_k2_e40_0p6b_rag/checkpoint
+runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint	9000	caches/.v2.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tail_ce_e40_v2_0p6b_rag.yaml
+runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite.json	2500	runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_tail_ce_e40_v2_0p6b_rag.yaml --checkpoint runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint
+runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite_long.json	2500	runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_tail_ce_e40_v2_0p6b_rag.yaml --checkpoint runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint
