@@ -166,3 +166,14 @@ Remaining for a new family: run build_teacher_cache premise check and eyeball
 one adapted record; Gemma additionally needs sliding-window mask support.
 Qualitative forgetting probe: scripts/sanity_chat.py (trivial questions incl.
 a Quijote control we never train on; queue writes eval/sanity.json per run).
+
+## gpu_scheduler on shared Slurm nodes: nvidia-smi vs CUDA_VISIBLE_DEVICES numbering
+
+Inside an allocation like CUDA_VISIBLE_DEVICES=0,2,3, the scheduler's
+free_mb probe (`nvidia-smi -i N`) uses PHYSICAL indices while job placement
+(CUDA_VISIBLE_DEVICES=N) uses LOGICAL ones — so the probe can read a
+stranger's card (observed 2026-07-03: probe read rplaza's physical GPU1).
+Benign with MAX_PER_GPU=1 (one job per card, placement correct); wrong if
+tighter packing is ever used on shared nodes. Fix: in gpu_scheduler.sh map
+probe indices through the CUDA_VISIBLE_DEVICES list before calling
+nvidia-smi -i.
