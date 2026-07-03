@@ -29,6 +29,28 @@ mse(normalize(H_student), normalize(H_teacher))
 
 This matches direction only and ignores magnitude.
 
+`cosine`: `1 - mean(cos(h_s, h_t))` — direction only, linear near optimum.
+
+`huber`: smooth-L1 on `H / rms(H_teacher)` — scale-comparable across layers
+like nmse, robust to heavy-tailed residual rows.
+
+Vocabulary-metric kinds measure the difference as the **frozen vocabulary**
+sees it (both apply the frozen final norm first, except at `h{n}` which is
+already post-norm):
+
+`vocab_mse`: `||W·Δh||² / ||W·h_t||²` with `W` the frozen unembedding —
+MSE in logit space, computed through the precomputed Gram matrix
+`M = WᵀW` ([H,H], one 4 MB buffer). Equivalently: `Δhᵀ M Δh`.
+
+`lens_kl`: `KL(lens(h_t) ‖ lens(h_s))` through the frozen norm + head.
+`vocab_mse` is the flat local approximation of `lens_kl` (the exact local
+metric of KL is the Fisher pullback `Wᵀ(diag(p) - ppᵀ)W`). Wave H's failed
+lens-KL was a *behavioral auxiliary without tail-CE*; these kinds replace
+the *storage* metric and compose with tail-CE — a different question.
+
+Both vocab kinds depend on the Frozen-Vocabulary Principle below: the
+metric is only meaningful because the vocabulary never moves.
+
 Local readout auxiliaries use gold answer CE through the frozen final norm and
 LM head. They are used only where explicitly configured:
 

@@ -43,7 +43,7 @@ from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
-from .losses import answer_ce, hidden_match
+from .losses import HiddenLoss, answer_ce
 
 
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
@@ -58,10 +58,15 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
     is decoded through the frozen final norm + lm_head (the logit lens) and
     CE'd against the gold answer — Belilovsky-style local auxiliary heads,
     for free. The head is frozen and ``h_in`` detached, so locality is
-    untouched: only block L's params see this gradient."""
+    untouched: only block L's params see this gradient.
+
+    ``kind`` is a HiddenLoss or a kind string (coerced; vocab-metric kinds
+    need the constructed HiddenLoss carrying the frozen norm/head)."""
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
-        loss = hidden_match(stack.loss_view(L, h_out)[0, s0: s0 + A], target, kind)
+        loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
+                       normed=(L == stack.n_layers))
         if lens_ce_w > 0:
             s_lens = stack.lm_head(
                 stack.final_norm(h_out)[0, s0 + ans_off - 1: s0 + A - 1])
@@ -76,10 +81,11 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
     through the frozen final norm + lm_head, but the graph is rooted at the
     detached ``h_in``, so the backward still touches only block n's params."""
     n = stack.n_layers
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(n, h_in, pos_emb)
         normed = stack.final_norm(h_out)
-        loss = hidden_match(normed[0, s0: s0 + A], target, kind)
+        loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
         if ce_w > 0:
             logits = stack.lm_head(normed[0, s0 + ans_off - 1: s0 + A - 1])
             loss = loss + ce_w * answer_ce(logits, gold)
@@ -97,13 +103,15 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
     at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
     norm/head receive none. Peak graph = ``n - L0 + 1`` blocks."""
     n = stack.n_layers
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h = h_in
         losses = []
         for L in range(L0, n + 1):
             h = stack.run_block(L, h, pos_emb)
-            losses.append(hidden_match(
-                stack.loss_view(L, h)[0, s0: s0 + A], targets[L], kind))
+            losses.append(loss_fn(
+                stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
+                normed=(L == n)))
         total = sum(losses)
         if ce_w > 0:
             logits = stack.lm_head(
@@ -225,6 +233,7 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
     is the schedule that parallelizes across GPUs at scale."""
     device = cfg.model.device
     n = stack.n_layers
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     records = ds.records
     loader = _loader(cfg, ds)
@@ -273,13 +282,13 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
                         gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
                         loss_val, _ = last_block_step(
                             stack, inp, pos_emb_c, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            it.ans0 - it.s0, gold, loss_fn,
                             cfg.train.last_block_ce_weight,
                         )
                     else:
                         loss_val, _ = local_block_step(
                             stack, L, inp, pos_emb_c, target,
-                            it.s0, it.A, cfg.train.hidden_loss,
+                            it.s0, it.A, loss_fn,
                         )
                     layer_losses.append(loss_val)
                 accum += 1
@@ -306,6 +315,7 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
 def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
     device = cfg.model.device
     n = stack.n_layers
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
     online = cfg.train.online_teacher
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
@@ -342,14 +352,14 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                         tail_losses, h = tail_step(
                             stack, tail0, h.detach(), pos_emb, tail_targets,
                             it.s0, it.A, it.ans0 - it.s0, gold,
-                            cfg.train.hidden_loss, cfg.train.tail_ce_weight,
+                            loss_fn, cfg.train.tail_ce_weight,
                         )
                         layer_losses.extend(tail_losses)
                         break
                     if L == n:
                         loss_val, h = last_block_step(
                             stack, h.detach(), pos_emb, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            it.ans0 - it.s0, gold, loss_fn,
                             max(cfg.train.last_block_ce_weight,
                                 cfg.train.lens_ce_weight
                                 if L >= cfg.train.lens_ce_from else 0.0),
@@ -359,7 +369,7 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                                   if L >= cfg.train.lens_ce_from else 0.0)
                         loss_val, h = local_block_step(
                             stack, L, h.detach(), pos_emb, target,
-                            it.s0, it.A, cfg.train.hidden_loss,
+                            it.s0, it.A, loss_fn,
                             lens_ce_w=lens_w, gold=gold,
                             ans_off=it.ans0 - it.s0,
                         )
@@ -430,6 +440,7 @@ class StudentActCache:
 def _train_sequential(cfg, stack, cache, tok, log):
     device = cfg.model.device
     n = stack.n_layers
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
     act_cache = StudentActCache()
     t0 = time.time()
 
@@ -466,13 +477,13 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
                         loss_val, _ = last_block_step(
                             stack, h_in.detach(), pos_emb, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            it.ans0 - it.s0, gold, loss_fn,
                             cfg.train.last_block_ce_weight,
                         )
                     else:
                         loss_val, _ = local_block_step(
                             stack, L, h_in.detach(), pos_emb, target,
-                            it.s0, it.A, cfg.train.hidden_loss,
+                            it.s0, it.A, loss_fn,
                         )
                     epoch_losses.append(loss_val)
                     accum += 1

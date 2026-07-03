@@ -83,7 +83,9 @@ class TrainConfig:
     grad_accum: int = 8
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
-    hidden_loss: str = "nmse"  # nmse | l2mse
+    # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
+    # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
+    hidden_loss: str = "nmse"
     # auxiliary CE on gold answer tokens (0 = pure distillation). Pins the
     # student's argmax to the gold recitation and counters free-run drift
     # caused by teacher formatting quirks at the trained positions.
