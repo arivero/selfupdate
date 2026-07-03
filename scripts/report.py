@@ -56,9 +56,19 @@ def _read_json(p):
     return json.loads(p.read_text()) if p.exists() else None
 
 
+def _best_run():
+    """(name, recite dict) of the best full-corpus recitation among all runs."""
+    best = None
+    for d in sorted(RUNS.iterdir()):
+        r = _read_json(d / "eval/recite.json")
+        if r and (best is None or r["cer"] < best[1]["cer"]):
+            best = (d.name, r)
+    return best
+
+
 def summary_text() -> str:
     base = _read_json(RUNS / "base-eval-full/recite.json")
-    kd = _read_json(RUNS / "kd_ce_0p6b_rag/eval/recite.json")
+    best = _best_run()
     lines = [
         "Project: self-distillation of context (same model as teacher and student).",
         "Teacher sees privileged context (RAG passage / <think> trace); the student",
@@ -72,16 +82,20 @@ def summary_text() -> str:
         "online teacher (adapters-off = frozen teacher, no cache).",
         "",
     ]
-    if base and kd:
+    if base and best:
+        name, kd = best
         lines += [
             f"Recitation (full corpus, n={base['n']}): base CER {base['cer']:.3f} ->",
-            f"best (KD+goldCE) CER {kd['cer']:.3f}, {kd['line_exact']:.0%} lines verbatim.",
+            f"best ({name}) CER {kd['cer']:.3f}, {kd['line_exact']:.0%} lines verbatim.",
             f"Forgetting probe (CE on held-out text): base {base['general']['mean_ce']:.3f},",
-            f"KD+CE {kd['general']['mean_ce']:.3f} (delta +{kd['general']['mean_ce']-base['general']['mean_ce']:.2f}).",
+            f"best-run {kd['general']['mean_ce']:.3f} (delta {kd['general']['mean_ce']-base['general']['mean_ce']:+.2f}).",
+            "  (computed from current artifacts)",
             "",
         ]
     lines += [
-        "Key findings:",
+        "Key findings (NARRATIVE SNAPSHOT written 2026-07-03 — tables and",
+        "figure pages are computed from current artifacts; re-read them if",
+        "this report was regenerated after new experiments):",
         " 1. Pure top-k KL saturates (KL~0.03) without free-run recitation; a gold-CE",
         "    auxiliary makes recitation click. Memorization is front-of-poem biased.",
         " 2. Pure hidden matching (any schedule) does not recite at 0.6B/10 epochs;",
@@ -110,21 +124,20 @@ def results_page(pdf):
                md.read_text().replace("|", " "), fontsize=6.5)
 
 
-def layer_swap_page(pdf):
-    csv = RUNS / "kd_ce_0p6b_rag/eval/layer_swap.csv"
-    if not csv.exists():
-        return
-    df = pd.read_csv(csv)
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.plot(df.layer, df.graft_cer, marker="o", label="graft (base + trained block L)")
-    ax.plot(df.layer, df.ablate_cer, marker="s", label="ablate (trained, block L reverted)")
-    ax.set_xlabel("layer")
-    ax.set_ylabel("recitation CER")
-    ax.set_title("Causal localization: layer graft/ablate on kd_ce checkpoint")
-    ax.legend()
-    fig.tight_layout()
-    pdf.savefig(fig)
-    plt.close(fig)
+def layer_swap_pages(pdf):
+    for csv in sorted(RUNS.glob("*/eval/layer_swap.csv")):
+        run = csv.parent.parent.name
+        df = pd.read_csv(csv)
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        ax.plot(df.layer, df.graft_cer, marker="o", label="graft (base + trained block L)")
+        ax.plot(df.layer, df.ablate_cer, marker="s", label="ablate (trained, block L reverted)")
+        ax.set_xlabel("layer")
+        ax.set_ylabel("recitation CER")
+        ax.set_title(f"Causal localization: layer graft/ablate — {run}")
+        ax.legend()
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
 
 
 def per_run_appendix(pdf):
@@ -181,9 +194,9 @@ def main() -> None:
         _image_page(pdf, "Training dynamics (loss / eval CER)", RUNS / "curves.png")
         _image_page(pdf, "Per-layer weight-delta profiles & heatmap",
                     RUNS / "delta_profiles.png")
-        layer_swap_page(pdf)
-        _image_page(pdf, "Logit-lens depth profile (kd_ce vs base)",
-                    RUNS / "kd_ce_0p6b_rag/eval/logit_lens.png")
+        layer_swap_pages(pdf)
+        for png in sorted(RUNS.glob("*/eval/logit_lens.png")):
+            _image_page(pdf, f"Logit-lens depth profile — {png.parent.parent.name}", png)
         # convergence tables as text
         conv = sorted(RUNS.glob("convergence_*.csv"))
         if conv:

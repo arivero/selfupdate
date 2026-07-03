@@ -399,10 +399,18 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         h_in = act_cache.get(it.example_id).to(device, torch.float32)[None]
                     pos_emb = stack.rope(h_in, pos)
                     target = it.hidden[L].to(device)
-                    loss_val, _ = local_block_step(
-                        stack, L, h_in.detach(), pos_emb, target,
-                        it.s0, it.A, cfg.train.hidden_loss,
-                    )
+                    if L == n:
+                        gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
+                        loss_val, _ = last_block_step(
+                            stack, h_in.detach(), pos_emb, target, it.s0, it.A,
+                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            cfg.train.last_block_ce_weight,
+                        )
+                    else:
+                        loss_val, _ = local_block_step(
+                            stack, L, h_in.detach(), pos_emb, target,
+                            it.s0, it.A, cfg.train.hidden_loss,
+                        )
                     epoch_losses.append(loss_val)
                     accum += 1
                     if accum % cfg.train.grad_accum == 0:

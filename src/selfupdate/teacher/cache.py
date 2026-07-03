@@ -38,13 +38,17 @@ def cache_config_hash(model_name: str, mask_mode: str, extra: dict | None = None
 
 def resolve_cache_dir(cfg) -> tuple[Path, str]:
     """Canonical cache directory + expected hash for an ExperimentConfig.
-    Must mirror scripts/build_teacher_cache.py exactly."""
+    Must mirror scripts/build_teacher_cache.py exactly. The hash covers every
+    payload-shaping parameter (topk, hidden dtype, schema) so a config change
+    can never silently reuse an incompatible cache."""
     examples_sha = hashlib.sha256(
         Path(cfg.data.examples_path).read_bytes()
     ).hexdigest()[:16]
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
-        {"compaction": cfg.mask.compaction, "examples": examples_sha},
+        {"compaction": cfg.mask.compaction, "examples": examples_sha,
+         "topk": cfg.cache.topk, "hdtype": cfg.cache.hidden_dtype,
+         "schema": 2},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"

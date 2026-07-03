@@ -34,7 +34,13 @@ def build_pairs(cfg, tok):
 
 
 def profile(model_src, cfg, tok, pairs, limit):
-    model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
+    if (Path(model_src) / "adapter_config.json").exists():
+        from peft import PeftModel
+
+        base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
+        model = PeftModel.from_pretrained(base, model_src).merge_and_unload()
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
     model.to(cfg.model.device).eval()
     prof = gold_logprob_by_layer(
         model, tok, pairs, device=cfg.model.device, limit=limit,

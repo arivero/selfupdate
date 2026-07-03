@@ -45,11 +45,25 @@ running_on() {  # count live jobs assigned to device $1 (devset may be "0,1")
     echo "$n"
 }
 
+exclusive_on() {  # 1 if device $1 is held by a live multi-GPU (exclusive) job
+    local d pid dev
+    for d in "$SCHED"/*.lock; do
+        [ -e "$d" ] || continue
+        read -r pid dev < "$d"
+        kill -0 "$pid" 2>/dev/null || continue
+        case "$dev" in
+            *,*) case ",$dev," in *",$1,"*) echo 1; return;; esac;;
+        esac
+    done
+    echo 0
+}
+
 echo $$ > runs/.sched/scheduler.pid
 log "started (pid $$, GPUS=$GPUS, MAX_PER_GPU=$MAX_PER_GPU)"
 while :; do
     launched=0
     for dev in $GPUS; do
+        [ "$(exclusive_on "$dev")" = 1 ] && continue  # multi-GPU job owns it
         [ "$(running_on "$dev")" -ge "$MAX_PER_GPU" ] && continue
         fm=$(( $(free_mb "$dev") - MARGIN_MB ))
         while IFS=$'\t' read -r done need after cmd ngpu; do

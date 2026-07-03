@@ -27,9 +27,15 @@ class RunLog:
 
 def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
     """runs/<run_name>/ with config.yaml dumped; the single bootstrap both
-    trainers share so run metadata stays consistent across methods."""
+    trainers share so run metadata stays consistent across methods. A rerun
+    rotates any previous metrics.jsonl aside so analysis never mixes
+    attempts under the latest config."""
     run_dir = Path("runs") / cfg.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
+    old = run_dir / "metrics.jsonl"
+    if old.exists() and old.stat().st_size > 0:
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        old.rename(run_dir / f"metrics.prev-{stamp}.jsonl")
     (run_dir / "config.yaml").write_text(
         yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
     )

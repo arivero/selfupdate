@@ -53,7 +53,7 @@ def main() -> None:
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
           f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")
 
-    out_dir = Path(args.checkpoint).parent / "eval" if args.checkpoint else Path("runs/base-eval")
+    out_dir = Path(args.checkpoint).parent / "eval" if args.checkpoint else Path("runs/base-eval-full")
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "recite.json").write_text(json.dumps(r, ensure_ascii=False, indent=1))
     print(f"wrote {out_dir / 'recite.json'}")
