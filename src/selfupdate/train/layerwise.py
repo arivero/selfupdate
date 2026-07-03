@@ -28,6 +28,7 @@ Schedules (registry; new variants = one new class):
 
 from __future__ import annotations
 
+import contextlib
 import time
 from pathlib import Path
 
@@ -145,27 +146,36 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     stack = BlockStack(model)
     stack.freeze_non_blocks()
 
-    online = cfg.train.online_teacher
-    if online and peft_model is None:
+    if cfg.train.online_teacher and peft_model is None:
         raise ValueError("train.online_teacher requires train.lora.enabled")
+    teacher = None
+    if cfg.train.online_teacher:
+        teacher = OnlineTeacherSource(stack, peft_model=peft_model)
+    elif cfg.train.frozen_teacher_copy:
+        # resident frozen bf16 copy: online teacher for full-FT schedules
+        t_model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=torch.bfloat16)
+        t_model.to(device).eval().requires_grad_(False)
+        teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
+    online = teacher is not None
     cache = None
     if not online:
         cache_root, chash = resolve_cache_dir(cfg)
         cache = TeacherCache(cache_root, expect_hash=chash)
 
     if cfg.train.schedule == "summed":
-        _train_summed(cfg, stack, cache, tok, log, peft_model)
+        _train_summed(cfg, stack, cache, tok, log, teacher)
     elif cfg.train.schedule == "teacher_censored":
-        if not online:
-            raise NotImplementedError(
-                "teacher_censored needs full-sequence teacher states; only the "
-                "online teacher (train.lora.enabled + train.online_teacher) "
-                "provides them without a full-sequence cache"
+        if teacher is None:
+            raise ValueError(
+                "teacher_censored needs full-sequence teacher states: enable "
+                "train.online_teacher (LoRA) or train.frozen_teacher_copy "
+                "(full-FT); the disk cache stores aligned slices only"
             )
         if cfg.mask.compaction != "remove":
             raise ValueError("teacher_censored assumes compaction=remove "
                              "(stub rows have no teacher counterpart)")
-        _train_teacher_censored(cfg, stack, tok, log, peft_model)
+        _train_teacher_censored(cfg, stack, tok, log, teacher)
     elif cfg.train.schedule == "sequential":
         if online:
             raise NotImplementedError(
@@ -205,24 +215,59 @@ def _loader(cfg, ds):
     )
 
 
+class OnlineTeacherSource:
+    """Frozen-teacher forwards for schedules that need per-step teacher
+    states. Two backends, exactly one active:
+
+    - ``peft_model``: adapters-off pass on the resident base (LoRA runs) —
+      the teacher is already resident, zero extra VRAM.
+    - ``frozen_stack``: a resident frozen bf16 copy of the base model — the
+      full-FT path (``train.frozen_teacher_copy``), ~1.2 GB at 0.6B.
+
+    ``full_states`` returns raw block outputs [h0..hn] over the full teacher
+    sequence (final norm applied by the consumer, matching the
+    teacher_censored convention). ``aligned_targets`` returns {L: [A, H]}
+    with the h_n post-norm convention — exactly what the disk cache stores.
+    """
+
+    def __init__(self, student_stack, peft_model=None, frozen_stack=None):
+        if (peft_model is None) == (frozen_stack is None):
+            raise ValueError("exactly one of peft_model / frozen_stack")
+        self.stack = frozen_stack if frozen_stack is not None else student_stack
+        self.peft_model = peft_model
+
+    def _ctx(self):
+        return (self.peft_model.disable_adapter() if self.peft_model
+                else contextlib.nullcontext())
+
+    @torch.no_grad()
+    def full_states(self, it, device) -> list[torch.Tensor]:
+        t_ids = it.teacher_ids.to(device)[None]
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None]
+        with self._ctx(), torch.autocast(device, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            states = [h]
+            for L in range(1, self.stack.n_layers + 1):
+                h = self.stack.run_block(L, h, pos_emb)
+                states.append(h)
+        return states
+
+    @torch.no_grad()
+    def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
+        states = self.full_states(it, device)
+        return {
+            L: self.stack.loss_view(L, states[L])[0, it.t0: it.t0 + it.A].detach()
+            for L in range(1, self.stack.n_layers + 1)
+        }
+
+
 def _online_targets(stack, peft_model, it, device):
-    """Teacher targets computed from the resident base weights (adapters off):
-    advance the teacher input through all blocks once, collect the aligned
-    slice per layer. Returns {L: [A, H]} like the disk cache would."""
-    t_ids = it.teacher_ids.to(device)[None]
-    t_pos = torch.arange(t_ids.shape[1], device=device)[None]
-    targets = {}
-    with torch.no_grad(), peft_model.disable_adapter(), \
-            torch.autocast(device, dtype=torch.bfloat16):
-        h = stack.embed(t_ids)
-        pos_emb = stack.rope(h, t_pos)
-        for L in range(1, stack.n_layers + 1):
-            h = stack.run_block(L, h, pos_emb)
-            targets[L] = stack.loss_view(L, h)[0, it.t0: it.t0 + it.A].detach()
-    return targets
+    """Back-compat wrapper (tests import this): adapters-off aligned targets."""
+    return OnlineTeacherSource(stack, peft_model=peft_model).aligned_targets(it, device)
 
 
-def _train_teacher_censored(cfg, stack, tok, log, peft_model):
+def _train_teacher_censored(cfg, stack, tok, log, teacher):
     """Schedule (b): per-block fitting on stationary teacher-stream inputs.
 
     One adapters-off pass per item yields the full-sequence teacher states
@@ -249,18 +294,8 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
     for epoch in range(cfg.train.epochs):
         for items in loader:
             for it in items:
-                t_ids = it.teacher_ids.to(device)[None]
-                n_t = t_ids.shape[1]
-                t_pos = torch.arange(n_t, device=device)[None]
                 # frozen teacher states, all layers, full teacher sequence
-                with torch.no_grad(), peft_model.disable_adapter(), \
-                        torch.autocast(device, dtype=torch.bfloat16):
-                    h = stack.embed(t_ids)
-                    pos_emb_full = stack.rope(h, t_pos)
-                    t_states = [h]
-                    for L in range(1, n + 1):
-                        h = stack.run_block(L, h, pos_emb_full)
-                        t_states.append(h)
+                t_states = teacher.full_states(it, device)
 
                 # censored view: prefix rows + aligned rows, teacher positions
                 tA0 = it.t0
@@ -312,11 +347,11 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
 
-def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
+def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-    online = cfg.train.online_teacher
+    online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
                        with_teacher_ids=online)
@@ -336,7 +371,7 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
             for it in items:
                 ids = it.student_ids.to(device)[None]
                 pos = it.position_ids.to(device)[None]
-                targets = _online_targets(stack, peft_model, it, device) if online else None
+                targets = teacher.aligned_targets(it, device) if online else None
                 h = stack.embed(ids)
                 pos_emb = stack.rope(h, pos)
                 layer_losses = []

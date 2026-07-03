@@ -1,3 +1,37 @@
-# QUEUE FROZEN 2026-07-03 ~17:00. No new training. Only evals of already-trained checkpoints remain;
 # scheduler exits when they finish. Full queue history: git log scripts/queue.tsv
 runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite_long.json	2500	runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_tail_ce_e40_v2_0p6b_rag.yaml --checkpoint runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint
+# WAVE I launched 2026-07-03 22:13:33 — loss grid at 0.6B on v2 data (see EXPERIMENTS.md).
+runs/lw_i_nmse_s43_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_nmse_s43_0p6b_rag.yaml
+runs/lw_i_nmse_s43_0p6b_rag/eval/recite.json	3000	runs/lw_i_nmse_s43_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_nmse_s43_0p6b_rag.yaml --checkpoint runs/lw_i_nmse_s43_0p6b_rag/checkpoint
+runs/lw_i_l2mse_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_l2mse_0p6b_rag.yaml
+runs/lw_i_l2mse_0p6b_rag/eval/recite.json	3000	runs/lw_i_l2mse_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_l2mse_0p6b_rag.yaml --checkpoint runs/lw_i_l2mse_0p6b_rag/checkpoint
+runs/lw_i_cosine_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_cosine_0p6b_rag.yaml
+runs/lw_i_cosine_0p6b_rag/eval/recite.json	3000	runs/lw_i_cosine_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_cosine_0p6b_rag.yaml --checkpoint runs/lw_i_cosine_0p6b_rag/checkpoint
+runs/lw_i_huber_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_huber_0p6b_rag.yaml
+runs/lw_i_huber_0p6b_rag/eval/recite.json	3000	runs/lw_i_huber_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_huber_0p6b_rag.yaml --checkpoint runs/lw_i_huber_0p6b_rag/checkpoint
+runs/lw_i_vocab_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_vocab_0p6b_rag.yaml
+runs/lw_i_vocab_0p6b_rag/eval/recite.json	3000	runs/lw_i_vocab_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_vocab_0p6b_rag.yaml --checkpoint runs/lw_i_vocab_0p6b_rag/checkpoint
+runs/lw_i_lenskl_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_lenskl_0p6b_rag.yaml
+runs/lw_i_lenskl_0p6b_rag/eval/recite.json	3000	runs/lw_i_lenskl_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_lenskl_0p6b_rag.yaml --checkpoint runs/lw_i_lenskl_0p6b_rag/checkpoint
+runs/lw_i_nmse_strict_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_nmse_strict_0p6b_rag.yaml
+runs/lw_i_nmse_strict_0p6b_rag/eval/recite.json	3000	runs/lw_i_nmse_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_nmse_strict_0p6b_rag.yaml --checkpoint runs/lw_i_nmse_strict_0p6b_rag/checkpoint
+runs/lw_i_vocab_strict_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_vocab_strict_0p6b_rag.yaml
+runs/lw_i_vocab_strict_0p6b_rag/eval/recite.json	3000	runs/lw_i_vocab_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_vocab_strict_0p6b_rag.yaml --checkpoint runs/lw_i_vocab_strict_0p6b_rag/checkpoint
+runs/lw_i_lenskl_strict_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_i_lenskl_strict_0p6b_rag.yaml
+runs/lw_i_lenskl_strict_0p6b_rag/eval/recite.json	3000	runs/lw_i_lenskl_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_i_lenskl_strict_0p6b_rag.yaml --checkpoint runs/lw_i_lenskl_strict_0p6b_rag/checkpoint
+# backlog drain (from legacy watchdog_backlog.tsv, 4-col format)
+runs/lw_summed_0p6b_rag/eval/logit_lens.csv	3000	-	.venv/bin/python scripts/logit_lens.py --run lw_summed_0p6b_rag --limit 24
+runs/lw_seq_0p6b_rag/eval/logit_lens.csv	3000	-	.venv/bin/python scripts/logit_lens.py --run lw_seq_0p6b_rag --limit 24
+runs/lw_summed_0p6b_rag/eval/layer_swap.csv	3500	-	.venv/bin/python scripts/layer_swap.py --run lw_summed_0p6b_rag --limit 8
+runs/lw_seq_0p6b_rag/eval/layer_swap.csv	3500	-	.venv/bin/python scripts/layer_swap.py --run lw_seq_0p6b_rag --limit 8
+# WAVE U (understanding): causal localization + storage-convergence probes on Wave I arms
+runs/lw_i_cosine_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_cosine_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_cosine_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
+runs/lw_i_cosine_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_cosine_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_cosine_0p6b_rag --limit 24
+runs/lw_i_huber_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_huber_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_huber_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
+runs/lw_i_huber_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_huber_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_huber_0p6b_rag --limit 24
+runs/lw_i_l2mse_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_l2mse_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_l2mse_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
+runs/lw_i_l2mse_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_l2mse_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_l2mse_0p6b_rag --limit 24
+runs/lw_i_nmse_strict_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_nmse_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_nmse_strict_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
+runs/lw_i_nmse_strict_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_nmse_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_nmse_strict_0p6b_rag --limit 24
+runs/lw_i_vocab_strict_0p6b_rag/eval/layer_swap.csv	3500	runs/lw_i_vocab_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/layer_swap.py --run lw_i_vocab_strict_0p6b_rag --limit 8 --layers 1 4 7 9 14 17 20 22 23 24 25 26 27 28
+runs/lw_i_vocab_strict_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_i_vocab_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/logit_lens.py --run lw_i_vocab_strict_0p6b_rag --limit 24

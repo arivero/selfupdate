@@ -117,6 +117,12 @@ class TrainConfig:
     # (student = base + adapters, so the frozen teacher is already resident).
     # Replaces the disk cache entirely — the choice at 120B scale.
     online_teacher: bool = False
+    # full-FT counterpart: keep a resident frozen bf16 copy of the base model
+    # as online teacher (~1.2 GB at 0.6B). Needed by schedules that consume
+    # full-sequence teacher states (teacher_censored, mixed) without LoRA.
+    # Explicit rather than automatic so a run's VRAM footprint is never a
+    # surprise (see AGENTS.md VRAM lessons).
+    frozen_teacher_copy: bool = False
     # warm-start: load student weights from runs/<init_from>/checkpoint
     # (teacher stays the base model — cache identity is untouched)
     init_from: str = ""
