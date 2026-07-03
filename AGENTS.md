@@ -103,6 +103,12 @@ python3 -m venv --system-site-packages .venv   # reuse system torch if recent
 
 ## Operational conventions
 
+- **Never abort a training run before it has seen ≥12,000 training items**
+  (user rule, 2026-07-03). Rationale: kd_ce_long showed 20-epoch runs
+  undertrain; early "plateaus" (see lw_tail_ce's noisy epochs 5-17) recover.
+  Applies even to runs that look stuck or dominated — matched item budget is
+  what makes the grid comparable.
+
 - Configs: `configs/base.yaml` + one small YAML per run in
   `configs/experiments/`; run outputs land in `runs/<run_name>/`
   (config.yaml, metrics.jsonl, checkpoint/, eval/).
