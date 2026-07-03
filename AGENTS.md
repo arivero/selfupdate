@@ -109,6 +109,14 @@ results.md/report aggregates all nodes, done-file idempotency is global (a
 run finished anywhere is finished everywhere), models download once — IF
 these conventions hold:
 
+- **This cluster does NOT constrain GPU devices by cgroup**: on a shared
+  node, `CUDA_VISIBLE_DEVICES=1` is PHYSICAL GPU 1 regardless of what Slurm
+  allocated you. Never renumber device ids from 0 — pass the allocation's
+  ids VERBATIM (`GPUS="$(tr ',' ' ' <<<"$CUDA_VISIBLE_DEVICES")"`), or set
+  `GPUS` explicitly to the free physical cards. Incident 2026-07-03: a
+  renumbered lane briefly loaded a model onto another user's card
+  (rlaplaza, agpuh01 GPU 1) before being aborted. Verbatim ids also make
+  the scheduler's `nvidia-smi -i` VRAM probes read the right cards.
 - **One queue file per node/lane** (`QUEUE=scripts/queue_<lane>.tsv`). Two
   schedulers must never share a queue: done-files appear only at completion,
   so both would launch the same pending item.

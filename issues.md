@@ -167,7 +167,7 @@ one adapted record; Gemma additionally needs sliding-window mask support.
 Qualitative forgetting probe: scripts/sanity_chat.py (trivial questions incl.
 a Quijote control we never train on; queue writes eval/sanity.json per run).
 
-## gpu_scheduler on shared Slurm nodes: nvidia-smi vs CUDA_VISIBLE_DEVICES numbering
+## gpu_scheduler on shared Slurm nodes: device numbering (RESOLVED 2026-07-03 — verbatim ids)
 
 Inside an allocation like CUDA_VISIBLE_DEVICES=0,2,3, the scheduler's
 free_mb probe (`nvidia-smi -i N`) uses PHYSICAL indices while job placement
