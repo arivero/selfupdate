@@ -1,0 +1,99 @@
+# Agent guide — selfupdate
+
+Orientation for a fresh agent/session, especially after moving the repo to a
+new machine. Read README.md for the science; this file is operational.
+
+## What this repo is (one paragraph)
+
+Self-distillation of context: the same model is teacher (sees a RAG passage or
+its own <think> trace) and student (context hidden, must behave identically).
+Regimes: logit KD vs block-local layerwise hidden matching (schedules:
+summed / sequential / teacher_censored), each × {full-FT, LoRA}, with gold-CE
+auxiliaries and an "online teacher" (LoRA adapters off = frozen teacher, no
+cache). First corpus: *La tierra de Alvargonzález* (Machado). Endgame
+("Pierre Menard"): 120B-class models memorizing Don Quijote.
+
+## Bootstrap on a new machine
+
+```bash
+python3 -m venv --system-site-packages .venv   # reuse system torch if recent
+.venv/bin/pip install -e . && .venv/bin/pip install pytest
+.venv/bin/python scripts/fetch_poem.py         # data/poem/raw.txt
+.venv/bin/python scripts/build_dataset.py      # examples.jsonl (RAG mode)
+.venv/bin/python scripts/build_teacher_cache.py  # per-model cache + premise check
+.venv/bin/python -m pytest tests/ -q           # MUST be green before training
+```
+
+- Deps: torch ≥ 2.10, transformers ≥ 5.3 (v5 API: `dtype=`, Cache objects).
+- Always `export PYTORCH_ALLOC_CONF=expandable_segments:True` for training.
+- Online-teacher runs (`train.online_teacher: true`, LoRA only) need **no**
+  teacher cache — preferred on new machines and for big models.
+- The premise check printed by build_teacher_cache must show a large gap
+  (teacher CE with context ≪ without); if not, the model already knows the
+  corpus — pick another corpus/model.
+
+## Operational conventions
+
+- Configs: `configs/base.yaml` + one small YAML per run in
+  `configs/experiments/`; run outputs land in `runs/<run_name>/`
+  (config.yaml, metrics.jsonl, checkpoint/, eval/).
+- Long work runs DETACHED so SSH/session death cannot kill it:
+  `nohup setsid bash scripts/overnight*.sh >> runs/pipeline*.log 2>&1 &`
+  Pipelines are idempotent (done-file guards) — rerun to resume.
+  Two-lane pattern (train lane + VRAM-guarded eval lane) overlaps GPU use.
+- Reporting: `scripts/analyze.py` (results.md, curves.png, delta profiles,
+  convergence), `scripts/report.py` (runs/report.pdf, verbose).
+- Never change without re-verifying tests: masking segment conventions,
+  aligned-span definition, cache layer-index convention (h{L} =
+  output_hidden_states[L]; last is post-final-norm), detach discipline in
+  train/layerwise.py.
+- Established results and env quirks live in the agent memory and in
+  runs/results.md; docs/hidden_loss.md and docs/scaling.md explain the loss
+  and the big-model plan.
+
+## Hardware ladder
+
+### Tier 0 — 1× RTX 3060 12 GB (origin)
+0.6B full-FT KD (9.4 GB, embed/head frozen); 0.6B–1.7B layerwise + LoRA
+(3–8 GB). Everything in runs/ up to 2026-07 came from here.
+
+### Tier 1 — 2× RTX 4090 (2×24 GB, PCIe)
+- The experiment grid is embarrassingly parallel: run one experiment per GPU
+  (`CUDA_VISIBLE_DEVICES=0/1` with two detached pipelines) — the biggest win.
+- Full-FT KD at 1.7B: fp32 AdamW needs ~27 GB → use bitsandbytes 8-bit Adam
+  or bf16 weights + fp32 master offload; layerwise sequential fits easily.
+- 4B: LoRA + online teacher comfortably on one card; full-FT layerwise
+  sequential also fits (one block ~0.4 GB + optimizer).
+- teacher_censored can split blocks across both GPUs (layers are independent).
+- Batched eval (task noted in repo) matters once two cards multiply runs.
+
+### Tier 2 — 4× L40S (4×48 GB)
+- Qwen3-14B/32B with LoRA + online teacher (bf16 base 28/64 GB — 32B needs
+  2-GPU sharding via accelerate/FSDP2).
+- First MoE work: Qwen3-30B-A3B — post-combine hidden matching only, log
+  teacher/student routing agreement, per-expert delta norms (docs/scaling.md).
+- Full-FT KD via FSDP2 to ~8B; beyond that KD stays LoRA-only.
+- Move teacher-cache builds to layer-streamed forwards if caching (or stay
+  online-teacher).
+
+### Tier 3 — 4× H100 (4×80 GB, NVLink)
+- Pierre Menard stage: corpus switches to Don Quijote (chapter-chunked tasks
+  through the same masking abstraction; expect ~500k answer tokens).
+- 120B-class dense / DeepSeek-GLM-class MoE:
+  - layerwise sequential = one block (2–4 GB bf16) + its optimizer per GPU;
+    pipeline stages across cards (advance / train / prefetch).
+  - teacher_censored = 4 blocks training concurrently, zero communication.
+  - KD = LoRA-only, FSDP2-sharded bf16 base, online teacher mandatory
+    (a hidden-state cache would be ~450 GB).
+- vLLM/sglang only for teacher trace harvesting and KD prompt_logprobs —
+  no engine exposes per-layer hidden states (docs/scaling.md).
+
+## Current state pointers (2026-07-03)
+
+Best recitation: runs/kd_ce_0p6b_rag (KD + answer_ce 0.5, 20 ep, CER 0.596
+full / 0.875 line-exact on eval subset). Pure hidden matching does not recite
+yet; local last-block CE (`last_block_ce_weight`) is the live hybrid lever.
+Convergence finding: methods share per-layer magnitude profiles (Spearman
+~0.75) with orthogonal delta directions (cos ~0.02). Next planned: hybrid
+verdicts, compaction axis (remove/stub/stub_gap), thinking-mode arm, 1.7B
+replication, then Tier-1 parallel grid.
