@@ -55,18 +55,26 @@ def main() -> None:
             render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
             for s in specs
         ]
-    elif cfg.mask.mode in ("thinking", "rag_thinking"):
+    elif cfg.mask.mode in ("thinking", "rag_thinking", "rag_mayeutic"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from selfupdate.teacher.generate import harvest_rag_thinking_traces, harvest_traces
+        from selfupdate.teacher.generate import (
+            harvest_rag_mayeutic_traces,
+            harvest_rag_thinking_traces,
+            harvest_traces,
+        )
 
         tok = AutoTokenizer.from_pretrained(cfg.model.name)
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model.name, dtype=getattr(torch, cfg.model.dtype)
         ).to(cfg.model.device)
         model.eval()
-        harvest = harvest_rag_thinking_traces if cfg.mask.mode == "rag_thinking" else harvest_traces
+        harvest = {
+            "thinking": harvest_traces,
+            "rag_thinking": harvest_rag_thinking_traces,
+            "rag_mayeutic": harvest_rag_mayeutic_traces,
+        }[cfg.mask.mode]
         examples = harvest(
             model, tok, specs,
             max_think_tokens=cfg.mask.max_think_tokens, student_stub=stub,
@@ -79,7 +87,7 @@ def main() -> None:
     with out.open("w", encoding="utf-8") as f:
         for spec, ex in zip(specs, examples):
             answer_text = spec.answer
-            if cfg.mask.mode == "rag_thinking":
+            if cfg.mask.mode in ("rag_thinking", "rag_mayeutic"):
                 answer_text = ex.answer.removesuffix("<|im_end|>")
             f.write(json.dumps({**ex.to_json(), "answer_text": answer_text,
                                 "question": spec.question}, ensure_ascii=False) + "\n")

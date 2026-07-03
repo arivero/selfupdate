@@ -13,7 +13,12 @@ import torch
 from tqdm import tqdm
 
 from ..data.poem import TaskSpec
-from ..masking import SegmentedExample, render_rag_thinking, render_thinking
+from ..masking import (
+    SegmentedExample,
+    render_rag_mayeutic,
+    render_rag_thinking,
+    render_thinking,
+)
 
 
 def harvest_traces(
@@ -103,6 +108,52 @@ def harvest_rag_thinking_traces(
         trace = tokenizer.decode(gen).strip()
         examples.append(
             render_rag_thinking(
+                spec.task_id, spec.question, spec.passage, trace, spec.answer,
+                **kwargs, student_stub=student_stub,
+            )
+        )
+    return examples
+
+
+def harvest_rag_mayeutic_traces(
+    model,
+    tokenizer,
+    specs: list[TaskSpec],
+    *,
+    max_think_tokens: int = 512,
+    system: str | None = None,
+    student_stub: str = "",
+) -> list[SegmentedExample]:
+    """Harvest visible mayeutic traces for mixed RAG+thinking mode."""
+    think_end = tokenizer.convert_tokens_to_ids("</think>")
+    if think_end is None or think_end == getattr(tokenizer, "unk_token_id", None):
+        raise ValueError(
+            "rag_mayeutic mode needs a tokenizer with a </think> special token "
+            "(Qwen3/R1 family)"
+        )
+    examples = []
+    for spec in tqdm(specs, desc="harvest RAG-conditioned mayeutic traces"):
+        kwargs = {} if system is None else {"system": system}
+        proto = render_rag_mayeutic(
+            spec.task_id, spec.question, spec.passage, "", spec.answer, **kwargs
+        )
+        prompt = proto.shared_prefix + proto.privileged + proto.shared_mid
+        prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        input_ids = torch.tensor([prompt_ids], device=model.device)
+        with torch.no_grad():
+            out = model.generate(
+                input_ids,
+                max_new_tokens=max_think_tokens,
+                do_sample=False,
+                eos_token_id=think_end,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+        gen = out[0, len(prompt_ids):].tolist()
+        if gen and gen[-1] == think_end:
+            gen = gen[:-1]
+        trace = tokenizer.decode(gen).strip()
+        examples.append(
+            render_rag_mayeutic(
                 spec.task_id, spec.question, spec.passage, trace, spec.answer,
                 **kwargs, student_stub=student_stub,
             )

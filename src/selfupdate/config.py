@@ -39,7 +39,7 @@ class DataConfig:
 
 @dataclass
 class MaskConfig:
-    mode: str = "rag"  # rag | thinking | rag_thinking
+    mode: str = "rag"  # rag | thinking | rag_thinking | rag_mayeutic
     max_think_tokens: int = 512
     # how the student's side compacts the privileged block:
     #   remove     — block deleted outright (zero size)

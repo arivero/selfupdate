@@ -206,6 +206,39 @@ def render_rag_thinking(
     )
 
 
+def render_rag_mayeutic(
+    example_id: str,
+    question: str,
+    passage: str,
+    trace: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+) -> SegmentedExample:
+    """Mixed RAG + visible mayeutic thinking.
+
+    The retrieved passage is still the only privileged segment. The shared
+    prompt asks the assistant to use a short Socratic self-dialogue in
+    ``<think>`` to reconstruct the answer from the hidden passage, then recite
+    the poem. The student sees that induction but not the passage.
+    """
+    mayeutic = (
+        "\n\nEn el bloque <think>, usa una breve mayeutica: formula preguntas "
+        "y respuestas internas que reutilicen el documento recuperado para "
+        "fijar los versos exactos. Despues recita solo el poema solicitado."
+    )
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}{mayeutic}"
+    )
+    privileged = f"\n\nDocumento recuperado:\n{passage}" if passage else ""
+    mid = f"{IM_END}\n{IM_START}assistant\n<think>\n"
+    visible = f"{trace.strip()}\n</think>\n\n" if trace.strip() else "\n</think>\n\n"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid, f"{visible}{answer}{IM_END}", student_stub
+    )
+
+
 class ContextMasker:
     """Tokenizes SegmentedExamples into aligned teacher/student ID pairs."""
 
