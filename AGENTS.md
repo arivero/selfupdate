@@ -37,7 +37,12 @@ state (`~/.claude/plans`, agent memory dirs): those do not travel with clones.
 - Two concurrent GPU jobs need a VRAM guard WITH a random stagger — two
   processes checking free memory in the same second both pass and collide.
 - `pkill -f pattern` kills your own shell if the pattern appears in your own
-  command line; use `[.]`-style patterns.
+  command line; use `[.]`-style patterns — and never reference the target
+  filename elsewhere in the same command.
+- VRAM checks at launch time underestimate peak (AdamW state lands at the
+  first step): full-FT jobs need launch-requirement ≈ peak + 1.5 GB.
+- Greedy small-job packing starves big-VRAM queue items; give the scheduler
+  a drain/priority mode before running mixed grids on the L40S.
 
 ## What this repo is (one paragraph)
 
