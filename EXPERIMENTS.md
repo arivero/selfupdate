@@ -4,6 +4,30 @@ Updated: 2026-07-03 ~12:30 — **repo moved to the 4× L40S machine** (Tier 2).
 Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs: `runs/pipeline_*.log`.
 Base model control: CER 0.932, general-CE 3.278.
 
+## THE GOAL (2026-07-03, standing): a good loss for layerwise training
+
+KD+backprop distilling a prompt is textbook — it is only the baseline/
+reference. The research question: **a loss that trains blocks independently
+and still produces behavior.** "Good" means: recites like KD+CE at matched
+budget, stays block-local (or names the minimal locality concession),
+comparable forgetting, and survives scale. Constraints established today:
+storage is NOT the problem (block-local nmse stores recall = KD through
+layer ~24: lens + graft evidence); the deficit is the last-mile READOUT,
+and readouts must be co-trained, never borrowed (both graft directions
+fail). See docs/hidden_loss.md.
+
+## Wave H — the loss search (🟢 the priority lane)
+
+| candidate | locality | status |
+|---|---|---|
+| nmse (all schedules × FT/LoRA) | strict | ❌ x9, stores but no readout |
+| + last-block CE | strict | ❌ one block can't coordinate |
+| + lens-CE all / deep blocks | strict | 🟡 running (FT + LoRA cells) |
+| l2mse (pure direction) | strict | 🟡 running |
+| + lens-KL to teacher layer-L lens | strict | ⏳ queued (softer than gold-CE) |
+| + tail-CE (k=4 joint window) | k-block concession | **first life: 0.792 / 5% @20ep**; e40 + LoRA running |
+| tc at 14B (localization at scale) | strict, zero-comm | 🟡 running (H100) |
+
 ## Wave G — L40S: scale ladder + backlog drain (🟢 running, scheduler on all 4 cards)
 
 `runs/` and `caches/` did not travel from the 3060, so the queue

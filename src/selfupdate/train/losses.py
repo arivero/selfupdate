@@ -74,3 +74,13 @@ def hidden_match(
 def answer_ce(student_logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
     """Auxiliary CE on gold answer tokens (already position-shifted by caller)."""
     return F.cross_entropy(student_logits.float(), target_ids)
+
+
+def lens_kl(student_logits: torch.Tensor, teacher_logits: torch.Tensor) -> torch.Tensor:
+    """KL(teacher || student) over full-vocab rows [N, V] — the per-block
+    lens-KL candidate: match the TEACHER's layer-L lens distribution instead
+    of the gold one-hot (softer than lens-CE; PKD reinterpreted through the
+    readout, so hidden error is weighted by what the head cares about)."""
+    t = F.log_softmax(teacher_logits.float(), dim=-1)
+    s = F.log_softmax(student_logits.float(), dim=-1)
+    return (t.exp() * (t - s)).sum(-1).mean()

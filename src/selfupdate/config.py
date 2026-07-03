@@ -109,6 +109,11 @@ class TrainConfig:
     # / parallelism story is fully preserved. 0 = off.
     lens_ce_weight: float = 0.0
     lens_ce_from: int = 1
+    # per-block lens-KL: match the TEACHER's layer-L lens distribution
+    # (softer than gold-CE; strictly local; applies to blocks < n — the last
+    # block has last_block_ce/lens_ce for behavior)
+    lens_kl_weight: float = 0.0
+    lens_kl_from: int = 1
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3

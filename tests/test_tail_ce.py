@@ -128,3 +128,32 @@ def test_lens_ce_stays_block_local(setup):
         for pname, p in stack.model.named_parameters():
             if name in pname:
                 assert p.grad is None, f"{pname} got a gradient"
+
+
+def test_lens_kl_stays_block_local(setup):
+    """lens-KL (teacher's layer-L lens distribution as target) must be as
+    confined as lens-CE: only block L gets gradients."""
+    from selfupdate.train.layerwise import local_block_step
+
+    stack, ds = setup
+    it = ds[0]
+    device = "cuda"
+    L = stack.n_layers // 2
+    ids = it.student_ids.to(device)[None]
+    pos = it.position_ids.to(device)[None]
+    with torch.no_grad():
+        h = stack.embed(ids)
+        pos_emb = stack.rope(h, pos)
+        for LL in range(1, L):
+            h = stack.run_block(LL, h, pos_emb)
+    stack.model.zero_grad(set_to_none=True)
+    local_block_step(stack, L, h.detach(), pos_emb, it.hidden[L].to(device),
+                     it.s0, it.A, "nmse", autocast=False,
+                     lens_kl_w=1.0, ans_off=it.ans0 - it.s0)
+    assert _grad(stack.block_params(L)), "block L got no grads"
+    for LL in list(range(1, L)) + list(range(L + 1, stack.n_layers + 1)):
+        assert not _grad(stack.block_params(LL)), f"block {LL} leaked"
+    for name in ("embed_tokens", "final_norm", "lm_head"):
+        for pname, p in stack.model.named_parameters():
+            if name in pname:
+                assert p.grad is None, f"{pname} got a gradient"
