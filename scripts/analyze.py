@@ -30,8 +30,10 @@ def results_table() -> pd.DataFrame:
         if not cfg_p.exists():
             continue
         cfg = yaml.safe_load(cfg_p.read_text())
-        evals = [m for m in read_metrics(run_dir) if m.get("kind") == "eval"]
-        done = [m for m in read_metrics(run_dir) if m.get("kind") == "done"]
+        metrics = read_metrics(run_dir)
+        trains = [m for m in metrics if m.get("kind") == "train"]
+        evals = [m for m in metrics if m.get("kind") == "eval"]
+        done = [m for m in metrics if m.get("kind") == "done"]
         full = run_dir / "eval" / "recite.json"
         full_cer = line_exact = forget = None
         if full.exists():
@@ -51,8 +53,13 @@ def results_table() -> pd.DataFrame:
             "full_eval_cer": full_cer,
             "line_exact": line_exact,
             "forgetting_dCE": forget,  # general-CE rise vs base model
+            "loss_first": round(sum(m["loss"] for m in trains[:20]) / len(trains[:20]), 4) if trains else None,
+            "loss_final": round(sum(m["loss"] for m in trains[-20:]) / len(trains[-20:]), 4) if trains else None,
+            "steps": trains[-1]["step"] if trains else None,
+            "items": len(trains),
             "vram_gb": done[-1]["vram_gb"] if done else None,
-            "minutes": (evals[-1].get("minutes") if evals else None),
+            "train_min": (evals[-1].get("minutes") if evals else None)
+                         or (done[-1].get("minutes") if done else None),
         })
     return pd.DataFrame(rows)
 
@@ -120,6 +127,42 @@ def delta_profiles(run_names: list[str], base_model: str) -> None:
             df.to_csv(f"runs/convergence_{a}__{b}.csv", index=False)
 
 
+def training_curves() -> None:
+    """Loss-vs-step and eval-CER-vs-epoch curves for every run (detailed
+    training-dynamics record: loss progress, time, convergence shape)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    runs = [d for d in sorted(Path("runs").iterdir())
+            if (d / "metrics.jsonl").exists() and (d / "config.yaml").exists()]
+    if not runs:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for d in runs:
+        ms = read_metrics(d)
+        trains = [m for m in ms if m.get("kind") == "train"]
+        evals = [m for m in ms if m.get("kind") == "eval" and "epoch" in m]
+        if trains:
+            xs = list(range(len(trains)))
+            step = max(1, len(xs) // 400)  # thin for plotting
+            axes[0].plot(xs[::step], [trains[i]["loss"] for i in xs[::step]],
+                         label=d.name, alpha=0.8, linewidth=1)
+        if evals:
+            axes[1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
+                         marker="o", label=d.name, alpha=0.8)
+    axes[0].set_yscale("log")
+    axes[0].set_xlabel("training items seen")
+    axes[0].set_ylabel("loss (log)")
+    axes[1].set_xlabel("epoch")
+    axes[1].set_ylabel("eval CER (8-example subset)")
+    axes[1].legend(fontsize=6)
+    fig.tight_layout()
+    fig.savefig("runs/curves.png", dpi=150)
+    print("wrote runs/curves.png")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--deltas", nargs="+", default=None, help="run names")
@@ -130,6 +173,7 @@ def main() -> None:
     if not df.empty:
         print(df.to_markdown(index=False))
         Path("runs/results.md").write_text(df.to_markdown(index=False))
+    training_curves()
     if args.deltas:
         delta_profiles(args.deltas, args.base_model)
 
