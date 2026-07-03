@@ -32,6 +32,9 @@ def results_table() -> pd.DataFrame:
         cfg = yaml.safe_load(cfg_p.read_text())
         metrics = read_metrics(run_dir)
         trains = [m for m in metrics if m.get("kind") == "train"]
+        if not trains:  # sequential schedule logs per-stage lines instead
+            trains = [{"loss": m["loss"], "step": m["steps"]}
+                      for m in metrics if m.get("kind") == "stage"]
         evals = [m for m in metrics if m.get("kind") == "eval"]
         done = [m for m in metrics if m.get("kind") == "done"]
         full = run_dir / "eval" / "recite.json"
