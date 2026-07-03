@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from selfupdate.config import load_config
 from selfupdate.data.poem import load_poem, make_specs
-from selfupdate.masking import RAG_STUB, THINK_STUB, render_rag
+from selfupdate.masking import RAG_STUB, THINK_STUB, render_rag, render_rag_tool
 
 
 def main() -> None:
@@ -47,6 +47,11 @@ def main() -> None:
     if cfg.mask.mode == "rag":
         examples = [
             render_rag(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
+            for s in specs
+        ]
+    elif cfg.mask.mode == "rag_tool":
+        examples = [
+            render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
             for s in specs
         ]
     elif cfg.mask.mode == "thinking":

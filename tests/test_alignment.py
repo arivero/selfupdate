@@ -130,3 +130,27 @@ def test_stub_compaction_aligns_and_gap(tokenizer, specs):
     assert masker.build(render_rag(spec.task_id, spec.question, spec.passage,
                                    spec.answer)).student_position_ids() == list(
         range(len(pair.student_ids) - n_stub))
+
+
+def test_rag_tool_matches_native_tool_template(tokenizer, specs):
+    """The rag_tool mode must speak Qwen3's NATIVE tool protocol: teacher =
+    canonical [system,user,tool] rendering, student = canonical no-tool
+    rendering, with the whole tool turn as the privileged segment."""
+    from selfupdate.masking import render_rag_tool
+
+    spec = specs[1]
+    ex = render_rag_tool(spec.task_id, spec.question, spec.passage, spec.answer)
+    teacher = ex.shared_prefix + ex.privileged + ex.shared_mid
+    canonical_t = tokenizer.apply_chat_template(
+        [{"role": "system", "content": DEFAULT_SYSTEM},
+         {"role": "user", "content": spec.question},
+         {"role": "tool", "content": spec.passage}],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    assert teacher == canonical_t
+    student = ex.shared_prefix + ex.shared_mid
+    canonical_s = tokenizer.apply_chat_template(
+        [{"role": "system", "content": DEFAULT_SYSTEM},
+         {"role": "user", "content": spec.question}],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False)
+    assert student == canonical_s
+    ContextMasker(tokenizer).build(ex)  # alignment asserts

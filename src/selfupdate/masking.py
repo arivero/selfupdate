@@ -126,6 +126,33 @@ def render_rag(
     )
 
 
+def render_rag_tool(
+    example_id: str,
+    question: str,
+    passage: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+) -> SegmentedExample:
+    """RAG via Qwen3's NATIVE tool protocol: the retrieved passage arrives as
+    a Hermes-style <tool_response> block in its own tool turn (how the model
+    saw retrieval during training). The entire tool turn is the privileged
+    segment, so the student's censored view is a canonical no-tool
+    conversation — same alignment contract as render_rag."""
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}{IM_END}\n"
+    )
+    privileged = (
+        f"{IM_START}user\n<tool_response>\n{passage}\n</tool_response>{IM_END}\n"
+        if passage else ""
+    )
+    mid = f"{IM_START}assistant\n{EMPTY_THINK}"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid, f"{answer}{IM_END}", student_stub
+    )
+
+
 def render_thinking(
     example_id: str,
     question: str,

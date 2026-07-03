@@ -1,0 +1,5 @@
+run_name: data_tool_build
+data:
+  examples_path: data/poem/examples_tool.jsonl
+mask:
+  mode: rag_tool
