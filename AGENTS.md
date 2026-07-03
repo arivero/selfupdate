@@ -101,6 +101,30 @@ python3 -m venv --system-site-packages .venv   # reuse system torch if recent
   (teacher CE with context ≪ without); if not, the model already knows the
   corpus — pick another corpus/model.
 
+## Multi-node on the shared Lustre (Slurm cluster, 2026-07)
+
+The repo, venv, HF cache and runs/ are ONE directory visible from every node
+(agpul01-09 = 4x L40S each, agpuh01-02 = H100). That is an advantage — one
+results.md/report aggregates all nodes, done-file idempotency is global (a
+run finished anywhere is finished everywhere), models download once — IF
+these conventions hold:
+
+- **One queue file per node/lane** (`QUEUE=scripts/queue_<lane>.tsv`). Two
+  schedulers must never share a queue: done-files appear only at completion,
+  so both would launch the same pending item.
+- **Per-node scheduler state** (`SCHED=runs/.sched-$(hostname -s)`): the lock
+  reaper uses `kill -0 <pid>`, and foreign-node pids look dead — a shared
+  .sched dir would reap live locks and duplicate jobs.
+- **Per-node job log** (`JOBLOG=runs/pipeline_sched_<host>.log`).
+- `evaluate.py --base` needs `--out` per lane (default runs/base-eval-full
+  is the 0.6B control; concurrent base evals would clobber it).
+- results_refresher + report_shipper run on ONE node only (currently the
+  origin L40S node).
+- The venv works on every node (same OS/arch; cu128 wheels cover both
+  sm89/L40S and sm90/H100).
+- `scripts/slurm_h100.sbatch` is the template: submit from the repo root,
+  it wires all of the above (H100 lane = scripts/queue_h100.tsv, 32B arm).
+
 ## Operational conventions
 
 - **Never abort a training run before it has seen ≥12,000 training items**

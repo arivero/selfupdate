@@ -1,0 +1,11 @@
+# completes the hidden_loss axis: l2mse (direction-only, 2-2cos) has never
+# had a full run; nmse entangles magnitude+direction. Same budget/control as
+# lw_summed_e40.
+run_name: lw_summed_l2mse_e40_0p6b_rag
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  hidden_loss: l2mse
+  lora:
+    enabled: false

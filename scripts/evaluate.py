@@ -27,6 +27,9 @@ def main() -> None:
     ap.add_argument("--experiment", default=None)
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--base", action="store_true", help="evaluate the untrained base model")
+    ap.add_argument("--out", default=None,
+                    help="output dir override (multi-node: concurrent --base "
+                         "evals must not share runs/base-eval-full)")
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
@@ -53,7 +56,9 @@ def main() -> None:
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
           f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")
 
-    out_dir = Path(args.checkpoint).parent / "eval" if args.checkpoint else Path("runs/base-eval-full")
+    out_dir = Path(args.out) if args.out else (
+        Path(args.checkpoint).parent / "eval" if args.checkpoint
+        else Path("runs/base-eval-full"))
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "recite.json").write_text(json.dumps(r, ensure_ascii=False, indent=1))
     print(f"wrote {out_dir / 'recite.json'}")

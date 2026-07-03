@@ -22,8 +22,8 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 GPUS="${GPUS:-0}"
 MAX_PER_GPU="${MAX_PER_GPU:-3}"
 MARGIN_MB=400
-QUEUE=scripts/queue.tsv
-SCHED=runs/.sched
+QUEUE="${QUEUE:-scripts/queue.tsv}"
+SCHED="${SCHED:-runs/.sched}"
 mkdir -p "$SCHED"
 
 log() { echo "[$(date '+%F %T')] sched: $*"; }
@@ -92,7 +92,7 @@ while :; do
             log "GPU[$devset] free=${fm}MB -> launch [$done] (need ${need}MB x$ngpu)"
             (
                 echo "$BASHPID $devset" > "$lk"
-                if CUDA_VISIBLE_DEVICES=$devset eval "$cmd" >> runs/pipeline_sched.log 2>&1; then
+                if CUDA_VISIBLE_DEVICES=$devset eval "$cmd" >> "${JOBLOG:-runs/pipeline_sched.log}" 2>&1; then
                     log "DONE [$done]"
                 else
                     log "FAIL [$done] (exit $?)"
