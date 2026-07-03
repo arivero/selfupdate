@@ -537,16 +537,19 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                         opt.zero_grad(set_to_none=True)
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            # uniform bf16 for BOTH eval passes (they run without autocast),
+            # fp32 masters restored only after all eval forwards are done
             if not cfg.train.lora.enabled:
                 for L in range(tail0, n + 1):
                     stack.blocks[L - 1].to(torch.bfloat16)
             r = recite_eval(stack.model, tok, records, limit=8)
+            gen = general_ce(stack.model, tok)["mean_ce"]
             if not cfg.train.lora.enabled and epoch < cfg.train.epochs - 1:
                 for L in range(tail0, n + 1):
                     stack.blocks[L - 1].float()
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
-                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
+                    gen_ce=gen,
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
