@@ -171,3 +171,24 @@ train/layerwise.py — blocks n-k+1..n connected in one graph, per-block hidden
 losses kept, answer-CE at the top, rooted at a detached input so locality
 below the window is intact (tests/test_tail_ce.py). Cost at scale: k blocks
 of activations instead of all — the 120B story survives with k/n overhead.
+
+### Free-run confirmation: cross-run tail grafts (scripts/tail_graft.py)
+
+Chimeras, k=4, full-corpus free-run CER (no lens anywhere — this answers the
+"lens-at-final-layer is circular for KD" objection):
+
+| model | CER | exact |
+|---|---|---|
+| kd_ce intact | 0.596 | 0.379 |
+| lw_seq intact | 0.928 | 0.000 |
+| lw_seq body + kd_ce tail | 0.926 | 0.000 |
+| kd_ce body + lw_seq tail | 0.932 | 0.054 |
+
+Neither tail transplants: a KD readout cannot decode an lw-trained stream,
+and removing kd_ce's own tail (replacing with lw's) destroys its recitation
+— the readout is necessary AND co-adapted to its body (the delta-direction
+orthogonality, cos ~0.02, is the geometry behind this). Meanwhile lw_tail_ce
+(a tail co-trained on its own lw body) reached CER 0.792 / 5% exact at 20
+epochs — the best layerwise result to date. Together: storage below the tail
+is real and method-invariant in *quality*, but its representation is
+method-specific; readouts must be co-trained, never borrowed.
