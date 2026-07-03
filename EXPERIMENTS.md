@@ -37,7 +37,7 @@ Base model control: CER 0.932, general-CE 3.278.
 |---|---|---|
 | kd_lora_ce_hi (lr 1e-4) | ✅ | learns (full CER 0.774, 22% exact, 2.3 GB) but forgetting +0.96 — WORST; forgetting tracks amount learned, not parameterization |
 | kd_lora_ce_mid (lr 3e-5, 40 ep) | ⏳ queued | the middle point of the lr/forgetting trade |
-| lw_tc_ce_hi (lr 1e-4, 30 ep) | 🟡 trained, eval pending | can (b)+CE recite with a working lr? |
+| lw_tc_ce_hi (lr 1e-4, 30 ep) | ✅ | still no recitation (0.840, 0 exact), forget +0.99 — 7th layerwise config, all negative: local losses can't do multi-layer credit assignment |
 | kd_ce_long (40 ep, full-FT) | coverage: does more training fix the front-of-poem bias? |
 
 ## Wave D2 — round 2 on the second model (⏳ queued)
@@ -82,7 +82,8 @@ mock + FSDP2 stubs pending). Original grid axis not yet run: **thinking-mode**
 
 - Batched eval generation (task #1; 5–8× eval speedup)
 - Thinking-mode arm (trace harvesting implemented, never run)
-- Per-block lens-CE layerwise variant (if hybrids keep failing)
+- Per-block lens-CE layerwise variant (hybrids have kept failing)
+- Two-phase: layerwise pre-conditioning -> short KD polish (needs adapter-resume in kd.py)
 - Sequential + online-teacher lockstep cache
 - Move to 2×4090: one experiment per GPU (AGENTS.md Tier 1); replicate grid with 2nd seed
 
