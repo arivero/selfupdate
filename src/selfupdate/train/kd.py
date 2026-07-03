@@ -66,7 +66,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
         need_layers=[], need_logits=not online,
-        rebase_gap=(cfg.mask.compaction == "stub_gap"),
+        rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
         with_teacher_ids=online,
     )
     records = ds.records  # same parsed jsonl the training pairs came from
@@ -134,7 +134,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
 
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1 or stop:
             r = recite_eval(model, tok, records, limit=8,
-                             rebase_gap=(cfg.mask.compaction == "stub_gap"))
+                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),

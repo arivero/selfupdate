@@ -183,7 +183,7 @@ def _make_dataset(cfg, cache, tok, layers, with_teacher_ids=False):
     return DistillDataset(
         cfg.data.examples_path, cache, tok,
         need_layers=layers, need_logits=False,
-        rebase_gap=(cfg.mask.compaction == "stub_gap"),
+        rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
         with_teacher_ids=with_teacher_ids,
     )
 
@@ -371,7 +371,7 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8,
-                            rebase_gap=(cfg.mask.compaction == "stub_gap"))
+                            rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -494,7 +494,7 @@ def _train_sequential(cfg, stack, cache, tok, log):
             act_cache.advance(stack, L, ds, device)
         if L % 7 == 0 or L == n:
             r = recite_eval(stack.model, tok, records, limit=8,
-                            rebase_gap=(cfg.mask.compaction == "stub_gap"))
+                            rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
             log.log(kind="eval", layer=L, cer=r["cer"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),

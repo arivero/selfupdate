@@ -44,7 +44,7 @@ def profile(model_src, cfg, tok, pairs, limit):
     model.to(cfg.model.device).eval()
     prof = gold_logprob_by_layer(
         model, tok, pairs, device=cfg.model.device, limit=limit,
-        rebase_gap=(cfg.mask.compaction == "stub_gap"),
+        rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
     )
     del model
     torch.cuda.empty_cache()

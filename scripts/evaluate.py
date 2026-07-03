@@ -48,7 +48,7 @@ def main() -> None:
 
     records = load_jsonl(cfg.data.examples_path)
     r = recite_eval(model, tok, records, limit=args.limit,
-                    rebase_gap=(cfg.mask.compaction == "stub_gap"))
+                    rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
     r["general"] = general_ce(model, tok, device=cfg.model.device)
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
           f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")

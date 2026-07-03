@@ -42,9 +42,19 @@ class MaskConfig:
     mode: str = "rag"  # rag | thinking
     max_think_tokens: int = 512
     # how the student's side compacts the privileged block:
-    #   remove   — block deleted outright (zero size)
-    #   stub     — replaced by a short uninformative placeholder token
-    #   stub_gap — stub + position-id gap so RoPE geometry matches the teacher
+    #   remove     — block deleted outright (zero size)
+    #   stub       — replaced by a short uninformative placeholder token
+    #   stub_gap   — stub + position-id gap so RoPE geometry matches the teacher
+    #   remove_gap — no stub, but the aligned span's position ids are rebased
+    #                by the gap. Added 2026-07-03 to complete the 2x2
+    #                (stub tokens x RoPE geometry): wave F concluded
+    #                "teacher-geometry imitation is harmful" from the
+    #                stub_gap-vs-stub delta, where the stub tokens are a
+    #                confound; remove-vs-remove_gap isolates pure geometry.
+    #                Constant-offset invariance (test_position_invariance)
+    #                says the rebase is output-neutral for the base model, so
+    #                any difference is purely about which geometry the
+    #                distilled memory is written at.
     compaction: str = "remove"
 
 
