@@ -1,0 +1,14 @@
+# tail-CE x LoRA x online teacher: the deployable combination (the 120B /
+# update-during-forward story is LoRA-online by construction; full-FT tail_ce
+# isolates the loss, this cell tests the recipe). LoRA lr lesson: 1e-4.
+run_name: lw_tail_ce_lora_0p6b_rag
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-4
+  tail_ce_blocks: 4
+  tail_ce_weight: 0.5
+  online_teacher: true
+  lora:
+    enabled: true
