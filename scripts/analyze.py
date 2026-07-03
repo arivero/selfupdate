@@ -160,8 +160,17 @@ def training_curves() -> None:
 
     row_titles = ["lw_* (layerwise)", "kd_lora*", "kd_* (full-FT KD)"]
     fig, axes = plt.subplots(3, 3, figsize=(18, 12), sharex="col", sharey="col")
+    # >10 lines per panel: the default 10-color cycle repeats and unrelated
+    # runs become indistinguishable (bit us 2026-07-03). 20 colors x 2 line
+    # styles = 40 unique combinations, assigned per run within its family.
+    import matplotlib.cm as cm
+    counters = [0, 0, 0]
+    def style(row):
+        i = counters[row]; counters[row] += 1
+        return {"color": cm.tab20(i % 20), "linestyle": ["-", "--"][(i // 20) % 2]}
     for d in runs:
         row = family(d.name)
+        st = style(row)
         ms = read_metrics(d)
         trains = [m for m in ms if m.get("kind") == "train"]
         evals = [m for m in ms if m.get("kind") == "eval" and "epoch" in m]
@@ -169,10 +178,10 @@ def training_curves() -> None:
             xs = list(range(len(trains)))
             step = max(1, len(xs) // 400)  # thin for plotting
             axes[row][0].plot(xs[::step], [trains[i]["loss"] for i in xs[::step]],
-                              label=d.name, alpha=0.8, linewidth=1)
+                              label=d.name, alpha=0.8, linewidth=1, **st)
         if evals:
             axes[row][1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
-                              marker="o", label=d.name, alpha=0.8)
+                              marker="o", label=d.name, alpha=0.8, **st)
         # per-epoch forgetting (gen_ce logged at eval epochs since 2026-07-03;
         # older runs lack it): the reference for how long each model+method
         # can train before memorization is paid for with general ability
@@ -180,7 +189,7 @@ def training_curves() -> None:
         if gens:
             axes[row][2].plot([m["epoch"] for m in gens],
                               [m["gen_ce"] for m in gens],
-                              marker="s", label=d.name, alpha=0.8)
+                              marker="s", label=d.name, alpha=0.8, **st)
     for row in range(3):
         axes[row][0].set_yscale("log")
         axes[row][0].set_ylabel(f"{row_titles[row]}\nloss (log)")
