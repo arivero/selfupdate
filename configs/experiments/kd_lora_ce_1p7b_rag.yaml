@@ -1,0 +1,10 @@
+run_name: kd_lora_ce_1p7b_rag
+model:
+  name: Qwen/Qwen3-1.7B
+train:
+  method: kd
+  epochs: 20
+  answer_ce_weight: 0.5
+  online_teacher: true
+  lora:
+    enabled: true

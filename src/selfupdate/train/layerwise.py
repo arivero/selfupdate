@@ -42,7 +42,7 @@ from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
-from .losses import hidden_match
+from .losses import answer_ce, hidden_match
 
 
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
@@ -54,6 +54,23 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = hidden_match(stack.loss_view(L, h_out)[0, s0: s0 + A], target, kind)
+    loss.backward()
+    return loss.item(), h_out.detach()
+
+
+def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
+                    ce_w, autocast=True):
+    """Block n's local step with the optional gold-CE hybrid: logits go
+    through the frozen final norm + lm_head, but the graph is rooted at the
+    detached ``h_in``, so the backward still touches only block n's params."""
+    n = stack.n_layers
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h_out = stack.run_block(n, h_in, pos_emb)
+        normed = stack.final_norm(h_out)
+        loss = hidden_match(normed[0, s0: s0 + A], target, kind)
+        if ce_w > 0:
+            logits = stack.lm_head(normed[0, s0 + ans_off - 1: s0 + A - 1])
+            loss = loss + ce_w * answer_ce(logits, gold)
     loss.backward()
     return loss.item(), h_out.detach()
 
@@ -208,10 +225,18 @@ def _train_teacher_censored(cfg, stack, tok, log, peft_model):
                         target = t_states[L][0, tA0: tA0 + it.A]
                         if L == n:
                             target = stack.final_norm(target)
-                    loss_val, _ = local_block_step(
-                        stack, L, inp, pos_emb_c, target,
-                        it.s0, it.A, cfg.train.hidden_loss,
-                    )
+                    if L == n:
+                        gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
+                        loss_val, _ = last_block_step(
+                            stack, inp, pos_emb_c, target, it.s0, it.A,
+                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            cfg.train.last_block_ce_weight,
+                        )
+                    else:
+                        loss_val, _ = local_block_step(
+                            stack, L, inp, pos_emb_c, target,
+                            it.s0, it.A, cfg.train.hidden_loss,
+                        )
                     layer_losses.append(loss_val)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,
@@ -260,10 +285,18 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                 layer_losses = []
                 for L in range(1, n + 1):
                     target = targets[L] if online else it.hidden[L].to(device)
-                    loss_val, h = local_block_step(
-                        stack, L, h.detach(), pos_emb, target,
-                        it.s0, it.A, cfg.train.hidden_loss,
-                    )
+                    if L == n:
+                        gold = ids[0, it.ans0: it.s0 + it.A]
+                        loss_val, h = last_block_step(
+                            stack, h.detach(), pos_emb, target, it.s0, it.A,
+                            it.ans0 - it.s0, gold, cfg.train.hidden_loss,
+                            cfg.train.last_block_ce_weight,
+                        )
+                    else:
+                        loss_val, h = local_block_step(
+                            stack, L, h.detach(), pos_emb, target,
+                            it.s0, it.A, cfg.train.hidden_loss,
+                        )
                     layer_losses.append(loss_val)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,

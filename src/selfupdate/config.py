@@ -76,6 +76,11 @@ class TrainConfig:
     # student's argmax to the gold recitation and counters free-run drift
     # caused by teacher formatting quirks at the trained positions.
     answer_ce_weight: float = 0.0
+    # layerwise hybrid: gold-CE on the LAST block only, computed through the
+    # frozen final norm + lm_head. The graph is rooted at block n's detached
+    # input, so the backward stays confined to block n — output supervision
+    # without giving up block-locality.
+    last_block_ce_weight: float = 0.0
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3
