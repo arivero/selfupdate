@@ -75,6 +75,32 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
     return loss.item(), h_out.detach()
 
 
+def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
+              ce_w, autocast=True):
+    """Joint step for the tail window [L0..n]: blocks are CONNECTED, so the
+    answer-CE at the top can assign credit across the final blocks — the
+    logit-lens finding says block-local matching stores recall fine up to
+    the tail, and the behavioral deficit lives in the last-mile readout.
+    Per-block hidden losses are kept (storage signal). The window is rooted
+    at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
+    norm/head receive none. Peak graph = ``n - L0 + 1`` blocks."""
+    n = stack.n_layers
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h = h_in
+        losses = []
+        for L in range(L0, n + 1):
+            h = stack.run_block(L, h, pos_emb)
+            losses.append(hidden_match(
+                stack.loss_view(L, h)[0, s0: s0 + A], targets[L], kind))
+        total = sum(losses)
+        if ce_w > 0:
+            logits = stack.lm_head(
+                stack.final_norm(h)[0, s0 + ans_off - 1: s0 + A - 1])
+            total = total + ce_w * answer_ce(logits, gold)
+    total.backward()
+    return [l.item() for l in losses], h.detach()
+
+
 def train_layerwise(cfg: ExperimentConfig) -> Path:
     run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
@@ -289,10 +315,23 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                 h = stack.embed(ids)
                 pos_emb = stack.rope(h, pos)
                 layer_losses = []
+                tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
                 for L in range(1, n + 1):
                     target = targets[L] if online else it.hidden[L].to(device)
+                    gold = ids[0, it.ans0: it.s0 + it.A]
+                    if L == tail0:
+                        tail_targets = {
+                            LL: (targets[LL] if online else it.hidden[LL].to(device))
+                            for LL in range(tail0, n + 1)
+                        }
+                        tail_losses, h = tail_step(
+                            stack, tail0, h.detach(), pos_emb, tail_targets,
+                            it.s0, it.A, it.ans0 - it.s0, gold,
+                            cfg.train.hidden_loss, cfg.train.tail_ce_weight,
+                        )
+                        layer_losses.extend(tail_losses)
+                        break
                     if L == n:
-                        gold = ids[0, it.ans0: it.s0 + it.A]
                         loss_val, h = last_block_step(
                             stack, h.detach(), pos_emb, target, it.s0, it.A,
                             it.ans0 - it.s0, gold, cfg.train.hidden_loss,

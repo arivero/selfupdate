@@ -125,3 +125,49 @@ Known limitation, deliberate: local targets came from the *initial* frozen
 teacher. The composition of individually-well-fitted blocks is not guaranteed
 to minimize any end-to-end objective — measuring how much recitation this
 loses relative to KD **is the experiment**, not a bug to engineer away.
+
+## Storage vs readout: the lens decomposition (2026-07-03) and where it sits
+
+Logit-lens depth profiles on matched runs (mean gold-token logprob of the
+answer, decoded through the frozen final norm + lm_head):
+
+| layer | kd_full | lw_seq | lw_summed |
+|---|---|---|---|
+| 20 | -10.5 | -11.1 | -11.2 |
+| 24 | -7.30 | **-7.23** | -8.16 |
+| 28 | **-0.40** | -2.70 | -4.12 |
+
+Under matched training signals, block-local hidden matching STORES the poem
+as well as global KD through layer ~24; the entire behavioral gap opens in
+the last four blocks — the readout. Memorization decomposes into storage
+(depth-distributed, method-invariant, achievable block-locally) and readout
+(a tail circuit that needs multi-block behavioral credit). Corroborations in
+this repo: wave-C ablation (deep layers 25-28 necessary for recitation),
+convergence analysis (shared per-layer delta-magnitude profiles across
+methods), and the single-block-CE hybrid failing while full-backprop KD+CE
+recites.
+
+Positioning against the bibliography (README):
+
+- PKD (Sun 2019, supervise all depths) vs MiniLM (Wang 2020, supervise the
+  top): both half-right — depth-spread supervision wins storage, top
+  supervision is about readout, and MiniLM only works because it backprops
+  through the whole student. Our tail-CE is the synthesis: local below,
+  behavioral credit confined to a bounded top window.
+- Stoehr 2024 (memorization low-layer & localizable) vs Huang 2024
+  (distributed & entangled): the decomposition says both, about different
+  things — storage is distributed and method-invariant, the *recitation
+  behavior* hinges on a small tail circuit. Cf. Hase 2023: where a memory is
+  carried is not where intervening works.
+- Belilovsky 2019 made greedy layerwise training work with per-block
+  auxiliary classifiers; the frozen lens is that auxiliary head for free —
+  grounding for the per-block lens-CE variant (untested bet).
+- Deng 2023 found cross-layer hidden matching "hard to optimize" and escaped
+  via curriculum; the tail window is the orthogonal escape suggested by our
+  lens data.
+
+Mechanism: `tail_ce_blocks` k + `tail_ce_weight` (config), `tail_step()` in
+train/layerwise.py — blocks n-k+1..n connected in one graph, per-block hidden
+losses kept, answer-CE at the top, rooted at a detached input so locality
+below the window is intact (tests/test_tail_ce.py). Cost at scale: k blocks
+of activations instead of all — the 120B story survives with k/n overhead.

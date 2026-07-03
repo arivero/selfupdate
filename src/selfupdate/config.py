@@ -85,6 +85,14 @@ class TrainConfig:
     # input, so the backward stays confined to block n — output supervision
     # without giving up block-locality.
     last_block_ce_weight: float = 0.0
+    # tail-CE hybrid (summed schedule): the last `tail_ce_blocks` blocks train
+    # JOINTLY — gradient flows within that window so the answer-CE at the top
+    # can do multi-block credit assignment — while everything below stays
+    # block-local. Motivated by the logit-lens finding (2026-07-03): lw stores
+    # recall as well as KD through layer n-4; the deficit is confined to the
+    # readout in the final blocks. 0 = off (pure block-local, the default).
+    tail_ce_blocks: int = 0
+    tail_ce_weight: float = 0.0
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3
