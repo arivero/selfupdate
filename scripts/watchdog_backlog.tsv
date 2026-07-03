@@ -1,0 +1,6 @@
+runs/kd_full_0p6b_rag/eval/logit_lens.csv	.venv/bin/python scripts/logit_lens.py --run kd_full_0p6b_rag --limit 24
+runs/lw_summed_0p6b_rag/eval/logit_lens.csv	.venv/bin/python scripts/logit_lens.py --run lw_summed_0p6b_rag --limit 24
+runs/lw_seq_0p6b_rag/eval/logit_lens.csv	.venv/bin/python scripts/logit_lens.py --run lw_seq_0p6b_rag --limit 24
+runs/kd_full_0p6b_rag/eval/layer_swap.csv	.venv/bin/python scripts/layer_swap.py --run kd_full_0p6b_rag --limit 8
+runs/lw_summed_0p6b_rag/eval/layer_swap.csv	.venv/bin/python scripts/layer_swap.py --run lw_summed_0p6b_rag --limit 8
+runs/lw_seq_0p6b_rag/eval/layer_swap.csv	.venv/bin/python scripts/layer_swap.py --run lw_seq_0p6b_rag --limit 8
