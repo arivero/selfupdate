@@ -76,7 +76,12 @@ class LoraConfig:
 @dataclass
 class TrainConfig:
     method: str = "layerwise"
-    schedule: str = "summed"  # layerwise only: summed | sequential
+    # summed | sequential | teacher_censored | mixed
+    schedule: str = "summed"
+    # mixed schedule: probability an item routes through the teacher-stream
+    # (censored) branch, linear from start (epoch 0) to end (last epoch)
+    mix_teacher_start: float = 1.0
+    mix_teacher_end: float = 0.0
     lr: float = 1e-5
     epochs: int = 10
     micro_batch: int = 1

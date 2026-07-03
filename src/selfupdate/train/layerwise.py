@@ -176,6 +176,16 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
             raise ValueError("teacher_censored assumes compaction=remove "
                              "(stub rows have no teacher counterpart)")
         _train_teacher_censored(cfg, stack, tok, log, teacher)
+    elif cfg.train.schedule == "mixed":
+        if teacher is None:
+            raise ValueError(
+                "mixed needs full-sequence teacher states: enable "
+                "train.online_teacher (LoRA) or train.frozen_teacher_copy"
+            )
+        if cfg.mask.compaction != "remove":
+            raise ValueError("mixed assumes compaction=remove "
+                             "(teacher branch deletes privileged rows)")
+        _train_mixed(cfg, stack, tok, log, teacher)
     elif cfg.train.schedule == "sequential":
         if online:
             raise NotImplementedError(
@@ -296,36 +306,8 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
             for it in items:
                 # frozen teacher states, all layers, full teacher sequence
                 t_states = teacher.full_states(it, device)
-
-                # censored view: prefix rows + aligned rows, teacher positions
-                tA0 = it.t0
-                rows = torch.cat([
-                    torch.arange(it.s0, device=device),          # shared prefix
-                    torch.arange(tA0, tA0 + it.A, device=device),  # mid+answer
-                ])
-                pos_c = rows[None]  # teacher absolute positions == row indices
-                pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
-
-                layer_losses = []
-                for L in range(1, n + 1):
-                    inp = t_states[L - 1][:, rows].detach()
-                    with torch.no_grad():
-                        target = t_states[L][0, tA0: tA0 + it.A]
-                        if L == n:
-                            target = stack.final_norm(target)
-                    if L == n:
-                        gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
-                        loss_val, _ = last_block_step(
-                            stack, inp, pos_emb_c, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, loss_fn,
-                            cfg.train.last_block_ce_weight,
-                        )
-                    else:
-                        loss_val, _ = local_block_step(
-                            stack, L, inp, pos_emb_c, target,
-                            it.s0, it.A, loss_fn,
-                        )
-                    layer_losses.append(loss_val)
+                layer_losses = _censored_item(cfg, stack, loss_fn, it,
+                                              t_states, device)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,
                         loss=sum(layer_losses) / n, per_layer=layer_losses)
@@ -345,6 +327,96 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+
+
+def _censored_item(cfg, stack, loss_fn, it, t_states, device):
+    """One item's per-block fitting on censored teacher-stream inputs
+    (prefix rows + aligned rows, teacher position ids, privileged rows
+    deleted). When ``tail_ce_blocks > 0`` the top window runs CONNECTED on
+    the censored input — the same bounded-locality concession the summed
+    schedule makes, so mixed/censored runs compare like-for-like."""
+    n = stack.n_layers
+    tA0 = it.t0
+    rows = torch.cat([
+        torch.arange(it.s0, device=device),          # shared prefix
+        torch.arange(tA0, tA0 + it.A, device=device),  # mid+answer
+    ])
+    pos_c = rows[None]  # teacher absolute positions == row indices
+    pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
+    gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
+    tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
+
+    def _target(L):
+        t = t_states[L][0, tA0: tA0 + it.A]
+        return (stack.final_norm(t) if L == n else t).detach()
+
+    layer_losses = []
+    for L in range(1, n + 1):
+        inp = t_states[L - 1][:, rows].detach()
+        if L == tail0:
+            tail_targets = {LL: _target(LL) for LL in range(tail0, n + 1)}
+            tail_losses, _ = tail_step(
+                stack, tail0, inp, pos_emb_c, tail_targets, it.s0, it.A,
+                it.ans0 - it.s0, gold, loss_fn, cfg.train.tail_ce_weight,
+            )
+            layer_losses.extend(tail_losses)
+            break
+        if L == n:
+            loss_val, _ = last_block_step(
+                stack, inp, pos_emb_c, _target(L), it.s0, it.A,
+                it.ans0 - it.s0, gold, loss_fn,
+                cfg.train.last_block_ce_weight,
+            )
+        else:
+            loss_val, _ = local_block_step(
+                stack, L, inp, pos_emb_c, _target(L), it.s0, it.A, loss_fn,
+            )
+        layer_losses.append(loss_val)
+    return layer_losses
+
+
+def _summed_item(cfg, stack, loss_fn, it, targets, device):
+    """One item's per-block local pass on the student's own stream: strict
+    local steps below, lens-CE where configured, the connected tail window
+    at the top. ``targets`` is {L: [A, H]} regardless of source (disk cache
+    or online teacher)."""
+    n = stack.n_layers
+    ids = it.student_ids.to(device)[None]
+    pos = it.position_ids.to(device)[None]
+    h = stack.embed(ids)
+    pos_emb = stack.rope(h, pos)
+    gold = ids[0, it.ans0: it.s0 + it.A]
+    tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
+    layer_losses = []
+    for L in range(1, n + 1):
+        if L == tail0:
+            tail_targets = {LL: targets[LL] for LL in range(tail0, n + 1)}
+            tail_losses, h = tail_step(
+                stack, tail0, h.detach(), pos_emb, tail_targets,
+                it.s0, it.A, it.ans0 - it.s0, gold,
+                loss_fn, cfg.train.tail_ce_weight,
+            )
+            layer_losses.extend(tail_losses)
+            break
+        if L == n:
+            loss_val, h = last_block_step(
+                stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
+                it.ans0 - it.s0, gold, loss_fn,
+                max(cfg.train.last_block_ce_weight,
+                    cfg.train.lens_ce_weight
+                    if L >= cfg.train.lens_ce_from else 0.0),
+            )
+        else:
+            lens_w = (cfg.train.lens_ce_weight
+                      if L >= cfg.train.lens_ce_from else 0.0)
+            loss_val, h = local_block_step(
+                stack, L, h.detach(), pos_emb, targets[L],
+                it.s0, it.A, loss_fn,
+                lens_ce_w=lens_w, gold=gold,
+                ans_off=it.ans0 - it.s0,
+            )
+        layer_losses.append(loss_val)
+    return layer_losses
 
 
 def _train_summed(cfg, stack, cache, tok, log, teacher=None):
@@ -369,46 +441,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     for epoch in range(cfg.train.epochs):
         for items in loader:
             for it in items:
-                ids = it.student_ids.to(device)[None]
-                pos = it.position_ids.to(device)[None]
-                targets = teacher.aligned_targets(it, device) if online else None
-                h = stack.embed(ids)
-                pos_emb = stack.rope(h, pos)
-                layer_losses = []
-                tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
-                for L in range(1, n + 1):
-                    target = targets[L] if online else it.hidden[L].to(device)
-                    gold = ids[0, it.ans0: it.s0 + it.A]
-                    if L == tail0:
-                        tail_targets = {
-                            LL: (targets[LL] if online else it.hidden[LL].to(device))
-                            for LL in range(tail0, n + 1)
-                        }
-                        tail_losses, h = tail_step(
-                            stack, tail0, h.detach(), pos_emb, tail_targets,
-                            it.s0, it.A, it.ans0 - it.s0, gold,
-                            loss_fn, cfg.train.tail_ce_weight,
-                        )
-                        layer_losses.extend(tail_losses)
-                        break
-                    if L == n:
-                        loss_val, h = last_block_step(
-                            stack, h.detach(), pos_emb, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, loss_fn,
-                            max(cfg.train.last_block_ce_weight,
-                                cfg.train.lens_ce_weight
-                                if L >= cfg.train.lens_ce_from else 0.0),
-                        )
-                    else:
-                        lens_w = (cfg.train.lens_ce_weight
-                                  if L >= cfg.train.lens_ce_from else 0.0)
-                        loss_val, h = local_block_step(
-                            stack, L, h.detach(), pos_emb, target,
-                            it.s0, it.A, loss_fn,
-                            lens_ce_w=lens_w, gold=gold,
-                            ans_off=it.ans0 - it.s0,
-                        )
-                    layer_losses.append(loss_val)
+                targets = (teacher.aligned_targets(it, device) if online
+                           else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
+                layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, device)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,
                         loss=sum(layer_losses) / n, per_layer=layer_losses)
@@ -425,6 +460,76 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                     prefix_lines=r["prefix_lines"],
                     # per-epoch forgetting reference: CER says when the poem
                     # arrives, gen_ce says when the model starts paying for it
+                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
+                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    minutes=round((time.time() - t0) / 60, 1))
+            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+
+
+def mix_teacher_p(cfg, epoch: int) -> float:
+    """Linear anneal of the teacher-branch probability from
+    ``mix_teacher_start`` (epoch 0) to ``mix_teacher_end`` (last epoch)."""
+    s, e = cfg.train.mix_teacher_start, cfg.train.mix_teacher_end
+    if cfg.train.epochs <= 1:
+        return e
+    return s + (e - s) * epoch / (cfg.train.epochs - 1)
+
+
+def _train_mixed(cfg, stack, tok, log, teacher):
+    """Scheduled-sampling routing: per item, a Bernoulli draw picks between
+    the teacher-stream censored branch (stationary inputs, early training)
+    and the student-stream summed branch (the deployment-matched input
+    distribution, late training). One teacher forward per item feeds both
+    branches. The branch generator is separate from the loader's shuffle
+    generator so sibling arms at the same seed see identical item order."""
+    device = cfg.model.device
+    n = stack.n_layers
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
+    records = ds.records
+    loader = _loader(cfg, ds)
+    opts = {
+        L: torch.optim.AdamW(
+            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
+        )
+        for L in range(1, n + 1)
+    }
+    branch_gen = torch.Generator().manual_seed(cfg.train.seed + 1)
+
+    step = accum = 0
+    t0 = time.time()
+    for epoch in range(cfg.train.epochs):
+        p = mix_teacher_p(cfg, epoch)
+        for items in loader:
+            for it in items:
+                t_states = teacher.full_states(it, device)
+                use_teacher = torch.rand((), generator=branch_gen).item() < p
+                if use_teacher:
+                    layer_losses = _censored_item(cfg, stack, loss_fn, it,
+                                                  t_states, device)
+                else:
+                    targets = {
+                        L: (stack.final_norm(t_states[L][0, it.t0: it.t0 + it.A])
+                            if L == n else t_states[L][0, it.t0: it.t0 + it.A]).detach()
+                        for L in range(1, n + 1)
+                    }
+                    layer_losses = _summed_item(cfg, stack, loss_fn, it,
+                                                targets, device)
+                accum += 1
+                log.log(kind="train", epoch=epoch, step=step,
+                        branch="teacher" if use_teacher else "student",
+                        p_teacher=round(p, 4),
+                        loss=sum(layer_losses) / n, per_layer=layer_losses)
+                if accum % cfg.train.grad_accum == 0:
+                    for L, opt in opts.items():
+                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
+                        opt.step()
+                        opt.zero_grad(set_to_none=True)
+                    step += 1
+        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            r = recite_eval(stack.model, tok, records, limit=8)
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+                    prefix_lines=r["prefix_lines"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))

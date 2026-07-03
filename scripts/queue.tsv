@@ -56,3 +56,12 @@ runs/lw_j_qwen8b_rag/eval/recite.json	25000	runs/lw_j_qwen8b_rag/checkpoint	.ven
 runs/lw_j_llama8b_rag/checkpoint	25000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_j_llama8b_rag.yaml
 runs/lw_j_llama8b_rag/eval/recite.json	25000	runs/lw_j_llama8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_j_llama8b_rag.yaml --checkpoint runs/lw_j_llama8b_rag/checkpoint
 runs/smoke_gptoss_k1.done	43000	-	bash -c ".venv/bin/python scripts/smoke_family.py --model openai/gpt-oss-20b --tail-blocks 1 > runs/pipeline_smoke_gptoss_k1.log 2>&1 && touch runs/smoke_gptoss_k1.done"
+# GRID B queued 2026-07-03 23:40:31 — routing x champion loss (1c landed: tail-in-censored + mixed)
+runs/lw_b_tc_frozen_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_b_tc_frozen_0p6b_rag.yaml
+runs/lw_b_tc_frozen_0p6b_rag/eval/recite.json	3000	runs/lw_b_tc_frozen_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_tc_frozen_0p6b_rag.yaml --checkpoint runs/lw_b_tc_frozen_0p6b_rag/checkpoint
+runs/lw_b_tc_lora_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_b_tc_lora_0p6b_rag.yaml
+runs/lw_b_tc_lora_0p6b_rag/eval/recite.json	3000	runs/lw_b_tc_lora_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_tc_lora_0p6b_rag.yaml --checkpoint runs/lw_b_tc_lora_0p6b_rag/checkpoint
+runs/lw_b_mixed_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_b_mixed_0p6b_rag.yaml
+runs/lw_b_mixed_0p6b_rag/eval/recite.json	3000	runs/lw_b_mixed_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_mixed_0p6b_rag.yaml --checkpoint runs/lw_b_mixed_0p6b_rag/checkpoint
+runs/lw_b_mixed_strict_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_b_mixed_strict_0p6b_rag.yaml
+runs/lw_b_mixed_strict_0p6b_rag/eval/recite.json	3000	runs/lw_b_mixed_strict_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_b_mixed_strict_0p6b_rag.yaml --checkpoint runs/lw_b_mixed_strict_0p6b_rag/checkpoint

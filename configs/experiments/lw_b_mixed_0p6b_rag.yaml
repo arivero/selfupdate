@@ -1,0 +1,18 @@
+# Grid B routing at champion loss (vocab_mse), 0.6B v2, matched budget.
+run_name: lw_b_mixed_0p6b_rag
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: mixed
+  epochs: 40
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 4
+  tail_ce_weight: 0.5
+  lr: 1.0e-5
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
