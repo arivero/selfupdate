@@ -3,6 +3,42 @@
 Orientation for a fresh agent/session, especially after moving the repo to a
 new machine. Read README.md for the science; this file is operational.
 
+## Source of truth
+
+Everything an agent needs lives IN THIS REPO — do not depend on host-local
+state (`~/.claude/plans`, agent memory dirs): those do not travel with clones.
+
+- `EXPERIMENTS.md` — the experiment plan + live status board + headline
+  results. Update it at every wave boundary.
+- `runs/results.md`, `runs/report.pdf`, `runs/curves.png` — auto-generated
+  metrics/report (rebuild with `scripts/analyze.py`, `scripts/report.py`).
+- `docs/hidden_loss.md`, `docs/scaling.md`, `docs/memory.md` — loss math and
+  locality proofs; big-model plan; memory-vs-params accounting.
+- `runs/*/metrics.jsonl` + `runs/pipeline_*.log` — raw training dynamics and
+  pipeline history. Checkpoints are in `runs/*/checkpoint` (gitignored — copy
+  separately if they must move).
+
+## Hard-won lessons (do not relearn these on GPU time)
+
+- **KL saturation ≠ recitation**: pure distillation reaches KL ~0.03 while
+  free-run recitation stays broken; a gold-CE auxiliary is what makes
+  recitation click. Exposure bias, not optimization failure.
+- **LoRA needs lr ~1e-4**, not the full-FT 1e-5 (rank-16 KL plateaued at 2.2
+  with the wrong lr and poisoned a whole round of conclusions).
+- **Eval on the full corpus**: the 8-example training-eval subset covers the
+  poem's opening and masked severe front-of-poem bias (subset CER 0.002 vs
+  full-corpus 0.596 on the same checkpoint).
+- **Layerwise trains hidden states, not behavior**: no block-local variant
+  recites yet; last-block-CE hybrid failed at lr 1e-5. Current bets: proper
+  lr, per-block lens-CE, or layerwise-as-preconditioner + short KD polish.
+- **teacher_censored (variant b) dominates student-stream (a)** on both
+  memorization and forgetting; its per-layer increment profile doubles as a
+  localization readout (context integration peaks at layer ~7 in Qwen3-0.6B).
+- Two concurrent GPU jobs need a VRAM guard WITH a random stagger — two
+  processes checking free memory in the same second both pass and collide.
+- `pkill -f pattern` kills your own shell if the pattern appears in your own
+  command line; use `[.]`-style patterns.
+
 ## What this repo is (one paragraph)
 
 Self-distillation of context: the same model is teacher (sees a RAG passage or

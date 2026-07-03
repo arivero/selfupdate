@@ -69,6 +69,14 @@ Base model control: CER 0.932, general-CE 3.278.
 | kd_full re-eval (fills forgetting NaN) | ⏳ |
 | 1.7B cache + lw_seq_1p7b (memory-curve point 2) | ⏳ |
 
+## Original milestone plan (for the record; superseded by the waves above)
+
+M1 data+cache+premise ✅ · M2 KD baseline (CER<5% subset) ✅ · M3 layerwise
+(locality tests ✅, VRAM<40% ✅ via sequential, recitation ❌ open) · M4
+analysis suite ✅ · M5 LoRA axis ✅ · M6 scale-up prep (docs ✅, streaming
+mock + FSDP2 stubs pending). Original grid axis not yet run: **thinking-mode**
+(trace harvesting implemented; needs a ~30 min generation pass + cache).
+
 ## Beyond (not yet scheduled)
 
 - Batched eval generation (task #1; 5–8× eval speedup)
