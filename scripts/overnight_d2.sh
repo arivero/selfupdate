@@ -15,7 +15,7 @@ step() {
 }
 while pgrep -f 'scripts/overnight_d\.sh$' >/dev/null; do sleep 120; done
 log "=== overnight_d2 (round 2 @ 1.7B) start ==="
-step train-kd-lora-ce-hi-1p7b runs/kd_lora_ce_hi_1p7b_rag/checkpoint 10500 \
+step train-kd-lora-ce-hi-1p7b runs/kd_lora_ce_hi_1p7b_rag/checkpoint 4500 \
     $PY scripts/train.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml
 step eval-kd-lora-ce-hi-1p7b runs/kd_lora_ce_hi_1p7b_rag/eval/recite.json 5000 \
     $PY scripts/evaluate.py --experiment configs/experiments/kd_lora_ce_hi_1p7b_rag.yaml \

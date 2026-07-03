@@ -16,7 +16,8 @@ step() {
 while pgrep -f 'scripts/overnight_c_(train|eval)\.sh$' >/dev/null; do sleep 120; done
 log "=== overnight_d (round 2) start ==="
 for name in kd_lora_ce_hi_0p6b_rag lw_tc_ce_hi_0p6b_rag kd_ce_long_0p6b_rag; do
-    step "train-$name" "runs/$name/checkpoint" 9500 \
+    case "$name" in *lora*|*tc_ce*) need=2500;; *) need=9500;; esac
+    step "train-$name" "runs/$name/checkpoint" "$need" \
         $PY scripts/train.py --experiment "configs/experiments/$name.yaml"
     step "eval-$name" "runs/$name/eval/recite.json" 2500 \
         $PY scripts/evaluate.py --checkpoint "runs/$name/checkpoint"

@@ -81,7 +81,9 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     device = cfg.model.device
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.float32)
+    # frozen bf16 base for LoRA (see kd.py); fp32 for full fine-tuning
+    base_dtype = torch.bfloat16 if cfg.train.lora.enabled else torch.float32
+    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
     model.to(device)
     peft_model = None
     if cfg.train.lora.enabled:

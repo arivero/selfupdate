@@ -9,7 +9,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 
 log() { echo "[$(date '+%F %T')] $*"; }
 free_mb() { nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1; }
-wait_vram() { while [ "$(free_mb)" -lt "$1" ]; do sleep 30; done; }
+wait_vram() { sleep $((RANDOM % 40 + 20)); while [ "$(free_mb)" -lt "$1" ]; do sleep 30; done; }
 
 train() {  # train <run_name> <needed_mb>
     local name=$1 need=$2
@@ -29,8 +29,8 @@ while pgrep -f 'scripts/train\.py' >/dev/null; do sleep 60; done
 log "=== overnight_c TRAIN lane start (pid $$) ==="
 
 train lw_summed_ce_0p6b_rag 8800   # full-FT summed: ~7.8 GB
-train lw_tc_ce_0p6b_rag     4000   # LoRA online:    ~3.2 GB
-train kd_lora_ce_0p6b_rag   4500   # LoRA online KD: ~3.8 GB
+train lw_tc_ce_0p6b_rag     2500   # LoRA online:    ~3.2 GB
+train kd_lora_ce_0p6b_rag   2500   # LoRA online KD: ~3.8 GB
 
 # stretch: Qwen3-1.7B, same KD recipe, online teacher (no cache needed)
 if [ ! -e runs/model-1p7b.marker ]; then
@@ -38,6 +38,6 @@ if [ ! -e runs/model-1p7b.marker ]; then
     $PY -c 'from huggingface_hub import snapshot_download; snapshot_download("Qwen/Qwen3-1.7B")' \
         && touch runs/model-1p7b.marker && log "DONE download-1p7b" || log "FAIL download-1p7b"
 fi
-train kd_lora_ce_1p7b_rag 10200    # fp32 base 6.8 GB + activations
+train kd_lora_ce_1p7b_rag 6500    # fp32 base 6.8 GB + activations
 
 log "=== overnight_c TRAIN lane finished ==="
