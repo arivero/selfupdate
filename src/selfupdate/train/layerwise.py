@@ -45,15 +45,26 @@ from .blocks import BlockStack
 from .losses import answer_ce, hidden_match
 
 
-def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
+def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
+                     lens_ce_w=0.0, gold=None, ans_off=None):
     """One local forward+backward for block L. ``h_in`` must be detached, so
     the recorded graph — and therefore the backward — is confined to block L:
     no gradient from this loss can reach any other block, the lm_head, or the
     logits. Returns (loss value, detached block output). Autocast wraps only
-    the forward+loss; backward runs outside it."""
+    the forward+loss; backward runs outside it.
+
+    ``lens_ce_w > 0`` adds a per-block behavioral auxiliary: block L's output
+    is decoded through the frozen final norm + lm_head (the logit lens) and
+    CE'd against the gold answer — Belilovsky-style local auxiliary heads,
+    for free. The head is frozen and ``h_in`` detached, so locality is
+    untouched: only block L's params see this gradient."""
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = hidden_match(stack.loss_view(L, h_out)[0, s0: s0 + A], target, kind)
+        if lens_ce_w > 0:
+            lens_logits = stack.lm_head(
+                stack.final_norm(h_out)[0, s0 + ans_off - 1: s0 + A - 1])
+            loss = loss + lens_ce_w * answer_ce(lens_logits, gold)
     loss.backward()
     return loss.item(), h_out.detach()
 
@@ -335,12 +346,18 @@ def _train_summed(cfg, stack, cache, tok, log, peft_model=None):
                         loss_val, h = last_block_step(
                             stack, h.detach(), pos_emb, target, it.s0, it.A,
                             it.ans0 - it.s0, gold, cfg.train.hidden_loss,
-                            cfg.train.last_block_ce_weight,
+                            max(cfg.train.last_block_ce_weight,
+                                cfg.train.lens_ce_weight
+                                if L >= cfg.train.lens_ce_from else 0.0),
                         )
                     else:
+                        lens_w = (cfg.train.lens_ce_weight
+                                  if L >= cfg.train.lens_ce_from else 0.0)
                         loss_val, h = local_block_step(
                             stack, L, h.detach(), pos_emb, target,
                             it.s0, it.A, cfg.train.hidden_loss,
+                            lens_ce_w=lens_w, gold=gold,
+                            ans_off=it.ans0 - it.s0,
                         )
                     layer_losses.append(loss_val)
                 accum += 1

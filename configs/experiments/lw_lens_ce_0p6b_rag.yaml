@@ -1,0 +1,10 @@
+run_name: lw_lens_ce_0p6b_rag
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  lens_ce_weight: 0.5
+  lens_ce_from: 1
+  lora:
+    enabled: false

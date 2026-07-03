@@ -117,3 +117,10 @@ runs/lw_tc_lora_e40_0p6b_rag/eval/recite.json	2500	runs/lw_tc_lora_e40_0p6b_rag/
 runs/lw_tail_ce_e40_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_tail_ce_e40_0p6b_rag.yaml
 runs/lw_tail_ce_e40_0p6b_rag/eval/recite.json	2500	runs/lw_tail_ce_e40_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_tail_ce_e40_0p6b_rag/checkpoint
 runs/lw_tail_ce_e40_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_tail_ce_e40_0p6b_rag/eval/recite.json	.venv/bin/python scripts/logit_lens.py --run lw_tail_ce_e40_0p6b_rag --limit 24
+# --- per-block lens-CE (Belilovsky aux-heads through the frozen lens; strictly local) ---
+runs/lw_lens_ce_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_lens_ce_0p6b_rag.yaml
+runs/lw_lens_ce_0p6b_rag/eval/recite.json	2500	runs/lw_lens_ce_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_lens_ce_0p6b_rag/checkpoint
+runs/lw_lens_ce_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_lens_ce_0p6b_rag/eval/recite.json	.venv/bin/python scripts/logit_lens.py --run lw_lens_ce_0p6b_rag --limit 24
+runs/lw_lens_ce_deep_0p6b_rag/checkpoint	9000	caches/.0p6b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_lens_ce_deep_0p6b_rag.yaml
+runs/lw_lens_ce_deep_0p6b_rag/eval/recite.json	2500	runs/lw_lens_ce_deep_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_lens_ce_deep_0p6b_rag/checkpoint
+runs/lw_lens_ce_deep_0p6b_rag/eval/logit_lens.csv	3000	runs/lw_lens_ce_deep_0p6b_rag/eval/recite.json	.venv/bin/python scripts/logit_lens.py --run lw_lens_ce_deep_0p6b_rag --limit 24

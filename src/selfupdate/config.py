@@ -93,6 +93,12 @@ class TrainConfig:
     # readout in the final blocks. 0 = off (pure block-local, the default).
     tail_ce_blocks: int = 0
     tail_ce_weight: float = 0.0
+    # per-block lens-CE (summed schedule): every block >= lens_ce_from gets a
+    # behavioral auxiliary through the frozen logit lens — Belilovsky-style
+    # local heads. Strictly block-local (unlike tail_ce): the personalization
+    # / parallelism story is fully preserved. 0 = off.
+    lens_ce_weight: float = 0.0
+    lens_ce_from: int = 1
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3
