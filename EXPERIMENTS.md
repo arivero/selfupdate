@@ -85,6 +85,17 @@ D1 decisions: campaign losses = vocab_mse + l2mse. Wave J: scale
 (1.7B full-FT, 4B/8B LoRA online), k∈{2,4,8} at 1.7B, family arms,
 gpt-oss retry. lens_kl arms run to the 12k floor, then judged.
 
+**Forgetting amendment (00:20, base refs restored):** every full-FT Wave I
+arm pays HEAVY general-CE forgetting (+0.7 to +2.2 nats on held-out
+prose; `scripts/forget_curves.py`, bands: <0.05 negligible / <=0.30 mild /
+>0.30 heavy). Ranking favors vocab_mse on BOTH axes: best recall
+(CER 0.024) and least tail-arm forgetting (+1.01); l2mse is the worst
+forgetter (+2.17) despite perfect subset recitation — demoted. From here
+champions are judged on the (CER, dCE) Pareto front, not CER alone.
+Open mitigations in flight: LoRA arms (drift-bounded), mixed schedule
+(teacher-stream anchoring), fewer epochs; candidates if needed:
+general-text CE anchor, weight averaging.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
