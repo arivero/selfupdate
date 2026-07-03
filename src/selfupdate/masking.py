@@ -104,6 +104,7 @@ DEFAULT_SYSTEM = "Eres un experto en poesía española. Respondes recitando de m
 # uninformative placeholder shown to the student under "stub" compaction
 RAG_STUB = "\n\nDocumento recuperado:\n[no disponible]"
 THINK_STUB = "..."
+ASSISTANT_THINK_START = f"{IM_END}\n{IM_START}assistant\n<think>\n"
 
 
 def render_rag(
@@ -206,6 +207,35 @@ def render_rag_thinking(
     )
 
 
+def render_rag_hidden_thinking(
+    example_id: str,
+    question: str,
+    passage: str,
+    trace: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+) -> SegmentedExample:
+    """Mixed RAG + hidden thinking.
+
+    Both the retrieved passage and generated ``<think>`` body are privileged.
+    The student sees the chat scaffold with an empty think block and is trained
+    only on the final poem answer.
+    """
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}"
+    )
+    doc = f"\n\nDocumento recuperado:\n{passage}" if passage else ""
+    trace_body = trace.strip()
+    privileged = f"{doc}{ASSISTANT_THINK_START}{trace_body}"
+    mid = "\n</think>\n\n"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid, f"{answer}{IM_END}",
+        student_stub or ASSISTANT_THINK_START,
+    )
+
+
 def render_rag_mayeutic(
     example_id: str,
     question: str,
@@ -236,6 +266,35 @@ def render_rag_mayeutic(
     visible = f"{trace.strip()}\n</think>\n\n" if trace.strip() else "\n</think>\n\n"
     return SegmentedExample(
         example_id, prefix, privileged, mid, f"{visible}{answer}{IM_END}", student_stub
+    )
+
+
+def render_rag_hidden_mayeutic(
+    example_id: str,
+    question: str,
+    passage: str,
+    trace: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+) -> SegmentedExample:
+    """Mayeutic variant with both RAG and thinking body censored."""
+    mayeutic = (
+        "\n\nEn el bloque <think>, usa una breve mayeutica: formula preguntas "
+        "y respuestas internas que reutilicen el documento recuperado para "
+        "fijar los versos exactos. Despues recita solo el poema solicitado."
+    )
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}{mayeutic}"
+    )
+    doc = f"\n\nDocumento recuperado:\n{passage}" if passage else ""
+    trace_body = trace.strip()
+    privileged = f"{doc}{ASSISTANT_THINK_START}{trace_body}"
+    mid = "\n</think>\n\n"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid, f"{answer}{IM_END}",
+        student_stub or ASSISTANT_THINK_START,
     )
 
 

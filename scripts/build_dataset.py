@@ -55,11 +55,19 @@ def main() -> None:
             render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
             for s in specs
         ]
-    elif cfg.mask.mode in ("thinking", "rag_thinking", "rag_mayeutic"):
+    elif cfg.mask.mode in (
+        "thinking",
+        "rag_thinking",
+        "rag_mayeutic",
+        "rag_hidden_thinking",
+        "rag_hidden_mayeutic",
+    ):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         from selfupdate.teacher.generate import (
+            harvest_rag_hidden_mayeutic_traces,
+            harvest_rag_hidden_thinking_traces,
             harvest_rag_mayeutic_traces,
             harvest_rag_thinking_traces,
             harvest_traces,
@@ -74,6 +82,8 @@ def main() -> None:
             "thinking": harvest_traces,
             "rag_thinking": harvest_rag_thinking_traces,
             "rag_mayeutic": harvest_rag_mayeutic_traces,
+            "rag_hidden_thinking": harvest_rag_hidden_thinking_traces,
+            "rag_hidden_mayeutic": harvest_rag_hidden_mayeutic_traces,
         }[cfg.mask.mode]
         examples = harvest(
             model, tok, specs,

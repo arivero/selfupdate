@@ -1,0 +1,10 @@
+run_name: data_rag_hidden_thinking_v3_qwen3_0p6b
+data:
+  examples_path: data/poem/examples_rag_hidden_thinking_v3_qwen3_0p6b.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  catechism: true
+mask:
+  mode: rag_hidden_thinking
+  max_think_tokens: 128

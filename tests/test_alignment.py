@@ -8,6 +8,8 @@ from selfupdate.masking import (
     DEFAULT_SYSTEM,
     ContextMasker,
     render_rag,
+    render_rag_hidden_mayeutic,
+    render_rag_hidden_thinking,
     render_rag_mayeutic,
     render_rag_thinking,
     render_thinking,
@@ -124,6 +126,41 @@ def test_rag_mayeutic_hides_only_rag_and_reproduces_trace(tokenizer, specs):
     assert ex.answer.startswith(trace)
     assert "</think>" in ex.answer
     assert spec.answer in ex.answer
+    assert pair.t_answer.stop == pair.t_aligned.stop
+    assert pair.s_answer.stop == pair.s_aligned.stop
+    assert pair.t_aligned.start - pair.s_aligned.start == len(pair.teacher_ids) - len(pair.student_ids)
+
+
+def test_rag_hidden_thinking_hides_rag_and_trace(tokenizer, specs):
+    spec = specs[1]
+    trace = "Consulto el pasaje y localizo los versos exactos."
+    ex = render_rag_hidden_thinking(spec.task_id, spec.question, spec.passage, trace, spec.answer)
+    pair = ContextMasker(tokenizer).build(ex)
+    student_text = ex.shared_prefix + ex.student_stub + ex.shared_mid + ex.answer
+
+    assert "Documento recuperado" in ex.privileged
+    assert trace in ex.privileged
+    assert trace not in ex.answer
+    assert trace not in student_text
+    assert ex.answer == f"{spec.answer}<|im_end|>"
+    assert pair.t_answer.stop == pair.t_aligned.stop
+    assert pair.s_answer.stop == pair.s_aligned.stop
+    assert pair.t_aligned.start - pair.s_aligned.start == len(pair.teacher_ids) - len(pair.student_ids)
+
+
+def test_rag_hidden_mayeutic_hides_rag_and_trace(tokenizer, specs):
+    spec = specs[1]
+    trace = "Pregunto que verso sigue; el documento responde con la cita."
+    ex = render_rag_hidden_mayeutic(spec.task_id, spec.question, spec.passage, trace, spec.answer)
+    pair = ContextMasker(tokenizer).build(ex)
+    student_text = ex.shared_prefix + ex.student_stub + ex.shared_mid + ex.answer
+
+    assert "mayeutica" in ex.shared_prefix
+    assert "Documento recuperado" in ex.privileged
+    assert trace in ex.privileged
+    assert trace not in ex.answer
+    assert trace not in student_text
+    assert ex.answer == f"{spec.answer}<|im_end|>"
     assert pair.t_answer.stop == pair.t_aligned.stop
     assert pair.s_answer.stop == pair.s_aligned.stop
     assert pair.t_aligned.start - pair.s_aligned.start == len(pair.teacher_ids) - len(pair.student_ids)
