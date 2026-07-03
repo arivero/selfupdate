@@ -14,8 +14,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from selfupdate.config import LoraConfig
 from selfupdate.data.dataset import DistillDataset
 from selfupdate.teacher.cache import TeacherCache
-from selfupdate.train.blocks import BlockStack
-from selfupdate.train.layerwise import _online_targets
 from selfupdate.train.lora import attach_lora
 
 MODEL = "Qwen/Qwen3-0.6B"
@@ -40,27 +38,14 @@ def test_online_targets_match_cache():
     model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32)
     model.to("cuda")
     peft_model = attach_lora(model, LoraConfig(enabled=True))
-    base = peft_model.get_base_model()
-    stack = BlockStack(base)
     cache = TeacherCache(_cache_dir())
 
-    n = stack.n_layers
-    ds = DistillDataset(EXAMPLES, cache, tok,
-                        need_layers=[1, n // 2, n], need_logits=True,
-                        with_teacher_ids=True)
+    base = peft_model.get_base_model()
+    ds = DistillDataset(EXAMPLES, cache, tok, need_logits=True, with_teacher_ids=True)
     it = ds[5]
-    targets = _online_targets(stack, peft_model, it, "cuda")
 
-    for L in (1, n // 2, n):
-        cached = it.hidden[L].to("cuda", torch.float32)
-        online = targets[L].float()
-        err = (online - cached).abs().max().item()
-        scale = cached.abs().max().item()
-        # bf16 autocast online vs fp16-stored fp32 build: ~1% relative
-        assert err <= max(2e-2 * scale, 0.05), f"h{L}: err {err} scale {scale}"
-
-    # logits path: online top-k should assign the same top-1 token almost
-    # everywhere and close values at cached top-k indices
+    # Online top-k should assign the same top-1 token almost everywhere and
+    # close values at cached top-k indices.
     with torch.no_grad(), peft_model.disable_adapter(), \
             torch.autocast("cuda", dtype=torch.bfloat16):
         t_h = base.model(input_ids=it.teacher_ids.to("cuda")[None],

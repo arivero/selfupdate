@@ -58,7 +58,7 @@ exclusive_on() {  # 1 if device $1 is held by a live multi-GPU (exclusive) job
     echo 0
 }
 
-echo $$ > runs/.sched/scheduler.pid
+echo $$ > "$SCHED/scheduler.pid"
 log "started (pid $$, GPUS=$GPUS, MAX_PER_GPU=$MAX_PER_GPU)"
 while :; do
     launched=0

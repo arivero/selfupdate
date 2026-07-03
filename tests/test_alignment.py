@@ -8,6 +8,7 @@ from selfupdate.masking import (
     DEFAULT_SYSTEM,
     ContextMasker,
     render_rag,
+    render_rag_thinking,
     render_thinking,
 )
 
@@ -92,6 +93,22 @@ def test_thinking_teacher_prompt_matches_template(tokenizer, specs):
     # our prefix ends with "<think>\n" which the model would otherwise generate
     assert ex.shared_prefix.startswith(canonical)
     assert ex.shared_prefix[len(canonical):] in ("", "<think>\n")
+
+
+def test_rag_thinking_hides_only_rag_and_reproduces_trace(tokenizer, specs):
+    spec = specs[1]
+    trace = "Consulto el pasaje y localizo los versos exactos."
+    ex = render_rag_thinking(spec.task_id, spec.question, spec.passage, trace, spec.answer)
+    pair = ContextMasker(tokenizer).build(ex)
+
+    assert "Documento recuperado" in ex.privileged
+    assert ex.shared_mid.endswith("<think>\n")
+    assert ex.answer.startswith(trace)
+    assert "</think>" in ex.answer
+    assert spec.answer in ex.answer
+    assert pair.t_answer.stop == pair.t_aligned.stop
+    assert pair.s_answer.stop == pair.s_aligned.stop
+    assert pair.t_aligned.start - pair.s_aligned.start == len(pair.teacher_ids) - len(pair.student_ids)
 
 
 def test_segmentwise_tokenization_is_not_naive(tokenizer, specs):

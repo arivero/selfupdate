@@ -3,4 +3,3 @@ train:
   method: kd
   epochs: 6
   answer_ce_weight: 0.5
-  init_from: lw_summed_ce_0p6b_rag

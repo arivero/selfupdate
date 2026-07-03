@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "selfupdate"
 version = "0.1.0"
-description = "Self-updating LLMs via self-distillation of context: same-model teacher/student, logit KD and layer-wise hidden-state matching"
+description = "Self-updating LLMs via classical self-distillation of context: same-model teacher/student logit KD"
 requires-python = ">=3.12"
 dependencies = [
     "torch>=2.10",

@@ -55,18 +55,19 @@ def main() -> None:
             render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
             for s in specs
         ]
-    elif cfg.mask.mode == "thinking":
+    elif cfg.mask.mode in ("thinking", "rag_thinking"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
-        from selfupdate.teacher.generate import harvest_traces
+        from selfupdate.teacher.generate import harvest_rag_thinking_traces, harvest_traces
 
         tok = AutoTokenizer.from_pretrained(cfg.model.name)
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model.name, dtype=getattr(torch, cfg.model.dtype)
         ).to(cfg.model.device)
         model.eval()
-        examples = harvest_traces(
+        harvest = harvest_rag_thinking_traces if cfg.mask.mode == "rag_thinking" else harvest_traces
+        examples = harvest(
             model, tok, specs,
             max_think_tokens=cfg.mask.max_think_tokens, student_stub=stub,
         )
@@ -77,7 +78,10 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf-8") as f:
         for spec, ex in zip(specs, examples):
-            f.write(json.dumps({**ex.to_json(), "answer_text": spec.answer,
+            answer_text = spec.answer
+            if cfg.mask.mode == "rag_thinking":
+                answer_text = ex.answer.removesuffix("<|im_end|>")
+            f.write(json.dumps({**ex.to_json(), "answer_text": answer_text,
                                 "question": spec.question}, ensure_ascii=False) + "\n")
     print(f"wrote {len(examples)} examples ({cfg.mask.mode}/{cfg.mask.compaction}) to {out}")
 

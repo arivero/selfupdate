@@ -18,8 +18,8 @@ boundary merges would silently break the alignment.
 The aligned span is ``shared_mid + answer``: the position that predicts the
 first answer token is the last ``shared_mid`` token, and that position carries
 the core "recall without context" signal, so it must be inside the matched
-region. Hidden-state losses apply at aligned positions ``[s0, s0+A)``; logit
-losses apply at ``[s0, s0+A-1)`` predicting tokens ``[s0+1, s0+A)``.
+region. Classical KD logit losses apply at ``[s0, s0+A-1)`` predicting tokens
+``[s0+1, s0+A)``. This branch does not train on hidden-state losses.
 """
 
 from __future__ import annotations
@@ -175,6 +175,34 @@ def render_thinking(
     mid = "\n</think>\n\n"
     return SegmentedExample(
         example_id, prefix, privileged, mid, f"{answer}{IM_END}", student_stub
+    )
+
+
+def render_rag_thinking(
+    example_id: str,
+    question: str,
+    passage: str,
+    trace: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+) -> SegmentedExample:
+    """Mixed RAG + visible thinking.
+
+    The teacher sees the retrieved passage in the user turn, then writes a
+    visible ``<think>`` trace and the answer. The student sees the same prompt
+    with only the RAG passage removed; the trace remains part of the aligned
+    target and must be reproduced.
+    """
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}"
+    )
+    privileged = f"\n\nDocumento recuperado:\n{passage}" if passage else ""
+    mid = f"{IM_END}\n{IM_START}assistant\n<think>\n"
+    visible = f"{trace.strip()}\n</think>\n\n" if trace.strip() else "\n</think>\n\n"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid, f"{visible}{answer}{IM_END}", student_stub
     )
 
 

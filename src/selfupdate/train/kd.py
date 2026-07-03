@@ -7,6 +7,7 @@ and the lm_head runs only on the aligned-span slice of the last hidden state
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
@@ -22,6 +23,50 @@ from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .losses import answer_ce, kd_topk_kl
+
+LORA_LAYER_RE = re.compile(r"layers\.(\d+)\.(.+?)\.lora_A\.")
+
+
+def _log_lora_layer_norms(peft_model, run_dir: Path, epoch: int) -> None:
+    """Append per-layer adapter update norms at eval epochs.
+
+    This is cheaper than checkpointing every epoch and gives the time axis for
+    where LoRA writes the new memory. Norms are unnormalized ||B@A|| because
+    base-weight normalization is expensive during training; final reports can
+    still compute normalized deltas from the saved checkpoint.
+    """
+    if peft_model is None:
+        return
+    state = peft_model.state_dict()
+    rows = []
+    for ka, a in state.items():
+        if "lora_A" not in ka:
+            continue
+        kb = ka.replace("lora_A", "lora_B")
+        if kb not in state:
+            continue
+        m = LORA_LAYER_RE.search(ka)
+        if not m:
+            continue
+        b = state[kb].detach().float().cpu()
+        a = a.detach().float().cpu()
+        if a.ndim != 2 or b.ndim != 2:
+            continue
+        rows.append((int(m.group(1)) + 1, (b @ a).norm().item()))
+    if not rows:
+        return
+    by_layer: dict[int, list[float]] = {}
+    for layer, norm in rows:
+        by_layer.setdefault(layer, []).append(norm)
+    out = run_dir / "eval" / "lora_layer_deltas_by_epoch.csv"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not out.exists()
+    with out.open("a", encoding="utf-8") as f:
+        if new_file:
+            f.write("epoch,layer,adapter_update_rms\n")
+        for layer in sorted(by_layer):
+            xs = torch.tensor(by_layer[layer], dtype=torch.float32)
+            f.write(f"{epoch},{layer},{float((xs.square().mean()).sqrt()):.8g}\n")
 
 
 def train_kd(cfg: ExperimentConfig) -> Path:
@@ -48,9 +93,8 @@ def train_kd(cfg: ExperimentConfig) -> Path:
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
     # Train transformer blocks only: embedding/lm_head/final-norm deltas would
-    # confound the layer-localization question, and freezing them keeps
-    # full-FT KD comparable with the layerwise regime (blocks only by
-    # construction). It also makes fp32 AdamW fit in 12 GB (0.31B frozen).
+    # confound the layer-localization question. It also makes fp32 AdamW fit
+    # in 12 GB (0.31B frozen).
     model.model.embed_tokens.requires_grad_(False)
     model.model.norm.requires_grad_(False)
     model.lm_head.requires_grad_(False)
@@ -66,7 +110,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
         cache = TeacherCache(cache_root, expect_hash=chash)
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
-        need_layers=[], need_logits=not online,
+        need_logits=not online,
         rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
         with_teacher_ids=online,
     )
@@ -143,6 +187,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     gen_ce=general_ce(model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
+            _log_lora_layer_norms(peft_model, run_dir, epoch)
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
         if stop:
             break

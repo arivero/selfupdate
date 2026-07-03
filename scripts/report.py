@@ -76,10 +76,9 @@ def summary_text() -> str:
         "(A. Machado, 1912), 725 verses, 228 tasks (continuations, per-section",
         "recitations, opening). Model: Qwen3-0.6B on a single RTX 3060 12 GB.",
         "",
-        "Methods compared: classical KD (top-k KL on logits) vs layer-wise hidden",
-        "matching with block-local backward (summed / sequential / teacher_censored",
-        "schedules), each x {full fine-tune, LoRA}, plus gold-CE auxiliaries and the",
-        "online teacher (adapters-off = frozen teacher, no cache).",
+        "Method family: classical KD (top-k KL on logits), either full fine-tune",
+        "of transformer blocks or LoRA adapters, plus gold-CE auxiliaries and the",
+        "online teacher path (adapters-off = frozen teacher, no cache).",
         "",
     ]
     if base and best:
@@ -98,17 +97,13 @@ def summary_text() -> str:
         "this report was regenerated after new experiments):",
         " 1. Pure top-k KL saturates (KL~0.03) without free-run recitation; a gold-CE",
         "    auxiliary makes recitation click. Memorization is front-of-poem biased.",
-        " 2. Pure hidden matching (any schedule) does not recite at 0.6B/10 epochs;",
-        "    a local last-block CE (block-locality preserved) is the working hybrid lever.",
-        " 3. Convergence: within-family weight-delta directions align (cos 0.6-0.65);",
-        "    across families they are orthogonal (cos ~0.02) while per-layer magnitude",
-        "    profiles correlate (Spearman 0.73-0.78): same 'where', different 'what'.",
-        " 4. teacher_censored (variant b): per-layer increment targets are 13x smaller",
-        "    than student-stream targets, peak at layer ~7 (context integration site),",
-        "    ~0 at the last layer; layers train independently (parallelizable).",
-        " 5. Efficiency: sequential layerwise 3.2-3.7 GB vs KD full-FT 9.45 GB (<40%);",
-        "    LoRA runs ~3.2 GB with near-zero forgetting (+0.06 CE) but rank-16 limits",
-        "    how far the KL can be driven.",
+        " 2. Gold-CE weight, LoRA learning rate, compaction, and model size are the",
+        "    active experimental axes on this branch.",
+        " 3. The localization question is now within classical KD: compare per-layer",
+        "    weight-delta norms, logit-lens depth profiles, and graft/ablate effects",
+        "    across KD recipes and model sizes.",
+        " 4. LoRA runs are memory-efficient, but rank and learning rate control how",
+        "    far the KL and gold recitation losses can be driven.",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M}. Details in the following pages;",
         "reproducibility: configs/experiments/*.yaml, runs/*/metrics.jsonl, git log.",
@@ -119,7 +114,7 @@ def summary_text() -> str:
 _COL_SHORT = {
     "last_train_cer": "train_cer", "full_eval_cer": "eval_cer",
     "line_exact": "exact", "forgetting_dCE": "forget",
-    "compaction": "compact", "schedule": "sched",
+    "compaction": "compact",
     "loss_first": "loss0", "loss_final": "lossN", "train_min": "min",
 }
 
@@ -193,10 +188,10 @@ def per_run_appendix(pdf):
         full = _read_json(d / "eval/recite.json")
         b = [f"== {d.name} =="]
         t = cfg.get("train", {})
-        b.append(f"  method={t.get('method')} schedule={t.get('schedule')} "
+        b.append(f"  method={t.get('method')} "
                  f"lora={t.get('lora', {}).get('enabled')} lr={t.get('lr')} "
-                 f"epochs={t.get('epochs')} ce={t.get('answer_ce_weight', 0)}/"
-                 f"{t.get('last_block_ce_weight', 0)} online={t.get('online_teacher')}")
+                 f"epochs={t.get('epochs')} ce={t.get('answer_ce_weight', 0)} "
+                 f"online={t.get('online_teacher')}")
         if trains:
             n = max(1, len(trains[:20]))
             b.append(f"  loss: first20 {sum(m['loss'] for m in trains[:20])/n:.4f} "

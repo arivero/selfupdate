@@ -1,6 +1,0 @@
-run_name: lw_seq_1p7b_rag
-model:
-  name: Qwen/Qwen3-1.7B
-train:
-  method: layerwise
-  schedule: sequential

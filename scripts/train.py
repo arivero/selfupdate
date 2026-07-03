@@ -1,4 +1,4 @@
-"""Train a student. Dispatches on train.method (kd | layerwise).
+"""Train a student with classical KD.
 
 Usage:
     python scripts/train.py --experiment configs/experiments/kd_full_0p6b_rag.yaml
@@ -20,16 +20,11 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
 
-    if cfg.train.method == "kd":
-        from selfupdate.train.kd import train_kd
-
-        run_dir = train_kd(cfg)
-    elif cfg.train.method == "layerwise":
-        from selfupdate.train.layerwise import train_layerwise
-
-        run_dir = train_layerwise(cfg)
-    else:
+    if cfg.train.method != "kd":
         sys.exit(f"unknown train.method {cfg.train.method!r}")
+    from selfupdate.train.kd import train_kd
+
+    run_dir = train_kd(cfg)
     print(f"run complete: {run_dir}")
 
 

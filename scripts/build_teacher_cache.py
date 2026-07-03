@@ -1,7 +1,7 @@
 """Precompute the frozen-teacher cache for every example in examples.jsonl.
 
-One fp32 forward per example; stores per-layer hidden states (fp16) and top-k
-logits (+ fp32 logsumexp) at the aligned span. Also runs the M1 premise check:
+One fp32 forward per example; stores top-k logits (+ fp32 logsumexp) at the
+aligned span. Also runs the M1 premise check:
 teacher answer-CE must be low WITH context and high WITHOUT (i.e., the model
 needs the context — it does not already know the poem).
 
@@ -56,8 +56,6 @@ def main() -> None:
     model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.float32)
     model.to(cfg.model.device)
     model.eval()
-    n_layers = model.config.num_hidden_layers
-
     masker = ContextMasker(tok)
     writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size)
 
@@ -66,17 +64,13 @@ def main() -> None:
         pair = masker.build(ex)
         t_ids = torch.tensor([pair.teacher_ids], device=model.device)
         with torch.no_grad():
-            out = model(t_ids, output_hidden_states=True, use_cache=False)
+            out = model(t_ids, use_cache=False)
         span = pair.t_aligned
-        hidden = {
-            L: out.hidden_states[L][0, span.start:span.stop]
-            for L in range(1, n_layers + 1)
-        }
         logits = out.logits[0, span.start:span.stop].float()
         logz = torch.logsumexp(logits, dim=-1)
         topk_v, topk_i = logits.topk(cfg.cache.topk, dim=-1)
         writer.add(
-            ex.example_id, hidden, topk_v, topk_i, logz,
+            ex.example_id, topk_v, topk_i, logz,
             span={
                 "t0": pair.t_aligned.start, "s0": pair.s_aligned.start,
                 "A": pair.aligned_len, "mid_len": pair.s_answer.start - pair.s_aligned.start,
@@ -93,7 +87,7 @@ def main() -> None:
 
     writer.finalize()
     mean = lambda xs: sum(xs) / len(xs)
-    print(f"wrote {len(examples)} examples, {n_layers} layers each, to {root}")
+    print(f"wrote {len(examples)} examples to {root}")
     print(f"premise check — teacher answer CE: with context {mean(ce_with):.3f}, "
           f"without context {mean(ce_without):.3f}")
     (root / "premise.json").write_text(json.dumps({

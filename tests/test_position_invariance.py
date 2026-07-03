@@ -4,8 +4,8 @@ Qwen3 uses pure rotary position embeddings with full attention: shifting all
 position_ids by a constant leaves every pairwise relative distance unchanged,
 so the model's outputs are (mathematically) identical. This justifies NOT
 rebasing student position_ids to match the teacher's absolute positions: the
-teacher/student hidden-state difference at aligned positions is then purely
-attention-into-the-privileged-block — the signal we distill.
+teacher/student logit difference at aligned positions is then driven by
+attention into the privileged block, which is the classical KD signal here.
 """
 
 import pytest

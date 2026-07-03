@@ -22,7 +22,6 @@ class Item:
     s0: int  # aligned-span start in the student sequence
     A: int  # aligned-span length
     ans0: int  # answer-span start in the student sequence (s0 + mid length)
-    hidden: dict[int, torch.Tensor]  # L -> [A, H] teacher targets (fp16)
     topk_v: torch.Tensor | None
     topk_i: torch.Tensor | None
     logz: torch.Tensor | None
@@ -38,10 +37,9 @@ def load_jsonl(path: str | Path) -> list[dict]:
 class DistillDataset(Dataset):
     """Yields student inputs plus lazily-read teacher targets.
 
-    ``need_layers`` limits hidden-state reads to what the trainer uses
-    (None = none); ``need_logits`` gates the top-k read. ``rebase_gap``
-    shifts aligned-span position ids by the privileged-block length
-    (the stub_gap compaction variant).
+    ``need_logits`` gates the top-k read. ``rebase_gap`` shifts aligned-span
+    position ids by the privileged-block length (the stub_gap compaction
+    variant).
     """
 
     def __init__(
@@ -49,7 +47,6 @@ class DistillDataset(Dataset):
         examples_path: str | Path,
         cache: TeacherCache | None,
         tokenizer,
-        need_layers: list[int] | None = None,
         need_logits: bool = True,
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
@@ -58,7 +55,6 @@ class DistillDataset(Dataset):
         # the one examples.jsonl was built with (identity for Qwen)
         self.records = adapt_records(load_jsonl(examples_path), tokenizer)
         self.cache = cache
-        self.need_layers = need_layers or []
         self.need_logits = need_logits
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
@@ -79,7 +75,6 @@ class DistillDataset(Dataset):
     def __getitem__(self, idx: int) -> Item:
         pair = self.pairs[idx]
         ex_id = pair.example_id
-        hidden = {L: self.cache.hidden(ex_id, L) for L in self.need_layers}
         topk_v = topk_i = logz = None
         if self.need_logits:
             topk_v, topk_i, logz = self.cache.logits(ex_id)
@@ -90,7 +85,6 @@ class DistillDataset(Dataset):
             s0=pair.s_aligned.start,
             A=pair.aligned_len,
             ans0=pair.s_answer.start,
-            hidden=hidden,
             topk_v=topk_v,
             topk_i=topk_i,
             logz=logz,

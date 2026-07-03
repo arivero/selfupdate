@@ -39,7 +39,7 @@ class DataConfig:
 
 @dataclass
 class MaskConfig:
-    mode: str = "rag"  # rag | thinking
+    mode: str = "rag"  # rag | thinking | rag_thinking
     max_think_tokens: int = 512
     # how the student's side compacts the privileged block:
     #   remove     — block deleted outright (zero size)
@@ -63,7 +63,6 @@ class CacheConfig:
     root: str = "caches"
     topk: int = 128
     shard_size: int = 128
-    hidden_dtype: str = "float16"
 
 
 @dataclass
@@ -76,48 +75,19 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
-    method: str = "kd"  # kd | layerwise
-    schedule: str = "summed"  # layerwise only: summed | sequential
+    method: str = "kd"
     lr: float = 1e-5
     epochs: int = 10
     micro_batch: int = 1
     grad_accum: int = 8
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
-    hidden_loss: str = "nmse"  # nmse | l2mse
     kd_temperature: float = 1.0
     # auxiliary CE on gold answer tokens (0 = pure distillation). Pins the
     # student's argmax to the gold recitation and counters free-run drift
     # caused by teacher formatting quirks at the trained positions.
     answer_ce_weight: float = 0.0
-    # layerwise hybrid: gold-CE on the LAST block only, computed through the
-    # frozen final norm + lm_head. The graph is rooted at block n's detached
-    # input, so the backward stays confined to block n — output supervision
-    # without giving up block-locality.
-    last_block_ce_weight: float = 0.0
-    # tail-CE hybrid (summed schedule): the last `tail_ce_blocks` blocks train
-    # JOINTLY — gradient flows within that window so the answer-CE at the top
-    # can do multi-block credit assignment — while everything below stays
-    # block-local. Motivated by the logit-lens finding (2026-07-03): lw stores
-    # recall as well as KD through layer n-4; the deficit is confined to the
-    # readout in the final blocks. 0 = off (pure block-local, the default).
-    tail_ce_blocks: int = 0
-    tail_ce_weight: float = 0.0
-    # per-block lens-CE (summed schedule): every block >= lens_ce_from gets a
-    # behavioral auxiliary through the frozen logit lens — Belilovsky-style
-    # local heads. Strictly block-local (unlike tail_ce): the personalization
-    # / parallelism story is fully preserved. 0 = off.
-    lens_ce_weight: float = 0.0
-    lens_ce_from: int = 1
-    # per-block lens-KL: match the TEACHER's layer-L lens distribution
-    # (softer than gold-CE; strictly local; applies to blocks < n — the last
-    # block has last_block_ce/lens_ce for behavior)
-    lens_kl_weight: float = 0.0
-    lens_kl_from: int = 1
     grad_checkpointing: bool = True
-    # sequential schedule
-    plateau_patience: int = 3
-    stage_max_steps: int = 500
     # LoRA-only: compute teacher targets per step by disabling the adapters
     # (student = base + adapters, so the frozen teacher is already resident).
     # Replaces the disk cache entirely — the choice at 120B scale.

@@ -35,9 +35,6 @@ def results_table() -> pd.DataFrame:
         cfg = yaml.safe_load(cfg_p.read_text())
         metrics = read_metrics(run_dir)
         trains = [m for m in metrics if m.get("kind") == "train"]
-        if not trains:  # sequential schedule logs per-stage lines instead
-            trains = [{"loss": m["loss"], "step": m["steps"]}
-                      for m in metrics if m.get("kind") == "stage"]
         evals = [m for m in metrics if m.get("kind") == "eval"]
         done = [m for m in metrics if m.get("kind") == "done"]
         full = run_dir / "eval" / "recite.json"
@@ -52,8 +49,6 @@ def results_table() -> pd.DataFrame:
         rows.append({
             "run": run_dir.name,
             "method": cfg["train"]["method"],
-            "schedule": (cfg["train"].get("schedule", "")
-                         if cfg["train"]["method"] == "layerwise" else ""),
             "lora": cfg["train"]["lora"]["enabled"],
             "mode": cfg["mask"]["mode"],
             "compaction": cfg["mask"]["compaction"],
@@ -148,17 +143,17 @@ def training_curves() -> None:
     if not runs:
         return
 
-    # one row per method family — the single panel got too crowded once the
-    # e40 wave landed. Axes are SHARED across rows (sharex/sharey per column)
+    # one row per KD family — the single panel got too crowded once the e40
+    # wave landed. Axes are SHARED across rows (sharex/sharey per column)
     # so curves stay directly comparable between families.
     def family(name: str) -> int:
-        if name.startswith("lw_"):
-            return 0
         if name.startswith("kd_lora"):
+            return 0
+        if name.startswith("kd_"):
             return 1
         return 2
 
-    row_titles = ["lw_* (layerwise)", "kd_lora*", "kd_* (full-FT KD)"]
+    row_titles = ["kd_lora*", "kd_* (full-FT KD)", "other KD runs"]
     fig, axes = plt.subplots(3, 3, figsize=(18, 12), sharex="col", sharey="col")
     # >10 lines per panel: the default 10-color cycle repeats and unrelated
     # runs become indistinguishable (bit us 2026-07-03). 20 colors x 2 line
