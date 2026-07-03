@@ -1,4 +1,4 @@
-"""Frozen-teacher cache: per-layer hidden states + top-k logits on disk.
+"""Frozen-teacher cache: per-layer hidden states on disk.
 
 The teacher is the initial checkpoint and its inputs are fixed per dataset
 example, so everything the student ever needs from it is precomputed once into
@@ -12,9 +12,6 @@ final norm on the student side too.
 
 Per example, restricted to the aligned span (length A):
 - ``h{L}``   [A, H] float16
-- ``topk_v`` [A, k] float16   (top-k teacher logit values)
-- ``topk_i`` [A, k] int32
-- ``logz``   [A]    float32   (logsumexp over the full vocab row)
 """
 
 from __future__ import annotations
@@ -39,7 +36,7 @@ def cache_config_hash(model_name: str, mask_mode: str, extra: dict | None = None
 def resolve_cache_dir(cfg) -> tuple[Path, str]:
     """Canonical cache directory + expected hash for an ExperimentConfig.
     Must mirror scripts/build_teacher_cache.py exactly. The hash covers every
-    payload-shaping parameter (topk, hidden dtype, schema) so a config change
+    payload-shaping parameter (hidden dtype, schema) so a config change
     can never silently reuse an incompatible cache."""
     examples_sha = hashlib.sha256(
         Path(cfg.data.examples_path).read_bytes()
@@ -47,8 +44,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
         {"compaction": cfg.mask.compaction, "examples": examples_sha,
-         "topk": cfg.cache.topk, "hdtype": cfg.cache.hidden_dtype,
-         "schema": 2},
+         "hdtype": cfg.cache.hidden_dtype, "schema": 3},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"
@@ -70,16 +66,10 @@ class TeacherCacheWriter:
         self,
         example_id: str,
         hidden: dict[int, torch.Tensor],  # L -> [A, H]
-        topk_v: torch.Tensor,
-        topk_i: torch.Tensor,
-        logz: torch.Tensor,
         span: dict,
     ) -> None:
         for L, h in hidden.items():
             self._buffer[f"{example_id}/h{L:02d}"] = h.to(torch.float16).contiguous().cpu()
-        self._buffer[f"{example_id}/topk_v"] = topk_v.to(torch.float16).contiguous().cpu()
-        self._buffer[f"{example_id}/topk_i"] = topk_i.to(torch.int32).contiguous().cpu()
-        self._buffer[f"{example_id}/logz"] = logz.to(torch.float32).contiguous().cpu()
         self._index["examples"][example_id] = {"shard": self._shard_no, **span}
         self._buffered_examples += 1
         if self._buffered_examples >= self.shard_size:
@@ -129,11 +119,3 @@ class TeacherCache:
 
     def hidden(self, example_id: str, layer: int) -> torch.Tensor:
         return self._handle(example_id).get_tensor(f"{example_id}/h{layer:02d}")
-
-    def logits(self, example_id: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        h = self._handle(example_id)
-        return (
-            h.get_tensor(f"{example_id}/topk_v"),
-            h.get_tensor(f"{example_id}/topk_i"),
-            h.get_tensor(f"{example_id}/logz"),
-        )

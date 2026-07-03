@@ -1,160 +1,61 @@
-# Experiment plan & status board
+# Experiment Plan & Status Board
 
-Updated: 2026-07-03 ~12:30 — **repo moved to the 4× L40S machine** (Tier 2).
-Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs: `runs/pipeline_*.log`.
-Base model control: CER 0.932, general-CE 3.278.
+Updated: 2026-07-03 evening - branch refocused on layerwise forward
+distillation only.
 
-## THE GOAL (2026-07-03, standing): a good loss for layerwise training
+Metrics: `runs/results.md` (auto) | report: `runs/report.pdf` | raw logs:
+`runs/*/metrics.jsonl` and `runs/pipeline_*.log`.
 
-KD+backprop distilling a prompt is textbook — it is only the baseline/
-reference. The research question: **a loss that trains blocks independently
-and still produces behavior.** "Good" means: recites like KD+CE at matched
-budget, stays block-local (or names the minimal locality concession),
-comparable forgetting, and survives scale. Constraints established today:
-storage is NOT the problem (block-local nmse stores recall = KD through
-layer ~24: lens + graft evidence); the deficit is the last-mile READOUT,
-and readouts must be co-trained, never borrowed (both graft directions
-fail). See docs/hidden_loss.md.
+## Standing Goal
 
-## Wave H — the loss search (🟢 the priority lane)
+Find a layerwise loss that trains with bounded backward depth and still
+produces behavior. "Good" means:
+
+- recites under full-corpus eval, not just the 8-example training subset
+- preserves block locality except for explicitly bounded tail windows
+- has measurable forgetting/general-CE cost
+- scales to online-teacher LoRA and one-block-at-a-time training
+
+## Active Loss Search
 
 | candidate | locality | status |
 |---|---|---|
-| nmse (all schedules × FT/LoRA) | strict | ❌ x9, stores but no readout |
-| + last-block CE | strict | ❌ one block can't coordinate |
-| + lens-CE all / deep blocks | strict | 🟡 running (FT + LoRA cells) |
-| l2mse (pure direction) | strict | 🟡 running |
-| + lens-KL to teacher layer-L lens | strict | ⏳ queued (softer than gold-CE) |
-| + tail-CE (k=4 joint window) | k-block concession | seeds 0.142/0.193; k-sweep: k1 0.88, k2 0.53, k4 0.14 |
-| **tail-CE x v2 data** | k=4 concession | **CROWN: CER 0.112 / 90.5% exact; whole-poem anchored 0.034, 312 verses before first error; self-chained 0.436 (all-time bests by 4x)** |
-| + lens-KL deep | strict | ❌ 0.725 — depth doesn't rescue KL; gold CE is the signal |
-| tc at 14B (localization at scale) | strict, zero-comm | 🟡 running (H100) |
+| `nmse` / `l2mse`, summed and sequential | strict one-block | stores signal, weak free-run behavior |
+| `teacher_censored` | strict one-block, independent layers | best strict localization readout; context integration peaks near layer 7 |
+| last-block CE | strict one-block | insufficient: one block cannot coordinate the readout alone |
+| lens-CE on deep/all blocks | strict one-block | active strict-local behavioral auxiliary |
+| tail-CE, `k=1/2/4` | bounded `k`-block top window | best current path |
+| tail-CE on v2 data, `k=4` | bounded 4-block top window | current champion: CER 0.112 / 90.5% exact; whole-poem anchored CER 0.034 |
 
-## PROJECT SPLIT (2026-07-03 end of day): two tracks
+## Current Interpretation
 
-- **Track A — KD/memorization science**: where does KD store content vs
-  model size. Assets: 5-point scale ladder (0.6B..32B), premise-margin trend,
-  teacher ceilings (32B anomaly 0.325 — fix the teacher prompt first!), tc
-  weight-delta peaks (L22/28 vs L35/40 — constant-from-top vs proportional
-  needs a 3rd point), cue-addressable-memory + Quijote verse-drift
-  conversational findings, per-epoch gen_ce instrumentation.
-- **Track B — lw methods**: the loss search. Founding results: tail-CE
-  (champion), deep lens-CE (strict locality), the k-sweep, the storage/
-  readout decomposition with the full ablation 2x2 (docs/hidden_loss.md).
-Queues are frozen at this point; git history holds the full grid.
+Hidden matching appears to learn distributed storage below the top blocks.
+Free-run recitation depends on a co-adapted readout circuit in the final
+blocks. The practical program is therefore:
 
-## Wave G — L40S: scale ladder + backlog drain (🟢 running, scheduler on all 4 cards)
+1. Keep forward hidden matching as the storage signal.
+2. Add only bounded, explicit readout credit where needed.
+3. Measure how small that concession can be as model size and data improve.
 
-`runs/` and `caches/` did not travel from the 3060, so the queue
-(`scripts/queue.tsv`) rebuilds foundations (kd_ce, kd_full, lw_summed, lw_seq,
-lw_summed_ce — doubles as new-hardware replication), drains waves D/E +
-watchdog backlog, and adds the new arm:
+## Queue State
 
-| run | status | note |
+`scripts/queue.tsv`, `scripts/queue_h100.tsv`, and
+`scripts/watchdog_backlog.tsv` are layerwise-only. They contain evals or
+layerwise jobs guarded by existing done-file conventions.
+
+## Next Work
+
+- Finish lens-CE and tail-CE comparisons on the current L40S artifacts.
+- Rebuild hidden-state caches with schema 3 after the logit-cache removal.
+- Re-run the focused layerwise test suite before launching training.
+- Extend `teacher_censored` and tail-CE to larger Qwen checkpoints.
+- Keep `evaluate.py --base` outputs lane-specific during concurrent runs.
+
+## Model Ladder
+
+| tier | model | question |
 |---|---|---|
-| kd_lora_ce_hi_4b (Qwen3-4B) | ⏳ premise-gated | hi recipe, online teacher |
-| kd_lora_ce_hi_8b (Qwen3-8B) | ⏳ premise-gated | memory-curve point 4 |
-| kd_lora_ce_hi_14b (Qwen3-14B) | ⏳ premise-gated | + recite_long whole-poem |
-
-Premise gates are automated: `evaluate.py --base` → `scripts/premise_gate.py`
-(train unlocks only if base CER > 0.7 — bigger Qwen may already know Machado).
-Not queued (needs dev work first): 32B (2-GPU sharding), 30B-A3B MoE
-(post-combine matching), thinking-mode arm.
-
-## Wave A — method grid, Qwen3-0.6B, v1 data (✅ done)
-
-| run | status | headline |
-|---|---|---|
-| kd_full (pure KD) | ✅ | KL→0.03 but CER 0.82: distillation alone doesn't recite |
-| kd_ce (KD + gold-CE, 20 ep) | ✅ | **best recitation: CER 0.596, 44% lines verbatim**; forget +0.52 |
-| lw_summed | ✅ | no recitation (0.90); forget +0.58 |
-| lw_seq | ✅ | no recitation (0.94); **3.2 GB = 34% of full backprop**; forget +0.41 |
-| kd_lora (lr 1e-5) | ✅ | KL stuck at 2.2 (lr too low); forget only +0.06 |
-
-## Wave B — (a) student-stream vs (b) teacher_censored, LoRA (✅ done)
-
-| run | status | headline |
-|---|---|---|
-| lw_summed_lora (a) | ✅ | CER 0.945, forget +0.31 |
-| lw_tc_lora (b) | ✅ | **(b) dominates: CER 0.878, forget +0.11**; increment peak @ layer 7 |
-
-## Wave C — causal analysis, hybrids, 1.7B first contact (🟡 eval finishing)
-
-| item | status | headline |
-|---|---|---|
-| graft/ablate on kd_ce | ✅ | graft: early layers (4–8) carry content; ablate: deep (25–28) needed |
-| logit lens on kd_ce | ✅ | recall readable only above layer ~21 |
-| lw_summed_ce (hybrid last-block CE) | ✅ | failed (0.99) — one block's CE can't coordinate the rest |
-| lw_tc_ce | ✅ | 0.867 ≈ no gain over (b) at lr 1e-5 |
-| kd_lora_ce (lr 1e-5) | ✅ | 0.943 — lr was the binding constraint |
-| kd_lora_ce_1p7b (lr 1e-5) | 🟡 eval running | trained 36 min @ 4.8 GB (full-FT wouldn't fit) |
-
-## Wave D — round 2: proper LoRA lr (⏳ queued, next)
-
-| run | status | headline |
-|---|---|---|
-| kd_lora_ce_hi (lr 1e-4) | ✅ | learns (full CER 0.774, 22% exact, 2.3 GB) but forgetting +0.96 — WORST; forgetting tracks amount learned, not parameterization |
-| kd_lora_ce_mid (lr 3e-5, 40 ep) | ⏳ queued | the middle point of the lr/forgetting trade |
-| lw_tc_ce_hi (lr 1e-4, 30 ep) | ✅ | still no recitation (0.840, 0 exact), forget +0.99 — 7th layerwise config, all negative: local losses can't do multi-layer credit assignment |
-| kd_ce_long (40 ep, full-FT) | coverage: does more training fix the front-of-poem bias? |
-
-## Wave D2 — round 2 on the second model (⏳ queued)
-
-| run | status | headline |
-|---|---|---|
-| kd_lora_ce_hi_1p7b | ✅ | recipe transfers: full CER 0.798, 13% exact (subset 0.42/45%) — same shape incl. coverage bias; forgetting delta pending 1.7B base ref |
-
-## Wave E — v2 extended-recitation data (⏳ queued)
-
-| item | status | headline |
-|---|---|---|
-| kd_lora_ce_hi_v2 | ✅ | **CER 0.600, 41% exact — matches full-FT champion at 1/4 memory** (forget +1.06 at hi lr) |
-| recite_long (hi_v2) | ✅ | whole poem (715 verses): anchored CER 0.396 (19/30 rounds correct), self-chained 0.724 — drift, not missing memory, dominates the gap |
-| kd_ce_v2 (40 ep full-FT) | ⏳ waits 11GB window | paraphrases + long windows on full-FT |
-
-## Wave F — compaction axis (⏳ queued, last)
-
-| run | status | headline |
-|---|---|---|
-| kd_lora_ce_hi_stub | ✅ | 0.791/17% — stub buys nothing over removal |
-| kd_lora_ce_hi_stubgap | ✅ | 0.788 but 0.4% exact, forget +2.0 — teacher-geometry imitation actively harmful; **remove is the right default** |
-
-## Watchdog backlog (fills idle GPU, any time)
-
-| item | status |
-|---|---|
-| logit lens ×3 (kd_full, lw_summed, lw_seq) | ⏳ |
-| graft/ablate ×3 (same runs) — causal cross-method localization | ⏳ |
-| lw_seq_bf16 re-measure (expect ~1.9 GB ≈ 20% of full backprop) | ⏳ |
-| kd_full re-eval (fills forgetting NaN) | ⏳ |
-| 1.7B cache + lw_seq_1p7b (memory-curve point 2) | ⏳ |
-
-## Original milestone plan (for the record; superseded by the waves above)
-
-M1 data+cache+premise ✅ · M2 KD baseline (CER<5% subset) ✅ · M3 layerwise
-(locality tests ✅, VRAM<40% ✅ via sequential, recitation ❌ open) · M4
-analysis suite ✅ · M5 LoRA axis ✅ · M6 scale-up prep (docs ✅, streaming
-mock + FSDP2 stubs pending). Original grid axis not yet run: **thinking-mode**
-(trace harvesting implemented; needs a ~30 min generation pass + cache).
-
-## Beyond (not yet scheduled)
-
-- Batched eval generation (task #1; 5–8× eval speedup)
-- Thinking-mode arm (trace harvesting implemented, never run)
-- Per-block lens-CE layerwise variant (hybrids have kept failing)
-- Two-phase: layerwise pre-conditioning -> short KD polish (needs adapter-resume in kd.py)
-- Sequential + online-teacher lockstep cache
-- Move to 2×4090: one experiment per GPU (AGENTS.md Tier 1); replicate grid with 2nd seed
-
-## Model ladder (premise-check each with teacher_recite.py before committing GPU time)
-
-| tier | model | unique question it answers |
-|---|---|---|
-| 3060 | Llama-3.2-1B | cross-family replication (different tokenizer/template) |
-| 3060 | SmolLM3-3B | open training data → verify the corpus is truly absent |
-| 2×4090 | Qwen3-4B / 8B | localization: positional or proportional depth? memory curve |
-| 2×4090 | DeepSeek-V2-Lite (16B MoE) | first MoE: per-expert localization, routing agreement, MLA path |
-| 2×4090 | R1-Distill-Qwen-1.5B | thinking-hiding arm with long load-bearing traces |
-| 4×L40S | Qwen3-14B / 32B / 30B-A3B | recipe at scale; the serious MoE study |
-| 4×L40S | Gemma-3-12B (stretch) | third family; needs sliding-window mask support |
-| 4×H100 | GLM / DeepSeek flagship class | Pierre Menard: Don Quijote |
+| 3060 / L40S | Qwen3-0.6B | loss mechanics, locality tests, ablations |
+| L40S | Qwen3-1.7B / 4B / 8B | whether readout window size scales with depth |
+| L40S / H100 | Qwen3-14B / 32B | online-teacher LoRA and memory curve |
+| H100 | MoE / 120B-class | one-block streaming and Don Quijote scale |

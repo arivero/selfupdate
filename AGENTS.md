@@ -1,206 +1,118 @@
-# Agent guide — selfupdate
+# Agent guide - selfupdate layerwise branch
 
-Orientation for a fresh agent/session, especially after moving the repo to a
-new machine. Read README.md for the science; this file is operational.
+Orientation for a fresh agent/session. Read `README.md` for the science; this
+file is operational.
 
-## Source of truth
+## Source Of Truth
 
-Everything an agent needs lives IN THIS REPO — do not depend on host-local
-state (`~/.claude/plans`, agent memory dirs): those do not travel with clones.
+Everything needed lives in this repo. Do not depend on host-local agent memory.
 
-- `EXPERIMENTS.md` — the experiment plan + live status board + headline
-  results. Update it at every wave boundary.
-- `runs/results.md`, `runs/report.pdf`, `runs/curves.png` — auto-generated
-  metrics/report (rebuild with `scripts/analyze.py`, `scripts/report.py`).
-- `docs/hidden_loss.md`, `docs/scaling.md`, `docs/memory.md` — loss math and
-  locality proofs; big-model plan; memory-vs-params accounting.
-- `runs/*/metrics.jsonl` + `runs/pipeline_*.log` — raw training dynamics and
-  pipeline history. Checkpoints are in `runs/*/checkpoint` (gitignored — copy
-  separately if they must move).
+- `EXPERIMENTS.md` - live layerwise plan and status board.
+- `docs/hidden_loss.md`, `docs/scaling.md`, `docs/memory.md` - loss math,
+  locality proofs, scale plan, memory accounting.
+- `runs/results.md`, `runs/report.pdf`, `runs/curves.png` - generated
+  artifacts when present.
+- `runs/*/metrics.jsonl` and `runs/pipeline_*.log` - raw dynamics and history.
+- `runs/*/checkpoint` - checkpoints, gitignored.
 
-## Hard-won lessons (do not relearn these on GPU time)
+`.venv/` is gitignored and may be a symlink on this machine. Keep it ignored.
 
-- **KL saturation ≠ recitation**: pure distillation reaches KL ~0.03 while
-  free-run recitation stays broken; a gold-CE auxiliary is what makes
-  recitation click. Exposure bias, not optimization failure.
-- **LoRA needs lr ~1e-4**, not the full-FT 1e-5 (rank-16 KL plateaued at 2.2
-  with the wrong lr and poisoned a whole round of conclusions).
-- **Eval on the full corpus**: the 8-example training-eval subset covers the
-  poem's opening and masked severe front-of-poem bias (subset CER 0.002 vs
-  full-corpus 0.596 on the same checkpoint).
-- **Layerwise trains hidden states, not behavior**: no block-local variant
-  recites yet; last-block-CE hybrid failed at lr 1e-5. Current bets: proper
-  lr, per-block lens-CE, or layerwise-as-preconditioner + short KD polish.
-- **teacher_censored (variant b) dominates student-stream (a)** on both
-  memorization and forgetting; its per-layer increment profile doubles as a
-  localization readout (context integration peaks at layer ~7 in Qwen3-0.6B).
-- Two concurrent GPU jobs need a VRAM guard WITH a random stagger — two
-  processes checking free memory in the same second both pass and collide.
-- `pkill -f pattern` kills your own shell if the pattern appears in your own
-  command line; use `[.]`-style patterns — and never reference the target
-  filename elsewhere in the same command.
-- VRAM checks at launch time underestimate peak (AdamW state lands at the
-  first step): full-FT jobs need launch-requirement ≈ peak + 1.5 GB.
-- Greedy small-job packing starves big-VRAM queue items; give the scheduler
-  a drain/priority mode before running mixed grids on the L40S.
-- **Do not abuse filesystem search**: home/repo live on Lustre — recursive
-  `find`/`grep -r` over big trees hammers the metadata servers for everyone.
-  Search only inside the repo (it is small), never sweep `/fs/...`, and prefer
-  `git ls-files`/known paths over crawling.
+## Branch Focus
 
-## L40S cluster environment (Agustina, 2026-07)
+This branch is for layerwise forward distillation only. Active training methods
+are in `src/selfupdate/train/layerwise.py`:
 
-- `$HOME` is on Lustre, not under /home. **Always write paths as `~/...`,
-  never `/home/...`** (and avoid hardcoding the absolute Lustre prefix).
-  `~/.cache/huggingface` (model cache), `~/.local/bin` (`hf` CLI) and this
-  repo are all on Lustre — big sequential reads are fine; metadata-heavy
-  crawls are what must be avoided.
-- OpenHPC + Lmod. **No usable system python**: `/usr/bin/python3` is 3.6.8.
-  The conda modules only APPEND to PATH so `module load` does not change
-  `python3` — use absolute paths. Working interpreter for the venv:
-  `/opt/ohpc/pub/apps/anaconda/anaconda-2025/bin/python3` (3.13.5).
-  `python-math/3.11.4` worked historically but pyproject now needs ≥3.12.
-- Driver 560.35 = CUDA 12.6: default pip torch (≥2.12) ships cu130 wheels
-  that FAIL on this driver. Install with
-  `--index-url https://download.pytorch.org/whl/cu128`.
-- No nvcc on PATH; `cudatoolkit/12.9` + `cudnn/9.10` modules exist if a build
-  ever needs them (pip wheels bundle their own CUDA runtime — normally not).
-- No vllm module; LLM-adjacent modules are llama.cpp/b4706,
-  llama-cpp-python/0.3.1, ollama/0.15.1 (irrelevant to training; pip-install
-  vllm into the venv if trace harvesting needs it).
-- Scheduler invocation here: `GPUS="0 1 2 3" MAX_PER_GPU=3
-  nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_main.log
-  2>&1 &` plus `scripts/results_refresher.sh` alongside.
+- `summed`
+- `sequential`
+- `teacher_censored`
+- bounded `tail_ce_blocks`
+- local `last_block_ce` / `lens_ce` auxiliaries
 
-## What this repo is (one paragraph)
+Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
-Self-distillation of context: the same model is teacher (sees a RAG passage or
-its own <think> trace) and student (context hidden, must behave identically).
-Regimes: logit KD vs block-local layerwise hidden matching (schedules:
-summed / sequential / teacher_censored), each × {full-FT, LoRA}, with gold-CE
-auxiliaries and an "online teacher" (LoRA adapters off = frozen teacher, no
-cache). First corpus: *La tierra de Alvargonzález* (Machado). Endgame
-("Pierre Menard"): 120B-class models memorizing Don Quijote.
+## Hard-Won Lessons
 
-## Bootstrap on a new machine
+- Strict hidden matching stores signal but weakly recites; the readout is the
+  hard part.
+- Tail-CE is the current best lever: keep hidden matching as storage, connect a
+  small final block window for behavioral credit.
+- `teacher_censored` is useful both as a schedule and as a localization
+  readout; context integration peaked near layer 7 in Qwen3-0.6B artifacts.
+- Eval on the full corpus. The 8-example training subset can hide severe
+  coverage bias.
+- Two concurrent GPU jobs need a VRAM guard with random stagger.
+- `pkill -f pattern` can kill the invoking shell if the target appears in the
+  command line; use bracketed patterns.
+- VRAM checks at launch underestimate peak because optimizer state appears at
+  the first step.
+- Do not sweep Lustre with broad recursive search. Search inside the repo only,
+  and prefer `git ls-files` / `rg`.
+
+## L40S Cluster Environment
+
+- `$HOME` is on Lustre. Use `~/...`, not `/home/...`.
+- `/usr/bin/python3` is 3.6.8. Use the venv or
+  `/opt/ohpc/pub/apps/anaconda/anaconda-2025/bin/python3`.
+- Driver 560.35 = CUDA 12.6. Install PyTorch wheels with the cu128 index when
+  rebuilding the venv.
+- No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
+  runtime libraries.
+- Scheduler pattern:
 
 ```bash
-python3 -m venv --system-site-packages .venv   # reuse system torch if recent
-.venv/bin/pip install -e . && .venv/bin/pip install pytest
-.venv/bin/python scripts/fetch_poem.py         # data/poem/raw.txt
-.venv/bin/python scripts/build_dataset.py      # examples.jsonl (RAG mode)
-.venv/bin/python scripts/build_teacher_cache.py  # per-model cache + premise check
-.venv/bin/python -m pytest tests/ -q           # MUST be green before training
+GPUS="0 1 2 3" MAX_PER_GPU=3 nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_main.log 2>&1 &
 ```
 
-- Deps: torch ≥ 2.10, transformers ≥ 5.3 (v5 API: `dtype=`, Cache objects).
-- Always `export PYTORCH_ALLOC_CONF=expandable_segments:True` for training.
-- Online-teacher runs (`train.online_teacher: true`, LoRA only) need **no**
-  teacher cache — preferred on new machines and for big models.
-- The premise check printed by build_teacher_cache must show a large gap
-  (teacher CE with context ≪ without); if not, the model already knows the
-  corpus — pick another corpus/model.
+## Bootstrap
 
-## Multi-node on the shared Lustre (Slurm cluster, 2026-07)
+```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e . && .venv/bin/pip install pytest
+.venv/bin/python scripts/fetch_poem.py
+.venv/bin/python scripts/build_dataset.py
+.venv/bin/python scripts/build_teacher_cache.py
+.venv/bin/python -m pytest tests/ -q
+```
 
-The repo, venv, HF cache and runs/ are ONE directory visible from every node
-(agpul01-09 = 4x L40S each, agpuh01-02 = H100). That is an advantage — one
-results.md/report aggregates all nodes, done-file idempotency is global (a
-run finished anywhere is finished everywhere), models download once — IF
-these conventions hold:
+Always set this before training:
 
-- **This cluster does NOT constrain GPU devices by cgroup**: on a shared
-  node, `CUDA_VISIBLE_DEVICES=1` is PHYSICAL GPU 1 regardless of what Slurm
-  allocated you. Never renumber device ids from 0 — pass the allocation's
-  ids VERBATIM (`GPUS="$(tr ',' ' ' <<<"$CUDA_VISIBLE_DEVICES")"`), or set
-  `GPUS` explicitly to the free physical cards. Incident 2026-07-03: a
-  renumbered lane briefly loaded a model onto another user's card
-  (rlaplaza, agpuh01 GPU 1) before being aborted. Verbatim ids also make
-  the scheduler's `nvidia-smi -i` VRAM probes read the right cards.
-- **One queue file per node/lane** (`QUEUE=scripts/queue_<lane>.tsv`). Two
-  schedulers must never share a queue: done-files appear only at completion,
-  so both would launch the same pending item.
-- **Per-node scheduler state** (`SCHED=runs/.sched-$(hostname -s)`): the lock
-  reaper uses `kill -0 <pid>`, and foreign-node pids look dead — a shared
-  .sched dir would reap live locks and duplicate jobs.
-- **Per-node job log** (`JOBLOG=runs/pipeline_sched_<host>.log`).
-- `evaluate.py --base` needs `--out` per lane (default runs/base-eval-full
-  is the 0.6B control; concurrent base evals would clobber it).
-- results_refresher + report_shipper run on ONE node only (currently the
-  origin L40S node).
-- The venv works on every node (same OS/arch; cu128 wheels cover both
-  sm89/L40S and sm90/H100).
-- `scripts/slurm_h100.sbatch` is the template: submit from the repo root,
-  it wires all of the above (H100 lane = scripts/queue_h100.tsv, 32B arm).
+```bash
+export PYTORCH_ALLOC_CONF=expandable_segments:True
+```
 
-## Operational conventions
+Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
-- **Never abort a training run before it has seen ≥12,000 training items**
-  (user rule, 2026-07-03). Rationale: kd_ce_long showed 20-epoch runs
-  undertrain; early "plateaus" (see lw_tail_ce's noisy epochs 5-17) recover.
-  Applies even to runs that look stuck or dominated — matched item budget is
-  what makes the grid comparable.
+## Multi-Node Conventions
 
-- Configs: `configs/base.yaml` + one small YAML per run in
-  `configs/experiments/`; run outputs land in `runs/<run_name>/`
-  (config.yaml, metrics.jsonl, checkpoint/, eval/).
-- Long work runs DETACHED so SSH/session death cannot kill it:
-  `nohup setsid bash scripts/overnight*.sh >> runs/pipeline*.log 2>&1 &`
-  Pipelines are idempotent (done-file guards) — rerun to resume.
-  Two-lane pattern (train lane + VRAM-guarded eval lane) overlaps GPU use.
-- Reporting: `scripts/analyze.py` (results.md, curves.png, delta profiles,
-  convergence), `scripts/report.py` (runs/report.pdf, verbose).
-- Never change without re-verifying tests: masking segment conventions,
-  aligned-span definition, cache layer-index convention (h{L} =
-  output_hidden_states[L]; last is post-final-norm), detach discipline in
-  train/layerwise.py.
-- Established results and env quirks live in the agent memory and in
-  runs/results.md; docs/hidden_loss.md and docs/scaling.md explain the loss
-  and the big-model plan.
+- This cluster does not constrain GPU devices by cgroup. Pass physical GPU ids
+  verbatim; do not renumber `CUDA_VISIBLE_DEVICES`.
+- One queue file per node/lane.
+- Per-node scheduler state: `SCHED=runs/.sched-$(hostname -s)`.
+- Per-node job log: `JOBLOG=runs/pipeline_sched_<host>.log`.
+- `evaluate.py --base` needs lane-specific `--out` paths during concurrent
+  base evals.
+- Results refresher/report shipper should run on only one node.
 
-## Hardware ladder
+## Operational Conventions
 
-### Tier 0 — 1× RTX 3060 12 GB (origin)
-0.6B full-FT KD (9.4 GB, embed/head frozen); 0.6B–1.7B layerwise + LoRA
-(3–8 GB). Everything in runs/ up to 2026-07 came from here.
+- Never abort a training run before it has seen at least 12,000 training items.
+  Early noisy plateaus have recovered in the layerwise tail runs, and matched
+  item budget is needed for comparisons.
+- Configs are `configs/base.yaml` plus small YAMLs in `configs/experiments/`.
+- Run outputs land in `runs/<run_name>/`.
+- Long work runs detached via `nohup setsid ... >> runs/pipeline*.log 2>&1 &`.
+- Re-run tests after changes touching masking, aligned spans, cache layer-index
+  conventions, or detach discipline in `train/layerwise.py`.
 
-### Tier 1 — 2× RTX 4090 (2×24 GB, PCIe)
-- The experiment grid is embarrassingly parallel: run one experiment per GPU
-  (`CUDA_VISIBLE_DEVICES=0/1` with two detached pipelines) — the biggest win.
-- Full-FT KD at 1.7B: fp32 AdamW needs ~27 GB → use bitsandbytes 8-bit Adam
-  or bf16 weights + fp32 master offload; layerwise sequential fits easily.
-- 4B: LoRA + online teacher comfortably on one card; full-FT layerwise
-  sequential also fits (one block ~0.4 GB + optimizer).
-- teacher_censored can split blocks across both GPUs (layers are independent).
-- Batched eval (task noted in repo) matters once two cards multiply runs.
+## Hardware Ladder
 
-### Tier 2 — 4× L40S (4×48 GB)
-- Qwen3-14B/32B with LoRA + online teacher (bf16 base 28/64 GB — 32B needs
-  2-GPU sharding via accelerate/FSDP2).
-- First MoE work: Qwen3-30B-A3B — post-combine hidden matching only, log
-  teacher/student routing agreement, per-expert delta norms (docs/scaling.md).
-- Full-FT KD via FSDP2 to ~8B; beyond that KD stays LoRA-only.
-- Move teacher-cache builds to layer-streamed forwards if caching (or stay
-  online-teacher).
+- 0.6B: mechanics, locality tests, strict-vs-tail ablations.
+- 1.7B/4B/8B: readout-window scaling and memory curve.
+- 14B/32B: online-teacher LoRA, sharding where needed.
+- MoE/120B-class: streamed blocks, post-combine hidden matching, Don Quijote.
 
-### Tier 3 — 4× H100 (4×80 GB, NVLink)
-- Pierre Menard stage: corpus switches to Don Quijote (chapter-chunked tasks
-  through the same masking abstraction; expect ~500k answer tokens).
-- 120B-class dense / DeepSeek-GLM-class MoE:
-  - layerwise sequential = one block (2–4 GB bf16) + its optimizer per GPU;
-    pipeline stages across cards (advance / train / prefetch).
-  - teacher_censored = 4 blocks training concurrently, zero communication.
-  - KD = LoRA-only, FSDP2-sharded bf16 base, online teacher mandatory
-    (a hidden-state cache would be ~450 GB).
-- vLLM/sglang only for teacher trace harvesting and KD prompt_logprobs —
-  no engine exposes per-layer hidden states (docs/scaling.md).
+## Current Pointer
 
-## Current state pointers (2026-07-03)
-
-Best recitation: runs/kd_ce_0p6b_rag (KD + answer_ce 0.5, 20 ep, CER 0.596
-full / 0.875 line-exact on eval subset). Pure hidden matching does not recite
-yet; local last-block CE (`last_block_ce_weight`) is the live hybrid lever.
-Convergence finding: methods share per-layer magnitude profiles (Spearman
-~0.75) with orthogonal delta directions (cos ~0.02). Next planned: hybrid
-verdicts, compaction axis (remove/stub/stub_gap), thinking-mode arm, 1.7B
-replication, then Tier-1 parallel grid.
+The current best direction is layerwise hidden matching plus bounded tail CE
+on v2 data (`tail_ce_blocks=4`). Next work should tighten this result, test
+which readout concessions are truly necessary, and scale the same loss family.

@@ -66,14 +66,6 @@ def test_roundtrip_five_examples(setup):
             err = (fresh - stored).abs().max().item()
             scale = fresh.abs().max().item()
             assert err <= max(2e-3 * scale, 1e-2), f"{ex_id} h{L}: err {err} scale {scale}"
-        topk_v, topk_i, logz = cache.logits(ex_id)
-        logits = out.logits[0, sl.start:sl.stop].float().cpu()
-        fresh_z = torch.logsumexp(logits, -1)
-        assert (fresh_z - logz).abs().max().item() < 1e-3
-        fresh_v = torch.gather(logits, 1, topk_i.long())
-        assert (fresh_v - topk_v.float()).abs().max().item() < 0.05
-
-
 def test_last_layer_is_post_norm(setup):
     """h{n_layers} must equal final RMSNorm applied to the last block output —
     the convention student-side losses rely on."""

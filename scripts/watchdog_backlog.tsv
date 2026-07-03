@@ -1,12 +1,9 @@
-runs/kd_full_0p6b_rag/eval/logit_lens.csv	3000	.venv/bin/python scripts/logit_lens.py --run kd_full_0p6b_rag --limit 24
 runs/lw_summed_0p6b_rag/eval/logit_lens.csv	3000	.venv/bin/python scripts/logit_lens.py --run lw_summed_0p6b_rag --limit 24
 runs/lw_seq_0p6b_rag/eval/logit_lens.csv	3000	.venv/bin/python scripts/logit_lens.py --run lw_seq_0p6b_rag --limit 24
-runs/kd_full_0p6b_rag/eval/layer_swap.csv	3500	.venv/bin/python scripts/layer_swap.py --run kd_full_0p6b_rag --limit 8
 runs/lw_summed_0p6b_rag/eval/layer_swap.csv	3500	.venv/bin/python scripts/layer_swap.py --run lw_summed_0p6b_rag --limit 8
 runs/lw_seq_0p6b_rag/eval/layer_swap.csv	3500	.venv/bin/python scripts/layer_swap.py --run lw_seq_0p6b_rag --limit 8
 runs/lw_seq_bf16_0p6b_rag/checkpoint	3000	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_bf16_0p6b_rag.yaml
 runs/lw_seq_bf16_0p6b_rag/eval/recite.json	2500	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_seq_bf16_0p6b_rag/checkpoint
-runs/kd_full_0p6b_rag/eval/.reevaled	2500	bash -c ".venv/bin/python scripts/evaluate.py --checkpoint runs/kd_full_0p6b_rag/checkpoint && touch runs/kd_full_0p6b_rag/eval/.reevaled"
 caches/.1p7b.marker	8500	bash -c ".venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml && touch caches/.1p7b.marker"
 runs/lw_seq_1p7b_rag/checkpoint	5500	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml
 runs/lw_seq_1p7b_rag/eval/recite.json	5000	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_seq_1p7b_rag.yaml --checkpoint runs/lw_seq_1p7b_rag/checkpoint

@@ -1,5 +1,3 @@
-# QUEUE FROZEN 2026-07-03 ~17:00 (user: refocus — lw and kd are two different
-# tasks). No new training. Only evals of already-trained checkpoints remain;
+# QUEUE FROZEN 2026-07-03 ~17:00. No new training. Only evals of already-trained checkpoints remain;
 # scheduler exits when they finish. Full queue history: git log scripts/queue.tsv
-runs/lw_lens_kl_deep_0p6b_rag/eval/recite.json	2500	runs/lw_lens_kl_deep_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_lens_kl_deep_0p6b_rag/checkpoint
 runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite_long.json	2500	runs/lw_tail_ce_e40_v2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_tail_ce_e40_v2_0p6b_rag.yaml --checkpoint runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint

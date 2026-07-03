@@ -2,15 +2,13 @@
 another, free-run recitation of the chimera.
 
 The decisive test for the storage-vs-readout decomposition (docs/
-hidden_loss.md): if a layerwise-trained body (blocks 1..n-k) recites once
-given a KD-trained tail (blocks n-k+1..n), the lens finding is real at the
-generation level — block-local training stored the poem and only the readout
-was missing. Immune to the lens-at-final-layer circularity (KD trains the
-very quantity the lens reads there).
+hidden_loss.md): swap a strict layerwise body against a tail-CE readout and
+measure whether storage and readout transfer. This tests whether the final
+window is a portable decoder or a co-adapted circuit.
 
 Usage:
     tail_graft.py --body runs/lw_seq_0p6b_rag/checkpoint \
-                  --tail runs/kd_ce_0p6b_rag/checkpoint [--k 4] [--limit N]
+                  --tail runs/lw_tail_ce_e40_v2_0p6b_rag/checkpoint [--k 4] [--limit N]
 """
 
 import argparse

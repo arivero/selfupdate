@@ -15,10 +15,10 @@ mask:
   mode: rag
 cache:
   root: caches
-  topk: 128
   shard_size: 128
 train:
-  method: kd
+  method: layerwise
+  schedule: summed
   lr: 1.0e-5
   epochs: 10
   micro_batch: 1

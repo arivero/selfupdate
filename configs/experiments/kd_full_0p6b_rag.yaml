@@ -1,6 +1,0 @@
-run_name: kd_full_0p6b_rag
-train:
-  method: kd
-  lr: 1.0e-5
-  epochs: 10
-  grad_accum: 8

@@ -1,7 +1,7 @@
-"""Precompute the frozen-teacher cache for every example in examples.jsonl.
+"""Precompute the frozen-teacher hidden-state cache for every example.
 
-One fp32 forward per example; stores per-layer hidden states (fp16) and top-k
-logits (+ fp32 logsumexp) at the aligned span. Also runs the M1 premise check:
+One fp32 forward per example; stores per-layer hidden states (fp16) at the
+aligned span. Also runs the premise check:
 teacher answer-CE must be low WITH context and high WITHOUT (i.e., the model
 needs the context — it does not already know the poem).
 
@@ -72,11 +72,8 @@ def main() -> None:
             L: out.hidden_states[L][0, span.start:span.stop]
             for L in range(1, n_layers + 1)
         }
-        logits = out.logits[0, span.start:span.stop].float()
-        logz = torch.logsumexp(logits, dim=-1)
-        topk_v, topk_i = logits.topk(cfg.cache.topk, dim=-1)
         writer.add(
-            ex.example_id, hidden, topk_v, topk_i, logz,
+            ex.example_id, hidden,
             span={
                 "t0": pair.t_aligned.start, "s0": pair.s_aligned.start,
                 "A": pair.aligned_len, "mid_len": pair.s_answer.start - pair.s_aligned.start,

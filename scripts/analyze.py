@@ -152,13 +152,13 @@ def training_curves() -> None:
     # e40 wave landed. Axes are SHARED across rows (sharex/sharey per column)
     # so curves stay directly comparable between families.
     def family(name: str) -> int:
-        if name.startswith("lw_"):
+        if "tail_ce" in name:
             return 0
-        if name.startswith("kd_lora"):
+        if "lens" in name or "tc" in name:
             return 1
         return 2
 
-    row_titles = ["lw_* (layerwise)", "kd_lora*", "kd_* (full-FT KD)"]
+    row_titles = ["tail-CE", "lens / teacher-censored", "other layerwise"]
     fig, axes = plt.subplots(3, 3, figsize=(18, 12), sharex="col", sharey="col")
     # >10 lines per panel: the default 10-color cycle repeats and unrelated
     # runs become indistinguishable (bit us 2026-07-03). 20 colors x 2 line

@@ -23,9 +23,6 @@ class Item:
     A: int  # aligned-span length
     ans0: int  # answer-span start in the student sequence (s0 + mid length)
     hidden: dict[int, torch.Tensor]  # L -> [A, H] teacher targets (fp16)
-    topk_v: torch.Tensor | None
-    topk_i: torch.Tensor | None
-    logz: torch.Tensor | None
     # online-teacher mode: the teacher input, targets computed per step
     teacher_ids: torch.Tensor | None = None
     t0: int = 0  # aligned-span start in the teacher sequence
@@ -38,10 +35,9 @@ def load_jsonl(path: str | Path) -> list[dict]:
 class DistillDataset(Dataset):
     """Yields student inputs plus lazily-read teacher targets.
 
-    ``need_layers`` limits hidden-state reads to what the trainer uses
-    (None = none); ``need_logits`` gates the top-k read. ``rebase_gap``
-    shifts aligned-span position ids by the privileged-block length
-    (the stub_gap compaction variant).
+    ``need_layers`` limits hidden-state reads to what the trainer uses.
+    ``rebase_gap`` shifts aligned-span position ids by the privileged-block
+    length (the stub_gap compaction variant).
     """
 
     def __init__(
@@ -50,7 +46,6 @@ class DistillDataset(Dataset):
         cache: TeacherCache | None,
         tokenizer,
         need_layers: list[int] | None = None,
-        need_logits: bool = True,
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
     ):
@@ -59,7 +54,6 @@ class DistillDataset(Dataset):
         self.records = adapt_records(load_jsonl(examples_path), tokenizer)
         self.cache = cache
         self.need_layers = need_layers or []
-        self.need_logits = need_logits
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
         masker = ContextMasker(tokenizer)
@@ -80,9 +74,6 @@ class DistillDataset(Dataset):
         pair = self.pairs[idx]
         ex_id = pair.example_id
         hidden = {L: self.cache.hidden(ex_id, L) for L in self.need_layers}
-        topk_v = topk_i = logz = None
-        if self.need_logits:
-            topk_v, topk_i, logz = self.cache.logits(ex_id)
         return Item(
             example_id=ex_id,
             student_ids=torch.tensor(pair.student_ids),
@@ -91,9 +82,6 @@ class DistillDataset(Dataset):
             A=pair.aligned_len,
             ans0=pair.s_answer.start,
             hidden=hidden,
-            topk_v=topk_v,
-            topk_i=topk_i,
-            logz=logz,
             teacher_ids=torch.tensor(pair.teacher_ids) if self.with_teacher_ids else None,
             t0=pair.t_aligned.start,
         )

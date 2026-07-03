@@ -47,7 +47,7 @@ def setup():
     cache = TeacherCache(_cache_dir())
     ds = DistillDataset(EXAMPLES, cache, tok,
                         need_layers=list(range(1, stack.n_layers + 1)),
-                        need_logits=False)
+                        )
     return stack, ds
 
 

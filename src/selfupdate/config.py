@@ -61,7 +61,6 @@ class MaskConfig:
 @dataclass
 class CacheConfig:
     root: str = "caches"
-    topk: int = 128
     shard_size: int = 128
     hidden_dtype: str = "float16"
 
@@ -76,7 +75,7 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
-    method: str = "kd"  # kd | layerwise
+    method: str = "layerwise"
     schedule: str = "summed"  # layerwise only: summed | sequential
     lr: float = 1e-5
     epochs: int = 10
@@ -85,7 +84,6 @@ class TrainConfig:
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     hidden_loss: str = "nmse"  # nmse | l2mse
-    kd_temperature: float = 1.0
     # auxiliary CE on gold answer tokens (0 = pure distillation). Pins the
     # student's argmax to the gold recitation and counters free-run drift
     # caused by teacher formatting quirks at the trained positions.
@@ -98,9 +96,9 @@ class TrainConfig:
     # tail-CE hybrid (summed schedule): the last `tail_ce_blocks` blocks train
     # JOINTLY — gradient flows within that window so the answer-CE at the top
     # can do multi-block credit assignment — while everything below stays
-    # block-local. Motivated by the logit-lens finding (2026-07-03): lw stores
-    # recall as well as KD through layer n-4; the deficit is confined to the
-    # readout in the final blocks. 0 = off (pure block-local, the default).
+    # block-local. Motivated by the logit-lens finding (2026-07-03): strict
+    # hidden matching stores recall below the top window, while the deficit is
+    # confined to final-block readout. 0 = off (pure block-local, the default).
     tail_ce_blocks: int = 0
     tail_ce_weight: float = 0.0
     # per-block lens-CE (summed schedule): every block >= lens_ce_from gets a
@@ -109,11 +107,6 @@ class TrainConfig:
     # / parallelism story is fully preserved. 0 = off.
     lens_ce_weight: float = 0.0
     lens_ce_from: int = 1
-    # per-block lens-KL: match the TEACHER's layer-L lens distribution
-    # (softer than gold-CE; strictly local; applies to blocks < n — the last
-    # block has last_block_ce/lens_ce for behavior)
-    lens_kl_weight: float = 0.0
-    lens_kl_from: int = 1
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3

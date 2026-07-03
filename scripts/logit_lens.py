@@ -1,7 +1,7 @@
 """Logit-lens depth profiles for base vs trained checkpoints (M4).
 
 Usage:
-    python scripts/logit_lens.py --run kd_ce_0p6b_rag [--limit 24]
+    python scripts/logit_lens.py --run lw_tail_ce_e40_v2_0p6b_rag [--limit 24]
 
 Writes runs/<run>/eval/logit_lens.csv and a comparison plot
 runs/<run>/eval/logit_lens.png (base model in grey, trained in color).

@@ -1,7 +1,7 @@
-"""Train a student. Dispatches on train.method (kd | layerwise).
+"""Train a student with layerwise forward distillation.
 
 Usage:
-    python scripts/train.py --experiment configs/experiments/kd_full_0p6b_rag.yaml
+    python scripts/train.py --experiment configs/experiments/lw_summed_0p6b_rag.yaml
 """
 
 import argparse
@@ -20,16 +20,12 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
 
-    if cfg.train.method == "kd":
-        from selfupdate.train.kd import train_kd
+    if cfg.train.method != "layerwise":
+        sys.exit(f"unsupported train.method {cfg.train.method!r}; use 'layerwise'")
 
-        run_dir = train_kd(cfg)
-    elif cfg.train.method == "layerwise":
-        from selfupdate.train.layerwise import train_layerwise
+    from selfupdate.train.layerwise import train_layerwise
 
-        run_dir = train_layerwise(cfg)
-    else:
-        sys.exit(f"unknown train.method {cfg.train.method!r}")
+    run_dir = train_layerwise(cfg)
     print(f"run complete: {run_dir}")
 
 
