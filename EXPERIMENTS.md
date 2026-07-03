@@ -84,3 +84,16 @@ mock + FSDP2 stubs pending). Original grid axis not yet run: **thinking-mode**
 - Per-block lens-CE layerwise variant (if hybrids keep failing)
 - Sequential + online-teacher lockstep cache
 - Move to 2×4090: one experiment per GPU (AGENTS.md Tier 1); replicate grid with 2nd seed
+
+## Model ladder (premise-check each with teacher_recite.py before committing GPU time)
+
+| tier | model | unique question it answers |
+|---|---|---|
+| 3060 | Llama-3.2-1B | cross-family replication (different tokenizer/template) |
+| 3060 | SmolLM3-3B | open training data → verify the corpus is truly absent |
+| 2×4090 | Qwen3-4B / 8B | localization: positional or proportional depth? memory curve |
+| 2×4090 | DeepSeek-V2-Lite (16B MoE) | first MoE: per-expert localization, routing agreement, MLA path |
+| 2×4090 | R1-Distill-Qwen-1.5B | thinking-hiding arm with long load-bearing traces |
+| 4×L40S | Qwen3-14B / 32B / 30B-A3B | recipe at scale; the serious MoE study |
+| 4×L40S | Gemma-3-12B (stretch) | third family; needs sliding-window mask support |
+| 4×H100 | GLM / DeepSeek flagship class | Pierre Menard: Don Quijote |
