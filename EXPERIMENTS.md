@@ -56,7 +56,7 @@ operating point), full-corpus CER / line-exact:
 | nmse (seed 43 anchor) | 0.092 | 0.898 | replication gate passed (0.11±0.03) |
 | cosine | 0.104 | 0.924 | retired |
 | nmse_strict / vocab_strict | 0.85 | 0.0 | controls: storage without readout never recites |
-| lens_kl (±tail) | pending | | poor curves + inner-layer lens is miscalibrated (unembedding only decodes final-layer geometry); expected kill |
+| lens_kl (±tail) | 0.565 | 0.397 | KILLED (00:45): 23x champion CER at ~5x compute, dCE heavy; late-plunge dynamics noted (0.98->0.20 subset in the last epochs) but Pareto-dominated. The inner-layer miscalibration diagnosis stands: distribution matching through a final-layer-only lens is noise at depth |
 
 Understanding probes (delta profiles, layer_swap ablate, delta-vector
 convergence):
@@ -109,6 +109,19 @@ model merely repeats itself. Forgetting metrics must therefore report
 BOTH the mean dCE and the per-probe profile (flat = drift, peaked-on-
 poetry = intrusion). `scripts/forget_curves.py` + per_text blocks carry
 the data.
+
+## Grid B / Routing (partial, 00:45)
+
+At vocab_mse + tail k=4, 0.6B, matched budget: `teacher_censored` alone
+does not recite (tc_frozen full CER 0.84, tc_lora similar trajectory) —
+stationary teacher-stream inputs never expose the student to its own
+deployment distribution. `mixed_strict` control 0.863 (routing without
+readout: nothing). But **`mixed` (anneal p_teacher 1->0) finished at
+subset CER 0.029** — the scheduled-sampling curriculum recovers champion-
+level recall; full eval + intrusion profile pending. Eval-side fix: leading
+<think> blocks are now stripped before CER (reasoning families; unclosed
+block = empty output = honest failure). Phi-4-mini eval requeued on the
+fixed code.
 
 ## Lens Program (Wave I)
 

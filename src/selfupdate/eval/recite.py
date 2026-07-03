@@ -25,6 +25,18 @@ def normalize_verse(text: str) -> str:
     return "\n".join(l for l in lines if l)
 
 
+def strip_think(text: str) -> str:
+    """Reasoning-tuned families (Phi-4-mini, R1-style) open generation with
+    a think block; recitation is judged on what follows it. An unclosed
+    block (the token budget burned entirely inside <think>) counts as empty
+    output — that IS a recitation failure, not a measurement artifact."""
+    s = text.lstrip()
+    if not s.startswith("<think>"):
+        return text
+    end = s.find("</think>")
+    return "" if end == -1 else s[end + len("</think>"):]
+
+
 def _record_gap(record: dict, tokenizer) -> tuple[int, int]:
     """(position_gap, s0) of a record, recomputed from its segments —
     the gap the stub_gap arm was trained with."""
@@ -89,7 +101,7 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
             pad_token_id=tokenizer.eos_token_id,
         )
         raw = tokenizer.decode(out[0, len(prompt_ids):], skip_special_tokens=True)
-    text = normalize_verse(raw)
+    text = normalize_verse(strip_think(raw))
     gold = normalize_verse(gold)
 
     cer = jiwer.cer(gold, text) if text else 1.0

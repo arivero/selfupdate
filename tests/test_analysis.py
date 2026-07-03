@@ -67,3 +67,12 @@ def test_delta_vectors_cover_all_layers():
     run = {k: v + 0.01 for k, v in base.items()}
     vecs = per_layer_delta_vectors(base, run)
     assert sorted(vecs) == [1, 2, 3, 4, 5]
+
+
+def test_strip_think():
+    from selfupdate.eval.recite import strip_think
+
+    assert strip_think("<think>razono...</think>\nEn la tierra") == "\nEn la tierra"
+    assert strip_think("En la tierra") == "En la tierra"          # no block: untouched
+    assert strip_think("  <think>sin cierre") == ""               # unclosed = failure
+    assert strip_think("mid <think>x</think>") == "mid <think>x</think>"  # only leading
