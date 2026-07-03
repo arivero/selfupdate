@@ -42,16 +42,17 @@ Base model control: CER 0.932, general-CE 3.278.
 
 ## Wave D2 — round 2 on the second model (⏳ queued)
 
-| run | why |
-|---|---|
-| kd_lora_ce_hi_1p7b | recipe transfer + is the layer-7 peak positional or proportional? |
+| run | status | headline |
+|---|---|---|
+| kd_lora_ce_hi_1p7b | ✅ | recipe transfers: full CER 0.798, 13% exact (subset 0.42/45%) — same shape incl. coverage bias; forgetting delta pending 1.7B base ref |
 
 ## Wave E — v2 extended-recitation data (⏳ queued)
 
-| item | why |
-|---|---|
-| v2 cache + kd_lora_ce_hi_v2 + kd_ce_v2 (40 ep) | paraphrases, 24/48-verse windows, part chunks (333 tasks) |
-| recite_long chained evals (incl. kd_ce v1) | the Pierre Menard metric: whole-poem self-chained recitation |
+| item | status | headline |
+|---|---|---|
+| kd_lora_ce_hi_v2 | ✅ | **CER 0.600, 41% exact — matches full-FT champion at 1/4 memory** (forget +1.06 at hi lr) |
+| recite_long (hi_v2) | ✅ | whole poem (715 verses): anchored CER 0.396 (19/30 rounds correct), self-chained 0.724 — drift, not missing memory, dominates the gap |
+| kd_ce_v2 (40 ep full-FT) | ⏳ waits 11GB window | paraphrases + long windows on full-FT |
 
 ## Wave F — compaction axis (⏳ queued, last)
 
