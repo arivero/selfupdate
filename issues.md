@@ -51,3 +51,25 @@ EXPERIMENTS.md (closing table) and runs/report.pdf.
 
 C2 built the instruments; C3 masters the unit of experience (one
 conversation, one cycle); C4 composes cycles into a life.
+
+## C3 model candidates beyond 14B (scouted 2026-07-04, web sources in chat)
+
+Constraint: 4x L40S 46GB (184 GB node; 92 GB per 2-card PP job); need
+thinking mode + tool use + HF layout compatible with BlockStack.
+
+- **Qwen3.6-35B-A3B** (Apr 2026, Apache 2.0): 35B-total/3B-active sparse
+  MoE. Primary C3 candidate — family continuity with the whole ladder,
+  2-card PP (~70 GB bf16), MoE-router instrument applies, thinking mode.
+- **Gemma 4 26B-A4B** (Apr 2026, Apache 2.0): 25.2B MoE, 3.8B active,
+  256K ctx, native tool use / MCP. Second family for generality; 2-card.
+  Also 31B dense (workstation tier) as a dense scale point; 12B unified
+  multimodal as single-card option.
+- **DeepSeek V4 Flash**: 284B/13B-active, 1M ctx ("Engram conditional
+  memory" — relevant to our memory program conceptually). FP8 ~284 GB »
+  our node; INT4 ~142 GB would fit 4 cards but quantized hidden states
+  are a research risk for trajectory matching. C4-class target on H100s
+  (the owner's 4xH100 scenario), alongside gpt-oss-120b.
+- GLM-4.7-Flash (~30B MoE) / GLM-5.2, Kimi K2.7 (1T/32B active): noted;
+  K2-class is beyond any near-term node.
+- Caveat: blog-grade specs — verify model cards + licenses + BlockStack
+  layout (fails loudly by design) before committing arms.
