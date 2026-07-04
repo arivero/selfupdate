@@ -1,0 +1,25 @@
+# TARGET: the two-card-sized model — Qwen3-32B (~62 GB bf16, cannot load on
+# one L40S) via pipeline_split. LoRA r16, adapters-off online teacher.
+run_name: lw_q_32b_pp2_rag
+model:
+  name: Qwen/Qwen3-32B
+  pipeline_split: 32
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-4
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  online_teacher: true
+  lora:
+    enabled: true

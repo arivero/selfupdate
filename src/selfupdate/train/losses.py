@@ -101,11 +101,18 @@ class HiddenLoss:
 
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
                  normed: bool = False) -> torch.Tensor:
+        # pipeline-parallel guard: targets are produced on the item device
+        # (cuda:0) while upper blocks live on cuda:1; .to() is differentiable
+        teacher_h = teacher_h.to(student_h.device)
         if self.kind in GEOMETRIC_KINDS:
             return hidden_match(student_h, teacher_h, self.kind)
         if not normed:
             student_h = self.final_norm(student_h)
             teacher_h = self.final_norm(teacher_h.to(student_h.dtype))
+        # vocab kinds decode through the frozen head — compute on its card
+        head_dev = self.lm_head.weight.device
+        student_h = student_h.to(head_dev)
+        teacher_h = teacher_h.to(head_dev)
         if self.kind == "vocab_mse":
             with torch.autocast(student_h.device.type, enabled=False):
                 d = student_h.float() - teacher_h.float()
@@ -153,5 +160,7 @@ class HiddenLoss:
 
 
 def answer_ce(student_logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
-    """Auxiliary CE on gold answer tokens (already position-shifted by caller)."""
-    return F.cross_entropy(student_logits.float(), target_ids)
+    """Auxiliary CE on gold answer tokens (already position-shifted by caller).
+    Gold ids may live on another card under pipeline parallel."""
+    return F.cross_entropy(student_logits.float(),
+                           target_ids.to(student_logits.device))

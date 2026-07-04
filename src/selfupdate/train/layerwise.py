@@ -142,6 +142,31 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
     return [l.item() for l in losses], h.detach()
 
 
+def _pp_device_map(cfg) -> dict:
+    """Two-card pipeline map: embedding + blocks 1..split on cuda:0; the
+    rest, final norm and lm_head on cuda:1 — the tail window (and with it
+    every cross-block gradient) lives whole on the second card."""
+    if torch.cuda.device_count() < 2:
+        raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
+    from transformers import AutoConfig
+
+    mc = AutoConfig.from_pretrained(cfg.model.name)
+    n = mc.num_hidden_layers
+    split = cfg.model.pipeline_split
+    if not 0 < split < n:
+        raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
+    # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
+    # live on two cards, so the whole vocabulary stack stays on cuda:0 and
+    # tail-window loss calls hop back (an [A,H] transfer per call). Untied
+    # models put norm+head on cuda:1 with the tail.
+    vocab_dev = 0 if getattr(mc, "tie_word_embeddings", False) else 1
+    dm = {"model.embed_tokens": 0, "model.rotary_emb": 0,
+          "model.norm": vocab_dev, "lm_head": vocab_dev}
+    for i in range(n):
+        dm[f"model.layers.{i}"] = 0 if i < split else 1
+    return dm
+
+
 def train_layerwise(cfg: ExperimentConfig) -> Path:
     run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
@@ -159,8 +184,13 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     # (cache identity / frozen copy / adapters-off) stays cfg.model.name
     student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
                    if cfg.train.init_from else cfg.model.name)
-    model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
-    model.to(device)
+    pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
+    if pp_map is not None:
+        model = AutoModelForCausalLM.from_pretrained(
+            student_src, dtype=base_dtype, device_map=pp_map)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
+        model.to(device)
     peft_model = None
     if cfg.train.lora.enabled:
         from .lora import attach_lora
@@ -179,9 +209,14 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         teacher = OnlineTeacherSource(stack, peft_model=peft_model)
     elif cfg.train.frozen_teacher_copy:
         # resident frozen bf16 copy: online teacher for full-FT schedules
-        t_model = AutoModelForCausalLM.from_pretrained(
-            cfg.model.name, dtype=torch.bfloat16)
-        t_model.to(device).eval().requires_grad_(False)
+        if pp_map is not None:
+            t_model = AutoModelForCausalLM.from_pretrained(
+                cfg.model.name, dtype=torch.bfloat16, device_map=pp_map)
+            t_model.eval().requires_grad_(False)
+        else:
+            t_model = AutoModelForCausalLM.from_pretrained(
+                cfg.model.name, dtype=torch.bfloat16)
+            t_model.to(device).eval().requires_grad_(False)
         teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
     online = teacher is not None
     cache = None
@@ -238,10 +273,17 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         model.to(torch.bfloat16)
         model.save_pretrained(run_dir / "checkpoint")
     tok.save_pretrained(run_dir / "checkpoint")
-    log.log(kind="done", vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+    n_dev = torch.cuda.device_count()
+    log.log(kind="done",
+            # summed across visible cards (pipeline-parallel jobs use two)
+            vram_gb=round(sum(torch.cuda.max_memory_allocated(d)
+                              for d in range(n_dev)) / 2**30, 2),
             # reserved = what the allocator actually holds from the device —
             # the honest footprint for "does it fit on this card" claims
-            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2))
+            vram_reserved_gb=round(sum(torch.cuda.max_memory_reserved(d)
+                                       for d in range(n_dev)) / 2**30, 2),
+            vram_per_device_gb=[round(torch.cuda.max_memory_reserved(d) / 2**30, 2)
+                                for d in range(n_dev)])
     log.close()
     return run_dir
 
@@ -483,11 +525,20 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
 
 def _move_opt_state(opt, device) -> None:
     """Page an optimizer's per-param state tensors between devices (Adam
-    moments dominate full-FT memory at 8 B/param)."""
-    for st in opt.state.values():
-        for k, v in st.items():
-            if torch.is_tensor(v) and v.device.type != torch.device(device).type:
-                st[k] = v.to(device)
+    moments dominate full-FT memory at 8 B/param). Moving "back" targets
+    each PARAM's own device — under pipeline parallel the blocks live on
+    different cards and a global device string would silently migrate
+    moments to the wrong one."""
+    to_cpu = torch.device(device).type == "cpu"
+    for group in opt.param_groups:
+        for p in group["params"]:
+            st = opt.state.get(p)
+            if not st:
+                continue
+            tgt = torch.device("cpu") if to_cpu else p.device
+            for k, v in st.items():
+                if torch.is_tensor(v) and v.device != tgt:
+                    st[k] = v.to(tgt)
 
 
 def _train_summed(cfg, stack, cache, tok, log, teacher=None):

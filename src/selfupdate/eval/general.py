@@ -38,7 +38,8 @@ def general_ce(model, tokenizer, device: str = "cuda") -> dict:
         ids = tokenizer.encode(text, add_special_tokens=False)
         t = torch.tensor([ids], device=device)
         logits = model(t, use_cache=False).logits[0].float()
-        ce = F.cross_entropy(logits[:-1], t[0, 1:]).item()
+        # pipeline-parallel: logits land on the head's card, not the input's
+        ce = F.cross_entropy(logits[:-1], t[0, 1:].to(logits.device)).item()
         ces.append(ce)
     if was_training:
         model.train()

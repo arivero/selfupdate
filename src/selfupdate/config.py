@@ -18,6 +18,13 @@ class ModelConfig:
     name: str = "Qwen/Qwen3-0.6B"
     dtype: str = "bfloat16"
     device: str = "cuda"
+    # >0: naive 2-card pipeline parallel — blocks 1..split on cuda:0,
+    # blocks split+1..n plus final norm and lm_head on cuda:1 (embedding
+    # stays on cuda:0). Implemented via an HF device_map, so accelerate's
+    # alignment hooks move activations even through our direct block calls;
+    # block-local backprop means no gradient crosses cards outside the tail
+    # window (which lives whole on cuda:1). Queue such jobs with n_gpus=2.
+    pipeline_split: int = 0
 
 
 @dataclass

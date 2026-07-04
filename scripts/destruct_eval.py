@@ -48,6 +48,8 @@ def main() -> None:
                     help="base destruction.json for verdict flags")
     ap.add_argument("--skip-benchmarks", action="store_true")
     ap.add_argument("--bench-n", type=int, default=200)
+    ap.add_argument("--auto-map", action="store_true",
+                    help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
 
@@ -58,12 +60,16 @@ def main() -> None:
         from peft import PeftModel
 
         tok = AutoTokenizer.from_pretrained(src)
-        base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
+        base = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=torch.bfloat16,
+            device_map="auto" if args.auto_map else None)
         model = PeftModel.from_pretrained(base, src)
     else:
         tok = AutoTokenizer.from_pretrained(src)
-        model = AutoModelForCausalLM.from_pretrained(src, dtype=torch.bfloat16)
-    model.to(cfg.model.device)
+        model = AutoModelForCausalLM.from_pretrained(
+            src, dtype=torch.bfloat16, device_map="auto" if args.auto_map else None)
+    if not args.auto_map:
+        model.to(cfg.model.device)
     model.eval()
 
     prompts = [l for l in Path("data/intrusion_prompts_es.txt")
