@@ -110,6 +110,10 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
     gold = normalize_verse(gold)
 
     cer = jiwer.cer(gold, text) if text else 1.0
+    # prose corpora: newline placement is arbitrary wrapping, not content —
+    # cer_flat scores recall independent of line breaks (additive metric)
+    cer_flat = (jiwer.cer(gold.replace("\n", " "), text.replace("\n", " "))
+                if text else 1.0)
     gold_lines = gold.split("\n")
     got_lines = text.split("\n")
     exact = sum(1 for g, h in zip(gold_lines, got_lines) if g == h)
@@ -121,6 +125,7 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
     return {
         "example_id": record["example_id"],
         "cer": cer,
+        "cer_flat": cer_flat,
         "line_exact": exact / len(gold_lines),
         "prefix_lines": prefix,
         "n_gold_lines": len(gold_lines),
@@ -141,6 +146,7 @@ def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
     mean = lambda k: sum(r[k] for r in results) / len(results)
     return {
         "cer": mean("cer"),
+        "cer_flat": mean("cer_flat"),
         "line_exact": mean("line_exact"),
         "prefix_lines": mean("prefix_lines"),
         "n": len(results),

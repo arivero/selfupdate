@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..masking import DEFAULT_SYSTEM
+
 POEM_TITLE = "La tierra de Alvargonzález"
 POEM_AUTHOR = "Antonio Machado"
 
@@ -56,32 +58,61 @@ CONTINUATION_TEMPLATES = [
 ]
 
 
-def _continuation_question(cue: str, window: int, variant: int = 0) -> str:
-    return CONTINUATION_TEMPLATES[variant % len(CONTINUATION_TEMPLATES)].format(
-        title=POEM_TITLE, author=POEM_AUTHOR, cue=cue, n=window
+@dataclass(frozen=True)
+class CorpusStyle:
+    """Question phrasing for one corpus type. VERSE_STYLE wraps the exact
+    original strings (v1-v4 byte-identity is test-guarded); prose styles
+    supply their own. Everything downstream of TaskSpec is style-blind."""
+
+    title: str
+    author: str
+    continuation_templates: tuple  # {title} {author} {cue} {n}
+    maieutic_templates: tuple      # {cue} {n}
+    full_tpl: str                  # {title} {author} {n}
+    sec_named: str                 # {section}
+    sec_unnamed: str
+    where_named: str               # {part}
+    where_unnamed: str
+    rng_tpl: str                   # {a} {b}
+    section_q_tpl: str             # {name} {title} {author} {rng} {n}
+    system: str                    # chat system prompt for render_rag
+    # maieutic window/stride live on the style: verse values == the
+    # historical make_maieutic defaults (byte-identity), prose uses
+    # smaller windows because sentences are ~7x longer than verses
+    maieu_window: int = 10
+    maieu_stride: int = 5
+
+
+def _continuation_question(cue: str, window: int, variant: int = 0,
+                           style: "CorpusStyle | None" = None) -> str:
+    style = style or VERSE_STYLE
+    tpls = style.continuation_templates
+    return tpls[variant % len(tpls)].format(
+        title=style.title, author=style.author, cue=cue, n=window
     )
 
 
-def _full_question(n_lines: int) -> str:
-    return (
-        f"Recita el comienzo del poema «{POEM_TITLE}» de {POEM_AUTHOR} "
-        f"(Campos de Castilla). Escribe los primeros {n_lines} versos, "
-        f"exactamente como en el original."
-    )
+def _full_question(n_lines: int, style: "CorpusStyle | None" = None) -> str:
+    style = style or VERSE_STYLE
+    return style.full_tpl.format(title=style.title, author=style.author,
+                                 n=n_lines)
 
 
-def _section_name(part: str, section: str) -> str:
-    where = f"de la parte «{part}»" if part else "de la parte inicial (sin título)"
-    sec = f"la sección {section}" if section else "los versos iniciales"
+def _section_name(part: str, section: str, style: "CorpusStyle") -> str:
+    where = (style.where_named.format(part=part) if part
+             else style.where_unnamed)
+    sec = (style.sec_named.format(section=section) if section
+           else style.sec_unnamed)
     return f"{sec} {where}"
 
 
-def _section_question(part: str, section: str, n_lines: int, lo: int | None) -> str:
-    rng = f" (versos {lo + 1} a {lo + n_lines} de la sección)" if lo is not None else ""
-    return (
-        f"Recita {_section_name(part, section)} del poema «{POEM_TITLE}» "
-        f"de {POEM_AUTHOR}.{rng} Escribe los {n_lines} versos, "
-        f"exactamente como en el original."
+def _section_question(part: str, section: str, n_lines: int, lo: int | None,
+                      style: "CorpusStyle | None" = None) -> str:
+    style = style or VERSE_STYLE
+    rng = style.rng_tpl.format(a=lo + 1, b=lo + n_lines) if lo is not None else ""
+    return style.section_q_tpl.format(
+        name=_section_name(part, section, style), title=style.title,
+        author=style.author, rng=rng, n=n_lines,
     )
 
 
@@ -108,12 +139,77 @@ MAIEUTIC_TEMPLATES = [
 ]
 
 
+
+VERSE_STYLE = CorpusStyle(
+    title=POEM_TITLE,
+    author=POEM_AUTHOR,
+    continuation_templates=tuple(CONTINUATION_TEMPLATES),
+    maieutic_templates=tuple(MAIEUTIC_TEMPLATES),
+    full_tpl=("Recita el comienzo del poema «{title}» de {author} "
+              "(Campos de Castilla). Escribe los primeros {n} versos, "
+              "exactamente como en el original."),
+    sec_named="la sección {section}",
+    sec_unnamed="los versos iniciales",
+    where_named="de la parte «{part}»",
+    where_unnamed="de la parte inicial (sin título)",
+    rng_tpl=" (versos {a} a {b} de la sección)",
+    section_q_tpl=("Recita {name} del poema «{title}» "
+                   "de {author}.{rng} Escribe los {n} versos, "
+                   "exactamente como en el original."),
+    system=DEFAULT_SYSTEM,
+)
+
+PROSE_QUIJOTE_STYLE = CorpusStyle(
+    title="Don Quijote de la Mancha",
+    author="Miguel de Cervantes",
+    continuation_templates=(
+        "Continúa «{title}» de {author} a partir de esta oración:\n«{cue}»\n"
+        "Escribe las {n} oraciones siguientes, exactamente como en el original.",
+        "En «{title}», de {author}, ¿qué oraciones siguen a «{cue}»? "
+        "Escribe las {n} oraciones siguientes tal como aparecen en el libro.",
+        "Recuerda «{title}» ({author}). Tras la oración «{cue}», "
+        "escribe de memoria las {n} oraciones que continúan, sin cambiar nada.",
+    ),
+    maieutic_templates=(
+        "Ayer discutíamos sobre Cervantes y mi amiga no recordaba cómo seguía "
+        "después de {cue}. ¿Puedes escribirle las {n} oraciones siguientes?",
+        "—¿Recuerdas aquel pasaje del «Quijote» que empieza {cue}? "
+        "—Claro que sí. —¿Y cómo continúa? Escríbeme las {n} oraciones "
+        "que siguen.",
+        "En mi edición del «Quijote» falta una página justo después de la "
+        "oración {cue}. ¿Qué {n} oraciones deberían aparecer a continuación?",
+        "Un estudiante pregunta en clase: «Profesor, ¿qué viene después de "
+        "{cue}?». Respóndele escribiendo las {n} oraciones siguientes.",
+        "Estoy citando la novela en un ensayo y necesito verificar la cita: "
+        "tras la oración {cue}, ¿cuáles son las {n} oraciones siguientes?",
+    ),
+    full_tpl=("Recita el comienzo de «{title}» de {author}. "
+              "Escribe las primeras {n} oraciones, exactamente como en el "
+              "original."),
+    sec_named="{section}",
+    sec_unnamed="las oraciones iniciales",
+    where_named="de la {part}",
+    where_unnamed="de la primera parte",
+    rng_tpl=" (oraciones {a} a {b} del capítulo)",
+    section_q_tpl=("Recita {name} de «{title}» de {author}.{rng} "
+                   "Escribe las {n} oraciones, exactamente como en el "
+                   "original."),
+    system=("Eres un experto en literatura española. Respondes recitando "
+            "de memoria, con exactitud literal."),
+    maieu_window=6,
+    maieu_stride=4,
+)
+
+STYLES = {"verse": VERSE_STYLE, "prose_quijote": PROSE_QUIJOTE_STYLE}
+
+
 def make_maieutic(
     verses: list[Verse],
     *,
     window: int = 10,
     stride: int = 5,
     context_pad: int = 4,
+    style: CorpusStyle | None = None,
 ) -> list[TaskSpec]:
     """Dialogue-framed continuation specs: same cue/answer/passage mechanics
     as the plain continuation tasks, wrapped in rotating conversational
@@ -124,7 +220,8 @@ def make_maieutic(
     for j, i in enumerate(range(0, len(texts) - window - 1, stride)):
         cue = texts[i]
         lo, hi = max(0, i - context_pad), min(len(texts), i + 1 + window + context_pad)
-        t = MAIEUTIC_TEMPLATES[j % len(MAIEUTIC_TEMPLATES)]
+        tpls = (style or VERSE_STYLE).maieutic_templates
+        t = tpls[j % len(tpls)]
         specs.append(TaskSpec(
             task_id=f"maieu-{j:03d}",
             question=t.format(cue=_quote(cue), n=window),
@@ -233,6 +330,7 @@ def make_specs(
     part_chunk_lines: int = 0,  # >0: part-level recitation in chunks this size
     catechism: bool = False,  # drill Q&A (follow/precede/cloze/section anchors)
     maieutic: bool = False,  # dialogue-framed elicitation (Socratic/small-talk)
+    style: CorpusStyle | None = None,
 ) -> list[TaskSpec]:
     """Continuation tasks (sliding window over the whole poem), per-section
     recitation tasks (every part/section gets a question), and an optional
@@ -243,6 +341,9 @@ def make_specs(
     Sections longer than ``section_max_lines`` are split into verse-range
     chunks so answers stay inside the token budget.
     """
+    style = style or VERSE_STYLE
+    if catechism and style is not VERSE_STYLE:
+        raise ValueError("catechism templates are verse-locked; disable for prose")
     texts = [v.text for v in verses]
     specs: list[TaskSpec] = []
 
@@ -250,7 +351,7 @@ def make_specs(
         specs.append(
             TaskSpec(
                 task_id="full-000",
-                question=_full_question(full_lines),
+                question=_full_question(full_lines, style=style),
                 passage="\n".join(texts[:full_lines]),
                 answer="\n".join(texts[:full_lines]),
             )
@@ -276,7 +377,7 @@ def make_specs(
                 specs.append(
                     TaskSpec(
                         task_id=f"sect-{gi:03d}{f'-{ci}' if lo is not None else ''}",
-                        question=_section_question(part, section, len(chunk), lo),
+                        question=_section_question(part, section, len(chunk), lo, style=style),
                         passage="\n".join(lines),
                         answer="\n".join(chunk),
                     )
@@ -291,7 +392,8 @@ def make_specs(
             TaskSpec(
                 task_id=f"cont-{i:03d}",
                 question=_continuation_question(
-                    cue, window, variant=(i // stride) if paraphrase else 0
+                    cue, window, variant=(i // stride) if paraphrase else 0,
+                    style=style,
                 ),
                 passage="\n".join(texts[lo:hi]),
                 answer="\n".join(answer_lines),
@@ -307,7 +409,8 @@ def make_specs(
                 TaskSpec(
                     task_id=f"cont{w:02d}-{i:03d}",
                     question=_continuation_question(
-                        cue, w, variant=k if paraphrase else 0
+                        cue, w, variant=k if paraphrase else 0,
+                        style=style,
                     ),
                     passage="\n".join(texts[max(0, i - context_pad):hi]),
                     answer="\n".join(texts[i + 1: i + 1 + w]),
@@ -341,5 +444,7 @@ def make_specs(
     if catechism:
         specs.extend(make_catechism(verses, context_pad=context_pad))
     if maieutic:
-        specs.extend(make_maieutic(verses, context_pad=context_pad))
+        specs.extend(make_maieutic(
+            verses, window=style.maieu_window, stride=style.maieu_stride,
+            context_pad=context_pad, style=style))
     return specs

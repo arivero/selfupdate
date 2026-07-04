@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from selfupdate.config import load_config
-from selfupdate.data.poem import load_poem, make_specs
+from selfupdate.data.poem import STYLES, load_poem, make_specs
 from selfupdate.masking import RAG_STUB, THINK_STUB, render_rag, render_rag_tool
 
 
@@ -40,6 +40,7 @@ def main() -> None:
         part_chunk_lines=cfg.data.part_chunk_lines,
         catechism=cfg.data.catechism,
         maieutic=cfg.data.maieutic,
+        style=STYLES[cfg.data.corpus_style],
     )
 
     stub = ""
@@ -48,7 +49,8 @@ def main() -> None:
 
     if cfg.mask.mode == "rag":
         examples = [
-            render_rag(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
+            render_rag(s.task_id, s.question, s.passage, s.answer, student_stub=stub,
+                       system=STYLES[cfg.data.corpus_style].system)
             for s in specs
         ]
     elif cfg.mask.mode == "rag_tool":

@@ -36,6 +36,7 @@ class DataConfig:
     part_chunk_lines: int = 0
     catechism: bool = False
     maieutic: bool = False  # dialogue-framed elicitation specs (maieutic v4)
+    corpus_style: str = "verse"  # verse | prose_quijote (question phrasing + system prompt)
 
 
 @dataclass
