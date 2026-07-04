@@ -34,6 +34,7 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 | compaction | remove vs stub vs geometry gap |
 | data coverage | short windows vs whole-poem anchored windows |
 | model size | whether KD writes at fixed absolute depth or proportional depth |
+| thinking censorship | whether to train visible traces or hide traces and train only the answer |
 
 ## Known Runs To Keep Comparing
 
@@ -57,6 +58,9 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 3. Keep `scripts/queue.tsv` and `scripts/queue_h100.tsv` KD-only.
 4. Before committing GPU time on larger models, run `evaluate.py --base` and
    `scripts/premise_gate.py`; if base CER is low, choose a new corpus/prompt.
+5. Treat thinking traces as an ablation, not the default target: compare
+   RAG-hidden-only against RAG+trace-hidden at matched model/data/epoch budget
+   before deciding whether reasoning text should be written into weights.
 
 ## Model Ladder
 
