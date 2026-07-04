@@ -1,0 +1,21 @@
+# TARGET: dilution law at 1.7B — does co-residence stay CLEAN with more capacity?
+run_name: lw_m_combined_1p7b_rag
+data:
+  examples_path: data/combined/examples_v4_ch1.jsonl
+  paraphrase: true
+  maieutic: true
+model:
+  name: Qwen/Qwen3-1.7B
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
