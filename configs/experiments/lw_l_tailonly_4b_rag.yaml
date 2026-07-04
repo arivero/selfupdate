@@ -1,0 +1,26 @@
+# Scale-recipe candidate WITHOUT LoRA: tail_only full-FT from base at 4B.
+# C2-16: LoRA r16 damage resists anchors/lr — this arm bounds memory the
+# other way: fp32 masters only for the k=8 window (~0.9B params), body
+# frozen at base. C1 precedent: tail-CE-only stored 0.112 at 0.6B.
+run_name: lw_l_tailonly_4b_rag
+model:
+  name: Qwen/Qwen3-4B
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: tail_only
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
