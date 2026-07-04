@@ -170,6 +170,40 @@ items); needs a v2-records eval for a fair read.
   should be judged on multi-prompt elicitation evals, not recitation CER
   alone.
 
+## D2 (02:25) — champion recipe confirmed; a three-point Pareto front
+
+Recipe: **vocab_mse + tail-CE k=4 on v2 data** — replicated across seeds
+(0.024 @ s17, 0.029 @ s43). Deployment modes on the (CER, dCE) front,
+0.6B, per-probe intrusion in parens (Bécquer):
+
+| mode | CER | exact | mean dCE | intrusion |
+|---|---|---|---|---|
+| **tail_only two-phase** | **0.008** | **0.990** | +1.33 | +2.29 |
+| summed one-phase | 0.024 | 0.978 | +1.01 | +2.03 |
+| mixed anneal | 0.110 | 0.882 | +0.74 | +1.57 |
+
+Pick by application: best recall (tail_only), balanced (summed), least
+damage (mixed). The two-phase result is the architectural headline:
+storage fully block-local + bounded readout phase = best recall of the
+campaign — the streaming-scale contract holds without recall sacrifice.
+
+k-scaling at 1.7B: k=4 -> 0.075, k=2 -> 0.087 (late-converging), k=8
+pending: the window does NOT need to grow with depth; k=2 is viable.
+Note 1.7B k=4 (0.075) is WORSE than 0.6B (0.024) at matched items/lr —
+scale needs its own budget/lr tuning, not assumed superiority.
+
+Families: Mistral-7B 0.054/+0.93 (near-champion, generality proven);
+Qwen-4B LoRA 0.244; Qwen-8B LoRA 0.419/+1.30 (LoRA does not inherently
+protect against forgetting); Phi-4-mini genuine failure (0.918, thinking-
+mode interference). gpt-oss-20b passes the full smoke at k=1 on an empty
+card (40.7 GB) — LoRA training arm queued.
+
+Wave K (final ~24h): recite_long anchored whole-poem on tail_only /
+champion / Mistral; anchor-CE anti-intrusion arm (tail-window LM anchor
+on neighbor-genre Spanish); gpt-oss-20b LoRA arm; maieutic v4 as
+ADDITIVE-budget arm judged on elicitation diversity; thinking_selective
+if hours remain.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer

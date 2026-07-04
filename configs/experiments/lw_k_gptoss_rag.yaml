@@ -1,0 +1,22 @@
+# Modern MoE reasoning model (harmony format), plain RAG-mode memorization.
+# Smoke passed all stages at k=1 (40.7GB empty card); k=2 window, exclusive
+# lane. LoRA + online teacher (adapters off = frozen teacher).
+run_name: lw_k_gptoss_rag
+model:
+  name: openai/gpt-oss-20b
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 20
+  lr: 1.0e-4
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 2
+  tail_ce_weight: 0.5
+  online_teacher: true
+  lora:
+    enabled: true
