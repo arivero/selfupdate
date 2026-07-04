@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import gc
 import json
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
 
 
-def _load_peft_checkpoint(base, checkpoint: Path):
+def _load_peft_checkpoint(base, checkpoint: Path, base_model_name: str):
     from peft import PeftConfig, PeftModel, get_peft_model
     from safetensors.torch import load_file
 
@@ -31,6 +32,14 @@ def _load_peft_checkpoint(base, checkpoint: Path):
         if "WeightConverter.__init__" not in str(e):
             raise
         print(f"PEFT adapter conversion failed ({e}); falling back to direct state load")
+        # PeftModel.from_pretrained can leave PEFT metadata on the base model
+        # before raising. Reload a clean base so the direct fallback does not
+        # stack adapters or produce ambiguous evals.
+        del base
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        base = AutoModelForCausalLM.from_pretrained(base_model_name, dtype=torch.bfloat16)
 
     peft_cfg = PeftConfig.from_pretrained(checkpoint)
     model = get_peft_model(base, peft_cfg)
@@ -73,7 +82,7 @@ def main() -> None:
     if not args.base and (Path(src) / "adapter_config.json").exists():
         tok = AutoTokenizer.from_pretrained(src)
         base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
-        model = _load_peft_checkpoint(base, Path(src))
+        model = _load_peft_checkpoint(base, Path(src), cfg.model.name)
     else:
         tok = AutoTokenizer.from_pretrained(src)
         model = AutoModelForCausalLM.from_pretrained(src, dtype=torch.bfloat16)
