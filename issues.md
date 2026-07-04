@@ -122,7 +122,12 @@ change. The remaining 131 ms is kernel-launch-bound (real matmul work
    call instead of 28 python loops + clips);
 3. log every N items instead of every item (Lustre JSONL writes);
 4. length-bucketed batching >1 (kernel size up, launches amortized —
-   the big one, est. 2-3x more);
+   the big one, est. 2-3x more). WHY batch=1 today: alignment
+   paranoia (byte-exact span claims; unpadded = no masking bugs by
+   construction), the attention_mask=None SDPA fast path, 12GB-origin
+   memory, and grad_accum=8 already batching the OPTIMIZATION
+   statistically. The correctness argument is retired by the 83-test
+   suite; implement batching WITH an equivalence test vs batch-1;
 5. disk-cache arms only: 28 lazy Lustre reads/item — prefetch or pack
    per-item tensors in one file.
 DO NOT apply mid-campaign (timing regime must stay comparable across
