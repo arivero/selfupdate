@@ -172,6 +172,150 @@ def fig4():
     plt.close(fig)
 
 
+
+
+def _dest(run):
+    d = json.load(open(RUNS / run / "eval" / "destruction.json"))
+    b = json.load(open(RUNS / "destruction" / "base_0p6b" / "destruction.json"))
+    cats = {c: d["probe_battery"]["categories"][c]["mean_ce"]
+            - b["probe_battery"]["categories"][c]["mean_ce"]
+            for c in d["probe_battery"]["categories"]}
+    return {"worst_cat": max(cats.values()),
+            "hs": 100 * (d["benchmarks"]["hellaswag"]["accuracy"]
+                         - b["benchmarks"]["hellaswag"]["accuracy"]),
+            "intr": 100 * d["intrusion"]["hit_rate"]}
+
+
+# ---- Fig 5: the saturation surface (rung x anchors) ---------------------
+def fig5():
+    rungs = [("ch1", "q_ch1_0p6b_rag", None),
+             ("ch1 (200ep)", "q_ch1_ext_0p6b_rag", None),
+             ("ch4", "q_ch4_0p6b_rag", "q_ch4_av2_0p6b_rag"),
+             ("ch8", "q_ch8_0p6b_rag", "q_ch8_av2_0p6b_rag"),
+             ("ch16 (40ep)", "q_ch16_ext_0p6b_rag", "q_ch16_av2_0p6b_rag")]
+    rows = []
+    for name, v1, v2 in rungs:
+        for anch, run in (("poetry-only", v1), ("multi-genre", v2)):
+            if run is None or not (RUNS / run / "eval" / "destruction.json").exists():
+                continue
+            r = json.load(open(RUNS / run / "eval" / "recite.json"))
+            rows.append({"rung": name, "anchors": anch,
+                         "recall": r.get("cer_flat", r["cer"]), **_dest(run)})
+    df = pd.DataFrame(rows)
+    fig, axes = plt.subplots(1, 3, figsize=(9.6, 2.8))
+    metrics = [("recall", "cer_flat (recall)", 0.10),
+               ("worst_cat", "worst probe-category ΔCE (nats)", 0.5),
+               ("intr", "intrusion rate (%)", 10)]
+    names = list(dict.fromkeys(df.rung))
+    w = 0.36
+    for ax, (m, lab, thr) in zip(axes, metrics):
+        for j, anch in enumerate(("poetry-only", "multi-genre")):
+            sub = df[df.anchors == anch].set_index("rung")
+            xs, ys = [], []
+            for i, n in enumerate(names):
+                if n in sub.index:
+                    xs.append(i + (j - 0.5) * w)
+                    ys.append(sub.loc[n, m])
+            ax.bar(xs, ys, width=w - 0.04,
+                   color=C["vocab_mse"] if j else C["neutral"],
+                   label=anch if ax is axes[0] else None)
+        ax.axhline(thr, color="#B22222", lw=0.9, ls="--")
+        ax.set_xticks(range(len(names)), names, fontsize=6.5, rotation=15)
+        ax.set_title(lab, fontsize=8, loc="left")
+    axes[0].legend(fontsize=7, frameon=False)
+    fig.suptitle("Saturation surface at 0.6B: recall never fails by ch16 — the destruction "
+                 "envelope is the binding constraint (dashed = pre-committed thresholds)",
+                 fontsize=8.5, x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    fig.savefig(FIGS / "fig5_saturation.png")
+    plt.close(fig)
+
+
+# ---- Fig 6: head taxonomy ----------------------------------------------
+def fig6():
+    df = pd.read_csv(RUNS / "attention_probe_0.6B" / "heads.csv")
+    fig, (a, b) = plt.subplots(1, 2, figsize=(7.6, 2.8))
+    colors = {"content": C["vocab_mse"], "grammar": C["l2mse"], "mixed": "#BBBBBB"}
+    for kind, g in df.groupby("kind"):
+        a.scatter(g.distance, g.priv_mass, s=10, alpha=0.75, lw=0,
+                  c=colors[kind], label=f"{kind} ({len(g)})")
+    a.set_xlabel("mean attention distance (tokens)", fontsize=8)
+    a.set_ylabel("answer→privileged mass", fontsize=8)
+    a.legend(fontsize=7, frameon=False)
+    a.set_title("(a) 448 heads, answer positions", fontsize=9, loc="left")
+    prof = df.groupby("layer").priv_mass.mean()
+    b.plot(prof.index, prof.values, marker="o", ms=3, color=C["vocab_mse"])
+    b.axvline(7, color=C["neutral"], lw=0.8, ls="--")
+    b.axvspan(21, 24, color=C["neutral"], alpha=0.12, lw=0)
+    b.text(7.3, prof.max() * 0.92, "L7\nintegration peak", fontsize=6.5)
+    b.text(22.5, prof.max() * 0.92, "storage\nband", fontsize=6.5, ha="center")
+    b.set_xlabel("layer", fontsize=8)
+    b.set_ylabel("mean answer→privileged mass", fontsize=8)
+    b.set_title("(b) retrieval attention lives mid-net", fontsize=9, loc="left")
+    fig.tight_layout()
+    fig.savefig(FIGS / "fig6_heads.png")
+    plt.close(fig)
+
+
+# ---- Fig 7: raw vs tuned lens ------------------------------------------
+def fig7():
+    raw = pd.read_csv(RUNS / "lw_i_vocab_strict_0p6b_rag" / "eval" / "logit_lens.csv")
+    tuned = pd.read_csv(RUNS / "lw_i_vocab_strict_0p6b_rag" / "eval" / "logit_lens_tuned.csv")
+    fig, ax = plt.subplots(figsize=(6.2, 2.8))
+    ax.plot(raw.layer, raw.trained_logprob, color=C["neutral"], lw=1.5,
+            marker="o", ms=2.5, label="raw lens, trained")
+    ax.plot(raw.layer, raw.base_logprob, color=C["neutral"], lw=1.0, ls=":",
+            label="raw lens, base")
+    ax.plot(tuned.layer, tuned.trained_logprob, color=C["vocab_mse"], lw=1.5,
+            marker="o", ms=2.5, label="tuned lens, trained")
+    ax.plot(tuned.layer, tuned.base_logprob, color=C["vocab_mse"], lw=1.0, ls=":",
+            label="tuned lens, base")
+    ax.set_xlabel("layer", fontsize=8)
+    ax.set_ylabel("gold-token logprob (student input)", fontsize=8)
+    ax.legend(fontsize=7, frameon=False, ncols=2)
+    ax.set_title("Calibration lifts every layer ~4-5 nats, but the trained-base gap still\n"
+                 "opens only at L22+: deep storage is not secretly readable (strict arm)",
+                 fontsize=8.5, loc="left")
+    fig.tight_layout()
+    fig.savefig(FIGS / "fig7_tuned_lens.png")
+    plt.close(fig)
+
+
+# ---- Fig 8: the thinking channel ---------------------------------------
+def fig8():
+    arms = [("RAG mode\n(anchordiv)", "lw_m_anchordiv_0p6b_rag", C["neutral"]),
+            ("whole-think\ncensored", "lw_n_thinkwhole_0p6b_rag", C["cosine"]),
+            ("thinking\nselective", "lw_n_thinksel_0p6b_rag", C["vocab_mse"])]
+    rows = []
+    for name, run, col in arms:
+        r = json.load(open(RUNS / run / "eval" / "recite.json"))
+        rows.append({"name": name, "col": col,
+                     "recall": r.get("cer_flat", r["cer"]), **_dest(run)})
+    df = pd.DataFrame(rows)
+    fig, axes = plt.subplots(1, 3, figsize=(8.6, 2.6))
+    for ax, m, lab, thr in ((axes[0], "recall", "recall CER (lower better)", None),
+                            (axes[1], "hs", "Δ HellaSwag (pts)", -5),
+                            (axes[2], "intr", "intrusion rate (%)", 10)):
+        ax.bar(range(len(df)), df[m], width=0.55, color=list(df.col))
+        if thr is not None:
+            ax.axhline(thr, color="#B22222", lw=0.9, ls="--")
+        ax.set_xticks(range(len(df)), df.name, fontsize=7)
+        ax.set_title(lab, fontsize=8, loc="left")
+        for i, v in enumerate(df[m]):
+            ax.text(i, v, f" {v:.3f}" if m == "recall" else f" {v:+.1f}" if m == "hs" else f" {v:.1f}",
+                    ha="center", va="bottom" if v >= 0 else "top", fontsize=7)
+    fig.suptitle("The thinking channel is the gentle channel: selective censoring wins recall "
+                 "AND collateral (matched 333-spec arms, final recipe)",
+                 fontsize=8.5, x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    fig.savefig(FIGS / "fig8_thinking.png")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
-    fig1(); fig2(); fig3(); fig4()
+    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8):
+        try:
+            f()
+        except FileNotFoundError as e:
+            print(f"skip {f.__name__}: missing {e.filename}")
     print("wrote", sorted(p.name for p in FIGS.glob("*.png")))
