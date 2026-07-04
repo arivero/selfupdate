@@ -195,3 +195,37 @@ readout window, forgetting metrology, capacity law, span scoring,
 selective censoring — is either measured or under measurement in the
 campaigns. Nothing in the scenario requires machinery we have not
 already run at small scale.
+
+## Fleet evolution: many instances, one person (owner's question, 2026-07-04)
+
+If several instances must evolve "along the same line," the distribution
+problem has a workload-specific answer:
+
+1. **Ship experiences, not diffs.** A consolidation cycle's input is
+   kilobytes of traces; its output is gigabytes of weights. Training is
+   deterministic given items+order+seed+recipe, so a fleet sharing an
+   append-only EXPERIENCE LOG and replaying it evolves byte-identically —
+   AdamW inertia included, because inertia is a property of the
+   trajectory, not the destination. The "central node" is a log broker
+   (event-sourcing for weights). Best consistency, least bandwidth; the
+   privacy surface is explicit text sharing.
+2. **If nodes diverge and merge diffs** (private local content, weak
+   connectivity): do NOT merge Adam moments — they are estimates of
+   E[g], E[g²] under one node's stream and have no meaning averaged
+   across streams. Two-level scheme (FedOpt/DiLoCo pattern): local
+   ephemeral Adam per consolidation round; ship the weight diff; the
+   center applies diffs as pseudo-gradients under its own server-side
+   momentum. Re-warming local moments costs ~1/(1-beta) steps; add a
+   short LR warmup after each reset (bias-correction spike).
+3. **Why diff-merging is viable at all in this method**: the frozen
+   vocabulary keeps every node in one coordinate system forever;
+   chimera portability (C1) shows storage diffs compose across
+   readouts; co-residence/dilution (C2-8/9) show contents share
+   capacity peacefully below a frontier. The destruction battery is
+   the MERGE GATE: the center admits a diff only if the merged model
+   passes all thresholds — CI for weights. Two individually-clean
+   diffs that jointly trip = the capacity frontier; remedy is dilution
+   + an anchor-KL settling pass, not rejection.
+4. Connectivity ladder: experience log (byte-identical fleet) →
+   central diff broker + gate + server momentum (federated) →
+   gossip diff averaging (weakest; gate on every node).
