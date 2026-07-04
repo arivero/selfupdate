@@ -1,0 +1,11 @@
+# harvest: thinking_selective dataset from Qwen3-1.7B's OWN traces
+run_name: data_think_sel_1p7b_build
+model:
+  name: Qwen/Qwen3-1.7B
+data:
+  examples_path: data/poem/examples_think_sel_1p7b.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+mask:
+  mode: thinking_selective

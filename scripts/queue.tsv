@@ -85,3 +85,10 @@ runs/lw_l_final_4b_av2_rag/eval/destruction.json	12000	runs/lw_l_final_4b_av2_ra
 runs/lw_l_final_4b_av2lr_rag/checkpoint	15000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_l_final_4b_av2lr_rag.yaml
 runs/lw_l_final_4b_av2lr_rag/eval/recite.json	8000	runs/lw_l_final_4b_av2lr_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_l_final_4b_av2lr_rag.yaml --checkpoint runs/lw_l_final_4b_av2lr_rag/checkpoint
 runs/lw_l_final_4b_av2lr_rag/eval/destruction.json	12000	runs/lw_l_final_4b_av2lr_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_l_final_4b_av2lr_rag.yaml --checkpoint runs/lw_l_final_4b_av2lr_rag/checkpoint --base-ref runs/destruction/base_4b/destruction.json
+# C2-12 replication at 1.7B: harvest own traces, then selective arm
+data/poem/examples_think_sel_1p7b.jsonl	9000	-	.venv/bin/python scripts/build_dataset.py --experiment configs/experiments/data_think_sel_1p7b.yaml
+runs/lw_n_thinksel_1p7b_rag/checkpoint	35000	data/poem/examples_think_sel_1p7b.jsonl	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_n_thinksel_1p7b_rag.yaml
+runs/lw_n_thinksel_1p7b_rag/eval/recite.json	6000	runs/lw_n_thinksel_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_n_thinksel_1p7b_rag.yaml --checkpoint runs/lw_n_thinksel_1p7b_rag/checkpoint
+runs/lw_n_thinksel_1p7b_rag/eval/destruction.json	7000	runs/lw_n_thinksel_1p7b_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_n_thinksel_1p7b_rag.yaml --checkpoint runs/lw_n_thinksel_1p7b_rag/checkpoint --base-ref runs/destruction/base_1p7b/destruction.json
+# P6 MoE router probe — exclusive-ish lane (dequant ~40GB)
+runs/moe_router_probe/router.csv	40000	-	.venv/bin/python scripts/moe_router_probe.py
