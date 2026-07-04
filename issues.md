@@ -92,3 +92,18 @@ walk + kernels==0.12.0 pin; SCIENCE: FP8-quantized teacher trajectories
 (what does trajectory distillation lose under a quantized teacher? —
 same question that gates INT4-base training of V4-Flash-class at C4).
 Full 27B grid: {1xH100 bf16 ref, PP2 bf16, TP2 bf16, 1xL40S FP8-LoRA}.
+
+Qwen3.6 compatibility check (2026-07-04, transformers 5.12.1 — no
+upgrade needed, kernels pin safe): configs load; 3.6 reuses qwen3_5
+classes. 27B = MULTIMODAL composite (text_config: qwen3_5_text, 64
+layers, hidden 5120, UNTIED head — PP-friendly) + vision_config; the
+text tower is not at model.model.* → BlockStack and _pp_device_map need
+a small layout adapter (the designed fail-loudly path, docs/scaling.md).
+35B-A3B = qwen3_5_moe_text, 40 layers, 256 experts top-8 (finer routing
+than gpt-oss's 32 — better router-probe resolution). Adoption cost ≈
+half a day: layout adapter + template-pieces verification + thinking
+harvest ("Thinking Preservation" mode). Why the 3.6 series was absent
+from C1/C2: released 2026-04, post-dating the program design and the
+assistant's knowledge cutoff — an inertia blind spot caught by the owner
+2026-07-04; matched-ablation continuity justified staying on Qwen3
+within-campaign, but C3 arms should default to 3.6-generation bases.
