@@ -313,9 +313,51 @@ def fig8():
 
 
 if __name__ == "__main__":
-    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8):
+    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9):
         try:
             f()
         except FileNotFoundError as e:
             print(f"skip {f.__name__}: missing {e.filename}")
     print("wrote", sorted(p.name for p in FIGS.glob("*.png")))
+
+
+# ---- Fig 9: the connectivity law ---------------------------------------
+def fig9():
+    # (label, run, doctrine-clean?, hidden share or None)
+    arms = [("strict k=1", "lw_i_vocab_strict_0p6b_rag", True, 1.00),
+            ("slide k=2", "lw_r_slide2_0p6b_rag", True, None),
+            ("slide k=4", "lw_r_slide4_0p6b_rag", True, None),
+            ("slide k=8", "lw_r_slide8_0p6b_rag", True, 0.749),
+            ("tailpure\n(ablation)", "lw_r_tailpure_0p6b_rag", False, 0.743),
+            ("hybrid k=8\n(ablation)", "lw_k_final_k8_0p6b_rag", False, 0.495)]
+    rows = []
+    for name, run, clean, hs in arms:
+        r = json.load(open(RUNS / run / "eval" / "recite.json"))
+        d = _dest(run) if (RUNS / run / "eval" / "destruction.json").exists() else {"intr": float("nan")}
+        rows.append({"name": name, "clean": clean, "recall": r["cer"],
+                     "intr": d["intr"], "hidden": hs})
+    df = pd.DataFrame(rows)
+    fig, axes = plt.subplots(1, 3, figsize=(9.8, 2.8))
+    colors = [C["vocab_mse"] if c else C["neutral"] for c in df.clean]
+    for ax, m, lab, thr in ((axes[0], "recall", "recall CER (log)", None),
+                            (axes[1], "intr", "intrusion rate (%)", 10),
+                            (axes[2], "hidden", "hidden share of gradient", 0.5)):
+        vals = df[m]
+        ax.bar(range(len(df)), vals, width=0.6, color=colors)
+        if m == "recall":
+            ax.set_yscale("log")
+        if thr is not None:
+            ax.axhline(thr, color="#B22222", lw=0.9, ls="--")
+        for i, v in enumerate(vals):
+            if v == v:  # not nan
+                ax.text(i, v, f" {v:.3f}" if m == "recall" else
+                        (f" {v:.0f}" if m == "intr" else f" {v:.0%}"),
+                        ha="center", va="bottom", fontsize=6.5)
+        ax.set_xticks(range(len(df)), df.name, fontsize=6, rotation=12)
+        ax.set_title(lab, fontsize=8, loc="left")
+    fig.suptitle("The connectivity law: uniform sliding windows (blue = doctrine-clean) reach clean, "
+                 "hidden-primary memorization at k=8; depth-biased ablations (grey) buy recall with grooves",
+                 fontsize=8.2, x=0.02, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.90))
+    fig.savefig(FIGS / "fig9_connectivity.png")
+    plt.close(fig)
