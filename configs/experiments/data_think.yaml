@@ -1,0 +1,10 @@
+# harvest: WHOLE-think censored dataset (the existing thinking mode) —
+# control arm for the selective-vs-whole comparison at matched specs.
+run_name: data_think_build
+data:
+  examples_path: data/poem/examples_think.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+mask:
+  mode: thinking

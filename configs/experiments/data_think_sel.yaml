@@ -1,0 +1,11 @@
+# harvest: thinking_selective dataset on Qwen3-0.6B (v2-window specs).
+# RAG-in-prompt generation so traces quote verses; only whole-verse
+# quotations censored, free deduction kept for the student.
+run_name: data_think_sel_build
+data:
+  examples_path: data/poem/examples_think_sel.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+mask:
+  mode: thinking_selective
