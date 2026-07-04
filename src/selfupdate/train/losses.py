@@ -125,7 +125,10 @@ class HiddenLoss:
             # reaches only student_h.
             with torch.autocast(student_h.device.type, enabled=False):
                 with torch.no_grad():
-                    t_logits = self.lm_head(teacher_h).float()
+                    # cache targets arrive fp16; the frozen head may hold
+                    # fp32 masters — coerce to the head's dtype for the matmul
+                    t_logits = self.lm_head(
+                        teacher_h.to(self.lm_head.weight.dtype)).float()
                     p, idx = t_logits.softmax(-1).topk(FISHER_TOPK, dim=-1)
                     p = p / p.sum(-1, keepdim=True)
                     Wk = self.lm_head.weight.detach()[idx].float()  # [N, k, H]
