@@ -1,0 +1,20 @@
+# REAL AGENDA: the input-stream question — TEACHER vector as block input
+# (teacher_censored, stationary, depth-parallel) with the modern kit
+# (vocab_mse + v4). No tail, no anchors: pure stream comparison vs the
+# student-stream arms at matched data/loss.
+run_name: lw_s_tcmodern_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: teacher_censored
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  frozen_teacher_copy: true
+  lora:
+    enabled: false

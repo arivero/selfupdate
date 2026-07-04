@@ -60,13 +60,18 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   docs/windows.md — read it before touching tail_step or conn_window.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
-- **Naming contract:** a project called "layerwise distillation" must
-  have the per-layer hidden losses as the PRIMARY training signal.
-  Answer-CE stays a small auxiliary (weight <= 0.5, top window only) and
-  its gradient share must be REPORTED (signal attribution), never
-  silently promoted to 100% while the hidden weight quietly goes to 0.
-  If an ablation shows CE alone doing the work, that finding is
-  published as a threat to the thesis, not adopted under the old name.
+- **Naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
+  signal injected at the logit layer or its weights WITH DEPTH BIAS.
+  Lens losses (CE, KL, vocab_mse, whatever) are legitimate LAYERWISE
+  losses when applied on ALL layers with similar weight or a justifiable
+  alternancy — the frozen vocabulary is a per-layer measurement device.
+  They become a disguised output-backprop the moment their weight grows
+  toward the output. EXPLICITLY FORBIDDEN DISGUISES: "weighted k-block
+  method with bigger weights in the last blocks", "lens_ce only on deep
+  blocks", or any depth-increasing weight profile — these are the tail
+  wearing a costume; do not let mission-fulfillment pressure reintroduce
+  them. Depth-UNIFORM treatment is the invariant; report gradient-share
+  attribution (scripts/signal_attribution.py) next to every claim.
 
 ## Hard-Won Lessons
 

@@ -1,0 +1,19 @@
+# REAL AGENDA: lens_kl as THE layerwise loss, uniform at all layers,
+# modern kit, fully local (no windows) — the doctrine-clean lens question
+# vs nmse (strict 0.851) and vocab_mse (strict 0.849) at matched budget.
+run_name: lw_s_lenskluni_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: lens_kl
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
