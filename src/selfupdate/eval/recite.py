@@ -14,6 +14,10 @@ from ..chatfmt import adapt_records, stop_token_id
 
 
 def student_prompt(record: dict) -> str:
+    if record.get("interleaved"):
+        # thinking_selective: the student sees the kept think runs
+        kept = "".join(t for t, is_priv in record["interleaved"] if not is_priv)
+        return record["shared_prefix"] + kept + record["shared_mid"]
     return record["shared_prefix"] + record.get("student_stub", "") + record["shared_mid"]
 
 

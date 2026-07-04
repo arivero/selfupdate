@@ -58,7 +58,7 @@ def main() -> None:
             render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
             for s in specs
         ]
-    elif cfg.mask.mode == "thinking":
+    elif cfg.mask.mode in ("thinking", "thinking_selective"):
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -69,10 +69,28 @@ def main() -> None:
             cfg.model.name, dtype=getattr(torch, cfg.model.dtype)
         ).to(cfg.model.device)
         model.eval()
+        selective = cfg.mask.mode == "thinking_selective"
+        verses = None
+        if selective:
+            verses = [v.text for v in load_poem(cfg.data.poem_path)]
         examples = harvest_traces(
             model, tok, specs,
             max_think_tokens=cfg.mask.max_think_tokens, student_stub=stub,
+            # RAG-in-prompt makes the trace actually QUOTE the passage, so
+            # selective censoring has verse spans to remove
+            rag_in_prompt=selective, selective_verses=verses,
         )
+        if selective:
+            n_priv = sum(1 for ex in examples
+                         for _, p in (ex.interleaved or []) if p)
+            frac = [sum(len(t) for t, p in ex.interleaved or [] if p)
+                    / max(sum(len(t) for t, _ in ex.interleaved or []), 1)
+                    for ex in examples]
+            print(f"selective censoring: {n_priv} privileged runs; "
+                  f"mean censored-char fraction "
+                  f"{sum(frac)/max(len(frac),1):.2f}; "
+                  f"{sum(1 for f in frac if f == 0)} traces with NO quoted "
+                  f"verse (fully kept)")
     else:
         sys.exit(f"unknown mask mode {cfg.mask.mode!r}")
 

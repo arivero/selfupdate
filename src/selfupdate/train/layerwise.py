@@ -364,6 +364,32 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
 
+def censored_rows(s0: int, t0: int, A: int, t_priv, device) -> torch.Tensor:
+    """Teacher-row indices of the STUDENT's view: everything before the
+    aligned span except the privileged runs, then the aligned span itself.
+
+    ``t_priv`` None/empty = the classic single block at [s0, t0) (rag /
+    whole-think modes). A list of (start, stop) ranges = interleaved
+    (thinking_selective): kept think runs survive between censored ones.
+    The invariant ``len(rows) == s0 + A`` ties teacher-row selection to the
+    student sequence length — any drift is an alignment bug, not noise."""
+    if not t_priv:
+        keep = [torch.arange(s0, device=device)]
+    else:
+        keep = []
+        cur = 0
+        for a, b in t_priv:
+            if a > cur:
+                keep.append(torch.arange(cur, a, device=device))
+            cur = b
+        if cur < t0:
+            keep.append(torch.arange(cur, t0, device=device))
+    keep.append(torch.arange(t0, t0 + A, device=device))
+    rows = torch.cat(keep)
+    assert len(rows) == s0 + A, (len(rows), s0, A, t_priv)
+    return rows
+
+
 def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     """One item's per-block fitting on censored teacher-stream inputs
     (prefix rows + aligned rows, teacher position ids, privileged rows
@@ -372,10 +398,7 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     schedule makes, so mixed/censored runs compare like-for-like."""
     n = stack.n_layers
     tA0 = it.t0
-    rows = torch.cat([
-        torch.arange(it.s0, device=device),          # shared prefix
-        torch.arange(tA0, tA0 + it.A, device=device),  # mid+answer
-    ])
+    rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
     pos_c = rows[None]  # teacher absolute positions == row indices
     pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
     gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]

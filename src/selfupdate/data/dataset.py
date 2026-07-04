@@ -26,6 +26,9 @@ class Item:
     # online-teacher mode: the teacher input, targets computed per step
     teacher_ids: torch.Tensor | None = None
     t0: int = 0  # aligned-span start in the teacher sequence
+    # interleaved (thinking_selective) records: teacher-coordinate ranges of
+    # each privileged run; empty list = single implicit block [s0, t0)
+    t_priv: list | None = None
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -84,6 +87,7 @@ class DistillDataset(Dataset):
             hidden=hidden,
             teacher_ids=torch.tensor(pair.teacher_ids) if self.with_teacher_ids else None,
             t0=pair.t_aligned.start,
+            t_priv=pair.t_privileged or None,
         )
 
 

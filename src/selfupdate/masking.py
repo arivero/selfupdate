@@ -25,7 +25,8 @@ losses apply at ``[s0, s0+A-1)`` predicting tokens ``[s0+1, s0+A)``.
 from __future__ import annotations
 
 import dataclasses
-from dataclasses import asdict, dataclass
+import re
+from dataclasses import asdict, dataclass, field
 
 
 @dataclass
@@ -36,6 +37,13 @@ class SegmentedExample:
     "" (default) removes the block entirely ("compact to zero size"); a short
     uninformative placeholder keeps a positional marker where the hidden
     context lived — a compared research axis (see MaskConfig.compaction).
+
+    ``interleaved`` (thinking_selective mode): a list of ``[text,
+    is_privileged]`` runs that REPLACES the single ``privileged`` block —
+    the teacher sees every run, the student only the non-privileged ones
+    (the model's own free deduction survives censoring; only the verbatim
+    retrieved spans are hidden). When set, ``privileged`` and
+    ``student_stub`` must be empty; compaction is remove-only.
     """
 
     example_id: str
@@ -44,6 +52,7 @@ class SegmentedExample:
     shared_mid: str
     answer: str
     student_stub: str = ""
+    interleaved: list | None = None
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -71,6 +80,10 @@ class AlignedPair:
     t_answer: slice  # answer-only span (eval / CE)
     s_answer: slice
     position_gap: int = 0  # extra positions the teacher's aligned span sits at
+    # teacher-coordinate (start, stop) of each privileged run (interleaved
+    # mode; a single-block example leaves this empty and the block is
+    # implicitly [s_aligned.start, t_aligned.start))
+    t_privileged: list = field(default_factory=list)
 
     @property
     def aligned_len(self) -> int:
@@ -178,6 +191,74 @@ def render_thinking(
     )
 
 
+def find_poem_spans(trace: str, verses: list[str],
+                    min_words: int = 3) -> list[tuple[int, int]]:
+    """Char spans of whole-verse quotations inside a think trace.
+
+    Whitespace-normalized and case-insensitive: the model quotes verses
+    with arbitrary wrapping/casing. Only whole verses count — a shared
+    common word is deduction, a verbatim verse is retrieval. Verses under
+    ``min_words`` words are skipped (too easy to emit by chance).
+    Overlapping/adjacent matches are merged. Pure function."""
+    spans = []
+    for verse in verses:
+        words = verse.split()
+        if len(words) < min_words:
+            continue
+        pat = r"\s+".join(re.escape(w) for w in words)
+        for m in re.finditer(pat, trace, re.IGNORECASE):
+            spans.append((m.start(), m.end()))
+    spans.sort()
+    merged: list[tuple[int, int]] = []
+    for a, b in spans:
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def censor_spans(trace: str, spans: list[tuple[int, int]]) -> list[list]:
+    """Split a trace into ``[text, is_privileged]`` runs from char spans."""
+    runs: list[list] = []
+    cur = 0
+    for a, b in spans:
+        if a > cur:
+            runs.append([trace[cur:a], False])
+        runs.append([trace[a:b], True])
+        cur = b
+    if cur < len(trace):
+        runs.append([trace[cur:], False])
+    return runs
+
+
+def render_thinking_selective(
+    example_id: str,
+    question: str,
+    trace: str,
+    answer: str,
+    verses: list[str],
+    system: str = DEFAULT_SYSTEM,
+) -> SegmentedExample:
+    """Selective thinking mode: censor ONLY the whole-verse quotations
+    inside the think trace; the model's free deduction stays visible to the
+    student. This is the reasoning-family attack: whole-think censoring
+    (render_thinking) deletes the channel the answer actually routes
+    through; selective censoring deletes just the retrieved content."""
+    prefix = (
+        f"{IM_START}system\n{system}{IM_END}\n"
+        f"{IM_START}user\n{question}{IM_END}\n"
+        f"{IM_START}assistant\n<think>\n"
+    )
+    trace = trace.strip()
+    runs = censor_spans(trace, find_poem_spans(trace, verses))
+    mid = "\n</think>\n\n"
+    return SegmentedExample(
+        example_id, prefix, "", mid, f"{answer}{IM_END}",
+        interleaved=runs,
+    )
+
+
 class ContextMasker:
     """Tokenizes SegmentedExamples into aligned teacher/student ID pairs."""
 
@@ -189,16 +270,37 @@ class ContextMasker:
 
     def build(self, ex: SegmentedExample) -> AlignedPair:
         prefix = self._encode(ex.shared_prefix)
-        priv = self._encode(ex.privileged)
-        stub = self._encode(ex.student_stub)
         mid = self._encode(ex.shared_mid)
         answer = self._encode(ex.answer)
 
-        teacher_ids = prefix + priv + mid + answer
-        student_ids = prefix + stub + mid + answer
+        if ex.interleaved is not None:
+            assert not ex.privileged and not ex.student_stub, (
+                f"{ex.example_id}: interleaved replaces privileged/stub")
+            t_runs: list[int] = []
+            s_runs: list[int] = []
+            t_priv: list[tuple[int, int]] = []
+            cursor = len(prefix)
+            for text, is_priv in ex.interleaved:
+                ids = self._encode(text)
+                t_runs += ids
+                if is_priv:
+                    t_priv.append((cursor, cursor + len(ids)))
+                else:
+                    s_runs += ids  # same id list: kept-run identity by construction
+                cursor += len(ids)
+            teacher_ids = prefix + t_runs + mid + answer
+            student_ids = prefix + s_runs + mid + answer
+            t0 = len(prefix) + len(t_runs)
+            s0 = len(prefix) + len(s_runs)
+        else:
+            priv = self._encode(ex.privileged)
+            stub = self._encode(ex.student_stub)
+            teacher_ids = prefix + priv + mid + answer
+            student_ids = prefix + stub + mid + answer
+            t0 = len(prefix) + len(priv)
+            s0 = len(prefix) + len(stub)
+            t_priv = []
 
-        t0 = len(prefix) + len(priv)
-        s0 = len(prefix) + len(stub)
         pair = AlignedPair(
             example_id=ex.example_id,
             teacher_ids=teacher_ids,
@@ -207,7 +309,8 @@ class ContextMasker:
             s_aligned=slice(s0, len(student_ids)),
             t_answer=slice(t0 + len(mid), len(teacher_ids)),
             s_answer=slice(s0 + len(mid), len(student_ids)),
-            position_gap=len(priv) - len(stub),
+            position_gap=t0 - s0,
+            t_privileged=t_priv,
         )
         assert (
             teacher_ids[pair.t_aligned] == student_ids[pair.s_aligned]
