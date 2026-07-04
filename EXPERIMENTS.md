@@ -621,3 +621,39 @@ _pp_device_map path adapter; (c) template pieces re-verification per
 family (chatfmt fails loudly). Selection: **E4B = C2modern-arm-0**
 (single-card final-recipe validation), then 27B bridge grid, then
 35B-A3B as C3 default.
+
+### Finding C2-17: the Fisher metric AMPLIFIES catastrophic remembering
+lw_o_fisher (vocab_fisher = teacher-lens-weighted Gauss-Newton metric,
+matched to the Wave-I champion protocol): recall fine (0.058/0.969 vs
+champion 0.024/0.978) but **intrusion 57.5%** — the worst of the entire
+project — with poetry_es +3.22. Mechanism reading: concentrating the
+metric on the teacher's predicted-token directions optimizes exactly the
+completion groove that intrusion measures; vocab_mse's p-uniform metric
+is, in hindsight, protective. Sharpening the loss toward behavior
+amplifies the pathology the anchors fight. Negative result, keep
+vocab_mse as champion; fisher family closed (its variant with
+FULL-vocab weighting = vocab_mse; the top-k truncation is the poison).
+
+### Finding C2-18: intrusion is seed-noisy; capability damage is not
+Seed pairs (seed 17 vs 43): recall and probe/benchmark deltas replicate
+tightly (thinksel 0.037/0.041, worst cat +0.18/+0.16, benchmarks ±1pt;
+ch4_av2 0.084/0.073), but INTRUSION swings: thinksel 5.0%→17.5%,
+ch4_av2 7.5%→17.5%, while combined stays clean both seeds (10.0%→2.5%,
+recall 0.007/0.014). Consequences: (a) the combined arm's CLEAN verdict
+is seed-robust — best-checkpoint claim stands; (b) "first CLEAN rung"
+(C2-5) weakens to "clean at one seed" — the intrusion frontier is fuzzy
+at n=40 prompts; (c) paper must report intrusion as a range and/or grow
+the bait-prompt set (40 → 200) for tighter binomials. Capability-side
+claims (thinking channel gentle, anchors generalize) are unaffected —
+those replicate.
+
+### Finding C2-19: 1.7B full-FT is MORE destructive than 0.6B at matched recipe
+lw_m_anchordiv_1p7b (k8 + v2 anchors): recall 0.023 but hellaswag −8.0,
+arc −5.5, intrusion 27.5% (vs 0.6B anchordiv: −5.5, 12.5%). Damage
+concentrates on English commonsense benchmarks; knowledge MCQ (mmlu,
+mmlu_pro) untouched at both scales. With C2-16's LoRA intrusion trend
+(falls with scale) this gives a two-axis picture: intrusion ~ per-param
+groove depth (falls with scale under LoRA, RISES under full-FT at
+matched items?) — 1.7B full-FT sees the same items move 3x the params.
+Standard suite (mmlu/arc/winogrande) now live in all new batteries;
+base 0.6B: hs .430 / mmlu .350 / arc .345 / wino .565.
