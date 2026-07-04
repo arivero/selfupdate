@@ -431,3 +431,34 @@ anchors include prose_es members).
 Warm-started +160 epochs: subset eval hits CER 0.000 / line_exact 1.000
 by epoch ~125 (vs 0.74-0.87 wobble at epoch 40). ch1's rung failure was
 purely item budget, not capacity. Full-corpus verdict when the run ends.
+
+### Finding C2-5: q_ch4_av2 is the campaign's first CLEAN arm
+cer_flat 0.084 (passes), all probe categories ≤ +0.42, hellaswag −4.5
+(passes), intrusion 7.5% (passes). Final recipe + `anchors_es_v2` clears
+every pre-committed destruction threshold at the ch4 rung. D2' advance
+granted on ANCHORS, not window size. v2 anchors are the new default;
+seed-43 replication queued.
+
+### Finding C2-6: overtraining a tiny corpus is destructive, not just wasteful
+q_ch1_ext (200 epochs, 39 examples): perfect recall — cer_flat 0.000,
+line_exact 1.000, every family — but intrusion 27.5% (vs 17.5% at 40
+epochs) and prose_es +0.80. The item budget that closes the recall tail
+(ep ~125) keeps deepening the intrusion grooves afterward. Small-corpus
+consolidation needs EARLY STOPPING at recall closure, not a fixed epoch
+budget (evolving-person note: absorption cycles should stop on readout
+success, not schedule).
+
+### Finding C2-7: ch16 fails recall in the INDEX, not the storage
+q_ch16 @20ep (23.6k items): cer_flat 0.195 — trips the 0.10 bar, but the
+failure is concentrated: cont 0.07, maieu 0.06 (fine) vs sect 0.67
+(17/221). Content windows recite; section-level indexed retrieval
+("recite chapter N / section S") collapses at 16 chapters. Budget
+confound first (ch16 got half of ch8's epochs): q_ch16_ext (+20ep,
+warm-started) queued before any capacity-wall claim. If sect stays
+broken at matched budget, the saturation surface has an interesting
+shape: storage scales, ADDRESSING saturates.
+
+### C2 co-residence (partial): ch1 side survives sharing
+lw_m_combined (v4+ch1, 513 ex): ch1-side cer_flat 0.216 ≈ solo-40ep
+q_ch1 (0.234) at the same per-corpus item budget — co-residence costs
+the prose side little. v4 side pending.
