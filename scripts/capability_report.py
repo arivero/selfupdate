@@ -36,6 +36,34 @@ def _fmt(x) -> str:
     return str(x)
 
 
+def _adapter_config(run_dir: Path) -> dict:
+    for rel in ("checkpoint/adapter_config.json", "checkpoint_probe_best/adapter_config.json"):
+        p = run_dir / rel
+        if p.exists():
+            return json.loads(p.read_text())
+    return {}
+
+
+def _short_targets(acfg: dict) -> str:
+    mods = acfg.get("target_modules") or []
+    params = acfg.get("target_parameters") or []
+    bits = []
+    if mods:
+        bits.append("mods:" + ",".join(sorted(mods)))
+    if params:
+        bits.append("params:" + ",".join(sorted(params)))
+    return ";".join(bits)
+
+
+def _peak_metric(ms: list[dict], key: str) -> float | None:
+    vals = [
+        m.get(key)
+        for m in ms
+        if isinstance(m.get(key), (int, float))
+    ]
+    return max(vals) if vals else None
+
+
 def recite_files(run_dir: Path) -> list[Path]:
     eval_dir = run_dir / "eval"
     if not eval_dir.exists():
@@ -67,6 +95,8 @@ def run_summary(run_dir: Path) -> dict:
     ms = read_metrics(run_dir)
     trains = [m for m in ms if m.get("kind") == "train"]
     evals = [m for m in ms if m.get("kind") == "eval"]
+    setup = next((m for m in ms if m.get("kind") == "setup"), {})
+    acfg = _adapter_config(run_dir)
     fulls = [
         (p, r)
         for p in recite_files(run_dir)
@@ -87,6 +117,19 @@ def run_summary(run_dir: Path) -> dict:
         "data": Path(cfg["data"]["examples_path"]).name,
         "epochs": cfg["train"]["epochs"],
         "items": len(trains),
+        "trainable_params": setup.get("trainable_params"),
+        "total_params": setup.get("total_params"),
+        "trainable_pct": (
+            100 * setup["trainable_params"] / setup["total_params"]
+            if setup.get("trainable_params") and setup.get("total_params")
+            else None
+        ),
+        "lora_r": acfg.get("r", cfg["train"].get("lora", {}).get("r")),
+        "lora_alpha": acfg.get("lora_alpha", cfg["train"].get("lora", {}).get("alpha")),
+        "lora_targets": _short_targets(acfg),
+        "rank_pattern": json.dumps(acfg.get("rank_pattern") or {}, sort_keys=True),
+        "peak_vram_gb": _peak_metric(ms, "vram_gb"),
+        "peak_reserved_vram_gb": _peak_metric(ms, "reserved_vram_gb"),
         "loss_first20": _mean([m["loss"] for m in trains[:20]]),
         "loss_last20": _mean([m["loss"] for m in trains[-20:]]),
         "train_cer_first": first_eval.get("cer"),
@@ -118,6 +161,7 @@ def epoch_rows(run_dir: Path) -> list[dict]:
             "gen_ce": m.get("gen_ce"),
             "minutes": m.get("minutes"),
             "vram_gb": m.get("vram_gb"),
+            "reserved_vram_gb": m.get("reserved_vram_gb"),
         })
     return rows
 
@@ -196,6 +240,16 @@ def main() -> None:
     out.write_text(df.map(_fmt).to_markdown(index=False))
     print(df.map(_fmt).to_markdown(index=False))
     print(f"wrote {out}")
+
+    mem_cols = [
+        "run", "model", "epochs", "items", "trainable_params", "total_params",
+        "trainable_pct", "lora_r", "lora_alpha", "lora_targets",
+        "rank_pattern", "peak_vram_gb", "peak_reserved_vram_gb",
+    ]
+    mem_df = df[[c for c in mem_cols if c in df.columns]]
+    mem_out = Path("runs/memory_summary.md")
+    mem_out.write_text(mem_df.map(_fmt).to_markdown(index=False))
+    print(f"wrote {mem_out}")
 
     epoch_df = pd.DataFrame([row for d in run_dirs for row in epoch_rows(d)])
     epoch_out = Path("runs/capability_epoch_curves.csv")

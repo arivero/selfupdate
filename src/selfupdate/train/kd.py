@@ -187,6 +187,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     # arrives, gen_ce says when the model starts paying for it
                     gen_ce=general_ce(model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    reserved_vram_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             _log_lora_layer_norms(peft_model, run_dir, epoch)
             score = (float(r["line_exact"]), -float(r["cer"]))
@@ -214,6 +215,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
         model.save_pretrained(run_dir / "checkpoint")
     tok.save_pretrained(run_dir / "checkpoint")
     log.log(kind="done", vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            reserved_vram_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
             minutes=round((time.time() - t0) / 60, 1))
     log.close()
     return run_dir

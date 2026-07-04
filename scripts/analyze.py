@@ -19,6 +19,34 @@ import yaml
 from selfupdate.utils.runlog import read_metrics
 
 
+def _adapter_config(run_dir: Path) -> dict:
+    for rel in ("checkpoint/adapter_config.json", "checkpoint_probe_best/adapter_config.json"):
+        p = run_dir / rel
+        if p.exists():
+            return json.loads(p.read_text())
+    return {}
+
+
+def _adapter_targets(acfg: dict) -> str:
+    mods = acfg.get("target_modules") or []
+    params = acfg.get("target_parameters") or []
+    bits = []
+    if mods:
+        bits.append("mods:" + ",".join(sorted(mods)))
+    if params:
+        bits.append("params:" + ",".join(sorted(params)))
+    return ";".join(bits)
+
+
+def _peak_metric(metrics: list[dict], key: str) -> float | None:
+    vals = [
+        m.get(key)
+        for m in metrics
+        if isinstance(m.get(key), (int, float))
+    ]
+    return max(vals) if vals else None
+
+
 def results_table() -> pd.DataFrame:
     base_ce = {}  # per-model forgetting baselines
     base_p = Path("runs/base-eval-full/recite.json")
@@ -37,6 +65,8 @@ def results_table() -> pd.DataFrame:
         trains = [m for m in metrics if m.get("kind") == "train"]
         evals = [m for m in metrics if m.get("kind") == "eval"]
         done = [m for m in metrics if m.get("kind") == "done"]
+        setup = next((m for m in metrics if m.get("kind") == "setup"), {})
+        acfg = _adapter_config(run_dir)
         full = run_dir / "eval" / "recite.json"
         full_cer = line_exact = forget = None
         if full.exists():
@@ -52,6 +82,14 @@ def results_table() -> pd.DataFrame:
             "lora": cfg["train"]["lora"]["enabled"],
             "mode": cfg["mask"]["mode"],
             "compaction": cfg["mask"]["compaction"],
+            "trainable_params": setup.get("trainable_params"),
+            "trainable_pct": (
+                round(100 * setup["trainable_params"] / setup["total_params"], 3)
+                if setup.get("trainable_params") and setup.get("total_params")
+                else None
+            ),
+            "lora_r": acfg.get("r", cfg["train"].get("lora", {}).get("r")),
+            "lora_targets": _adapter_targets(acfg),
             "last_train_cer": evals[-1]["cer"] if evals else None,
             "full_eval_cer": full_cer,
             "line_exact": line_exact,
@@ -60,7 +98,8 @@ def results_table() -> pd.DataFrame:
             "loss_final": round(sum(m["loss"] for m in trains[-20:]) / len(trains[-20:]), 4) if trains else None,
             "steps": trains[-1]["step"] if trains else None,
             "items": len(trains),
-            "vram_gb": done[-1]["vram_gb"] if done else None,
+            "vram_gb": _peak_metric(metrics, "vram_gb"),
+            "reserved_vram_gb": _peak_metric(metrics, "reserved_vram_gb"),
             "train_min": (evals[-1].get("minutes") if evals else None)
                          or (done[-1].get("minutes") if done else None),
         })
