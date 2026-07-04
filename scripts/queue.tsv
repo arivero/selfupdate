@@ -95,3 +95,8 @@ runs/lw_i_vocab_0p6b_rag/eval/recite_long.json	3000	runs/lw_i_vocab_0p6b_rag/eva
 runs/lw_j_mistral7b_rag/eval/recite_long.json	17000	runs/lw_j_mistral7b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_j_mistral7b_rag.yaml --checkpoint runs/lw_j_mistral7b_rag/checkpoint
 runs/lw_k_gptoss_rag/checkpoint	44000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_gptoss_rag.yaml
 runs/lw_k_gptoss_rag/eval/recite.json	44000	runs/lw_k_gptoss_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_gptoss_rag.yaml --checkpoint runs/lw_k_gptoss_rag/checkpoint
+# anti-intrusion anchor arms (catastrophic-remembering mitigation at the trigger site)
+runs/lw_k_anchor_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_anchor_0p6b_rag.yaml
+runs/lw_k_anchor_0p6b_rag/eval/recite.json	3000	runs/lw_k_anchor_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_anchor_0p6b_rag.yaml --checkpoint runs/lw_k_anchor_0p6b_rag/checkpoint
+runs/lw_k_tailonly_anchor_0p6b_rag/checkpoint	11000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_tailonly_anchor_0p6b_rag.yaml
+runs/lw_k_tailonly_anchor_0p6b_rag/eval/recite.json	3000	runs/lw_k_tailonly_anchor_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_tailonly_anchor_0p6b_rag.yaml --checkpoint runs/lw_k_tailonly_anchor_0p6b_rag/checkpoint

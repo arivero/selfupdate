@@ -457,6 +457,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    anchor = _make_anchor(cfg, tok)
     online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
@@ -482,6 +483,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                 log.log(kind="train", epoch=epoch, step=step,
                         loss=sum(layer_losses) / n, per_layer=layer_losses)
                 if accum % cfg.train.grad_accum == 0:
+                    if anchor is not None:
+                        anchor_step(stack, n - cfg.train.tail_ce_blocks + 1,
+                                    anchor.next(), cfg.train.anchor_ce_weight)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()
@@ -500,6 +504,58 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
 
+class AnchorBank:
+    """Tokenized neighbor-genre fragments (blank-line separated), cycled at
+    optimizer-step boundaries for the anti-intrusion anchor."""
+
+    def __init__(self, path, tok, device, max_tokens: int = 96):
+        texts = [t.strip() for t in Path(path).read_text(encoding="utf-8").split("\n\n")
+                 if t.strip()]
+        if not texts:
+            raise ValueError(f"no anchor fragments in {path}")
+        self.ids = [torch.tensor(tok.encode(t, add_special_tokens=False)[:max_tokens],
+                                 device=device) for t in texts]
+        self.i = 0
+
+    def next(self) -> torch.Tensor:
+        ids = self.ids[self.i % len(self.ids)]
+        self.i += 1
+        return ids
+
+
+def anchor_step(stack, L0, ids, w, autocast=True):
+    """Anti-intrusion anchor: plain next-token CE on a neighbor-genre
+    fragment, gradient confined to the tail window [L0..n] (input detached
+    below the window, frozen norm/head). This counters the readout trigger
+    ("poetic Spanish -> recite the poem") exactly where catastrophic
+    remembering showed it is installed. Returns the unweighted CE value."""
+    device = ids.device
+    pos = torch.arange(len(ids), device=device)[None]
+    with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16,
+                                         enabled=autocast):
+        h = stack.embed(ids[None])
+        pos_emb = stack.rope(h, pos)
+        for L in range(1, L0):
+            h = stack.run_block(L, h, pos_emb)
+    h = h.detach()
+    with torch.autocast(device.type, dtype=torch.bfloat16, enabled=autocast):
+        for L in range(L0, stack.n_layers + 1):
+            h = stack.run_block(L, h, pos_emb)
+        logits = stack.lm_head(stack.final_norm(h))[0, :-1]
+        ce = answer_ce(logits, ids[1:])
+    (w * ce).backward()
+    return ce.item()
+
+
+def _make_anchor(cfg, tok):
+    if cfg.train.anchor_ce_weight <= 0:
+        return None
+    if cfg.train.tail_ce_blocks <= 0:
+        raise ValueError("anchor_ce_weight needs tail_ce_blocks > 0 "
+                         "(the anchor regularizes the tail window)")
+    return AnchorBank(cfg.train.anchor_path, tok, cfg.model.device)
+
+
 def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
     """Phase-2 readout training, motivated by the chimera result: storage
     trained fully block-local can be unlocked by a readout learned ON TOP of
@@ -512,6 +568,7 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
     k = cfg.train.tail_ce_blocks
     tail0 = n - k + 1
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    anchor = _make_anchor(cfg, tok)
     for L in range(1, tail0):
         stack.blocks[L - 1].requires_grad_(False)
     if not cfg.train.lora.enabled:
@@ -556,6 +613,9 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                 log.log(kind="train", epoch=epoch, step=step,
                         loss=sum(tail_losses) / k, per_layer=tail_losses)
                 if accum % cfg.train.grad_accum == 0:
+                    if anchor is not None:
+                        anchor_step(stack, tail0, anchor.next(),
+                                    cfg.train.anchor_ce_weight)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()

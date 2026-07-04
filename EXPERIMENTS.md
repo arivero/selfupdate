@@ -204,6 +204,27 @@ on neighbor-genre Spanish); gpt-oss-20b LoRA arm; maieutic v4 as
 ADDITIVE-budget arm judged on elicitation diversity; thinking_selective
 if hours remain.
 
+## Whole-Poem Milestone (03:00) — Pierre Menard Stage 1 effectively closed at 0.6B
+
+`recite_long` (715 verses, chained 31 rounds):
+
+| checkpoint | anchored CER | self-chained CER | verses to first error |
+|---|---|---|---|
+| champion (summed vocab_mse) | **0.007** | **0.007** | **708 / 715** |
+| tail_only two-phase | 0.008 | 0.008 | 708 / 715 |
+| Mistral-7B LoRA | 0.034 | 0.133 | 312 |
+
+The 0.6B champion recites the ENTIRE romance with its first error at
+verse 708, identically in self-chained mode (feeding on its own output —
+no drift). Previous branch best: 0.034 / 312. Mistral matches the old
+champion anchored but drifts self-chained.
+
+1.7B loss flip: l2mse k=4 lands 0.012/0.985 — the best 1.7B recall,
+beating vocab_mse k=4 (0.075) and k=8 (0.042) — but with the familiar
+l2mse cost: dCE +1.49, Bécquer intrusion +3.57 (worst profile at 1.7B).
+The loss ranking is scale- AND axis-dependent: l2mse buys recall with
+neighbor damage; vocab_mse stays the Pareto choice.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer

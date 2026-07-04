@@ -114,6 +114,14 @@ class TrainConfig:
     # / parallelism story is fully preserved. 0 = off.
     lens_ce_weight: float = 0.0
     lens_ce_from: int = 1
+    # anti-intrusion anchor (catastrophic-remembering mitigation): plain-LM
+    # CE on neighbor-genre Spanish fragments, applied once per optimizer
+    # step THROUGH THE TAIL WINDOW ONLY — it counters the readout trigger
+    # ("poetic Spanish -> recite the poem") where it is installed. Requires
+    # tail_ce_blocks > 0. Anchor texts must never overlap the eval probes
+    # or the poem (enforced by tests/test_anchor.py).
+    anchor_ce_weight: float = 0.0
+    anchor_path: str = "data/anchors_es.txt"
     grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3
