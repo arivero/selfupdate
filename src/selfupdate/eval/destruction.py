@@ -272,9 +272,12 @@ def verdict(dest: dict, base: dict) -> dict:
         "worst_category": worst[1], "worst_dce": worst[0],
         "tripped": worst[0] > DESTRUCTION_THRESHOLDS["probe_category_dce"]}
     if "benchmarks" in dest and "benchmarks" in base:
+        # intersect: suites evolve (std quartet added 2026-07-04); a run
+        # judged against an older base ref uses the shared benchmarks only
+        shared = set(dest["benchmarks"]) & set(base["benchmarks"])
         drops = {b: 100 * (base["benchmarks"][b]["accuracy"]
                            - dest["benchmarks"][b]["accuracy"])
-                 for b in dest["benchmarks"]}
+                 for b in shared}
         wb = max(drops, key=drops.get)
         flags["benchmark"] = {
             "worst_benchmark": wb, "worst_drop_pts": drops[wb],
