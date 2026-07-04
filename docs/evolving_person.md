@@ -131,8 +131,16 @@ Nightly (or idle-time), on the serving hardware:
      identifiable experts (C2 router probe on gpt-oss-20b), routing is
      both a scoring signal AND a parameter-selection mechanism —
      consolidate into the experts that fired, leave grammar experts
-     untouched. MoE models may make the grammar/content split
-     architectural rather than inferred.
+     untouched. **First results (`runs/moe_router_probe/router.csv`,
+     base gpt-oss-20b, 24 layers × 32 experts, top-4): routing is
+     dominated by LANGUAGE (ES vs EN mean JS 0.09, peak L23); within
+     Spanish, poem-vs-same-genre (0.021) and genre (0.027) are an
+     order of magnitude weaker, peaking at L11 — the same mid-net band
+     as the content heads. So expert selection is a coarse
+     register/language instrument, not a novelty detector, at least
+     for the base model on raw text. The sharper test — does routing
+     SHIFT after content is consolidated into the experts that fired —
+     needs a before/after pair and is future work.**
 3. **Build items**: student view = conversation with scored spans
    censored (removed or, in thinking models, selectively masked);
    teacher = same weights with full context (adapters off).

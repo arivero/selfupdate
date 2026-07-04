@@ -569,3 +569,14 @@ destructive. Saturation at 0.6B is defined by COLLATERAL, not by recall
 capacity — the model can store and address 16 chapters; it cannot yet do
 so without paying in neighboring capability. q_ch16_av2 queued to
 complete the (rung × anchors) grid.
+
+### Finding C2-15: MoE routing is a language/register instrument, not a novelty detector
+gpt-oss-20b router probe (base model, 4 text conditions, top-4/32
+experts x 24 layers): language dominates (ES-vs-EN JS 0.090-0.109,
+peak L23); within Spanish everything is an order of magnitude weaker
+(genre 0.027, poem-vs-own-genre 0.021, peak L11 — the same mid-net band
+as the attention content heads). Routing can select experts per
+register (useful for restricting consolidation params) but does not
+mark THIS text as novel on its own. Before/after-consolidation routing
+shift is the sharper follow-up (future work; needs a memorized gpt-oss
+checkpoint).
