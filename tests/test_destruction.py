@@ -20,11 +20,12 @@ def _training_grams():
     Quijote rungs (ch16 is a superset of ch1/4/8), anchor texts."""
     grams = set()
     for path in ("data/poem/raw.txt", "data/quijote/raw_ch16.txt",
-                 "data/anchors_es.txt"):
+                 "data/anchors_es.txt", "data/anchors_es_v2.txt"):
         for line in _file_lines(path):
             grams |= ngrams(line)
     # anchors are multi-line poems: catch 5-grams that span line breaks
-    for path in ("data/poem/raw.txt", "data/anchors_es.txt"):
+    for path in ("data/poem/raw.txt", "data/anchors_es.txt",
+                 "data/anchors_es_v2.txt"):
         grams |= ngrams(" ".join(_file_lines(path)))
     return grams
 

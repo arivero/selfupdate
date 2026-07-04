@@ -359,3 +359,40 @@ Sequence:
 | L40S | Qwen3-1.7B / 4B / 8B | whether readout window size scales with depth |
 | L40S / H100 | Qwen3-14B / 32B | online-teacher LoRA and memory curve |
 | H100 | MoE / 120B-class | one-block streaming and Don Quijote scale |
+
+---
+
+## CAMPAIGN 2 (2026-07-04 → 07-05): saturation, destruction v2, scale
+
+### Finding C2-1: the v2 battery relabels the C1 final recipe as destructive
+The category-resolved destruction battery (5 genres × 8 texts, benchmarks,
+intrusion bait, degeneration; thresholds pre-committed in the plan) passed
+its D1' sanity on base 0.6B (intrusion 0%, hellaswag 0.430, category CEs
+ordered as expected). First verdicts:
+
+| arm | poetry_es | prose_es | procedural | facts | prose_en | hellaswag | intrusion |
+|---|---|---|---|---|---|---|---|
+| lw_i_vocab (C1 champion) | +1.60 | +1.83 | +1.51 | +1.18 | +0.36 | −2.5 pts | **40.0%** |
+| lw_k_final_k8 (C1 final) | +0.37 | **+0.81** | +0.75 | +0.63 | +0.32 | **−7.0 pts** | **22.5%** |
+| lw_k_final_1p7b | +0.92 | +1.38 | +1.19 | +0.78 | +0.39 | −7.5 pts | 22.5% |
+| q_ch1 (40 ep) | +0.42 | +0.56 | +0.30 | +0.36 | +0.13 | ±0.0 | 17.5% |
+
+Every trained arm trips at least one threshold. The legacy 4-text mean
+(+0.51 for final_k8) hid this: damage sits in categories the C1 metric
+did not sample, and intrusion under bait prompts was never measured.
+
+### Finding C2-2: anchor-KL taught to the test
+`data/anchors_es.txt` is six POETRY fragments. final_k8's profile shows
+the fingerprint: poetry protected (+0.37, the only category under the
+0.5 threshold) while prose_es/procedural/facts absorb displaced damage.
+The C1 claim "anchor-KL halves neighbor damage" was measured on poetry
+probes — where the anchors are. Regularizer protection may not
+generalize across genre. Causal test queued: `lw_m_anchordiv` = same
+recipe, `anchors_es_v2.txt` (6 poetry + 6 multi-genre, hygiene-tested).
+
+Notes: mmlu-pro-nomath moves +0.5..+3.5 pts on some arms (n=200 ≈ noise,
+do not read); degeneration rep4 ratios all < 1 (trained arms repeat LESS
+than base greedy); intrusion is a differential instrument (base rate is
+exactly 0% on the same 40 prompts), but individual hits should be
+eyeballed — common-phrase 5-grams ("la puerta de su casa") count
+alongside unmistakable ones ("de los de lanza en").
