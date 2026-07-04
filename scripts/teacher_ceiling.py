@@ -39,13 +39,17 @@ def teacher_view(r):
         return {**r, "interleaved": [[t, False] for t, _ in r["interleaved"]]}
     return {**r, "student_stub": r.get("privileged", ""), "interleaved": None}
 
+model_short = cfg.model.name.split("/")[-1].replace("Qwen3-", "")
+data_stem = Path(cfg.data.examples_path).stem.replace("examples_", "")
 records = [teacher_view(r) for r in load_jsonl(cfg.data.examples_path)]
 if args.limit and args.limit < len(records):
     step = max(1, len(records) // args.limit)
     records = records[::step][: args.limit]  # family-balanced stride sample
 r = recite_eval(model, tok, records)
-print(f"TEACHER CEILING {cfg.run_name}: n={r['n']} cer {r['cer']:.4f} "
+print(f"TEACHER CEILING {model_short} x {data_stem}: n={r['n']} cer {r['cer']:.4f} "
       f"cer_flat {r['cer_flat']:.4f} line_exact {r['line_exact']:.4f}")
-out = Path(args.out or f"runs/teacher_ceiling_{cfg.run_name}.json")
+# name by what the measurement IS: (model x dataset). Nothing here is
+# trained or layerwise — arm names would mislabel a pure inference probe.
+out = Path(args.out or f"runs/teacher_ceiling_{model_short}_{data_stem}.json")
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(r, ensure_ascii=False, indent=1))
