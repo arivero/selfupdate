@@ -236,6 +236,44 @@ KL(base || student) on anchor text through the tail window (base logits
 from the frozen teacher copy): "on neighbor input, behave like base" is
 the correct invariant; matching gold tokens is not.
 
+## Wave K Verdicts (05:00) — the two theses close
+
+**Maieutic v4 (additive budget) wins every axis:**
+
+| eval | v2-champion | maieutic arm |
+|---|---|---|
+| recitation (v2 records) | 0.024 | **0.015** |
+| dialogue frames (maieu) | 0.921 (template-locked!) | **0.000 / 100% exact** |
+| whole v4 | — | 0.010 |
+| mean dCE | +1.01 | +1.18 |
+
+Dialogue-frame data completely cures elicitation brittleness AND improves
+plain recitation, at +0.17 nats extra forgetting. Elicitation diversity is
+now a standing recipe ingredient (the user's maieutic thesis, confirmed).
+
+**Anchor-KL halves intrusion at zero recall cost** (tail_only variants):
+
+| anchor | CER | Bécquer | mean dCE |
+|---|---|---|---|
+| CE (negative, recorded) | 0.023* | +3.73 | +1.93 |
+| none | 0.008 | +2.29 | +1.33 |
+| **KL(base||student)** | **0.010** | **+1.06** | **+0.70** |
+(*summed variant)
+
+"Behave like base on neighbor input" beats both alternatives — better
+forgetting than even the mixed schedule (+0.74) at 10x its recall.
+
+**gpt-oss-20b: honest failure (CER 1.0)** after harmony-aware eval fix.
+Combined with Phi-4-mini (0.918), a clear pattern: reasoning-tuned
+families resist recitation training under this recipe — their generation
+routes through think/analysis channels the readout training never
+touches. Non-reasoning families (Qwen3 base modes, Mistral, Llama) all
+train. Worth its own investigation at Quijote scale.
+
+**Final recipe queued** (all findings composed): vocab_mse + maieutic v4
++ tail-CE k=4 + anchor-KL, in both one-phase (summed) and two-phase
+(v4-strict body -> tail_only) forms.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer

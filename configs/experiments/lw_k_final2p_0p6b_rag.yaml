@@ -1,0 +1,21 @@
+# THE final recipe, two-phase form: v4-strict storage body + anchor-KL readout.
+run_name: lw_k_final2p_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: tail_only
+  init_from: lw_k_v4strict_0p6b_rag
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 4
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
