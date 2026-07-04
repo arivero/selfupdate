@@ -129,6 +129,7 @@ def train_kd(cfg: ExperimentConfig) -> Path:
     step = accum = 0
     stop = False
     t0 = time.time()
+    best_probe: tuple[float, float] | None = None
     for epoch in range(cfg.train.epochs):
         for items in loader:
             if stop:
@@ -188,6 +189,20 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             _log_lora_layer_norms(peft_model, run_dir, epoch)
+            score = (float(r["line_exact"]), -float(r["cer"]))
+            if peft_model is not None and (best_probe is None or score > best_probe):
+                best_probe = score
+                best_dir = run_dir / "checkpoint_probe_best"
+                peft_model.save_pretrained(best_dir)
+                tok.save_pretrained(best_dir)
+                log.log(
+                    kind="best_probe",
+                    epoch=epoch,
+                    cer=r["cer"],
+                    line_exact=r["line_exact"],
+                    prefix_lines=r["prefix_lines"],
+                    checkpoint=str(best_dir),
+                )
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
         if stop:
             break
