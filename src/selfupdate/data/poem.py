@@ -301,7 +301,7 @@ def make_catechism(
             groups.append((key, []))
         groups[-1][1].append(v.text)
     for gi, ((part, section), lines) in enumerate(groups):
-        where = _section_name(part, section)
+        where = _section_name(part, section, VERSE_STYLE)  # catechism is verse-locked
         for kind, verse in (("first", lines[0]), ("last", lines[-1])):
             q_kind = "empieza" if kind == "first" else "termina"
             specs.append(TaskSpec(
