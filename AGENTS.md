@@ -61,6 +61,9 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   job can be OOM'd later by a 3GB eval placed into its margin. Exclusive
   jobs (gpt-oss-class) should run when the queue is otherwise drained, or
   use the n_gpus exclusivity path.
+- Python urllib rejects the cluster proxy's self-signed CA; `curl` trusts
+  the system store — download external files with curl (or a curl
+  fallback), as in scripts/fetch_quijote.py.
 - GPU tests contend with campaign jobs on cuda:0 — pin with
   `CUDA_VISIBLE_DEVICES=<free>` when lanes are busy.
 
