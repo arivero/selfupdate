@@ -30,7 +30,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber")
+GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "zero")
 VOCAB_KINDS = ("vocab_mse", "lens_kl", "vocab_fisher")
 
 FISHER_TOPK = 64
@@ -52,6 +52,10 @@ def hidden_match(
     """
     teacher_h = teacher_h.float()
     student_h = student_h.float()
+    if kind == "zero":
+        # ablation-only: no hidden matching at all — the "auxiliary is 100%"
+        # control for the naming contract (keeps the graph valid and cheap)
+        return student_h.sum() * 0.0
     if kind == "nmse":
         return F.mse_loss(student_h, teacher_h) / teacher_h.pow(2).mean().clamp_min(1e-8)
     if kind == "l2mse":

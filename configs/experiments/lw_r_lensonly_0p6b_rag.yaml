@@ -1,0 +1,22 @@
+# LABELED ABLATION (naming contract, tonight-only batch): the "auxiliary
+# at 100%" control — ZERO hidden matching, only per-block local lens-CE
+# at every depth (pure Belilovsky local training). If this matches
+# lens_ce_deep-style arms, hidden matching is decoration; if it
+# collapses, hidden matching is load-bearing.
+run_name: lw_r_lensonly_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: zero
+  lens_ce_weight: 0.5
+  lens_ce_from: 1
+  lora:
+    enabled: false
