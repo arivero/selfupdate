@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Forward-Only Trajectory Matching</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="paper.css" />
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Forward-Only Trajectory Matching</h1>
+</header>
+<h1 id="forward-only-trajectory-matching-distilling-context-into-weights-one-layer-at-a-time">Forward-Only Trajectory Matching: Distilling Context into Weights, One Layer at a Time</h1>
+<p><strong>The Pierre Menard Program, Stage 1 — campaign report, 2026-07-04</strong></p>
+<p><em>selfupdate / layerwise branch · Qwen3-0.6B → 20B-class · repository: <code>supercomplex/selfupdate_lw</code></em></p>
+<hr />
+<h2 id="abstract">Abstract</h2>
+<p>We study a training regime in which a language model teaches itself a long text: the same model plays teacher (prompt contains a privileged RAG passage) and student (passage removed), and each student block is trained to reproduce the teacher’s hidden state at its own depth, with every backward pass confined to a single block. We call the regime <strong>forward-only trajectory matching</strong>: because teacher and student share architecture and initial weights, the teacher’s forward pass <em>is</em> the supervision trajectory, sampled at every layer, with no global backward anywhere in the system except one explicitly bounded top window. In a 24–40 h autonomous campaign (~50 runs, Qwen3-0.6B/1.7B plus five other model families) we find: (1) a new storage loss — MSE measured through the frozen unembedding’s Gram matrix (<code>vocab_mse</code>) — beats standard hidden-matching losses on recall <em>and</em> forgetting, and writes storage in a format portable across readouts; (2) memory storage and behavioral readout dissociate causally: storage is distributed and redundant at ~80% fractional depth, while all pathologies of the regime live in the top-<em>k</em> readout window — it is fragile, template-locked, intrusion-prone, and capacity-limited; (3) “catastrophic remembering” — damage concentrated on the memorized content’s genre neighbors — is a distinct, measurable failure mode, halved by a KL-to-base anchor through the readout window and <em>worsened</em> by a naive CE anchor; (4) Socratic (“maieutic”) dialogue frames at additive data budget cure the readout’s template lock completely while improving plain recitation; and (5) the readout window has a measurable capacity: k=4 supports any two of {elicitation diversity, anchor discipline, full-poem chain depth}, k=8 supports all three. The final 0.6B model recites the complete 715-verse <em>La tierra de Alvargonzález</em> self-chained with its first error at verse 708, answers dialogue-framed questions at 100% exact lines, and pays +0.51 nats mean general-CE — with the storage phase trainable one block at a time, the contract required for streaming this method to 120B-class models.</p>
+<hr />
+<h2 id="introduction">1. Introduction</h2>
+<p>Standard knowledge distillation and fine-tuning assign credit through a full-depth backward pass. That coupling is what makes very large models expensive to update: the whole network must be resident and connected. This work asks how much of a concrete memorization task — verbatim recall of a 715-verse poem, elicited without any retrieval context — survives when credit assignment is <strong>strictly block-local</strong>.</p>
+<p>The setting makes locality unusually cheap. Teacher and student are the <em>same</em> checkpoint; the teacher sees <code>shared_prefix | privileged | shared_mid | answer</code> while the student sees the same prompt with <code>privileged</code> deleted. At every aligned token position and every layer <code>L</code>, the teacher’s hidden state <code>h_L</code> is a well-defined vector <em>in the student’s own coordinate system</em> — no learned projection, no auxiliary head, no label. Each student block trains against its own depth’s target from a detached input; activations are detached both entering and leaving the block.</p>
+<p>Contributions, in the order the campaign produced them:</p>
+<ol type="1">
+<li><strong>A vocabulary-metric storage loss.</strong> <code>vocab_mse</code> measures hidden error as <code>‖W·Δh‖²</code> through the frozen unembedding <code>W</code> — equivalently a quadratic form under the Gram matrix <code>M = WᵀW</code>, computable with one 4 MB buffer. It is the flat local approximation of a per-layer KL through the logit lens, and it wins the loss sweep on every axis (Fig. 1).</li>
+<li><strong>A causal map of where the memory lives</strong> (Fig. 2): entry ~layer 7, redundant distributed storage at ~80% fractional depth, readout at the top; confirmed by weight-delta profiles, single-layer graft/ablate curves, logit-lens depth profiles, and cross-run delta-direction convergence.</li>
+<li><strong>Readout transplants (“chimeras”)</strong> showing storage formats are loss-specific and <code>vocab_mse</code>’s is portable — which predicted a <strong>two-phase pipeline</strong> (<code>tail_only</code>) where a readout trained on a <em>frozen, fully-locally-trained</em> body beats joint training.</li>
+<li><strong>Catastrophic remembering</strong> as a measurable failure mode with a 4-probe decomposition (drift vs intrusion), a demonstrated fix (anchor-KL) and a demonstrated anti-fix (anchor-CE) (Fig. 3).</li>
+<li><strong>Maieutic data</strong>: dialogue-framed elicitation examples that cure the readout’s template lock at additive budget.</li>
+<li><strong>Readout capacity</strong> as a budgetable quantity (Fig. 4).</li>
+</ol>
+<h2 id="related-approaches-and-alternatives">2. Related approaches and alternatives</h2>
+<p><strong>Whole-network KD</strong> (Hinton-style) matches the teacher’s output distribution and needs full-depth backward — the baseline this branch deliberately abandons. <strong>Forward-Forward</strong> trains layers on a local scalar goodness with positive/negative data, but provides no per-layer vector target. <strong>Greedy layerwise training</strong> (Bengio 2007; Belilovsky 2019) reaches the global label through per-stage auxiliary heads. <strong>Target propagation</strong> manufactures local targets with learned inverses, inheriting their approximation error. None exploit the condition that makes our targets exact and free: teacher and student sharing architecture <em>and</em> initialization, so every depth’s target already lives in the student’s coordinates.</p>
+<p>Within the design space we also evaluated and rejected alternatives: per-layer <strong>lens-KL</strong> as the storage loss (killed: 23× champion CER at ~5× compute; the unembedding only decodes final-layer geometry, so inner-layer distribution matching is noise with a gradient); <strong>CKA-style rotation-invariant losses</strong> (rejected analytically: batch-1 <code>[A,H]</code> slices are rank-deficient, and rotation invariance contradicts the frozen-readout contract); <strong>teacher-stream-only routing</strong> (<code>teacher_censored</code> alone never recites — the student must finish training on its own input distribution); <strong>catechism drills at matched budget</strong> (substituting drill items for recitation items undertrains recitation; elicitation diversity must be additive); and <strong>anchor-CE</strong> (Section 6.2).</p>
+<h2 id="method">3. Method</h2>
+<h3 id="masking-and-alignment">3.1 Masking and alignment</h3>
+<p>Every example is segmented <code>shared_prefix | privileged | shared_mid | answer</code>. The RAG passage (the relevant poem fragment with context padding) is the privileged block; the aligned span is <code>shared_mid + answer</code>. The student-side block is deleted (<code>compaction: remove</code>). Qwen3 uses RoPE with full attention, and a constant position offset is output-invariant, so all teacher/student divergence at aligned positions is attributable to attention into the privileged block — precisely the signal being distilled. A template-agnostic re-renderer (<code>chatfmt.py</code>) derives the segment pieces for any tokenizer’s chat template, which is what lets the same records drive Llama, Mistral, Phi and gpt-oss unchanged.</p>
+<h3 id="losses">3.2 Losses</h3>
+<p>Geometric hidden-matching kinds, per aligned position:</p>
+<ul>
+<li><code>nmse</code>: <code>mse(h_s, h_t) / mean(h_t²)</code> — scale-comparable across layers.</li>
+<li><code>l2mse</code>: MSE between L2-normalized vectors (direction only).</li>
+<li><code>cosine</code>: <code>1 − cos(h_s, h_t)</code> (direction only, linear near optimum).</li>
+<li><code>huber</code>: smooth-L1 in units of the teacher RMS.</li>
+</ul>
+<p>Vocabulary-metric kinds decode through the <strong>frozen</strong> final norm + head:</p>
+<ul>
+<li><code>vocab_mse</code>: <code>‖W·Δh‖² / ‖W·h_t‖²</code> = <code>ΔhᵀMΔh</code> with <code>M = WᵀW</code> precomputed once ([H×H], fp32). MSE in logit space at hidden-space cost.</li>
+<li><code>lens_kl</code>: full <code>KL(lens(h_t) ‖ lens(h_s))</code> per position — the exact objective whose local quadratic approximation (Fisher pullback <code>Wᵀ(diag(p) − ppᵀ)W</code>) <code>vocab_mse</code> flattens.</li>
+</ul>
+<p><strong>Frozen-vocabulary principle.</strong> The embedding, final norm and LM head are never trained, under any schedule or auxiliary: they are the fixed basis every lens and every cached target is expressed in (and on tied models the logit matrix <em>is</em> the embedding transpose). This is enforced four ways: <code>requires_grad=False</code>, block-only optimizers, gradient- confinement tests, and a runtime signature tripwire that refuses to save a checkpoint if these tensors changed. Verified bitwise on trained checkpoints (max |Δ| = 0.0).</p>
+<h3 id="schedules-input-routing">3.3 Schedules (input routing)</h3>
+<ul>
+<li><code>summed</code>: block L consumes the student’s own (drifting) stream, detached; every block gets its local loss on every item.</li>
+<li><code>sequential</code>: one block trains to plateau at a time over a frozen prefix — the one-block-at-a-time streaming contract.</li>
+<li><code>teacher_censored</code>: block L consumes the <em>teacher’s</em> <code>h_{L−1}</code> with privileged rows deleted (teacher position ids kept). Inputs are stationary and layers independent — embarrassingly parallel.</li>
+<li><code>mixed</code>: per-item Bernoulli between the two streams with the teacher-branch probability annealed 1→0 over epochs (scheduled sampling across depth).</li>
+<li><code>tail_only</code>: body frozen (from <code>init_from</code>), only the top-k window trains — phase 2 of the two-phase pipeline.</li>
+</ul>
+<h3 id="readout-auxiliaries">3.4 Readout auxiliaries</h3>
+<p>Strict hidden matching stores but does not recite (Section 5.2). The bounded concession is <strong>tail-CE</strong>: the final <code>k</code> blocks train as one connected graph so a gold-answer CE at the top can assign credit within the window; everything below stays block-local. The <strong>anchor</strong> regularizes the same window on neighbor-genre Spanish fragments once per optimizer step: <code>anchor-CE</code> (next-token CE — a recorded negative) or <code>anchor-KL</code> (<code>KL(base ‖ student)</code> against precomputed base-model logits — the corrected form).</p>
+<h3 id="data">3.5 Data</h3>
+<p><code>v2</code> (333 examples): sliding recitation windows, sections, paraphrased templates, long windows (24/48 verses). <code>v3</code> (+catechism drills): follow/precede/cloze/anchor Q&amp;A. <code>v4</code> (+<strong>maieutic frames</strong>, 141): five rotating Spanish dialogue templates (Socratic exchange, classroom scene, missing page, citation check, small talk) that <em>elicit</em> verse windows; answers stay verbatim verses so all masking/eval machinery is unchanged.</p>
+<h3 id="metrics">3.6 Metrics</h3>
+<p>Full-corpus recitation CER and line-exact fraction (never the 8-example training subset); whole-poem chained recitation (anchored and self-chained; verses until first error, out of 715); <strong>forgetting</strong> as Δ general-CE vs per-model base references on four held-out probes (Spanish romantic poetry, Spanish facts, English prose, Spanish procedural text), whose <em>profile</em> separates uniform drift from genre-targeted <strong>intrusion</strong>; and elicitation generalization (CER on the 141 maieutic frames).</p>
+<h2 id="experimental-setup">4. Experimental setup</h2>
+<p>Qwen3-0.6B (28 layers) for mechanics; Qwen3-1.7B/4B/8B, Llama-3.1-8B, Mistral-7B-Instruct, Phi-4-mini-reasoning, gpt-oss-20b (MoE) for scale and generality; 4× NVIDIA L40S (46 GB). Full fine-tuning at 0.6B/1.7B (fp32 masters, bf16 autocast, one optimizer per block); LoRA r16 with the <strong>online teacher</strong> (adapters-off = frozen teacher, no disk cache) for ≥4B and non-Qwen families. Matched item budgets throughout (40 epochs × 333 = 13,320 items on v2; the v4 arm is explicitly additive at 18,960). Teacher hidden states via fp16 per-layer disk caches (hash-keyed by model+data+mask) or computed online. All runs, metrics and evals are in the repository (<code>runs/results.md</code>, <code>runs/report.pdf</code>).</p>
+<h2 id="results">5. Results</h2>
+<h3 id="the-loss-decides-what-is-written-not-just-how-fast">5.1 The loss decides what is written, not just how fast</h3>
+<figure>
+<img src="figs/fig1_losses.png" alt="Fig. 1 — loss sweep" /><figcaption aria-hidden="true">Fig. 1 — loss sweep</figcaption>
+</figure>
+<p><em>Figure 1: Wave I loss sweep at the champion operating point. <code>vocab_mse</code> wins recall (CER 0.024 vs incumbent 0.112) and pays the least forgetting of any tail arm. <code>l2mse</code> posts strong recall but the worst forgetting; <code>lens_kl</code> is Pareto-dominated at ~5× compute.</em></p>
+<p>Weight-space analysis sharpens the claim: delta-direction cosine across runs shows huber≈nmse are the <em>same</em> trajectory (0.95–0.99), l2mse nearby (0.87–0.91), while <code>vocab_mse</code> writes a substantially different solution (0.48–0.70 vs all others) — and the best one. Measuring error as the vocabulary sees it changes <em>what</em> is stored.</p>
+<p><strong>Portability (chimeras).</strong> Transplanting the k=4 readout between checkpoints of different losses is asymmetric: a foreign (l2mse) readout decodes <code>vocab_mse</code>’s body almost as well as its own (CER 0.109 vs 0.024), the reverse fails (0.595), and a readout grafted onto a <em>strict-only</em> body that never recited alone (0.85/0 %) unlocks 40 % exact lines. Each loss writes storage in its own format; the Gram metric writes in the one format every readout natively consumes.</p>
+<h3 id="where-the-memory-lives">5.2 Where the memory lives</h3>
+<figure>
+<img src="figs/fig2_layers.png" alt="Fig. 2 — layers" /><figcaption aria-hidden="true">Fig. 2 — layers</figcaption>
+</figure>
+<p><em>Figure 2: (a) weight-delta mass concentrates at L22–24 of 28 (~80 % fractional depth — the same fraction at 1.7B), with a local bump at the L7 context-entry point. (b) Reverting single layers below the tail barely hurts (l2mse survives reverts of its two most-modified layers at CER 0.00) — storage is redundant. Reverting any one tail block destroys recitation — the readout is a fragile co-adapted circuit.</em></p>
+<p>Logit-lens depth profiles agree: the gold token is undecodable through L1–20 and assembles steeply from L22 — including in strict runs that never recite, proving storage exists without behavior. At fixed loss, tail and strict runs share their sub-tail weight deltas almost exactly (cos 0.99+): tail-CE re-carves only the readout, never the storage.</p>
+<p><strong>Two-phase training.</strong> These facts predict that the readout can be trained <em>after</em> storage, on a frozen body. It can: <code>tail_only</code> on a frozen strict-trained body reaches CER <strong>0.008</strong> — better than joint training (0.024) — turning the whole pipeline into an embarrassingly parallel storage phase plus one bounded window phase.</p>
+<h3 id="routing">5.3 Routing</h3>
+<p>Pure teacher-stream training (<code>teacher_censored</code>) never produces recitation (CER 0.84–0.87) regardless of backend; the annealed <code>mixed</code> curriculum recovers champion-level subset recall (full CER 0.110) with the least forgetting of the v2 arms (+0.74). The student must finish training on its own input distribution; stationary teacher inputs are a storage device, not a behavior device.</p>
+<h3 id="scale-and-families">5.4 Scale and families</h3>
+<p>At 1.7B the readout window does <strong>not</strong> need to grow (k=2 reaches CER 0.087 after a late convergence; k=4 0.075; k=8 0.042), and the loss ranking is scale- and axis-dependent: l2mse wins raw recall at 1.7B (0.012) but with the worst intrusion profile (+3.57 on the poetry probe). The same code drives <strong>Mistral-7B</strong> to near-champion recitation (0.054, LoRA online) and trains Llama-3.1-8B and Qwen-4B/8B with no family-specific changes. <strong>Reasoning-tuned models resist the recipe</strong> (Phi-4-mini 0.918; gpt-oss-20b 1.0 after harmony-aware eval normalization): their output routes through think/analysis channels the readout window never trains — the sharpest open question for scaling.</p>
+<h3 id="catastrophic-remembering-and-the-anchor-arc">5.5 Catastrophic remembering and the anchor arc</h3>
+<figure>
+<img src="figs/fig3_intrusion.png" alt="Fig. 3 — intrusion" /><figcaption aria-hidden="true">Fig. 3 — intrusion</figcaption>
+</figure>
+<p><em>Figure 3: per-probe forgetting decomposition on tail_only arms of equal recall. Damage concentrates on the memorized content’s nearest genre neighbor (Spanish romantic poetry) — intrusion, not drift. A naive CE anchor on six fixed neighbor fragments amplifies it (the regularizer becomes another memorized poem); KL-to-base through the window halves it.</em></p>
+<p>Strict (storage-only) arms show a <em>flat</em> damage profile: the intrusion trigger is installed by readout training. Qualitatively, tail-trained checkpoints continue a Bécquer prompt with Machado material (violet- mountain imagery, the mother’s death) while the base model merely repeats itself. The metrology is cheap — four forward passes — and we propose reporting <em>both</em> the mean ΔCE and its profile for any memorization fine-tune.</p>
+<h3 id="elicitation-brittleness-and-the-maieutic-cure">5.6 Elicitation brittleness and the maieutic cure</h3>
+<p>The v2 champion collapses from CER 0.024 to <strong>0.921</strong> when the same verses are requested through dialogue frames it never saw: the readout is template-locked. Adding 141 maieutic frames (additive budget) yields CER <strong>0.000 (100 % exact)</strong> on dialogue elicitation <em>and improves</em> plain recitation to 0.015. At 1.7B the effect transfers unchanged (dialogue 0.000). Elicitation diversity trains the readout’s triggers, not the storage — consistent with the storage/readout decomposition — and must be <em>additive</em>: substituting drills for recitation at matched budget (v3) undertrains recitation (0.711).</p>
+<h3 id="readout-capacity-and-the-final-recipe">5.7 Readout capacity and the final recipe</h3>
+<figure>
+<img src="figs/fig4_capacity.png" alt="Fig. 4 — capacity" /><figcaption aria-hidden="true">Fig. 4 — capacity</figcaption>
+</figure>
+<p><em>Figure 4: whole-poem self-chained recitation. Maieutic data and anchor-KL are each free individually (708/715 verses to first error), but combined they saturate the k=4 window (431 one-phase, 231 two-phase). Widening to k=8 restores 708 while keeping every other gain.</em></p>
+<p><strong>Final recipe</strong> — <code>vocab_mse</code> + maieutic v4 + tail-CE <strong>k=8</strong> + anchor-KL 0.5:</p>
+<table>
+<thead>
+<tr class="header">
+<th>axis</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>recitation (full corpus)</td>
+<td>CER 0.015 / 98.6 % exact</td>
+</tr>
+<tr class="even">
+<td>dialogue elicitation</td>
+<td>CER 0.001 / 100 % exact</td>
+</tr>
+<tr class="odd">
+<td>whole poem, self-chained</td>
+<td>CER 0.007, first error at verse 708/715</td>
+</tr>
+<tr class="even">
+<td>poetry-neighbor intrusion</td>
+<td>+0.65 nats (campaign best)</td>
+</tr>
+<tr class="odd">
+<td>mean forgetting</td>
+<td>+0.51 nats (campaign best)</td>
+</tr>
+</tbody>
+</table>
+<p>Seed-replicated (k=4 one-phase variant: 0.009 @ s17, 0.012 @ s43); at 1.7B the recipe scores 0.021 — 3.5× better than the plain champion recipe at the same scale.</p>
+<h2 id="negative-results-kept-on-purpose">6. Negative results (kept on purpose)</h2>
+<ol type="1">
+<li><strong>lens_kl</strong> as storage loss: Pareto-dominated; inner-layer lens distributions are miscalibrated because the unembedding only decodes final-layer geometry.</li>
+<li><strong>anchor-CE</strong>: fixed-fragment CE is memorization pressure — it <em>increased</em> poetry-neighbor damage from +2.29 to +3.57 nats.</li>
+<li><strong>teacher-stream-only routing</strong>: stores but never recites.</li>
+<li><strong>catechism at matched budget</strong>: elicitation diversity by substitution undertrains recitation; it must be additive.</li>
+<li><strong>LoRA as forgetting protection</strong>: Qwen-8B LoRA still pays +1.30 nats; the adapter bound does not prevent intrusion.</li>
+<li><strong>Reasoning-tuned families</strong>: the recipe fails on think/analysis- channel models as-is.</li>
+</ol>
+<h2 id="limitations-and-future-work">7. Limitations and future work</h2>
+<p>Single poem, single language, one model lineage fully mapped (Qwen3) — the causal picture should be replicated on a second corpus before the fractional-depth claims harden. The window-capacity result (k=4 holds two of three demands, k=8 all three) begs a scaling law: capacity as a function of k, model width, and content size — the Don Quijote question in miniature. The designed-but-unbuilt <code>thinking_selective</code> mask (censor only quoted verses inside reasoning traces, keep free deduction) is now doubly motivated by the reasoning-family failure. The tuned-lens program (per-layer translators for calibrated depth profiles) remains open, as does a broader rotating anchor corpus.</p>
+<h2 id="conclusion">8. Conclusion</h2>
+<p>With exact per-depth targets from a shared-initialization teacher, block-local training stores a 715-verse poem redundantly and portably; a bounded top window turns storage into behavior; and every pathology of the process — template lock, genre intrusion, capacity saturation — lives in that window, where it can be measured, priced, and fixed. The storage phase never needs more than one block in memory. Pierre Menard, Stage 1, closes at 0.6B with the poem recited whole; the machinery that did it is the same machinery designed to stream one block of a 120B-class model at a time.</p>
+<hr />
+<p><em>Artifacts: <code>EXPERIMENTS.md</code> (closing table and chronology), <code>runs/report.pdf</code> (per-run appendix; archived copy alongside this paper), <code>runs/results.md</code>, <code>runs/curves.png</code>, <code>runs/forget_curves.png</code>, <code>docs/hidden_loss.md</code>, <code>docs/forward_trajectory.md</code>. Figures reproducible via <code>paper/make_figs.py</code> from run artifacts.</em></p>
+</body>
+</html>
