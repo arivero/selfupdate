@@ -55,6 +55,14 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   the first step.
 - Do not sweep Lustre with broad recursive search. Search inside the repo only,
   and prefer `git ls-files` / `rg`.
+- `kernels` must stay `==0.12.0` with transformers 5.12.1: 0.16 breaks ALL
+  model loading (`ValueError: Either a revision or a version ...`).
+- Scheduler VRAM reservations are launch-time checks, not leases: a 40GB
+  job can be OOM'd later by a 3GB eval placed into its margin. Exclusive
+  jobs (gpt-oss-class) should run when the queue is otherwise drained, or
+  use the n_gpus exclusivity path.
+- GPU tests contend with campaign jobs on cuda:0 — pin with
+  `CUDA_VISIBLE_DEVICES=<free>` when lanes are busy.
 
 ## L40S Cluster Environment
 
