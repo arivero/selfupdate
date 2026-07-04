@@ -67,7 +67,18 @@ At Qwen3-0.6B, v2 data, matched 13.3k-item budgets, full-corpus eval:
    template-agnostic masking); gpt-oss-20b's MoE blocks run the local
    steps too (OOM only at the connected tail on a shared card).
 
-## Open questions the remaining waves address
+## Campaign appendix (2026-07-04, waves complete)
+
+The open questions below were answered: routing needs a student-stream
+finish (`mixed` anneal works, pure teacher-stream never recites); the
+readout window does not grow with depth (k=2 viable at 1.7B); LoRA does
+not inherently protect against forgetting; elicitation-diverse (maieutic)
+data cures the readout's template lock at additive budget while IMPROVING
+recitation; KL-to-base through the window halves intrusion while naive CE
+anchoring backfires; and the window has a measurable capacity — trigger
+diversity, anchor discipline, and full chain depth cannot all fit in k=4.
+
+## Open questions the remaining waves addressed
 
 - Input routing: does a layer learn its increment best from the student's
   drifting stream (summed), the teacher's stationary stream

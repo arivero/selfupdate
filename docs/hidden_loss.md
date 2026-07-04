@@ -111,15 +111,32 @@ can assign credit within that bounded window.
 - `teacher_censored`: each block consumes the teacher stream with privileged
   rows removed, making layers independent and stationary.
 
-## Current Mechanistic Picture
+## Current Mechanistic Picture (2026-07-04 campaign-final)
 
-Strict hidden matching learns storage but leaves the final readout weak.
-Tail-CE shows that a small co-trained top window can turn the stored signal
-into behavior. This supports the working decomposition:
+Storage and readout dissociate, causally:
 
-- storage: distributed below the tail, learnable by forward hidden matching
-- readout: compact and co-adapted in the final blocks
+- **storage**: distributed and REDUNDANT across the upper-middle stack
+  (delta mass peaks at ~80% fractional depth at 0.6B and 1.7B alike;
+  single-layer ablations below the tail are harmless). Best written by
+  `vocab_mse` — measuring hidden error through the frozen vocabulary's
+  Gram matrix — whose format is PORTABLE: foreign readouts decode it
+  (chimera transplants), and a readout trained post-hoc on a frozen
+  strict body beats joint training (`tail_only`, 0.008 vs 0.024).
+- **readout**: a fragile, co-adapted circuit in the top k blocks where
+  every pathology lives. It is template-locked (recitation-trained
+  readouts collapse 0.024 -> 0.92 under dialogue framing; cured by
+  maieutic elicitation-diverse data), intrusion-prone ("catastrophic
+  remembering": damage concentrates on neighbor-genre Spanish poetry,
+  halved-to-thirded by anchor-KL to the base model, WORSENED by naive
+  anchor-CE), and capacity-limited (k=4 serves any two of trigger
+  diversity / anchor discipline / full 715-verse chain depth, not all
+  three).
+- Context enters the computation near L7 (`teacher_censored` increments);
+  content is written at ~80% depth; behavior is decoded at the top.
+- Reasoning-tuned families (Phi-4-mini, gpt-oss) resist the recipe:
+  their output routes through think/analysis channels the readout never
+  trains. Non-reasoning families (Qwen3, Mistral, Llama) all train.
 
-The current champion is the v2-data `tail_ce` run with `k=4`, which gives the
-best full-corpus and anchored whole-poem recitation among layerwise methods in
-the repo artifacts.
+Final recipe and closing table: EXPERIMENTS.md. The 0.6B one-phase
+champion recites the full 715-verse romance self-chained, first error at
+verse 708.
