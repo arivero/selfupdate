@@ -1,7 +1,9 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-03 evening - branch refocused on layerwise forward
-distillation only.
+Updated: 2026-07-04 morning - 24-40h campaign (Waves I/J/K + understanding
+probes) complete; final recipe = vocab_mse + maieutic v4 data + tail-CE
+k=4 + anchor-KL, one- or two-phase. Chronological findings below; the
+campaign closing table is in "Wave K Verdicts" + "Final Recipe".
 
 Metrics: `runs/results.md` (auto) | report: `runs/report.pdf` | raw logs:
 `runs/*/metrics.jsonl` and `runs/pipeline_*.log`.
@@ -16,26 +18,34 @@ produces behavior. "Good" means:
 - has measurable forgetting/general-CE cost
 - scales to online-teacher LoRA and one-block-at-a-time training
 
-## Active Loss Search
+## Loss Search — FINAL STATE (2026-07-04)
 
-| candidate | locality | status |
-|---|---|---|
-| `nmse` / `l2mse`, summed and sequential | strict one-block | stores signal, weak free-run behavior |
-| `teacher_censored` | strict one-block, independent layers | best strict localization readout; context integration peaks near layer 7 |
-| last-block CE | strict one-block | insufficient: one block cannot coordinate the readout alone |
-| lens-CE on deep/all blocks | strict one-block | active strict-local behavioral auxiliary |
-| tail-CE, `k=1/2/4` | bounded `k`-block top window | best current path |
-| tail-CE on v2 data, `k=4` | bounded 4-block top window | current champion: CER 0.112 / 90.5% exact; whole-poem anchored CER 0.034 |
+| candidate | status |
+|---|---|
+| **vocab_mse** (Gram metric W^T W) | **champion storage loss**: best recall, least forgetting, PORTABLE storage format (chimeras) |
+| l2mse | recall-strong but worst intrusion; wins raw CER at 1.7B (0.012) — scale/axis dependent |
+| nmse / huber | same weight-space trajectory (delta-cos 0.95+); dominated |
+| cosine | dominated |
+| lens_kl | killed (0.565 @ 5x compute; inner-layer lens miscalibrated) |
+| tail-CE k=4 | the readout concession; k does NOT grow with depth (k=2 viable at 1.7B) |
+| **tail_only two-phase** | fully-local storage + bounded readout phase BEATS joint training (0.008 vs 0.024) |
+| **anchor-KL** | halves-to-thirds intrusion at zero recall cost (summed: Bécquer +0.71, mean +0.50) |
+| anchor-CE | recorded negative: fixed-fragment CE worsens intrusion |
+| **maieutic v4 data** | cures elicitation brittleness (0.921 -> 0.000) AND improves recitation (0.015) |
 
 ## Current Interpretation
 
-Hidden matching appears to learn distributed storage below the top blocks.
-Free-run recitation depends on a co-adapted readout circuit in the final
-blocks. The practical program is therefore:
-
-1. Keep forward hidden matching as the storage signal.
-2. Add only bounded, explicit readout credit where needed.
-3. Measure how small that concession can be as model size and data improve.
+Confirmed causally during the campaign: storage is distributed and
+REDUNDANT across the upper-middle stack (peak deposits at ~80% depth,
+single-layer ablations harmless, fractionally constant across scales);
+the readout is a fragile, co-adapted, TEMPLATE-LOCKED, intrusion-prone
+circuit in the top k blocks. Every pathology and every fix of this
+regime lives in the readout: tail-CE installs behavior (and the
+intrusion trigger), anchor-KL disciplines it, maieutic data diversifies
+its triggers, and the two-phase split shows it can be trained after the
+fact on a frozen fully-local body. Reasoning-tuned families (Phi,
+gpt-oss) resist the recipe — their output routes through think/analysis
+channels the readout never trains; open question for Quijote scale.
 
 ## Queue State
 

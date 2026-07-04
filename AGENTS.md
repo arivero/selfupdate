@@ -129,6 +129,10 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Current Pointer
 
-The current best direction is layerwise hidden matching plus bounded tail CE
-on v2 data (`tail_ce_blocks=4`). Next work should tighten this result, test
-which readout concessions are truly necessary, and scale the same loss family.
+The final campaign recipe (2026-07-04): `hidden_loss: vocab_mse` +
+maieutic v4 data (`examples_v4.jsonl`) + `tail_ce_blocks: 4` +
+`anchor_kl_weight: 0.5` (+ `frozen_teacher_copy` for full-FT). Two-phase
+form (strict body then `schedule: tail_only` with `init_from`) matches or
+beats joint training and keeps storage fully block-local. Next work:
+scale the final recipe (1.7B+, families), the reasoning-family question,
+thinking_selective masking (designed, unbuilt — see plan file).

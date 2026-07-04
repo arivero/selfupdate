@@ -52,11 +52,16 @@ See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 
 ## Current Finding
 
-Strict one-block hidden matching stores useful recall but does not by itself
-produce free-run recitation. The best current lever is `tail_ce_blocks`: keep
-hidden-state matching everywhere, but connect only the final `k` blocks so a
-gold answer CE can train a small readout circuit. The champion layerwise run
-reported in `EXPERIMENTS.md` uses `k=4` and v2 data.
+Storage and readout dissociate. Hidden matching writes distributed,
+redundant storage (best metric: `vocab_mse`, MSE in the frozen
+vocabulary's coordinates — portable across readouts); a bounded tail
+window turns it into behavior, and can even be trained as a second phase
+on a frozen fully-local body (`tail_only`). The readout is where the
+pathologies live: it is template-locked (cured by maieutic dialogue
+data) and intrudes on neighbor-genre text ("catastrophic remembering",
+halved by an anchor-KL to the base model). Final recipe and the full
+evidence chain: `EXPERIMENTS.md`. 0.6B recites the whole 715-verse
+romance self-chained with its first error at verse 708.
 
 ## Bootstrap
 
