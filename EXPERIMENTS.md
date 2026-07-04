@@ -657,3 +657,26 @@ groove depth (falls with scale under LoRA, RISES under full-FT at
 matched items?) — 1.7B full-FT sees the same items move 3x the params.
 Standard suite (mmlu/arc/winogrande) now live in all new batteries;
 base 0.6B: hs .430 / mmlu .350 / arc .345 / wino .565.
+
+### Finding C2-20: the (rung × anchors) grid completes — ch16_av2 passes recall and intrusion, fails capability
+q_ch16_av2 (40ep from scratch, v2 anchors): cer_flat 0.065 (vs 0.078
+v1-ext), intrusion exactly 10.0% (borderline PASS — dilution at 16
+chapters), but facts +0.61 / arc −6.0 / hellaswag −6.5 / winogrande
+−5.0 → DESTRUCTIVE on probes+benchmarks. The ladder's final picture at
+0.6B: recall and intrusion both improve with corpus size and anchors;
+CAPABILITY cost is what grows with content — the destruction envelope
+statement of C2-14 sharpened to its capability component. fig5
+regenerated with the full grid.
+
+### Finding C2-21 (ABLATION-CLASS, tail-only — hard-stop batch): at 4B the
+window alone recites
+lw_l_tailonly_4b (full-FT of ONLY the k=8 tail window from base, body
+untouched, no LoRA): CER 0.013 / line_exact 0.986 — champion-level
+recall with zero body training, no LoRA damage vehicle. Read under the
+doctrine: this is the strongest possible statement of the referee's
+objection — at 4B the poem fits entirely inside a trained readout
+window, so any tail-carrying method must prove its body matters
+(attribution + ablations), and the connectivity law must beat this
+number honestly. Destruction verdict lands after the verdict() fix.
+Classical-side baseline; belongs conceptually to ../selfupdate_kd
+territory and is reported here as the labeled boundary stone.
