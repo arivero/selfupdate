@@ -1,36 +1,33 @@
 # Issues / Follow-Ups
 
-This file tracks current branch-local engineering work after the refocus to
-layerwise forward distillation.
+Post-campaign state (2026-07-04). The 24-40h campaign is recorded in
+EXPERIMENTS.md (closing table) and runs/report.pdf.
 
-## Active
+## Done (campaign, 2026-07-03/04)
 
-1. Rebuild teacher hidden-state caches with schema 3 after removing cached
-   logit payloads.
-2. Add a small smoke test that `scripts/train.py` rejects non-layerwise
-   methods with a clear error.
-3. Tuned-lens infrastructure: per-layer translator training on the frozen
-   base model + translator support in `eval/logit_lens.py` and
-   `scripts/logit_lens.py`. Vocabulary stays frozen (see
-   `docs/hidden_loss.md`).
-4. Drain the frozen eval queues (recite_long for the champion, 14B recite,
-   logit_lens/layer_swap backlog) before new training.
+- Schema-3 caches rebuilt (v1/v2/v3/v4 at 0.6B; v2/v4 at 1.7B).
+- Full test suite green throughout (52 tests at close).
+- smoke test for non-layerwise rejection: superseded by the loss/schedule
+  registries raising ValueError (covered by tests).
+- Wave I-K: loss sweep, routing, scale, families, understanding probes,
+  innovation arms — see EXPERIMENTS.md.
+- Artifacts: results.md / curves.png / forget_curves.png / report.pdf.
 
-## Done (2026-07-03)
+## Future Work
 
-- Full test suite re-run after the layerwise-only cleanup: 34/34 pass.
-- `runs/results.md`, `runs/curves.png`, `runs/report.pdf` regenerated.
-- Scheduler audit: no detached schedulers or GPU jobs live; all queues
-  frozen with eval-only entries.
-
-## Research
-
-1. Lens program (Wave I) - see `EXPERIMENTS.md`: tuned-lens depth
-   profiles of existing checkpoints, then tuned-lens-CE vs raw lens-CE vs
-   tail-CE at matched item budgets.
-2. Measure whether the best `tail_ce_blocks` value changes with model depth.
-3. Extend `teacher_censored` to larger checkpoints and log per-layer
-   increment profiles.
-4. Implement streamed block load/offload for the sequential large-model path.
-5. Embedding-lens probe on untied checkpoints (8B+), where input and output
-   vocabularies genuinely differ.
+1. **Window capacity**: if final_k8 did not restore the 708-verse chain,
+   build v4.1 with extra long-window replicas (the dilution hypothesis);
+   study k as a budgetable capacity (triggers vs anchors vs depth).
+2. **thinking_selective mask** (1d): full design in the campaign plan file
+   (multi-privileged-span masking, find_poem_spans matcher,
+   prefix-truncation fallback). Context update: reasoning-tuned families
+   RESIST the recipe (Phi 0.918, gpt-oss 1.0) — selective think-censoring
+   may be the way readout training reaches their output channels.
+3. **Reasoning-family question**: why think/analysis-channel models fail;
+   try training with the channel present in the student prompt.
+4. **Tuned-lens program** (Wave I plan, still pending): per-layer
+   translators for calibrated depth profiles; tuned-lens-CE auxiliary.
+5. **Scale**: final recipe at 4B/8B full-FT (sequential/tail_only for
+   VRAM), 14B+ LoRA; Don Quijote data engineering.
+6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
+   larger corpus may improve anchor-KL further.
