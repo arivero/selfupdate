@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -457,7 +458,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-    anchor = _make_anchor(cfg, tok)
+    anchor = _make_anchor(cfg, tok, teacher)
     online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
@@ -484,8 +485,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                         loss=sum(layer_losses) / n, per_layer=layer_losses)
                 if accum % cfg.train.grad_accum == 0:
                     if anchor is not None:
+                        a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.tail_ce_blocks + 1,
-                                    anchor.next(), cfg.train.anchor_ce_weight)
+                                    a_ids, anchor[1], base_logits=a_base)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()
@@ -515,20 +517,45 @@ class AnchorBank:
             raise ValueError(f"no anchor fragments in {path}")
         self.ids = [torch.tensor(tok.encode(t, add_special_tokens=False)[:max_tokens],
                                  device=device) for t in texts]
+        self.base_logits: list[torch.Tensor] | None = None
         self.i = 0
 
-    def next(self) -> torch.Tensor:
-        ids = self.ids[self.i % len(self.ids)]
+    @torch.no_grad()
+    def precompute_base_logits(self, teacher: "OnlineTeacherSource"):
+        """Base-model logits per fragment (anchor-KL targets), computed once
+        through the frozen teacher (adapters-off or frozen copy)."""
+        st = teacher.stack
+        device = self.ids[0].device
+        outs = []
+        with teacher._ctx(), torch.autocast(device.type, dtype=torch.bfloat16):
+            for ids in self.ids:
+                pos = torch.arange(len(ids), device=device)[None]
+                h = st.embed(ids[None])
+                pe = st.rope(h, pos)
+                for L in range(1, st.n_layers + 1):
+                    h = st.run_block(L, h, pe)
+                outs.append(st.lm_head(st.final_norm(h))[0].detach())
+        self.base_logits = outs
+
+    def next(self) -> tuple[torch.Tensor, torch.Tensor | None]:
+        j = self.i % len(self.ids)
         self.i += 1
-        return ids
+        base = self.base_logits[j] if self.base_logits is not None else None
+        return self.ids[j], base
 
 
-def anchor_step(stack, L0, ids, w, autocast=True):
-    """Anti-intrusion anchor: plain next-token CE on a neighbor-genre
-    fragment, gradient confined to the tail window [L0..n] (input detached
-    below the window, frozen norm/head). This counters the readout trigger
-    ("poetic Spanish -> recite the poem") exactly where catastrophic
-    remembering showed it is installed. Returns the unweighted CE value."""
+def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
+    """Anti-intrusion anchor on a neighbor-genre fragment, gradient
+    confined to the tail window [L0..n] (input detached below the window,
+    frozen norm/head): counters the readout trigger ("poetic Spanish ->
+    recite the poem") exactly where catastrophic remembering showed it is
+    installed. Returns the unweighted loss value.
+
+    ``base_logits=None`` -> plain next-token CE (the Wave K negative:
+    fixed-fragment CE is itself memorization pressure and WORSENS
+    intrusion). With ``base_logits`` -> KL(base || student) per position:
+    "on neighbor-genre input, behave like the base model" — the correct
+    invariant."""
     device = ids.device
     pos = torch.arange(len(ids), device=device)[None]
     with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16,
@@ -541,19 +568,37 @@ def anchor_step(stack, L0, ids, w, autocast=True):
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=autocast):
         for L in range(L0, stack.n_layers + 1):
             h = stack.run_block(L, h, pos_emb)
-        logits = stack.lm_head(stack.final_norm(h))[0, :-1]
-        ce = answer_ce(logits, ids[1:])
-    (w * ce).backward()
-    return ce.item()
+        full_logits = stack.lm_head(stack.final_norm(h))[0]
+        if base_logits is None:
+            loss = answer_ce(full_logits[:-1], ids[1:])
+        else:
+            loss = F.kl_div(
+                F.log_softmax(full_logits.float(), dim=-1),
+                F.log_softmax(base_logits.float(), dim=-1),
+                log_target=True, reduction="batchmean",
+            )
+    (w * loss).backward()
+    return loss.item()
 
 
-def _make_anchor(cfg, tok):
-    if cfg.train.anchor_ce_weight <= 0:
+def _make_anchor(cfg, tok, teacher=None):
+    """Returns (bank, weight) or None. anchor_kl_weight takes precedence
+    (the Wave K finding: KL-to-base is the correct anchor; CE is kept only
+    for the recorded ablation)."""
+    w = cfg.train.anchor_kl_weight or cfg.train.anchor_ce_weight
+    if w <= 0:
         return None
     if cfg.train.tail_ce_blocks <= 0:
-        raise ValueError("anchor_ce_weight needs tail_ce_blocks > 0 "
+        raise ValueError("anchor weights need tail_ce_blocks > 0 "
                          "(the anchor regularizes the tail window)")
-    return AnchorBank(cfg.train.anchor_path, tok, cfg.model.device)
+    bank = AnchorBank(cfg.train.anchor_path, tok, cfg.model.device)
+    if cfg.train.anchor_kl_weight > 0:
+        if teacher is None:
+            raise ValueError("anchor_kl_weight needs an online teacher for "
+                             "base logits: enable train.frozen_teacher_copy "
+                             "or LoRA + train.online_teacher")
+        bank.precompute_base_logits(teacher)
+    return bank, w
 
 
 def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
@@ -568,7 +613,7 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
     k = cfg.train.tail_ce_blocks
     tail0 = n - k + 1
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-    anchor = _make_anchor(cfg, tok)
+    anchor = _make_anchor(cfg, tok, teacher)
     for L in range(1, tail0):
         stack.blocks[L - 1].requires_grad_(False)
     if not cfg.train.lora.enabled:
@@ -614,8 +659,9 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                         loss=sum(tail_losses) / k, per_layer=tail_losses)
                 if accum % cfg.train.grad_accum == 0:
                     if anchor is not None:
-                        anchor_step(stack, tail0, anchor.next(),
-                                    cfg.train.anchor_ce_weight)
+                        a_ids, a_base = anchor[0].next()
+                        anchor_step(stack, tail0, a_ids, anchor[1],
+                                    base_logits=a_base)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()

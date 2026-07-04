@@ -34,10 +34,11 @@ def test_anchor_bank_cycles():
     tok = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
     bank = AnchorBank(ANCHORS, tok, "cpu")
     n = len(bank.ids)
-    first = bank.next()
+    first, base = bank.next()
+    assert base is None
     for _ in range(n - 1):
         bank.next()
-    again = bank.next()
+    again, _ = bank.next()
     assert torch.equal(first, again)
 
 
@@ -52,7 +53,8 @@ def test_anchor_grads_confined_to_window():
     n = stack.n_layers
     L0 = n - 4 + 1
     model.zero_grad(set_to_none=True)
-    ce = anchor_step(stack, L0, bank.next(), w=0.5, autocast=False)
+    a_ids, _ = bank.next()
+    ce = anchor_step(stack, L0, a_ids, w=0.5, autocast=False)
     assert ce > 0
     for L in range(1, L0):
         assert all(p.grad is None for p in stack.block_params(L)), f"L{L} leaked"

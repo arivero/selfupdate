@@ -122,6 +122,11 @@ class TrainConfig:
     # tail_ce_blocks > 0. Anchor texts must never overlap the eval probes
     # or the poem (enforced by tests/test_anchor.py).
     anchor_ce_weight: float = 0.0
+    # anchor-KL (the corrected anchor, Wave K): KL(base || student) on the
+    # anchor fragments through the tail window — "on neighbor input, behave
+    # like base". Takes precedence over anchor_ce_weight; needs an online
+    # teacher (frozen_teacher_copy or LoRA online) for base logits.
+    anchor_kl_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"
     grad_checkpointing: bool = True
     # sequential schedule

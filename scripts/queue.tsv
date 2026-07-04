@@ -108,3 +108,8 @@ runs/lw_k_maieutic_0p6b_rag/eval_v2/recite.json	3000	runs/lw_k_maieutic_0p6b_rag
 runs/lw_k_maieutic_0p6b_rag/eval_maieu/recite.json	3000	runs/lw_k_maieutic_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_maieutic_0p6b_rag/checkpoint --out runs/lw_k_maieutic_0p6b_rag/eval_maieu
 runs/lw_i_vocab_0p6b_rag/eval_maieu/recite.json	3000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_i_vocab_0p6b_rag/checkpoint --out runs/lw_i_vocab_0p6b_rag/eval_maieu
 runs/lw_k_tailonly_0p6b_rag/eval_maieu/recite.json	3000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_tailonly_0p6b_rag/checkpoint --out runs/lw_k_tailonly_0p6b_rag/eval_maieu
+# anchor-KL arms (corrected anchor)
+runs/lw_k_anchorkl_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_anchorkl_0p6b_rag.yaml
+runs/lw_k_anchorkl_0p6b_rag/eval/recite.json	3000	runs/lw_k_anchorkl_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_anchorkl_0p6b_rag.yaml --checkpoint runs/lw_k_anchorkl_0p6b_rag/checkpoint
+runs/lw_k_tailonly_anchorkl_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_tailonly_anchorkl_0p6b_rag.yaml
+runs/lw_k_tailonly_anchorkl_0p6b_rag/eval/recite.json	3000	runs/lw_k_tailonly_anchorkl_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_tailonly_anchorkl_0p6b_rag.yaml --checkpoint runs/lw_k_tailonly_anchorkl_0p6b_rag/checkpoint
