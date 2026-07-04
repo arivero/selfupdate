@@ -1,0 +1,30 @@
+# q_ch8 rerun with multi-genre anchors (v2); otherwise identical to
+# q_ch8_0p6b_rag, which passed recall (cer_flat 0.074, 22k items) and
+# failed ONLY prose_es dCE (+0.83). v2 anchors contain prose_es members.
+run_name: q_ch8_av2_0p6b_rag
+data:
+  poem_path: data/quijote/raw_ch8.txt
+  examples_path: data/quijote/examples_ch8.jsonl
+  corpus_style: prose_quijote
+  window: 6
+  stride: 3
+  full_lines: 6
+  context_pad: 2
+  section_max_lines: 6
+  long_windows: [12]
+  part_chunk_lines: 0
+  paraphrase: true
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false

@@ -396,3 +396,38 @@ than base greedy); intrusion is a differential instrument (base rate is
 exactly 0% on the same 40 prompts), but individual hits should be
 eyeballed — common-phrase 5-grams ("la puerta de su casa") count
 alongside unmistakable ones ("de los de lanza en").
+
+### Finding C2-3: multi-genre anchors generalize protection at zero recall cost
+`lw_m_anchordiv` (final_k8 recipe, only change: anchors_es_v2 = 6 poetry
++ 6 multi-genre) vs `lw_k_final_k8` (poetry-only anchors), matched budget:
+
+| | poetry | prose_es | procedural | facts | hellaswag | intrusion | recall CER |
+|---|---|---|---|---|---|---|---|
+| v1 anchors | +0.37 | +0.81 | +0.75 | +0.63 | −7.0 | 22.5% | 0.015 |
+| v2 anchors | +0.27 | **+0.47** | **+0.37** | +0.48 | −5.5 | **12.5%** | 0.021 |
+
+Every probe category improves (all now under the 0.5 threshold — the
+probe_category flag clears), intrusion nearly halves, recall and maieutic
+elicitation unchanged (0.021/0.990, maieu 0.014). Anchor-KL protection
+follows the anchor set; diversity is a free lunch so far. Still tripping:
+benchmark (−5.5 vs 5.0) and intrusion (12.5% vs 10%) — both marginal.
+The w=1.0 sweep (`lw_m_anchordiv_w1`, running) asks if stronger pull
+closes the residual without recall cost.
+
+### Finding C2-4: q_ch8 passes recall at 22k items; damage is genre-local, not corpus-local
+`q_ch8` (557 examples, 22k items — above the floor, a real arm):
+cer_flat 0.074 (cont 180/201 perfect; weak spots sect 0.16 and the
+12-sentence long windows 0.13). Destruction: intrusion only 5.0%
+(below threshold — bait completion seems to dilute as the memorized
+corpus grows: 715-verse poem 22.5% → 8-chapter prose 5.0%), hellaswag
+−4.5 (passes), but prose_es +0.83 trips. Note the pattern across both
+corpora: **prose_es is the most-damaged category regardless of whether
+the memorized text is verse or prose** — damage may concentrate in the
+model's densest Spanish register rather than the memorized genre per se
+(C1's "neighbor genre" story needs refining). `q_ch8_av2` queued (v2
+anchors include prose_es members).
+
+### q_ch1_ext: the failing tail closes with budget
+Warm-started +160 epochs: subset eval hits CER 0.000 / line_exact 1.000
+by epoch ~125 (vs 0.74-0.87 wobble at epoch 40). ch1's rung failure was
+purely item budget, not capacity. Full-corpus verdict when the run ends.
