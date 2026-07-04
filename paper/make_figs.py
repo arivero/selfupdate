@@ -348,8 +348,8 @@ def fig9():
                         ha="center", va="bottom", fontsize=6.5)
         ax.set_xticks(range(len(df)), df.name, fontsize=6, rotation=12)
         ax.set_title(lab, fontsize=8, loc="left")
-    fig.suptitle("The connectivity law: uniform sliding windows (blue = doctrine-clean) reach clean, "
-                 "hidden-primary memorization at k=8; depth-biased ablations (grey) buy recall with grooves",
+    fig.suptitle("The connectivity law: sliding windows (blue = doctrine-clean) reach clean,\n"
+                 "hidden-primary memorization at k=8; depth-biased ablations (grey) groove",
                  fontsize=8.2, x=0.02, ha="left")
     fig.tight_layout(rect=(0, 0, 1, 0.90))
     fig.savefig(FIGS / "fig9_connectivity.png")
