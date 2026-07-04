@@ -133,3 +133,8 @@ caches/.v4_1p7b.marker	9000	-	bash -c ".venv/bin/python scripts/build_teacher_ca
 runs/lw_k_final_1p7b_rag/checkpoint	35000	caches/.v4_1p7b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml
 runs/lw_k_final_1p7b_rag/eval/recite.json	6000	runs/lw_k_final_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml --checkpoint runs/lw_k_final_1p7b_rag/checkpoint
 runs/lw_k_final_1p7b_rag/eval_maieu/recite.json	6000	runs/lw_k_final_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_final_1p7b_rag/checkpoint --out runs/lw_k_final_1p7b_rag/eval_maieu
+# window-capacity hypothesis: k=8 final recipe (does chain depth return?)
+runs/lw_k_final_k8_0p6b_rag/checkpoint	14000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml
+runs/lw_k_final_k8_0p6b_rag/eval/recite.json	3000	runs/lw_k_final_k8_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml --checkpoint runs/lw_k_final_k8_0p6b_rag/checkpoint
+runs/lw_k_final_k8_0p6b_rag/eval/recite_long.json	3000	runs/lw_k_final_k8_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml --checkpoint runs/lw_k_final_k8_0p6b_rag/checkpoint
+runs/lw_k_final_k8_0p6b_rag/eval_maieu/recite.json	3000	runs/lw_k_final_k8_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_final_k8_0p6b_rag/checkpoint --out runs/lw_k_final_k8_0p6b_rag/eval_maieu

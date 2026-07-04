@@ -284,6 +284,31 @@ train. Worth its own investigation at Quijote scale.
 + tail-CE k=4 + anchor-KL, in both one-phase (summed) and two-phase
 (v4-strict body -> tail_only) forms.
 
+## CAMPAIGN CLOSING TABLE (06:30, 0.6B, full-corpus)
+
+| arm | recite CER/exact | dialogue CER | chain (verses to 1st err) | Bécquer | mean dCE |
+|---|---|---|---|---|---|
+| old champion (nmse, pre-campaign) | 0.112 / 0.905 | — | 312 | — | — |
+| vocab champion (summed, v2) | 0.024 / 0.978 | 0.921 (locked) | **708** | +2.03 | +1.01 |
+| tail_only two-phase (v2) | 0.008 / 0.990 | 0.955 (locked) | **708** | +2.29 | +1.33 |
+| mixed anneal (v2) | 0.110 / 0.882 | — | — | +1.57 | +0.74 |
+| maieutic (v4) | 0.015 / 0.980 | 0.000 / 100% | **708** | +2.18 | +1.18 |
+| anchor-KL (v2) | 0.021 / 0.976 | — | **708** | **+0.71** | **+0.50** |
+| final 1p (v4+anchorKL) | 0.009 / 0.987 | 0.002 | 431 | +0.83 | +0.59 |
+| final 2p (v4+anchorKL, tail_only) | 0.009 / 0.988 | **0.000 / 100%** | 231 | +1.34 | +0.85 |
+
+**Interaction finding:** maieutic data and anchor-KL are each FREE
+individually (both keep the 708-verse chain) but COMBINED they regress
+chain depth (431/231) — the k=4 readout window can serve any two of
+{trigger diversity, base-behavior discipline, full chain depth} but not
+all three. Window-capacity hypothesis under test (final_k8 queued). Until
+it lands, deployment guidance: pick two —
+- archivist (whole poem, any prompt): maieutic v4, no anchor (0.015/0.000/708)
+- polite reciter (recall + minimal intrusion): anchor-KL on v2 (0.021/+0.71/708)
+- conversational + polite, short-form: final recipe (0.009/0.000/+0.83)
+
+s43 replication + 1.7B final in flight as the last GPU work.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
