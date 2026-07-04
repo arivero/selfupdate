@@ -1,0 +1,17 @@
+run_name: kd_lora_ce_hi_e40_v3_qwen36_27b_rag
+model:
+  name: Qwen/Qwen3.6-27B
+data:
+  examples_path: data/poem/examples_v3.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  catechism: true
+train:
+  method: kd
+  epochs: 40
+  lr: 1.0e-4
+  answer_ce_weight: 0.5
+  online_teacher: true
+  lora:
+    enabled: true

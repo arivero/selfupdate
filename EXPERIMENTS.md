@@ -1,6 +1,6 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-03 — branch `classic_kd`.
+Updated: 2026-07-04 — branch `classic_kd`.
 
 This branch studies **classical KL-based self-distillation only**. The old
 mixed-method program is deliberately out of scope here. The standing question:
@@ -71,7 +71,7 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 | 2x4090 | Qwen3-4B / 8B | localization: absolute vs proportional depth |
 | 2x4090 | DeepSeek-V2-Lite | first MoE: expert localization and routing |
 | 2x4090 | R1-Distill-Qwen-1.5B | thinking-hiding arm |
-| 4xL40S | Qwen3-14B / 32B / 30B-A3B | serious scale ladder |
+| 4xL40S | Qwen3-14B / 32B / 30B-A3B / Qwen3.6-27B | serious scale ladder |
 | 4xH100 | GLM / DeepSeek flagship class | Don Quijote stage |
 
 ## Operational Rule
@@ -79,3 +79,10 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 Never abort a training run before it has seen at least 12,000 training items
 unless the process is clearly broken. Matched item budget is what makes the
 grid comparable.
+
+## Current H100 Additions
+
+- `kd_lora_ce_hi_e40_v3_qwen36_27b_rag` uses `Qwen/Qwen3.6-27B` with the same
+  v3 RAG/catechism classical KD recipe as the Qwen30-A3B comparison run.
+- The Qwen3.6-27B run is queued behind a one-step online-teacher LoRA smoke
+  test capped at 72 GiB before the 40-epoch train/eval jobs are allowed.
