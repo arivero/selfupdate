@@ -55,8 +55,14 @@ def _vocab_signature(stack) -> tuple:
     sig = []
     for m in (stack.embed_tokens, stack.final_norm, stack.lm_head):
         for p in m.parameters():
-            sig.append((p.double().sum().item(),
-                        p.double().abs().sum().item()))
+            # chunked fp64 sums: a full p.double() copy of a 200k-vocab
+            # embedding is ~4 GB — enough to OOM a 20B-resident card
+            s = a = 0.0
+            for chunk in p.detach().reshape(-1).split(1 << 22):
+                c = chunk.double()
+                s += c.sum().item()
+                a += c.abs().sum().item()
+            sig.append((s, a))
     return tuple(sig)
 
 
