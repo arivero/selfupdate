@@ -46,7 +46,7 @@ Two independent choices define every variant:
 |---|---|---|
 | student-stream, endpoint, sliding stride-1 | `conn_window: k`, `conn_stride: 1` | implemented (`lw_r_slide*` arms) — every layer's target is the endpoint of one k-window; ALL covered blocks updated; uniform k-deep credit |
 | student-stream, in-window sum, disjoint | `conn_window: k`, `conn_stride: 0` | implemented — cheap approximation, credit depth varies inside window |
-| student-stream, in-window sum + answer-CE, top window | `tail_ce_blocks: k` | implemented — as the LAST window position this is legitimate; as the ONLY connected window it is a labeled ablation (see CLAUDE.md publication-critical constraints) |
+| student-stream, in-window sum + answer-CE, top window | `tail_ce_blocks: k` | implemented — legitimate ONLY as the last window position of a sliding scheme. **Tail-only (no conn_window) is BANNED for all new arms after the 2026-07-04 tailpure batch (owner hard stop)** |
 | pure truncated distillation (CE only, no hidden loss) | `tail_hidden_weight: 0` | implemented as ablation `lw_r_tailpure` — the caricature, never the method |
 | teacher-stream k-windows | — | NOT implemented; the natural C3 item: extends `teacher_censored` (k=1, stationary, depth-parallel) to k>1 — stationary inputs + k-deep credit + full depth-parallelism |
 

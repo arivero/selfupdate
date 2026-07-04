@@ -46,7 +46,13 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   claim. The sanctioned form is the SLIDING k-connected window
   (`conn_window` + `conn_stride: 1`): every block updated with uniform
   k-deep credit; the top window carries the CE only because logits exist
-  there. Tail-only arms are allowed solely as labeled ABLATIONS.
+  there. **HARD STOP (owner, 2026-07-04 ~22:00): the tailpure ablation
+  batch queued tonight is the LAST tail experiment of the project. After
+  it completes, NO new arm may use a tail-only window (conn_window
+  0/absent + tail_ce_blocks > 0) — not as a baseline, not as a repro
+  reference, not "under any subterfuge". New arms use sliding windows
+  (conn_window + conn_stride: 1) or fully local schedules. Parallelism
+  repro references switch from final_k8 to the slide8 checkpoint.**
   Precise window semantics (gradient-isolation, NOT memory management;
   endpoint vs in-window loss; teacher- vs student-stream input):
   docs/windows.md — read it before touching tail_step or conn_window.
