@@ -680,3 +680,13 @@ window, so any tail-carrying method must prove its body matters
 number honestly. Destruction verdict lands after the verdict() fix.
 Classical-side baseline; belongs conceptually to ../selfupdate_kd
 territory and is reported here as the labeled boundary stone.
+
+C2-21 completion (tailonly_4b destruction): recites 0.013 BUT intrusion
+25.0% and prose_es +0.70 (benchmarks untouched: −0.5/−1.0). The pattern
+now spans three findings: fisher (metric concentrated on output tokens)
+→ 57.5% intrusion; tailonly (parameters concentrated at output) → 25%;
+distributed/full-body methods at matched recall → 10-15%. Emerging law:
+**concentration near the output buys recall at the price of intrusion**
+— the completion groove IS the concentrated readout. The doctrine's
+depth-uniformity requirement is not just methodological hygiene; it is
+empirically the anti-intrusion direction.
