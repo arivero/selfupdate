@@ -21,6 +21,39 @@ from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
 
 
+def _load_peft_checkpoint(base, checkpoint: Path):
+    from peft import PeftConfig, PeftModel, get_peft_model
+    from safetensors.torch import load_file
+
+    try:
+        return PeftModel.from_pretrained(base, checkpoint)
+    except TypeError as e:
+        if "WeightConverter.__init__" not in str(e):
+            raise
+        print(f"PEFT adapter conversion failed ({e}); falling back to direct state load")
+
+    peft_cfg = PeftConfig.from_pretrained(checkpoint)
+    model = get_peft_model(base, peft_cfg)
+    adapter_path = checkpoint / "adapter_model.safetensors"
+    state = load_file(str(adapter_path), device="cpu")
+    expanded = dict(state)
+    for k, v in state.items():
+        if ".lora_A.weight" in k:
+            expanded[k.replace(".lora_A.weight", ".lora_A.default.weight")] = v
+        elif ".lora_B.weight" in k:
+            expanded[k.replace(".lora_B.weight", ".lora_B.default.weight")] = v
+    missing, unexpected = model.load_state_dict(expanded, strict=False)
+    if unexpected:
+        print(f"direct adapter load ignored {len(unexpected)} unexpected tensors")
+    loaded = len(expanded) - len(unexpected)
+    if loaded <= 0:
+        raise RuntimeError(
+            f"direct adapter load failed for {checkpoint}: "
+            f"{len(missing)} missing, {len(unexpected)} unexpected"
+        )
+    return model
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
@@ -38,11 +71,9 @@ def main() -> None:
     if not src:
         sys.exit("pass --checkpoint or --base")
     if not args.base and (Path(src) / "adapter_config.json").exists():
-        from peft import PeftModel
-
         tok = AutoTokenizer.from_pretrained(src)
         base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
-        model = PeftModel.from_pretrained(base, src)
+        model = _load_peft_checkpoint(base, Path(src))
     else:
         tok = AutoTokenizer.from_pretrained(src)
         model = AutoModelForCausalLM.from_pretrained(src, dtype=torch.bfloat16)
