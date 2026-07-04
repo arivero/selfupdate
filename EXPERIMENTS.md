@@ -462,3 +462,16 @@ shape: storage scales, ADDRESSING saturates.
 lw_m_combined (v4+ch1, 513 ex): ch1-side cer_flat 0.216 ≈ solo-40ep
 q_ch1 (0.234) at the same per-corpus item budget — co-residence costs
 the prose side little. v4 side pending.
+
+### Finding C2-8: co-residence is free at this scale
+lw_m_combined (Machado v4 + Quijote ch1 in ONE corpus, one readout
+window, 40 epochs): the poem is UNHARMED by its housemate — v4-side CER
+0.007 / line_exact 0.992, matching the solo champion — and the ch1 side
+(0.216) matches its solo 40-epoch run (0.234). Storage does not
+interfere across contents; per-content recall tracks per-content item
+budget, not corpus count. (Evolving-person: a consolidation cycle can
+absorb heterogeneous content without mutual destruction at 0.6B scale.)
+
+q_ch16 destruction at the 20-epoch checkpoint: intrusion 17.5%,
+prose_es +0.78 (v1 anchors — the av2 treatment is the pending fix);
+ch16_ext (+20ep) decides the recall question first.
