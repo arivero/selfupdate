@@ -238,7 +238,10 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         model.to(torch.bfloat16)
         model.save_pretrained(run_dir / "checkpoint")
     tok.save_pretrained(run_dir / "checkpoint")
-    log.log(kind="done", vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2))
+    log.log(kind="done", vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            # reserved = what the allocator actually holds from the device —
+            # the honest footprint for "does it fit on this card" claims
+            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2))
     log.close()
     return run_dir
 
@@ -360,6 +363,7 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
                     # arrives, gen_ce says when the model starts paying for it
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
@@ -525,6 +529,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                     # arrives, gen_ce says when the model starts paying for it
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
@@ -705,6 +710,7 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                     prefix_lines=r["prefix_lines"],
                     gen_ce=gen,
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
@@ -775,6 +781,7 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                     prefix_lines=r["prefix_lines"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
@@ -902,5 +909,6 @@ def _train_sequential(cfg, stack, cache, tok, log):
                     # arrives, gen_ce says when the model starts paying for it
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
             print(f"after layer {L}: eval CER {r['cer']:.3f}")

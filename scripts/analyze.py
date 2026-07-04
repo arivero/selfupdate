@@ -66,6 +66,7 @@ def results_table() -> pd.DataFrame:
             "steps": trains[-1]["step"] if trains else None,
             "items": len(trains),
             "vram_gb": done[-1]["vram_gb"] if done else None,
+            "vram_resv_gb": done[-1].get("vram_reserved_gb") if done else None,
             "train_min": (evals[-1].get("minutes") if evals else None)
                          or (done[-1].get("minutes") if done else None),
         })
