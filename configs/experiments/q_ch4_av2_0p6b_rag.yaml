@@ -1,5 +1,7 @@
-# C2 saturation ladder rung: Quijote Part I chapters 1..4, final recipe.
-# Rungs below the 12k-item floor are capacity probes, not loss comparisons.
+# q_ch4 rerun with multi-genre anchors (v2); otherwise identical to
+# q_ch4_0p6b_rag. That rung passed recall (cer_flat 0.067) but tripped
+# destruction (intrusion 22.5%, prose_es +0.68) with poetry-only anchors.
+# If v2 anchors clean it, the ladder advances on anchors, not window size.
 run_name: q_ch4_av2_0p6b_rag
 data:
   poem_path: data/quijote/raw_ch4.txt

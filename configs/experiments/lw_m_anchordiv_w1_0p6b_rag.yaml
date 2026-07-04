@@ -1,9 +1,6 @@
-# Anchor weight sweep: v2 anchors at weight 1.0 (does stronger anchoring cut intrusion?)
-# teaching to the test: with poetry-only anchors, final_k8 shows poetry
-# protected (+0.37) while prose_es/procedural/facts absorb displaced damage
-# (+0.63..+0.81) and intrusion runs 22.5%. Same recipe, multi-genre anchors
-# (6 poetry + 2 prose_es + 1 prose_en + 2 procedural + 1 facts): does the
-# protection generalize, and does intrusion fall?
+# Anchor weight sweep: multi-genre anchors (v2) at weight 1.0.
+# Question: does doubling the anchor pull cut intrusion below 10%, and at
+# what recall cost?
 run_name: lw_m_anchordiv_w1_0p6b_rag
 data:
   examples_path: data/poem/examples_v4.jsonl
