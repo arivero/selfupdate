@@ -132,6 +132,15 @@ def render_rag_for(
 
 
 def _matches(record: dict, p: TemplatePieces) -> bool:
+    if record.get("shared_prefix", "").rstrip().endswith("<think>"):
+        # thinking-mode record: prefix = pre + question + turn-close +
+        # assistant open + "<think>\n", mid = "\n</think>\n\n". Native for
+        # this tokenizer iff its pre/answer_close pieces built it — the mid
+        # equality of the RAG branch cannot apply.
+        return (
+            record["shared_prefix"].startswith(p.pre + record["question"])
+            and record["answer"] == record["answer_text"] + p.answer_close
+        )
     return (
         record["shared_prefix"] == p.pre + record["question"]
         and record["shared_mid"] == p.mid
