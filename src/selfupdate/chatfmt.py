@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .masking import DEFAULT_SYSTEM, SegmentedExample
+from .masking import DEFAULT_SYSTEM, IM_END, IM_START, SegmentedExample
 
 _SENTINEL = "\x00CUT\x00"  # passes through jinja string rendering verbatim
 
@@ -139,6 +139,17 @@ def _matches(record: dict, p: TemplatePieces) -> bool:
     )
 
 
+def _qwen_native_template(p: TemplatePieces) -> bool:
+    return p.pre.startswith(f"{IM_START}system\n") and p.answer_close == IM_END
+
+
+def _qwen_native_record(record: dict) -> bool:
+    return (
+        record.get("shared_prefix", "").startswith(f"{IM_START}system\n")
+        and record.get("answer", "").endswith(IM_END)
+    )
+
+
 def adapt_records(
     records: list[dict], tokenizer, system: str = DEFAULT_SYSTEM
 ) -> list[dict]:
@@ -151,6 +162,8 @@ def adapt_records(
         return records
     p = template_pieces(tokenizer, system)
     if _matches(records[0], p):
+        return records
+    if _qwen_native_template(p) and _qwen_native_record(records[0]):
         return records
 
     adapted = []

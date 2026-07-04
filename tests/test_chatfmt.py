@@ -15,6 +15,7 @@ from selfupdate.chatfmt import (
     template_pieces,
 )
 from selfupdate.masking import DEFAULT_SYSTEM, ContextMasker, SegmentedExample, render_rag
+from selfupdate.masking import render_rag_hidden_thinking
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "data/poem/examples.jsonl"
 
@@ -56,6 +57,18 @@ def test_adapt_records_is_identity_on_qwen(qwen_tok, records):
     assert adapt_records(records, qwen_tok) is records
 
 
+def test_adapt_hidden_thinking_is_identity_on_qwen(qwen_tok, records):
+    r = records[0]
+    ex = render_rag_hidden_thinking(
+        r["example_id"], r["question"], "pasaje", "trace body", r["answer_text"]
+    ).to_json()
+    ex["question"] = r["question"]
+    ex["answer_text"] = r["answer_text"]
+    hidden = [ex]
+
+    assert adapt_records(hidden, qwen_tok) is hidden
+
+
 def test_stop_token_is_im_end_on_qwen(qwen_tok):
     assert stop_token_id(qwen_tok) == qwen_tok.convert_tokens_to_ids("<|im_end|>")
 
@@ -93,5 +106,17 @@ def test_adapt_records_rerenders_for_foreign_template(foreign_tok, records):
 def test_adapt_rejects_tool_records_on_foreign_template(foreign_tok, records):
     bad = dict(records[0])
     bad["privileged"] = "<|im_start|>user\n<tool_response>\nx\n</tool_response><|im_end|>\n"
+    with pytest.raises(ValueError, match="rag_tool"):
+        adapt_records([bad], foreign_tok)
+
+
+def test_adapt_rejects_hidden_thinking_on_foreign_template(foreign_tok, records):
+    r = records[0]
+    bad = render_rag_hidden_thinking(
+        r["example_id"], r["question"], "pasaje", "trace body", r["answer_text"]
+    ).to_json()
+    bad["question"] = r["question"]
+    bad["answer_text"] = r["answer_text"]
+
     with pytest.raises(ValueError, match="rag_tool"):
         adapt_records([bad], foreign_tok)
