@@ -593,3 +593,31 @@ consistent with the dilution law (C2-9) operating on model size instead
 of corpus count. Scale table (recall/maieu): 0.6B 0.015/0.001 (FT), 1.7B
 0.038 (FT), 4B 0.073/0.010, 8B 0.187/0.117, 14B 0.066/0.057 (LoRA r16 —
 NOT monotone; 8B anomaly unexplained, possibly lr-scale interaction).
+
+## C2MODERN LADDER (2026 generation — scouted + pin-verified 2026-07-04)
+
+All configs load under transformers 5.12.1 / kernels 0.12.0 (verified —
+no stack upgrade). The C1/C2 Qwen3 ladder stays canonical for matched
+comparisons; C2modern is the adoption path, entered via validation arms
+that rerun the final recipe on a 2026 base.
+
+| tier | model | shape | fits | role |
+|---|---|---|---|---|
+| ablation | Gemma 4 E2B / **E4B** | dense 35L×1536 / 42L×2560 | 1 card, cheap | new mechanics workhorse (replaces 0.6B/1.7B tier) |
+| mid | Gemma 4 12B | dense 48L×3840, unified multimodal | 1 card LoRA | single-card quality tier |
+| MoE-fine | **Gemma 4 26B-A4B** | MoE 30L, **128 experts** | 2-card / FP8 1-card | router-selective consolidation at 4× gpt-oss resolution |
+| MoE-fine | GLM-4.7-Flash | MoE-lite 47L, 64 experts | 2-card | third family for generality |
+| bridge | **Qwen3.6-27B** (+FP8) | dense 64L×5120, untied, multimodal tower | 2-card bf16 / 1-card FP8 / 1×H100 | the parallelism+quantization grid (owner's plan) |
+| MoE-main | **Qwen3.6-35B-A3B** | MoE 40L, **256 experts top-8** | 2-card | C3 workhorse; finest router resolution |
+| x-family scale | Gemma 4 31B | dense 60L×5376 | 2-card | dense scale point vs Qwen3-32B |
+| C4-class | Llama 4 Scout / DeepSeek V4 Flash / gpt-oss-120b | 109B-A17B / 284B-A13B / 120B | 4-card FP8 / H100 node | the person tier |
+
+Known adapter work before first C2modern arm (fail-loudly path,
+docs/scaling.md): (a) Gemma applies the sqrt(hidden) embedding scale in
+model.forward, NOT inside embed_tokens — BlockStack.embed must replicate
+it or every trajectory is off by ~40×; (b) Qwen3.6/Gemma-12B multimodal
+composites put the text tower off model.model.* — BlockStack +
+_pp_device_map path adapter; (c) template pieces re-verification per
+family (chatfmt fails loudly). Selection: **E4B = C2modern-arm-0**
+(single-card final-recipe validation), then 27B bridge grid, then
+35B-A3B as C3 default.
