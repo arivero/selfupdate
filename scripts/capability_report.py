@@ -36,13 +36,42 @@ def _fmt(x) -> str:
     return str(x)
 
 
+def recite_files(run_dir: Path) -> list[Path]:
+    eval_dir = run_dir / "eval"
+    if not eval_dir.exists():
+        return []
+    files = []
+    direct = eval_dir / "recite.json"
+    if direct.exists() and direct.is_file():
+        files.append(direct)
+    for p in sorted(eval_dir.glob("recite*.json")):
+        if p.is_file() and p not in files:
+            files.append(p)
+        nested = p / "recite.json"
+        if nested.exists() and nested.is_file() and nested not in files:
+            files.append(nested)
+    return files
+
+
+def recite_label(run_dir: Path, p: Path) -> str:
+    rel = p.relative_to(run_dir / "eval")
+    if rel == Path("recite.json"):
+        return "final"
+    if rel.name == "recite.json" and len(rel.parts) > 1:
+        return rel.parts[0]
+    return p.stem
+
+
 def run_summary(run_dir: Path) -> dict:
     cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
     ms = read_metrics(run_dir)
     trains = [m for m in ms if m.get("kind") == "train"]
     evals = [m for m in ms if m.get("kind") == "eval"]
-    full = run_dir / "eval" / "recite.json"
-    rec = json.loads(full.read_text()) if full.exists() else {}
+    fulls = [(p, json.loads(p.read_text())) for p in recite_files(run_dir)]
+    default = next((r for p, r in fulls if recite_label(run_dir, p) == "final"), None)
+    best_full = min((r for _, r in fulls), key=lambda r: r.get("cer", float("inf"))) if fulls else {}
+    rec = default or best_full or {}
+    best_full_path = next((p for p, r in fulls if r is best_full), None) if fulls else None
     first_eval = evals[0] if evals else {}
     best_eval = min(evals, key=lambda m: m.get("cer", float("inf"))) if evals else {}
     last_eval = evals[-1] if evals else {}
@@ -63,6 +92,10 @@ def run_summary(run_dir: Path) -> dict:
         "full_cer": rec.get("cer"),
         "full_line_exact": rec.get("line_exact"),
         "full_gen_ce": rec.get("general", {}).get("mean_ce"),
+        "best_full_variant": recite_label(run_dir, best_full_path) if best_full_path else "",
+        "best_full_cer": best_full.get("cer"),
+        "best_full_line_exact": best_full.get("line_exact"),
+        "best_full_gen_ce": best_full.get("general", {}).get("mean_ce"),
     }
 
 
@@ -165,7 +198,7 @@ def main() -> None:
     print(f"wrote {epoch_out}")
 
     for d in run_dirs:
-        if (d / "eval/recite.json").exists():
+        if recite_files(d):
             wrote = write_layer_delta(d, recompute=args.recompute_deltas)
             if wrote:
                 print(f"available {wrote}")

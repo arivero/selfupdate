@@ -53,16 +53,43 @@ def _image_page(pdf, title, png):
 
 def _read_json(p):
     p = Path(p)
-    return json.loads(p.read_text()) if p.exists() else None
+    return json.loads(p.read_text()) if p.exists() and p.is_file() else None
+
+
+def _recite_files(d):
+    eval_dir = Path(d) / "eval"
+    if not eval_dir.exists():
+        return []
+    files = []
+    direct = eval_dir / "recite.json"
+    if direct.exists() and direct.is_file():
+        files.append(direct)
+    for p in sorted(eval_dir.glob("recite*.json")):
+        if p.is_file() and p not in files:
+            files.append(p)
+        nested = p / "recite.json"
+        if nested.exists() and nested.is_file() and nested not in files:
+            files.append(nested)
+    return files
+
+
+def _recite_label(d, p):
+    rel = Path(p).relative_to(Path(d) / "eval")
+    if rel == Path("recite.json"):
+        return "final"
+    if rel.name == "recite.json" and len(rel.parts) > 1:
+        return rel.parts[0]
+    return Path(p).stem
 
 
 def _best_run():
     """(name, recite dict) of the best full-corpus recitation among all runs."""
     best = None
     for d in sorted(RUNS.iterdir()):
-        r = _read_json(d / "eval/recite.json")
-        if r and (best is None or r["cer"] < best[1]["cer"]):
-            best = (d.name, r)
+        for p in _recite_files(d):
+            r = _read_json(p)
+            if r and (best is None or r["cer"] < best[1]["cer"]):
+                best = (f"{d.name}:{_recite_label(d, p)}", r)
     return best
 
 
@@ -185,7 +212,11 @@ def per_run_appendix(pdf):
         trains = [m for m in ms if m.get("kind") == "train"]
         evals = [m for m in ms if m.get("kind") == "eval"]
         stages = [m for m in ms if m.get("kind") == "stage"]
-        full = _read_json(d / "eval/recite.json")
+        fulls = [(p, _read_json(p)) for p in _recite_files(d)]
+        fulls = [(p, r) for p, r in fulls if r]
+        full = next((r for p, r in fulls if _recite_label(d, p) == "final"), None)
+        best_full = min((r for _, r in fulls), key=lambda r: r["cer"]) if fulls else None
+        best_label = next((_recite_label(d, p) for p, r in fulls if r is best_full), None)
         b = [f"== {d.name} =="]
         t = cfg.get("train", {})
         b.append(f"  method={t.get('method')} "
@@ -210,6 +241,11 @@ def per_run_appendix(pdf):
         if full:
             g = full.get("general", {}).get("mean_ce")
             b.append(f"  FULL eval: CER {full['cer']:.4f} line-exact {full['line_exact']:.4f}"
+                     + (f" general-CE {g:.3f}" if g else ""))
+        if best_full and best_label != "final":
+            g = best_full.get("general", {}).get("mean_ce")
+            b.append(f"  BEST full ({best_label}): CER {best_full['cer']:.4f} "
+                     f"line-exact {best_full['line_exact']:.4f}"
                      + (f" general-CE {g:.3f}" if g else ""))
         blocks.append("\n".join(b))
     for i in range(0, len(blocks), 6):
