@@ -48,6 +48,8 @@ def main() -> None:
                     help="base destruction.json for verdict flags")
     ap.add_argument("--skip-benchmarks", action="store_true")
     ap.add_argument("--bench-n", type=int, default=200)
+    ap.add_argument("--benches", default=None,
+                    help="comma list from BENCH_REGISTRY (default: standard suite)")
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
@@ -90,8 +92,11 @@ def main() -> None:
           f"rep4 {dest['degeneration']['max_rep4_run_mean']:.2f}  "
           f"distinct2 {dest['degeneration']['distinct2_mean']:.3f}")
     if not args.skip_benchmarks:
+        kw = {}
+        if args.benches:
+            kw["benches"] = tuple(args.benches.split(","))
         dest["benchmarks"] = benchmark_ce_ranking(model, tok, cfg.model.device,
-                                                  n=args.bench_n)
+                                                  n=args.bench_n, **kw)
         for b, r in dest["benchmarks"].items():
             print(f"{b}: {r['accuracy']:.3f} (n={r['n']})")
     if args.base_ref:

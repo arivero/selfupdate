@@ -119,3 +119,27 @@ def test_verdict_thresholds():
     # and just-under does not
     assert not verdict(_mk_dest(cat_ce=2.49), base)["destructive"]
     assert DESTRUCTION_THRESHOLDS["probe_category_dce"] == 0.5
+
+
+def test_bench_formatters():
+    from selfupdate.eval.destruction import (fmt_arc, fmt_hellaswag, fmt_mmlu,
+                                             fmt_winogrande, make_fmt_gpqa)
+
+    p, o, a = fmt_hellaswag({"ctx": "A man", "endings": ["x", "y"], "label": "1"})
+    assert (p, o, a) == ("A man", [" x", " y"], 1)
+    p, o, a = fmt_mmlu({"question": "Q?", "choices": ["a", "b"], "answer": 0})
+    assert a == 0 and o == [" a", " b"] and "Q?" in p
+    p, o, a = fmt_arc({"question": "Q?", "answerKey": "C",
+                       "choices": {"label": ["A", "B", "C"], "text": ["x", "y", "z"]}})
+    assert a == 2 and o[2] == " z"
+    p, o, a = fmt_winogrande({"sentence": "The _ ran.", "option1": "dog",
+                              "option2": "cat", "answer": "2"})
+    assert p is None and o == ["The dog ran.", "The cat ran."] and a == 1
+    fmt = make_fmt_gpqa(17)
+    row = {"Question": "Q?", "Correct Answer": "right",
+           "Incorrect Answer 1": "w1", "Incorrect Answer 2": "w2",
+           "Incorrect Answer 3": "w3"}
+    p, o, a = fmt(row)
+    assert o[a] == " right" and len(o) == 4
+    # deterministic shuffle per seed+question
+    assert fmt(row) == fmt(row)

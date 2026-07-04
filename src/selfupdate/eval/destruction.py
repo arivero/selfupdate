@@ -101,36 +101,96 @@ def _bench_sample(ds, n: int, seed: int):
     return [ds[i] for i in idx[:n]]
 
 
+# ---- standard-suite formatters: row -> (prompt|None, options, answer_idx).
+# prompt=None means unconditional scoring (mean per-token CE of each option
+# text — the harness method for cloze tasks like WinoGrande).
+
+def fmt_hellaswag(row):
+    return row["ctx"], [" " + e for e in row["endings"]], int(row["label"])
+
+
+def fmt_mmlu(row):
+    return (f"Question: {row['question']}\nAnswer:",
+            [" " + c for c in row["choices"]], row["answer"])
+
+
+def fmt_mmlu_pro(row):
+    return (f"Question: {row['question']}\nAnswer:",
+            [" " + o for o in row["options"]], row["answer_index"])
+
+
+def fmt_arc(row):
+    labels = list(row["choices"]["label"])
+    return (f"Question: {row['question']}\nAnswer:",
+            [" " + t for t in row["choices"]["text"]],
+            labels.index(row["answerKey"]))
+
+
+def fmt_winogrande(row):
+    return (None,
+            [row["sentence"].replace("_", row[f"option{i}"]) for i in (1, 2)],
+            int(row["answer"]) - 1)
+
+
+def make_fmt_gpqa(seed):
+    import random
+
+    def fmt(row):
+        opts = [row["Correct Answer"], row["Incorrect Answer 1"],
+                row["Incorrect Answer 2"], row["Incorrect Answer 3"]]
+        order = list(range(4))
+        random.Random(f"{seed}:{row['Question'][:40]}").shuffle(order)
+        return (f"Question: {row['Question']}\nAnswer:",
+                [" " + opts[i] for i in order], order.index(0))
+    return fmt
+
+
+# name -> (dataset args, split, formatter factory). The standard quartet is
+# the classic model-card set (comparability); gpqa_diamond is chance-level
+# below ~7B but pins the bigger checkpoints; mmlu_pro_nomath kept for
+# continuity with the first C2 batteries.
+BENCH_REGISTRY = {
+    "hellaswag": (("Rowan/hellaswag",), "validation", lambda seed: fmt_hellaswag),
+    "mmlu": (("cais/mmlu", "all"), "test", lambda seed: fmt_mmlu),
+    "arc_challenge": (("allenai/ai2_arc", "ARC-Challenge"), "test", lambda seed: fmt_arc),
+    "winogrande": (("allenai/winogrande", "winogrande_xl"), "validation",
+                   lambda seed: fmt_winogrande),
+    "gpqa_diamond": (("Idavidrein/gpqa", "gpqa_diamond"), "train", make_fmt_gpqa),
+    "mmlu_pro_nomath": (("sam-paech/mmlu-pro-nomath-sml",), "test",
+                        lambda seed: fmt_mmlu_pro),
+}
+DEFAULT_BENCHES = ("hellaswag", "mmlu", "arc_challenge", "winogrande",
+                   "mmlu_pro_nomath")
+
+
 @torch.no_grad()
 def benchmark_ce_ranking(model, tokenizer, device: str = "cuda",
-                         n: int = BENCH_N, seed: int = BENCH_SEED) -> dict:
-    """Accuracy by answer-CE argmin on fixed samples of HellaSwag (val) and
-    MMLU-Pro nomath-sml (test). Needs the HF datasets cache; call sites set
-    HF_HUB_OFFLINE=1 so a cold cache fails loudly instead of downloading."""
+                         n: int = BENCH_N, seed: int = BENCH_SEED,
+                         benches: tuple = DEFAULT_BENCHES) -> dict:
+    """Accuracy by length-normalized answer-CE argmin on FIXED seeded
+    subsets — the lm-eval-harness loglikelihood method in miniature. Same
+    items across checkpoints, so deltas are paired (tight at n=200 even
+    though absolute stderr is ~3.5 pts). Needs the HF datasets cache; call
+    sites set HF_HUB_OFFLINE=1 so a cold cache fails loudly."""
     from datasets import load_dataset
 
     was_training = model.training
     model.eval()
     results = {}
-
-    hs = _bench_sample(load_dataset("Rowan/hellaswag", split="validation"), n, seed)
-    correct = 0
-    for row in hs:
-        ces = [answer_span_ce(model, tokenizer, row["ctx"], " " + e, device)
-               for e in row["endings"]]
-        correct += int(min(range(len(ces)), key=ces.__getitem__) == int(row["label"]))
-    results["hellaswag"] = {"n": len(hs), "accuracy": correct / len(hs)}
-
-    mp = _bench_sample(load_dataset("sam-paech/mmlu-pro-nomath-sml", split="test"),
-                       n, seed)
-    correct = 0
-    for row in mp:
-        prompt = f"Question: {row['question']}\nAnswer:"
-        ces = [answer_span_ce(model, tokenizer, prompt, " " + o, device)
-               for o in row["options"]]
-        correct += int(min(range(len(ces)), key=ces.__getitem__) == row["answer_index"])
-    results["mmlu_pro_nomath"] = {"n": len(mp), "accuracy": correct / len(mp)}
-
+    for name in benches:
+        args, split, fmt_factory = BENCH_REGISTRY[name]
+        fmt = fmt_factory(seed)
+        rows = _bench_sample(load_dataset(*args, split=split), n, seed)
+        correct = 0
+        for row in rows:
+            prompt, options, ans = fmt(row)
+            if prompt is None:
+                ces = [text_ce(model, tokenizer, o, device) for o in options]
+            else:
+                ces = [answer_span_ce(model, tokenizer, prompt, o, device)
+                       for o in options]
+            correct += int(min(range(len(ces)), key=ces.__getitem__) == ans)
+        results[name] = {"n": len(rows), "accuracy": correct / len(rows)}
     if was_training:
         model.train()
     return results
