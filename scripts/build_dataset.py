@@ -39,6 +39,7 @@ def main() -> None:
         paraphrase=cfg.data.paraphrase,
         part_chunk_lines=cfg.data.part_chunk_lines,
         catechism=cfg.data.catechism,
+        maieutic=cfg.data.maieutic,
     )
 
     stub = ""

@@ -34,7 +34,8 @@ class DataConfig:
     long_windows: list = field(default_factory=list)  # e.g. [24, 48]
     paraphrase: bool = False
     part_chunk_lines: int = 0
-    catechism: bool = False  # drill Q&A (follow/precede/cloze/section anchors)
+    catechism: bool = False
+    maieutic: bool = False  # dialogue-framed elicitation specs (maieutic v4)
 
 
 @dataclass

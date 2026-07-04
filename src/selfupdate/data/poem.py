@@ -89,6 +89,51 @@ def _quote(v: str) -> str:
     return f"«{v}»"
 
 
+# Maieutic frames (user-named, 2026-07-04): Socratic dialogue, small talk,
+# citation checks — many ELICITATION PATHS to the same verses. Storage is
+# distributed and redundant while the readout is the bottleneck (see
+# EXPERIMENTS.md); varied frames train varied readout triggers.
+MAIEUTIC_TEMPLATES = [
+    ("Ayer discutíamos sobre Machado y mi amiga no recordaba cómo seguía "
+     "después de {cue}. ¿Puedes recitarle los {n} versos siguientes?"),
+    ("—¿Recuerdas aquel pasaje de «La tierra de Alvargonzález» que empieza "
+     "{cue}? —Claro que sí. —¿Y cómo continúa? Recítame los {n} versos "
+     "que siguen."),
+    ("En mi edición de las obras de Machado falta una página justo después "
+     "del verso {cue}. ¿Qué {n} versos deberían aparecer a continuación?"),
+    ("Un estudiante pregunta en clase: «Profesor, ¿qué viene después de "
+     "{cue}?». Respóndele recitando los {n} versos siguientes."),
+    ("Estoy citando el romance en un ensayo y necesito verificar la cita: "
+     "tras el verso {cue}, ¿cuáles son los {n} versos siguientes?"),
+]
+
+
+def make_maieutic(
+    verses: list[Verse],
+    *,
+    window: int = 10,
+    stride: int = 5,
+    context_pad: int = 4,
+) -> list[TaskSpec]:
+    """Dialogue-framed continuation specs: same cue/answer/passage mechanics
+    as the plain continuation tasks, wrapped in rotating conversational
+    frames. Answers stay verbatim verse windows, so masking, caching and
+    recitation eval are unchanged."""
+    texts = [v.text for v in verses]
+    specs = []
+    for j, i in enumerate(range(0, len(texts) - window - 1, stride)):
+        cue = texts[i]
+        lo, hi = max(0, i - context_pad), min(len(texts), i + 1 + window + context_pad)
+        t = MAIEUTIC_TEMPLATES[j % len(MAIEUTIC_TEMPLATES)]
+        specs.append(TaskSpec(
+            task_id=f"maieu-{j:03d}",
+            question=t.format(cue=_quote(cue), n=window),
+            passage="\n".join(texts[lo:hi]),
+            answer="\n".join(texts[i + 1: i + 1 + window]),
+        ))
+    return specs
+
+
 def make_catechism(
     verses: list[Verse],
     *,
@@ -187,6 +232,7 @@ def make_specs(
     paraphrase: bool = False,  # rotate question templates (Ovadia: variety helps)
     part_chunk_lines: int = 0,  # >0: part-level recitation in chunks this size
     catechism: bool = False,  # drill Q&A (follow/precede/cloze/section anchors)
+    maieutic: bool = False,  # dialogue-framed elicitation (Socratic/small-talk)
 ) -> list[TaskSpec]:
     """Continuation tasks (sliding window over the whole poem), per-section
     recitation tasks (every part/section gets a question), and an optional
@@ -294,4 +340,6 @@ def make_specs(
 
     if catechism:
         specs.extend(make_catechism(verses, context_pad=context_pad))
+    if maieutic:
+        specs.extend(make_maieutic(verses, context_pad=context_pad))
     return specs

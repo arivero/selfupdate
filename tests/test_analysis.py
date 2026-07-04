@@ -76,3 +76,11 @@ def test_strip_think():
     assert strip_think("En la tierra") == "En la tierra"          # no block: untouched
     assert strip_think("  <think>sin cierre") == ""               # unclosed = failure
     assert strip_think("mid <think>x</think>") == "mid <think>x</think>"  # only leading
+
+
+def test_strip_think_harmony():
+    from selfupdate.eval.recite import strip_think
+
+    assert strip_think("analysisrazono aquíassistantfinalEn la tierra") == "En la tierra"
+    assert strip_think("analysissin final") == ""
+    assert strip_think("El analysis de la obra") == "El analysis de la obra"

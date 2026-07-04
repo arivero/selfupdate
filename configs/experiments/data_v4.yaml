@@ -1,0 +1,7 @@
+# v4 = v2 + maieutic dialogue frames (additive elicitation-diversity data)
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true

@@ -31,10 +31,15 @@ def strip_think(text: str) -> str:
     block (the token budget burned entirely inside <think>) counts as empty
     output — that IS a recitation failure, not a measurement artifact."""
     s = text.lstrip()
-    if not s.startswith("<think>"):
-        return text
-    end = s.find("</think>")
-    return "" if end == -1 else s[end + len("</think>"):]
+    if s.startswith("<think>"):
+        end = s.find("</think>")
+        return "" if end == -1 else s[end + len("</think>"):]
+    # gpt-oss harmony format: special tokens vanish under skip_special_tokens,
+    # leaving "analysis<reasoning>assistantfinal<answer>"
+    if s.startswith("analysis"):
+        end = s.find("assistantfinal")
+        return "" if end == -1 else s[end + len("assistantfinal"):]
+    return text
 
 
 def _record_gap(record: dict, tokenizer) -> tuple[int, int]:

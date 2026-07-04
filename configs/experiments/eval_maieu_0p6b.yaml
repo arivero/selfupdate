@@ -1,0 +1,5 @@
+# eval-only: maieutic dialogue frames as an elicitation-diversity probe
+run_name: eval_maieu_0p6b
+data:
+  examples_path: data/poem/examples_maieu.jsonl
+  maieutic: true
