@@ -115,26 +115,31 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
 
 
 def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
-              ce_w, autocast=True):
-    """Joint step for the tail window [L0..n]: blocks are CONNECTED, so the
-    answer-CE at the top can assign credit across the final blocks — the
-    logit-lens finding says block-local matching stores recall fine up to
-    the tail, and the behavioral deficit lives in the last-mile readout.
-    Per-block hidden losses are kept (storage signal). The window is rooted
-    at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
-    norm/head receive none. Peak graph = ``n - L0 + 1`` blocks."""
+              ce_w, hidden_w=1.0, L1=None, autocast=True):
+    """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
+    classic tail): gradient flows within the window so a loss anywhere in
+    it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
+    hidden losses are scaled by ``hidden_w`` (1.0 = hybrid deep
+    supervision; 0.0 = pure truncated distillation — CE only). The
+    answer-CE applies only when the window ends at the top (L1 == n,
+    where logits exist). The window is rooted at a detached ``h_in``: no
+    gradient reaches blocks < L0, and the frozen norm/head receive none.
+    Peak graph = window width. Sliding body windows (conn_window) reuse
+    this with ce_w=0."""
     n = stack.n_layers
+    L1 = n if L1 is None else L1
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h = h_in
         losses = []
-        for L in range(L0, n + 1):
+        for L in range(L0, L1 + 1):
             h = stack.run_block(L, h, pos_emb)
-            losses.append(loss_fn(
-                stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
-                normed=(L == n)))
-        total = sum(losses)
-        if ce_w > 0:
+            if L in targets:  # sparse targets: endpoint-sliding windows
+                losses.append(loss_fn(
+                    stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
+                    normed=(L == n)))
+        total = hidden_w * sum(losses)
+        if ce_w > 0 and L1 == n:
             logits = stack.lm_head(
                 stack.final_norm(h)[0, s0 + ans_off - 1: s0 + A - 1])
             total = total + ce_w * answer_ce(logits, gold)
@@ -480,10 +485,10 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
 
 
 def _summed_item(cfg, stack, loss_fn, it, targets, device):
-    """One item's per-block local pass on the student's own stream: strict
-    local steps below, lens-CE where configured, the connected tail window
-    at the top. ``targets`` is {L: [A, H]} regardless of source (disk cache
-    or online teacher)."""
+    """One item's pass on the student's own stream: block-local steps (or
+    sliding conn_window-connected windows) below, lens-CE where configured,
+    the connected tail window at the top. ``targets`` is {L: [A, H]}
+    regardless of source (disk cache or online teacher)."""
     n = stack.n_layers
     ids = it.student_ids.to(device)[None]
     pos = it.position_ids.to(device)[None]
@@ -491,17 +496,56 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
     pos_emb = stack.rope(h, pos)
     gold = ids[0, it.ans0: it.s0 + it.A]
     tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
+    W = max(cfg.train.conn_window, 1)
     layer_losses = []
-    for L in range(1, n + 1):
+    L = 1
+    while L <= n:
         if L == tail0:
             tail_targets = {LL: targets[LL] for LL in range(tail0, n + 1)}
             tail_losses, h = tail_step(
                 stack, tail0, h.detach(), pos_emb, tail_targets,
                 it.s0, it.A, it.ans0 - it.s0, gold,
                 loss_fn, cfg.train.tail_ce_weight,
+                hidden_w=cfg.train.tail_hidden_weight,
             )
             layer_losses.extend(tail_losses)
             break
+        if W > 1 and cfg.train.conn_stride == 1:
+            # FAITHFUL sliding windows: one clean no-grad trajectory, then
+            # every body layer L1 is matched as the ENDPOINT of a window
+            # [L1-W+1 .. L1] whose backward updates ALL covered blocks —
+            # uniform k-deep credit for every layer (owner's design).
+            last_body = min(tail0 - 1, n)
+            with torch.no_grad():
+                h_traj = {L - 1: h.detach()}
+                t = h
+                for LL in range(L, last_body + 1):
+                    t = stack.run_block(LL, t, pos_emb)
+                    h_traj[LL] = t.detach()
+            for L1 in range(L, last_body + 1):
+                L0 = max(1, L1 - W + 1)
+                win_losses, _ = tail_step(
+                    stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
+                    it.s0, it.A, it.ans0 - it.s0, gold,
+                    loss_fn, ce_w=0.0, L1=L1,
+                )
+                layer_losses.extend(win_losses)
+            h = h_traj[last_body]
+            L = last_body + 1
+            continue
+        if W > 1:
+            # DISJOINT windows (conn_stride 0): detach every W blocks —
+            # cheap approximation; credit depth varies inside the window
+            L1 = min(L + W - 1, tail0 - 1, n)
+            win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
+            win_losses, h = tail_step(
+                stack, L, h.detach(), pos_emb, win_targets,
+                it.s0, it.A, it.ans0 - it.s0, gold,
+                loss_fn, ce_w=0.0, L1=L1,
+            )
+            layer_losses.extend(win_losses)
+            L = L1 + 1
+            continue
         if L == n:
             loss_val, h = last_block_step(
                 stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
@@ -520,6 +564,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                 ans_off=it.ans0 - it.s0,
             )
         layer_losses.append(loss_val)
+        L += 1
     return layer_losses
 
 

@@ -117,6 +117,24 @@ class TrainConfig:
     # confined to final-block readout. 0 = off (pure block-local, the default).
     tail_ce_blocks: int = 0
     tail_ce_weight: float = 0.0
+    # in-window hidden-loss weight for the connected tail. 1.0 = the hybrid
+    # (deep supervision inside the window); 0.0 = PURE truncated
+    # distillation — only the top CE drives the window (owner challenge
+    # 2026-07-04: in-window trajectory mimicry may fight readout assembly,
+    # since the teacher's window trajectory was computed WITH the context).
+    tail_hidden_weight: float = 1.0
+    # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
+    # every layer gets k-deep credit assignment, peak activation graph
+    # stays k blocks. 0/1 = classic block-local. Composes with the tail
+    # window (which is just the last window position — the only one where
+    # logits exist, so the only one carrying the answer-CE).
+    conn_window: int = 0
+    # 0 = DISJOINT windows (detach every k blocks; walk compute unchanged;
+    # credit depth depends on position inside the window). 1 = FAITHFUL
+    # sliding windows: every body layer's target is matched as the ENDPOINT
+    # of a k-deep window that updates ALL covered blocks — uniform k-deep
+    # credit everywhere, at ~k x body compute.
+    conn_stride: int = 0
     # per-block lens-CE (summed schedule): every block >= lens_ce_from gets a
     # behavioral auxiliary through the frozen logit lens — Belilovsky-style
     # local heads. Strictly block-local (unlike tail_ce): the personalization

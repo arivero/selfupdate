@@ -1,0 +1,27 @@
+# TARGET (owner design, k-determination): FAITHFUL sliding k-connected
+# windows — every block updated with uniform 8-deep credit; the top
+# window carries the CE. NOT tail-only training: all blocks except
+# embedding/logits are trained with connected credit. k=8 point of the
+# connectivity law.
+run_name: lw_r_slide8_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  conn_window: 8
+  conn_stride: 1
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false

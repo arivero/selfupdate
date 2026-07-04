@@ -38,6 +38,18 @@ are in `src/selfupdate/train/layerwise.py`:
 
 Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
+## Publication-Critical Constraints (owner directives, 2026-07-04)
+
+- **Never train only the last k blocks "under any subterfuge."** A
+  tail-only readout window with CE is, to a referee, classical
+  distillation of the top layers — it invalidates the layerwise/forward
+  claim. The sanctioned form is the SLIDING k-connected window
+  (`conn_window` + `conn_stride: 1`): every block updated with uniform
+  k-deep credit; the top window carries the CE only because logits exist
+  there. Tail-only arms are allowed solely as labeled ABLATIONS.
+- The embedding and logits matrix are never trained, in any window
+  scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
+
 ## Hard-Won Lessons
 
 - Strict hidden matching stores signal but weakly recites; the readout is the
