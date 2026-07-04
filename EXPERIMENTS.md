@@ -475,3 +475,43 @@ absorb heterogeneous content without mutual destruction at 0.6B scale.)
 q_ch16 destruction at the 20-epoch checkpoint: intrusion 17.5%,
 prose_es +0.78 (v1 anchors — the av2 treatment is the pending fix);
 ch16_ext (+20ep) decides the recall question first.
+
+### Finding C2-9: the intrusion residual is not an anchor-weight problem — it is a corpus-size problem
+Three Machado arms, all with v2 anchors, matched budget:
+
+| arm | recall CER | hellaswag | intrusion |
+|---|---|---|---|
+| anchordiv (w=0.5) | 0.021 | −5.5 | 12.5% |
+| anchordiv_w1 (w=1.0) | **0.004** | −6.0 | 12.5% |
+| anchordiv_s43 (seed) | 0.042 | −6.5 | 12.5% |
+| **combined (poem + ch1)** | **0.007** | **−3.5** | **10.0% → CLEAN** |
+
+Doubling the anchor weight does nothing to intrusion (stuck at exactly
+12.5%) and even improves recall — the anchor axis is saturated. What DOES
+move it: co-residence. The combined arm dilutes intrusion below threshold
+and halves the benchmark cost, at champion-level poem recall. Diluting
+the readout across more content is a better regularizer than pulling
+harder on anchors. Current best Machado checkpoint = lw_m_combined
+(CLEAN + CER 0.007). Replicated intrusions at 12.5% across seeds suggest
+the residual is a stable property of poem-alone consolidation at 0.6B.
+
+### Finding C2-10: LoRA at 4B is MORE destructive than full-FT at 0.6B
+lw_l_final_4b (LoRA r16, lr 1e-4, v1 anchors): recall healthy (cer_flat
+0.072, maieu 0.010) but hellaswag −16.0 pts and prose_es +1.00. The C1
+warning ("LoRA arms are not inherently forgetting-proof") was an
+understatement: rank-16 updates at 10× the FT lr concentrate damage.
+Follow-ups queued on the two axes separately: v2 anchors (4b_av2), then
+halved lr (4b_av2lr). 8B/14B v1 batteries will complete the matched
+scale picture when they land.
+
+### Finding C2-11: the tuned lens CONFIRMS deep storage is not secretly readable
+Tuned-lens re-profiles (calibrated translators, KL 1.43 after 3M tokens):
+calibration lifts every layer ~4–5 nats, but the trained-vs-base
+separation still opens only at L22+ (strict arm: Δ0.8 nats at L22, Δ1.4
+at L24, assembly completing at L26–28). The C1 "storage is deep but
+readout assembles in the tail" picture survives the better instrument —
+mid-depth memory is genuinely non-vocabulary-shaped, not miscalibrated.
+
+P3 note: adapt_records' fast path rejected Qwen-native thinking records
+(crash-loop at load, fixed). Harvest quality: 4,751 censored spans, 22%
+of trace chars censored, 321/333 traces quote at least one verse.
