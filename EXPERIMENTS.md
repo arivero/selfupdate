@@ -760,3 +760,36 @@ its OWN states; depth-parallelism buys no recitation. The input-stream
 question is answered: student-stream is essential for readout; teacher-
 stream remains interesting only for storage pre-passes (two-phase) or
 k>1 teacher-windows (C3, docs/windows.md taxonomy).
+
+### Finding C2-28: the aux-100% control fails at BOTH jobs — the synergy is real
+lw_r_lensonly (hidden_loss zero, uniform local lens-CE at every layer —
+the "auxiliary is 100%" caricature, honestly run): CER 0.795 (barely
+above strict-matching's 0.85 — it cannot recite), AND worst probe
+category +8.70 nats — the most destructive arm ever measured, an order
+beyond any threshold. Bracketing complete: hidden-only stores but
+cannot recite (0.85); aux-only neither recites NOR survives (0.795 +
+capability wreckage); the uniform combination is clean and hidden-
+primary (slide8). The naming contract holds empirically: the hidden
+losses are load-bearing for storage AND for stability — the lens-CE
+signal without trajectory grounding tears the model apart.
+
+### Finding C2-29: the teacher ceiling, full corpus — students exceed teacher BEHAVIOR ~40×
+teacher_ceiling Qwen3-0.6B × v4, n=474 (the real number, not the probe):
+CER 0.650 / line_exact 0.056. Per family: full(copy-everything) 0.000;
+sect 0.41; cont 0.65; long-cont 0.35-0.46; maieutic 0.85 (0/141 —
+dialogue frames defeat the teacher's passage use almost entirely).
+Trained students recite the same items at 0.001-0.041. Consequences:
+(a) classical output-KD would cap at 0.650 — this method is NOT
+behavior distillation, information travels via states + gold text;
+(b) elicitation-robustness (maieutic 0.000 after training vs teacher's
+0.85) is CREATED by consolidation, not inherited; (c) ceiling grid for
+other sizes/corpora still computing — expect the gap to close with
+model size (locate-and-continue improves with scale).
+
+Notes: 8B av2 — recall 0.187→0.146 with v2 anchors and intrusion 5%,
+but hellaswag −8.0 persists: LoRA benchmark damage is anchor-independent
+at 8B too (C2-16/24 extended; probe-flag discrepancy at 8B to re-check
+at wrap). ft4b (offload_adam full-FT 4B): 2.3 s/item — CHEAPER per item
+than the 4B LoRA arms; paging overhead amortized to noise by
+grad_accum=8 → the sliding-window Adam prefetch is UNNECESSARY
+(empirical gate passed without building it); ETA ~07:00.
