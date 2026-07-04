@@ -145,6 +145,31 @@ anneal trades some recall for measurably less intrusion. v3-catechism
 full CER 0.321/0.601 is NOT comparable (its eval corpus includes drill
 items); needs a v2-records eval for a fair read.
 
+## Wave J/K Partials (02:00)
+
+- **Two-phase pipeline works**: `tail_only` (frozen vocab_strict body from
+  `init_from`, train ONLY the k=4 window) reached subset CER 0.000 at the
+  matched 13.3k budget — full eval pending. If confirmed, storage can be
+  trained fully block-local/parallel and behavior added in a bounded
+  second phase: the strongest form of the streaming story.
+- **Mistral-7B full: CER 0.054 / 92.7% exact** (LoRA r16, online teacher,
+  vocab_mse + tail k=4) — near-champion recitation on a 2023 non-Qwen
+  family, first-attempt, no family-specific code. Qwen-4B LoRA 0.244,
+  Llama-8B/Qwen-8B trailing (evals pending) — LoRA arm quality varies
+  strongly by family; Mistral >> Qwen-4B/8B at the same recipe.
+- **k-sweep at 1.7B**: k=2 finished 0.087/0.907 after a LATE convergence
+  (subset 0.676 at 70% budget -> 0.087 final; same late-plunge dynamics as
+  lens_kl — narrow/hard credit paths start slow). k=8 tracking best
+  (subset 0.036), k=4 eval pending.
+- **Cross-corpus 2x2 is a double negative**: v2-champion on v3 corpus CER
+  1.88 (cannot do drills it never saw — expected); v3-trained on v2
+  recitation CER 0.711 (matched budget split across drills+recitation
+  UNDERTRAINS recitation). At matched budget, catechism data does NOT help
+  pure recitation at 0.6B. The maieutic hypothesis survives only as
+  "elicitation diversity needs EXTRA budget, not substituted budget" — v4
+  should be judged on multi-prompt elicitation evals, not recitation CER
+  alone.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
