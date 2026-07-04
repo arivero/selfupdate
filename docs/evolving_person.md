@@ -113,11 +113,20 @@ Nightly (or idle-time), on the serving hardware:
    readiness:
    - *retrieval frequency*: a RAG result fetched many times is the
      definition of a "usual detail" (free from tool logs);
-   - *content-head attention mass*: the head-taxonomy probe (C2 Part 6)
+   - *content-head attention mass*: the head-taxonomy probe (C2 Part 6,
+     `scripts/attention_probe.py` → `runs/attention_probe_0.6B/`)
      classifies heads into grammar-like (local, low-entropy,
-     privileged-blind) vs content/insight (long-range,
-     privileged-heavy); attention from content heads onto a span is a
-     direct "the model considered this worth attention" measurement;
+     privileged-blind) vs content (privileged-heavy); attention from
+     content heads onto a span is a direct "the model considered this
+     worth attention" measurement. **First results (Qwen3-0.6B, 16 v4
+     examples): 112/448 content heads, concentrated at L7–L20 (peak 11
+     heads at L12) and absent from the readout tail L26–28; the single
+     strongest is L7-h6 with 95% of its answer-position attention on
+     the passage at entropy 0.32 — the same L7 where teacher_censored
+     localized context integration. Retrieval attention lives mid-net;
+     the tail assembles but does not retrieve. Caveat: raw "attention
+     distance" is sink-confounded (heads staring at token 0 score ~700
+     tokens); distance only defines grammar heads, never content.**
    - *MoE router statistics*: if novel-content tokens route to
      identifiable experts (C2 router probe on gpt-oss-20b), routing is
      both a scoring signal AND a parameter-selection mechanism —
