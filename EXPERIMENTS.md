@@ -580,3 +580,16 @@ register (useful for restricting consolidation params) but does not
 mark THIS text as novel on its own. Before/after-consolidation routing
 shift is the sharper follow-up (future work; needs a memorized gpt-oss
 checkpoint).
+
+### Finding C2-16: LoRA destructiveness is not an anchor or lr problem; intrusion falls with scale
+4B single-axis grid (all LoRA r16): v1 anchors hs −16.0 / av2 −14.5 /
+av2+lr÷2 −12.5 with recall collapsing (0.073 → 0.088 → 0.226). The
+benchmark damage barely moves; the update's low-rank concentration is
+the remaining suspect — r64 arm queued. 14B (v1): recall 0.066, maieu
+0.057, poetry_es +1.21, hs −13.5 → same signature. Meanwhile intrusion
+DROPS monotonically with scale: 0.6B 12.5% → 4B 7.5% → 14B 2.5% — the
+memorization groove is shallower relative to capacity in bigger models,
+consistent with the dilution law (C2-9) operating on model size instead
+of corpus count. Scale table (recall/maieu): 0.6B 0.015/0.001 (FT), 1.7B
+0.038 (FT), 4B 0.073/0.010, 8B 0.187/0.117, 14B 0.066/0.057 (LoRA r16 —
+NOT monotone; 8B anomaly unexplained, possibly lr-scale interaction).
