@@ -52,7 +52,9 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   0/absent + tail_ce_blocks > 0) — not as a baseline, not as a repro
   reference, not "under any subterfuge". New arms use sliding windows
   (conn_window + conn_stride: 1) or fully local schedules. Parallelism
-  repro references switch from final_k8 to the slide8 checkpoint.**
+  repro references switch from final_k8 to the slide8 checkpoint.
+  Tail/classical-distillation experiments BELONG TO the sibling checkout
+  ../selfupdate_kd — route them there, keep this branch pure layerwise.**
   Precise window semantics (gradient-isolation, NOT memory management;
   endpoint vs in-window loss; teacher- vs student-stream input):
   docs/windows.md — read it before touching tail_step or conn_window.
