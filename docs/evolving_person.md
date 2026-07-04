@@ -229,3 +229,34 @@ problem has a workload-specific answer:
 4. Connectivity ladder: experience log (byte-identical fleet) →
    central diff broker + gate + server momentum (federated) →
    gossip diff averaging (weakest; gate on every node).
+
+## The update problem (owner objection, 2026-07-05)
+
+Every few months the base model is replaced by the vendor; weight deltas
+do not survive (they live in one parameterization's coordinates — the
+chimera boundary: portability held only within a shared frozen-vocab
+base). The program's answer, by construction not retrofit:
+
+1. **Weights are a cache; the experience log is canonical.** On update,
+   REPLAY the log through the new base. The method's targets are
+   trajectories the new base generates itself from (new weights +
+   logged context) — the objective re-derives; nothing needs the old
+   model's internals. Cost: a year of absorbed items replays in hours
+   to days on the owner's hardware (post C3 speedups), per update.
+   Side effect: re-encoded by a stronger base, the person has
+   retroactively learned its life better.
+2. **Distill-back when the log cannot be kept:** the old personal model
+   interrogates itself (maieutic machinery — the live-Socratic idea in
+   reverse) and writes synthetic memoirs; the new base consolidates
+   them. Elicitation-diversity findings say self-interrogation output
+   is exactly the readable form.
+3. **Identity caveat, stated honestly:** replay produces a successor
+   that shares the biography, not the connectome. Stage-0 of this is
+   already how the assistant itself persists (files replayed per
+   session).
+4. **Strategic inversion:** infeasible for API vendors = the moat of
+   local open-weights deployment. The owner holds log + weights, so
+   the self is updateable; and the one artifact open-weight vendors
+   already keep stable across family updates (the tokenizer/vocab) is
+   precisely the coordinate this method freezes. Personal weight
+   evolution is an open-weights-native capability.
