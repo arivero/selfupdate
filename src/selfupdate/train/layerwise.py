@@ -15,6 +15,10 @@ Schedules (registry; new variants = one new class):
                  their outputs precomputed into an activation cache; blocks
                  <= L never run again in later stages. This is the contract
                  that streams one 120B block at a time.
+- Connected WINDOWS (conn_window / tail_ce_blocks) are gradient-isolation
+  units, NOT memory management: backward exists only inside [L0..L1] and
+  stops at the detached input of L0 — see docs/windows.md for the precise
+  2x2 semantics (loss placement x window-input stream) before editing.
 - ``teacher_censored`` teacher-stream inputs: block L consumes the TEACHER's
                  h_{L-1} with the privileged rows deleted (censored own
                  attention, teacher position ids kept so the RoPE gap is

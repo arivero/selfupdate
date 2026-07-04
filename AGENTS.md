@@ -47,6 +47,9 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   (`conn_window` + `conn_stride: 1`): every block updated with uniform
   k-deep credit; the top window carries the CE only because logits exist
   there. Tail-only arms are allowed solely as labeled ABLATIONS.
+  Precise window semantics (gradient-isolation, NOT memory management;
+  endpoint vs in-window loss; teacher- vs student-stream input):
+  docs/windows.md — read it before touching tail_step or conn_window.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
 - **Naming contract:** a project called "layerwise distillation" must
