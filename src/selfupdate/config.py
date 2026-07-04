@@ -143,6 +143,12 @@ class TrainConfig:
     # Explicit rather than automatic so a run's VRAM footprint is never a
     # surprise (see AGENTS.md VRAM lessons).
     frozen_teacher_copy: bool = False
+    # summed full-FT: page each block's Adam moments to CPU between its
+    # steps. Blocks step one at a time, so resident optimizer state drops
+    # from all-blocks (8 B/param, the largest full-FT term) to one block's.
+    # Costs PCIe traffic per optimizer step — pair with grad_accum. This is
+    # what lets true full-FT summed fit at 4B on one 46 GB card.
+    offload_adam: bool = False
     # warm-start: load student weights from runs/<init_from>/checkpoint
     # (teacher stays the base model — cache identity is untouched)
     init_from: str = ""

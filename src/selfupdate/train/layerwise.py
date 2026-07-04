@@ -481,6 +481,15 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
     return layer_losses
 
 
+def _move_opt_state(opt, device) -> None:
+    """Page an optimizer's per-param state tensors between devices (Adam
+    moments dominate full-FT memory at 8 B/param)."""
+    for st in opt.state.values():
+        for k, v in st.items():
+            if torch.is_tensor(v) and v.device.type != torch.device(device).type:
+                st[k] = v.to(device)
+
+
 def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     device = cfg.model.device
     n = stack.n_layers
@@ -498,6 +507,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
         )
         for L in range(1, n + 1)
     }
+    offload = cfg.train.offload_adam
 
     step = accum = 0
     t0 = time.time()
@@ -517,8 +527,12 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                                     a_ids, anchor[1], base_logits=a_base)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
+                        if offload:
+                            _move_opt_state(opt, device)
                         opt.step()
                         opt.zero_grad(set_to_none=True)
+                        if offload:
+                            _move_opt_state(opt, "cpu")
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8,
