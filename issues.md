@@ -73,3 +73,14 @@ thinking mode + tool use + HF layout compatible with BlockStack.
   K2-class is beyond any near-term node.
 - Caveat: blog-grade specs — verify model cards + licenses + BlockStack
   layout (fails loudly by design) before committing arms.
+
+**Owner addition (2026-07-04): Qwen3.6-27B as the parallelism bridge
+model.** Dense 27B (Apr 2026, Apache 2.0, thinking mode, 262K ctx,
+SWE-bench 77.2): two-card on L40S (54 GB bf16 → PP2/TP2 mandatory) AND
+one-card on H100 80GB (traditional reference possible). Plan: once TP+PP
+are understood on current models (PP2 repro + 32B arm in flight), run
+the same 27B recipe as {single-H100 reference, PP2, TP2} and compare —
+parallelism correctness against a no-parallelism ground truth, and
+layerwise-vs-traditional at a size both can run. Its "Thinking
+Preservation" mechanism is adjacent to thinking_selective — investigate
+at harvest time.
