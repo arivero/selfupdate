@@ -556,3 +556,16 @@ DESTRUCTIVE. Combined with q_ch1_ext (recall 0.000 → intr 27.5%): along
 the ladder, intrusion is a function of recall depth more than of anchor
 set. There is a recall-intrusion frontier; "clean" rungs sit below a
 recall threshold on it. Synthesis at wrap (saturation-surface figure).
+
+### Finding C2-14: recall does NOT saturate by ch16 — the destruction envelope is the binding constraint
+q_ch16_ext (40ep total, 47k items, v1 anchors): cer_flat 0.078 — PASSES.
+The sect family closed 0.67 → 0.13 with budget (C2-7's "index
+saturation" was, like ch1, an item-budget artifact; storage AND
+addressing both scale at 0.6B up to 16 chapters). But destruction is the
+campaign's worst: prose_es +0.97, facts +0.86, all categories elevated,
+intrusion 15.0%, hellaswag −5.0. Ladder summary (0.6B, k8, ~40ep-scale
+budgets): ch4 CLEAN (av2) / ch8 borderline both anchor sets / ch16
+destructive. Saturation at 0.6B is defined by COLLATERAL, not by recall
+capacity — the model can store and address 16 chapters; it cannot yet do
+so without paying in neighboring capability. q_ch16_av2 queued to
+complete the (rung × anchors) grid.

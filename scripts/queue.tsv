@@ -92,3 +92,6 @@ runs/lw_n_thinksel_1p7b_rag/eval/recite.json	6000	runs/lw_n_thinksel_1p7b_rag/ch
 runs/lw_n_thinksel_1p7b_rag/eval/destruction.json	7000	runs/lw_n_thinksel_1p7b_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_n_thinksel_1p7b_rag.yaml --checkpoint runs/lw_n_thinksel_1p7b_rag/checkpoint --base-ref runs/destruction/base_1p7b/destruction.json
 # P6 MoE router probe — exclusive-ish lane (dequant ~40GB)
 runs/moe_router_probe/router.csv	40000	-	.venv/bin/python scripts/moe_router_probe.py
+runs/q_ch16_av2_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/q_ch16_av2_0p6b_rag.yaml
+runs/q_ch16_av2_0p6b_rag/eval/recite.json	3000	runs/q_ch16_av2_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/q_ch16_av2_0p6b_rag.yaml --checkpoint runs/q_ch16_av2_0p6b_rag/checkpoint
+runs/q_ch16_av2_0p6b_rag/eval/destruction.json	4000	runs/q_ch16_av2_0p6b_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/q_ch16_av2_0p6b_rag.yaml --checkpoint runs/q_ch16_av2_0p6b_rag/checkpoint --base-ref runs/destruction/base_0p6b/destruction.json
