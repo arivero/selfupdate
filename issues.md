@@ -107,3 +107,23 @@ from C1/C2: released 2026-04, post-dating the program design and the
 assistant's knowledge cutoff — an inertia blind spot caught by the owner
 2026-07-04; matched-ablation continuity justified staying on Qwen3
 within-campaign, but C3 arms should default to 3.6-generation bases.
+
+## Trainer hot-loop is sync-bound, not compute-bound (diagnosed 2026-07-05, owner question)
+
+The algorithm never needs CPU — the syncs exist purely for logging.
+Measured on 0.6B (600-token item, 28 blocks, fwd+bwd per block):
+`.item()` per block = 191 ms/item vs GPU-side loss accumulation with ONE
+flush per item = 131 ms/item → **1.46x free speedup** from a ~10-line
+change. The remaining 131 ms is kernel-launch-bound (real matmul work
+~15-20 ms at batch 1). C3 engineering ladder, in order of win/effort:
+1. defer `.item()`: stack per-block losses on GPU, `.cpu()` once per
+   grad-accum boundary (measured 1.46x);
+2. fused/foreach AdamW across the 28 per-block optimizers (one step
+   call instead of 28 python loops + clips);
+3. log every N items instead of every item (Lustre JSONL writes);
+4. length-bucketed batching >1 (kernel size up, launches amortized —
+   the big one, est. 2-3x more);
+5. disk-cache arms only: 28 lazy Lustre reads/item — prefetch or pack
+   per-item tensors in one file.
+DO NOT apply mid-campaign (timing regime must stay comparable across
+matched arms); apply as C3's first engineering block.

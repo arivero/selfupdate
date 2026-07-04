@@ -75,6 +75,12 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
 ## Hard-Won Lessons
 
+- The trainer hot loop is SYNC-bound: `.item()` per block = a GPU
+  round-trip per block per item purely for logging (measured 1.46x
+  recoverable; see issues.md "sync-bound"). Never add `.item()`/`.cpu()`
+  /`print` inside the block walk; accumulate on GPU, flush per accum
+  boundary.
+
 - Strict hidden matching stores signal but weakly recites; the readout is the
   hard part.
 - Tail-CE is the current best lever: keep hidden matching as storage, connect a

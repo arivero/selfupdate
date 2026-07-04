@@ -33,9 +33,17 @@ tok = AutoTokenizer.from_pretrained(cfg.model.name)
 model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
 model.to(cfg.model.device).eval()
 
-records = [{**r, "student_stub": r.get("privileged", ""), "interleaved": None}
-           for r in load_jsonl(cfg.data.examples_path)]
-r = recite_eval(model, tok, records, limit=args.limit)
+def teacher_view(r):
+    if r.get("interleaved"):
+        # thinking_selective: teacher sees ALL runs (kept + censored)
+        return {**r, "interleaved": [[t, False] for t, _ in r["interleaved"]]}
+    return {**r, "student_stub": r.get("privileged", ""), "interleaved": None}
+
+records = [teacher_view(r) for r in load_jsonl(cfg.data.examples_path)]
+if args.limit and args.limit < len(records):
+    step = max(1, len(records) // args.limit)
+    records = records[::step][: args.limit]  # family-balanced stride sample
+r = recite_eval(model, tok, records)
 print(f"TEACHER CEILING {cfg.run_name}: n={r['n']} cer {r['cer']:.4f} "
       f"cer_flat {r['cer_flat']:.4f} line_exact {r['line_exact']:.4f}")
 out = Path(args.out or f"runs/teacher_ceiling_{cfg.run_name}.json")

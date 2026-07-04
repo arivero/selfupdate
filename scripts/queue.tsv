@@ -1,3 +1,10 @@
+runs/teacher_ceiling_lw_k_final_k8_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml
+runs/teacher_ceiling_q_ch8_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch8_0p6b_rag.yaml
+runs/teacher_ceiling_q_ch16_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch16_0p6b_rag.yaml
+runs/teacher_ceiling_lw_k_final_1p7b_rag.json	6000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml
+runs/teacher_ceiling_lw_l_final_4b_rag.json	11000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_4b_rag.yaml
+runs/teacher_ceiling_lw_l_final_8b_rag.json	19000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_8b_rag.yaml
+runs/teacher_ceiling_lw_l_final_14b_rag.json	31000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_14b_rag.yaml
 # CAMPAIGN 2 queue — 2026-07-04 12:37:10. Saturation ladder (Quijote rungs, final recipe, frozen-copy online teacher)
 runs/q_ch1_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/q_ch1_0p6b_rag.yaml
 runs/q_ch1_0p6b_rag/eval/recite.json	3000	runs/q_ch1_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/q_ch1_0p6b_rag.yaml --checkpoint runs/q_ch1_0p6b_rag/checkpoint
@@ -183,10 +190,6 @@ runs/lw_r_slide8pure_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.
 runs/lw_r_slide8pure_0p6b_rag/eval/recite.json	3000	runs/lw_r_slide8pure_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_r_slide8pure_0p6b_rag.yaml --checkpoint runs/lw_r_slide8pure_0p6b_rag/checkpoint
 runs/lw_r_slide8pure_0p6b_rag/eval/destruction.json	4000	runs/lw_r_slide8pure_0p6b_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_r_slide8pure_0p6b_rag.yaml --checkpoint runs/lw_r_slide8pure_0p6b_rag/checkpoint --base-ref runs/destruction/base_0p6b/destruction.json
 # teacher-with-RAG behavioral ceilings — one per (model x dataset) combo (owner request)
-runs/teacher_ceiling_lw_k_final_k8_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml
-runs/teacher_ceiling_q_ch8_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch8_0p6b_rag.yaml
-runs/teacher_ceiling_q_ch16_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch16_0p6b_rag.yaml
-runs/teacher_ceiling_lw_k_final_1p7b_rag.json	6000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml
-runs/teacher_ceiling_lw_l_final_4b_rag.json	11000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_4b_rag.yaml
-runs/teacher_ceiling_lw_l_final_8b_rag.json	19000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_8b_rag.yaml
-runs/teacher_ceiling_lw_l_final_14b_rag.json	31000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_l_final_14b_rag.yaml
+runs/teacher_ceiling_lw_n_thinksel_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_n_thinksel_0p6b_rag.yaml
+runs/teacher_ceiling_lw_n_thinkwhole_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_n_thinkwhole_0p6b_rag.yaml
+runs/teacher_ceiling_lw_m_combined_0p6b_rag.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_m_combined_0p6b_rag.yaml
