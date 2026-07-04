@@ -49,6 +49,13 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   there. Tail-only arms are allowed solely as labeled ABLATIONS.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
+- **Naming contract:** a project called "layerwise distillation" must
+  have the per-layer hidden losses as the PRIMARY training signal.
+  Answer-CE stays a small auxiliary (weight <= 0.5, top window only) and
+  its gradient share must be REPORTED (signal attribution), never
+  silently promoted to 100% while the hidden weight quietly goes to 0.
+  If an ablation shows CE alone doing the work, that finding is
+  published as a threat to the thesis, not adopted under the old name.
 
 ## Hard-Won Lessons
 
