@@ -1,0 +1,7 @@
+# eval-only: Quijote ch1 corpus recite for the combined arm
+run_name: eval_combined_ch1
+data:
+  poem_path: data/quijote/raw_ch1.txt
+  examples_path: data/quijote/examples_ch1.jsonl
+  corpus_style: prose_quijote
+  maieutic: true

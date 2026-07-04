@@ -1,0 +1,6 @@
+# eval-only: Machado v4 corpus recite for the combined arm
+run_name: eval_combined_v4
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  maieutic: true
