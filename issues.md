@@ -84,3 +84,11 @@ parallelism correctness against a no-parallelism ground truth, and
 layerwise-vs-traditional at a size both can run. Its "Thinking
 Preservation" mechanism is adjacent to thinking_selective — investigate
 at harvest time.
+
+Single-L40S 27B addendum: bf16 impossible (54 GB weights alone), but the
+official Qwen3.6-27B-FP8 checkpoint (~27 GB) + bf16 LoRA + adapters-off
+teacher ≈ 31-33 GB fits one card. Risks: FP8 forward through our block
+walk + kernels==0.12.0 pin; SCIENCE: FP8-quantized teacher trajectories
+(what does trajectory distillation lose under a quantized teacher? —
+same question that gates INT4-base training of V4-Flash-class at C4).
+Full 27B grid: {1xH100 bf16 ref, PP2 bf16, TP2 bf16, 1xL40S FP8-LoRA}.
