@@ -225,6 +225,17 @@ l2mse cost: dCE +1.49, Bécquer intrusion +3.57 (worst profile at 1.7B).
 The loss ranking is scale- AND axis-dependent: l2mse buys recall with
 neighbor damage; vocab_mse stays the Pareto choice.
 
+## Anchor-CE Negative (04:00) — the regularizer became another poem
+
+tail_only + anchor-CE w=0.5: recall intact (CER 0.011) but intrusion
+WORSENED (Bécquer +3.57 vs +2.29 unanchored; mean dCE +2.02 vs +1.33).
+Plain CE on six fixed neighbor fragments is memorization pressure on
+those fragments — the tail also learns THEM, further warping the poetry
+manifold measured by the held-out probe. Fix queued: **anchor-KL** —
+KL(base || student) on anchor text through the tail window (base logits
+from the frozen teacher copy): "on neighbor input, behave like base" is
+the correct invariant; matching gold tokens is not.
+
 ## Lens Program (Wave I)
 
 Focus: multiple kinds of lens. A lens = optional learned per-layer
