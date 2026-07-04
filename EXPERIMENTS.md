@@ -515,3 +515,44 @@ mid-depth memory is genuinely non-vocabulary-shaped, not miscalibrated.
 P3 note: adapt_records' fast path rejected Qwen-native thinking records
 (crash-loop at load, fixed). Harvest quality: 4,751 censored spans, 22%
 of trace chars censored, 321/333 traces quote at least one verse.
+
+### Finding C2-12: selective think-censoring wins — and the thinking channel is the gentle channel
+Matched 333-spec arms (final recipe k8 + v2 anchors, 13.3k items), each
+evaluated under its own student view:
+
+| arm | recall CER | line_exact | worst cat | hellaswag | intrusion | verdict |
+|---|---|---|---|---|---|---|
+| whole-think censored | 0.077 | 0.913 | +0.14 | −1.0 | 7.5% | CLEAN |
+| thinking_selective | **0.037** | **0.953** | +0.18 | **+0.5** | **5.0%** | **CLEAN** |
+| (RAG-mode ref: anchordiv) | 0.021 | 0.990 | +0.47 | −5.5 | 12.5% | DESTR |
+
+Two results in one: (a) keeping free deduction visible to the student
+beats censoring the whole think block — the reasoning-channel fix works
+(the C1 Phi/gpt-oss resistance was a masking-policy problem, not a
+family property); (b) BOTH thinking arms show far less collateral than
+every RAG-mode arm: near-zero probe damage, no benchmark cost, lowest
+intrusion of the campaign. Hypothesis: teacher targets conditioned on
+the model's own generated reasoning sit closer to the student's natural
+distribution, so consolidation fights the prior less. Caveat: the
+selective student legitimately sees its own (censored-of-verses)
+deduction at eval — that IS the deployment contract, not leakage;
+sub-verse fragments below the 5-word whole-verse threshold may carry
+paraphrase-level signal. 1.7B selective replication queued.
+Evolving-person consequence: distill through the thinking channel.
+
+### Finding C2-13: LoRA destructiveness persists at 8B; recall degrades with scale at fixed budget
+8B (LoRA r16, lr 1e-4, v1 anchors): recall 0.187/0.749 (worse than 4B's
+0.072 — LoRA convergence slows with scale at matched epochs), maieu
+0.117, prose_es +1.06, hellaswag −8.5 → DESTRUCTIVE. Same signature as
+4B (−16.0). 14B maieu already at 0.057 (recite pending) — not monotone;
+14B ran ~4h (more optimizer steps per epoch? no — 474 examples, same;
+likely healthier lr/scale interaction). 4B follow-ups (av2, av2+lr/2)
+will separate anchors from lr.
+
+### Ladder nuance: q_ch8_av2 — v2 anchors BUY recall, intrusion tracks recall depth
+q_ch8_av2: recall 0.032 (vs 0.074 with v1 anchors — anchors improved
+recall!) but intrusion 15.0% (v1: 5.0%) and facts +0.51 by a hair →
+DESTRUCTIVE. Combined with q_ch1_ext (recall 0.000 → intr 27.5%): along
+the ladder, intrusion is a function of recall depth more than of anchor
+set. There is a recall-intrusion frontier; "clean" rungs sit below a
+recall threshold on it. Synthesis at wrap (saturation-surface figure).
