@@ -56,6 +56,11 @@ def _read_json(p):
     return json.loads(p.read_text()) if p.exists() and p.is_file() else None
 
 
+def _recite_json(p):
+    r = _read_json(p)
+    return r if isinstance(r, dict) and "cer" in r else None
+
+
 def _recite_files(d):
     eval_dir = Path(d) / "eval"
     if not eval_dir.exists():
@@ -87,7 +92,7 @@ def _best_run():
     best = None
     for d in sorted(RUNS.iterdir()):
         for p in _recite_files(d):
-            r = _read_json(p)
+            r = _recite_json(p)
             if r and (best is None or r["cer"] < best[1]["cer"]):
                 best = (f"{d.name}:{_recite_label(d, p)}", r)
     return best
@@ -212,7 +217,7 @@ def per_run_appendix(pdf):
         trains = [m for m in ms if m.get("kind") == "train"]
         evals = [m for m in ms if m.get("kind") == "eval"]
         stages = [m for m in ms if m.get("kind") == "stage"]
-        fulls = [(p, _read_json(p)) for p in _recite_files(d)]
+        fulls = [(p, _recite_json(p)) for p in _recite_files(d)]
         fulls = [(p, r) for p, r in fulls if r]
         full = next((r for p, r in fulls if _recite_label(d, p) == "final"), None)
         best_full = min((r for _, r in fulls), key=lambda r: r["cer"]) if fulls else None

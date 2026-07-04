@@ -67,7 +67,12 @@ def run_summary(run_dir: Path) -> dict:
     ms = read_metrics(run_dir)
     trains = [m for m in ms if m.get("kind") == "train"]
     evals = [m for m in ms if m.get("kind") == "eval"]
-    fulls = [(p, json.loads(p.read_text())) for p in recite_files(run_dir)]
+    fulls = [
+        (p, r)
+        for p in recite_files(run_dir)
+        for r in [json.loads(p.read_text())]
+        if isinstance(r, dict) and "cer" in r
+    ]
     default = next((r for p, r in fulls if recite_label(run_dir, p) == "final"), None)
     best_full = min((r for _, r in fulls), key=lambda r: r.get("cer", float("inf"))) if fulls else {}
     rec = default or best_full or {}
