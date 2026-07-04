@@ -31,7 +31,9 @@ import torch
 import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber")
-VOCAB_KINDS = ("vocab_mse", "lens_kl")
+VOCAB_KINDS = ("vocab_mse", "lens_kl", "vocab_fisher")
+
+FISHER_TOPK = 64
 
 
 def hidden_match(
@@ -112,6 +114,28 @@ class HiddenLoss:
                 t = teacher_h.float()
                 denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
+        if self.kind == "vocab_fisher":
+            # Position-dependent Fisher metric: weight the logit-space error
+            # by the TEACHER's layer-L lens distribution, restricted to its
+            # top-k support. This is the Gauss-Newton form of lens_kl —
+            # vocab_mse is its p-uniform, full-support degeneration. Capacity
+            # concentrates on directions that move the tokens the teacher
+            # actually predicts at this position, instead of all 151k rows
+            # equally. Wk/p are detached (the head is frozen); gradient
+            # reaches only student_h.
+            with torch.autocast(student_h.device.type, enabled=False):
+                with torch.no_grad():
+                    t_logits = self.lm_head(teacher_h).float()
+                    p, idx = t_logits.softmax(-1).topk(FISHER_TOPK, dim=-1)
+                    p = p / p.sum(-1, keepdim=True)
+                    Wk = self.lm_head.weight.detach()[idx].float()  # [N, k, H]
+                d = (student_h.float() - teacher_h.float())
+                proj = torch.einsum("nkh,nh->nk", Wk, d)
+                t = teacher_h.float()
+                tproj = torch.einsum("nkh,nh->nk", Wk, t)
+                num = (p * proj.pow(2)).sum(-1).mean()
+                denom = (p * tproj.pow(2)).sum(-1).mean().clamp_min(1e-8)
+                return num / denom
         # lens_kl: KL(teacher || student) over the frozen logit lens. The
         # V-sized matmul may run under the caller's autocast (bf16); the
         # softmax/KL run in fp32.

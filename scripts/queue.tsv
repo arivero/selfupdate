@@ -98,3 +98,7 @@ runs/q_ch16_av2_0p6b_rag/eval/destruction.json	4000	runs/q_ch16_av2_0p6b_rag/eva
 runs/lw_l_final_4b_r64_rag/checkpoint	16000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_l_final_4b_r64_rag.yaml
 runs/lw_l_final_4b_r64_rag/eval/recite.json	8000	runs/lw_l_final_4b_r64_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_l_final_4b_r64_rag.yaml --checkpoint runs/lw_l_final_4b_r64_rag/checkpoint
 runs/lw_l_final_4b_r64_rag/eval/destruction.json	12000	runs/lw_l_final_4b_r64_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_l_final_4b_r64_rag.yaml --checkpoint runs/lw_l_final_4b_r64_rag/checkpoint --base-ref runs/destruction/base_4b/destruction.json
+# stretch: Fisher vocab-metric loss, matched to Wave-I champion protocol
+runs/lw_o_fisher_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_o_fisher_0p6b_rag.yaml
+runs/lw_o_fisher_0p6b_rag/eval/recite.json	3000	runs/lw_o_fisher_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_o_fisher_0p6b_rag.yaml --checkpoint runs/lw_o_fisher_0p6b_rag/checkpoint
+runs/lw_o_fisher_0p6b_rag/eval/destruction.json	4000	runs/lw_o_fisher_0p6b_rag/eval/recite.json	.venv/bin/python scripts/destruct_eval.py --experiment configs/experiments/lw_o_fisher_0p6b_rag.yaml --checkpoint runs/lw_o_fisher_0p6b_rag/checkpoint --base-ref runs/destruction/base_0p6b/destruction.json

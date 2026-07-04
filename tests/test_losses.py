@@ -115,3 +115,49 @@ def test_hidden_loss_geometric_delegates():
     torch.manual_seed(11)
     hs, ht = torch.randn(10, H), torch.randn(10, H)
     assert torch.allclose(loss_fn(hs, ht), hidden_match(hs, ht, "nmse"))
+
+
+def test_vocab_fisher_zero_at_identity_positive_otherwise():
+    loss = _vocab_loss("vocab_fisher")
+    torch.manual_seed(7)
+    ht = torch.randn(9, H)
+    assert loss(ht.clone(), ht).item() < 1e-10
+    hs = ht + 0.3 * torch.randn(9, H)
+    assert loss(hs, ht).item() > 0
+
+
+def test_vocab_fisher_differs_from_vocab_mse_and_grads_flow():
+    fisher = _vocab_loss("vocab_fisher")
+    vmse = _vocab_loss("vocab_mse")
+    torch.manual_seed(8)
+    ht = torch.randn(7, H)
+    hs = (ht + 0.5 * torch.randn(7, H)).requires_grad_(True)
+    lf = fisher(hs, ht)
+    lv = vmse(hs, ht)
+    # same family, different metric: both positive, not equal
+    assert lf.item() > 0 and lv.item() > 0
+    assert abs(lf.item() - lv.item()) > 1e-6
+    lf.backward()
+    assert hs.grad is not None and torch.isfinite(hs.grad).all()
+    # frozen head/norm receive no gradient
+    assert all(p.grad is None for p in fisher.lm_head.parameters())
+
+
+def test_vocab_fisher_weights_toward_teacher_support():
+    """An error along a HIGH-probability token's unembedding row must cost
+    more than the same-size error along a LOW-probability row."""
+    torch.manual_seed(9)
+    norm = torch.nn.Identity()
+    head = torch.nn.Linear(H, V, bias=False)
+    loss = HiddenLoss("vocab_fisher", final_norm=norm, lm_head=head)
+    with torch.no_grad():
+        head.weight[:] = torch.randn(V, H)
+        ht = 3.0 * head.weight[0] / head.weight[0].norm()  # teacher peaks token 0
+        ht = ht[None]
+        logits = head(ht)
+        lo = logits[0].argmin().item()
+        e_hi = head.weight[0] / head.weight[0].norm()
+        e_lo = head.weight[lo] / head.weight[lo].norm()
+    l_hi = loss(ht + 0.1 * e_hi[None], ht)
+    l_lo = loss(ht + 0.1 * e_lo[None], ht)
+    assert l_hi.item() > l_lo.item()
