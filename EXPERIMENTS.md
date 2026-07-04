@@ -690,3 +690,40 @@ distributed/full-body methods at matched recall → 10-15%. Emerging law:
 — the completion groove IS the concentrated readout. The doctrine's
 depth-uniformity requirement is not just methodological hygiene; it is
 empirically the anti-intrusion direction.
+
+### Finding C2-22: the owner's hypothesis confirmed — in-window trajectory mimicry INSTALLS the intrusion groove
+lw_r_tailpure (body trained by per-layer hidden losses; top-k8 window
+CE-ONLY, tail_hidden_weight=0): CER 0.017 / le 0.978 (matches final_k8
+0.015) with **intrusion 2.5%** — vs 12.5-22.5% for the hidden+CE hybrid
+window, at identical body training. The C2-21 "concentration" law
+sharpens into a mechanism: what installs the trigger groove is matching
+the TEACHER'S WITH-CONTEXT TRAJECTORY near the readout. The teacher's
+window states are context-conditioned; forcing the student into them
+teaches "enter poem-state whenever the stream looks poem-ish" —
+intrusion. CE-only readout learns "produce the poem when ASKED" —
+prompt-conditioned, groove-free. Consistent across the family: fisher
+(mimicry in output-token geometry) 57.5%; tailonly_4b (window mimicry,
+no body) 25%; hybrid windows 12.5-22.5%; mimicry-free readout 2.5%.
+Per the naming contract this ablation is REPORTED, not silently
+adopted: the doctrine-clean composition is sliding uniform body credit
++ mimicry-free top window (lw_r_slide8pure, queued as Sunday arm 0).
+
+### Finding C2-23: depth-biased behavioral signal grooves even harder with better data
+lw_r_lensdeep2 (deep-only lens-CE, modern kit): recall 0.046 but
+intrusion 50.0%, procedural +2.51 — the old-kit 0.307 arm was bad at
+reciting AND we now see its modern version is an intrusion machine.
+Depth-biased aux = groove, confirming the doctrine empirically from the
+lens side (fisher was the metric side, tailonly the parameter side).
+
+### Finding C2-24: the LoRA axis closes — nothing fixes it
+4B r64 (rank quadrupled): bench_min −18.0, prose_es +0.94, intr 15% —
+worse than r16. Anchors, lr, and rank all fail; the LoRA vehicle itself
+is wrong for full-body consolidation at scale. Scale recipe = full-FT
+window schemes (tailonly_4b VRAM path) or offload_adam full-FT (ft4b
+pending).
+
+### Finding C2-25: dilution does not rescue 1.7B full-FT
+lw_m_combined_1p7b: v4-side recall 0.009 (best-ever at 1.7B) but intr
+27.5%, bench −9.5 → DESTR. The 0.6B combined-arm cleanliness does NOT
+transfer: full-FT at 1.7B digs grooves faster than co-residence dilutes
+them (C2-19 confirmed under the dilution lever).
