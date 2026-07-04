@@ -123,3 +123,13 @@ runs/lw_k_final_0p6b_rag/eval/recite_long.json	3000	runs/lw_k_final_0p6b_rag/eva
 runs/lw_k_final2p_0p6b_rag/eval/recite.json	3000	runs/lw_k_final2p_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_final2p_0p6b_rag.yaml --checkpoint runs/lw_k_final2p_0p6b_rag/checkpoint
 runs/lw_k_final2p_0p6b_rag/eval_maieu/recite.json	3000	runs/lw_k_final2p_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_final2p_0p6b_rag/checkpoint --out runs/lw_k_final2p_0p6b_rag/eval_maieu
 runs/lw_k_final2p_0p6b_rag/eval/recite_long.json	3000	runs/lw_k_final2p_0p6b_rag/eval/recite.json	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_k_final2p_0p6b_rag.yaml --checkpoint runs/lw_k_final2p_0p6b_rag/checkpoint
+# chain-robustness diagnostics: which final ingredient cost the long chain?
+runs/lw_k_maieutic_0p6b_rag/eval/recite_long.json	3000	-	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_k_maieutic_0p6b_rag.yaml --checkpoint runs/lw_k_maieutic_0p6b_rag/checkpoint
+runs/lw_k_anchorkl_0p6b_rag/eval/recite_long.json	3000	-	.venv/bin/python scripts/recite_long.py --experiment configs/experiments/lw_k_anchorkl_0p6b_rag.yaml --checkpoint runs/lw_k_anchorkl_0p6b_rag/checkpoint
+# last GPU work: final-recipe replication + scale
+runs/lw_k_final_s43_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_final_s43_0p6b_rag.yaml
+runs/lw_k_final_s43_0p6b_rag/eval/recite.json	3000	runs/lw_k_final_s43_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_final_s43_0p6b_rag.yaml --checkpoint runs/lw_k_final_s43_0p6b_rag/checkpoint
+caches/.v4_1p7b.marker	9000	-	bash -c ".venv/bin/python scripts/build_teacher_cache.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml && touch caches/.v4_1p7b.marker"
+runs/lw_k_final_1p7b_rag/checkpoint	35000	caches/.v4_1p7b.marker	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml
+runs/lw_k_final_1p7b_rag/eval/recite.json	6000	runs/lw_k_final_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_k_final_1p7b_rag.yaml --checkpoint runs/lw_k_final_1p7b_rag/checkpoint
+runs/lw_k_final_1p7b_rag/eval_maieu/recite.json	6000	runs/lw_k_final_1p7b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_0p6b.yaml --checkpoint runs/lw_k_final_1p7b_rag/checkpoint --out runs/lw_k_final_1p7b_rag/eval_maieu
