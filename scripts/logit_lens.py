@@ -33,7 +33,7 @@ def build_pairs(cfg, tok):
             for r in load_jsonl(cfg.data.examples_path)]
 
 
-def profile(model_src, cfg, tok, pairs, limit):
+def profile(model_src, cfg, tok, pairs, limit, translators=None):
     if (Path(model_src) / "adapter_config.json").exists():
         from peft import PeftModel
 
@@ -45,6 +45,7 @@ def profile(model_src, cfg, tok, pairs, limit):
     prof = gold_logprob_by_layer(
         model, tok, pairs, device=cfg.model.device, limit=limit,
         rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
+        translators=translators,
     )
     del model
     torch.cuda.empty_cache()
@@ -57,15 +58,23 @@ def main() -> None:
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
     ap.add_argument("--limit", type=int, default=24)
+    ap.add_argument("--lens", choices=("raw", "tuned"), default="raw")
+    ap.add_argument("--translators", default="runs/tuned_lens_0.6B/translators.safetensors")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+
+    translators = None
+    if args.lens == "tuned":
+        from selfupdate.train.tuned_lens import load_translators
+
+        translators = load_translators(args.translators, cfg.model.device)
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
     pairs = build_pairs(cfg, tok)
     ckpt = Path("runs") / args.run / "checkpoint"
 
-    base_prof = profile(cfg.model.name, cfg, tok, pairs, args.limit)
-    trained_prof = profile(str(ckpt), cfg, tok, pairs, args.limit)
+    base_prof = profile(cfg.model.name, cfg, tok, pairs, args.limit, translators)
+    trained_prof = profile(str(ckpt), cfg, tok, pairs, args.limit, translators)
 
     df = pd.DataFrame({
         "layer": list(base_prof.keys()),
@@ -74,7 +83,8 @@ def main() -> None:
     })
     out = Path("runs") / args.run / "eval"
     out.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out / "logit_lens.csv", index=False)
+    stem = "logit_lens" if args.lens == "raw" else "logit_lens_tuned"
+    df.to_csv(out / f"{stem}.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(8, 4))
     ax.plot(df.layer, df.base_logprob, marker="o", color="grey", label="base")
@@ -83,9 +93,9 @@ def main() -> None:
     ax.set_ylabel("mean gold-token logprob (student input, no context)")
     ax.legend()
     fig.tight_layout()
-    fig.savefig(out / "logit_lens.png", dpi=150)
+    fig.savefig(out / f"{stem}.png", dpi=150)
     print(df.to_string(index=False))
-    print(f"wrote {out / 'logit_lens.csv'} and .png")
+    print(f"wrote {out / f'{stem}.csv'} and .png")
 
 
 if __name__ == "__main__":

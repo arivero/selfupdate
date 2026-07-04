@@ -16,11 +16,15 @@ import torch.nn.functional as F
 
 @torch.no_grad()
 def gold_logprob_by_layer(model, tokenizer, pairs, device="cuda", limit=32,
-                          rebase_gap: bool = False) -> dict:
+                          rebase_gap: bool = False, translators=None) -> dict:
     """pairs: list[AlignedPair]. Returns {layer: mean gold-token logprob}.
     ``rebase_gap`` must match the training compaction (stub_gap trains at
     gap-shifted positions; probing at contiguous ones would measure an
-    untrained geometry)."""
+    untrained geometry). ``translators``: a tuned-lens ModuleDict
+    (train/tuned_lens.py); zero-init translators reproduce the raw lens
+    exactly (delta parameterization)."""
+    from ..train.tuned_lens import apply_translator
+
     n_layers = model.config.num_hidden_layers
     inner = model.model
     sums = torch.zeros(n_layers + 1, dtype=torch.float64)
@@ -36,6 +40,7 @@ def gold_logprob_by_layer(model, tokenizer, pairs, device="cuda", limit=32,
         for L in range(1, n_layers + 1):
             h = out.hidden_states[L][0, s.start: s.stop - 1]
             if L < n_layers:
+                h = apply_translator(translators, L, h)
                 h = inner.norm(h)  # hidden_states[n_layers] is already post-norm
             logits = model.lm_head(h)
             lp = F.log_softmax(logits.float(), -1)
