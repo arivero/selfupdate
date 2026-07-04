@@ -1,9 +1,10 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-04 morning - 24-40h campaign (Waves I/J/K + understanding
-probes) complete; final recipe = vocab_mse + maieutic v4 data + tail-CE
-k=4 + anchor-KL, one- or two-phase. Chronological findings below; the
-campaign closing table is in "Wave K Verdicts" + "Final Recipe".
+Updated: 2026-07-04 07:25 - CAMPAIGN CLOSED. Final recipe: vocab_mse +
+maieutic v4 data + tail-CE **k=8** + anchor-KL 0.5 (k=8 resolves the
+window-capacity trade-off; k=4 suffices for any two of trigger
+diversity / anchor discipline / chain depth). Chronological findings
+below; see "CAMPAIGN CLOSING TABLE" + "Window capacity".
 
 Metrics: `runs/results.md` (auto) | report: `runs/report.pdf` | raw logs:
 `runs/*/metrics.jsonl` and `runs/pipeline_*.log`.
@@ -297,17 +298,24 @@ train. Worth its own investigation at Quijote scale.
 | final 1p (v4+anchorKL) | 0.009 / 0.987 | 0.002 | 431 | +0.83 | +0.59 |
 | final 2p (v4+anchorKL, tail_only) | 0.009 / 0.988 | **0.000 / 100%** | 231 | +1.34 | +0.85 |
 
-**Interaction finding:** maieutic data and anchor-KL are each FREE
-individually (both keep the 708-verse chain) but COMBINED they regress
-chain depth (431/231) — the k=4 readout window can serve any two of
-{trigger diversity, base-behavior discipline, full chain depth} but not
-all three. Window-capacity hypothesis under test (final_k8 queued). Until
-it lands, deployment guidance: pick two —
-- archivist (whole poem, any prompt): maieutic v4, no anchor (0.015/0.000/708)
-- polite reciter (recall + minimal intrusion): anchor-KL on v2 (0.021/+0.71/708)
-- conversational + polite, short-form: final recipe (0.009/0.000/+0.83)
+**Window capacity: CONFIRMED and RESOLVED (07:20).** maieutic data and
+anchor-KL are each free individually (708-verse chain intact) but
+combined they saturate k=4 (431/231). **k=8 restores everything**:
 
-s43 replication + 1.7B final in flight as the last GPU work.
+| final recipe @ k=8 | value |
+|---|---|
+| recitation | 0.015 / 0.986 |
+| dialogue frames | 0.001 / 100% |
+| whole-poem chain (self) | **0.007 / 708 of 715** |
+| Bécquer intrusion | **+0.65** (campaign best) |
+| mean dCE | **+0.51** (campaign best) |
+
+Readout capacity is real and budgetable: k=4 holds any two of {trigger
+diversity, anchor discipline, chain depth}; k=8 holds all three. THE
+closing recipe: vocab_mse + maieutic v4 + tail-CE k=8 + anchor-KL 0.5.
+Replications: s43 one-phase k=4 variant 0.012/+0.91; at 1.7B the final
+recipe scores 0.021/0.976 (dCE +0.87, dialogue 0.000) — 3.5x better than
+the plain champion recipe at the same scale (0.075).
 
 ## Lens Program (Wave I)
 
