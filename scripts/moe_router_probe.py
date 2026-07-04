@@ -48,13 +48,33 @@ def condition_texts():
 
 @torch.no_grad()
 def routing_histograms(model, tok, text, device, max_tokens=768):
+    """Per-layer expert-usage histograms. output_router_logits=True is
+    UNUSABLE here: the hub-kernels fused-MoE path never calls the Python
+    router module, the recorder stays empty, and the aux-loss branch then
+    crashes on the empty tuple. Instead: capture each MLP's INPUT with a
+    pre-hook and run the router weights manually — kernel-agnostic."""
     ids = tok.encode(text, add_special_tokens=False)[:max_tokens]
     t = torch.tensor([ids], device=device)
-    out = model(t, output_router_logits=True, use_cache=False)
+    captured: dict[int, torch.Tensor] = {}
+    hooks = []
+    for i, layer in enumerate(model.model.layers):
+        def make_hook(i):
+            def pre(module, args, kwargs):
+                h = args[0] if args else kwargs["hidden_states"]
+                captured[i] = h.detach()
+            return pre
+        hooks.append(layer.mlp.register_forward_pre_hook(
+            make_hook(i), with_kwargs=True))
+    model(t, use_cache=False)
+    for h in hooks:
+        h.remove()
     k = model.config.num_experts_per_tok
     hists = []
-    for rl in out.router_logits:  # per MoE layer: [T, n_experts]
-        top = rl.float().topk(k, dim=-1).indices  # [T, k]
+    for i in sorted(captured):
+        router = model.model.layers[i].mlp.router
+        flat = captured[i].reshape(-1, captured[i].shape[-1]).float()
+        rl = F.linear(flat, router.weight.float(), router.bias.float())
+        top = rl.topk(k, dim=-1).indices  # [T, k]
         h = torch.zeros(rl.shape[-1], dtype=torch.float64)
         for e in top.flatten().tolist():
             h[e] += 1
