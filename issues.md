@@ -31,3 +31,23 @@ EXPERIMENTS.md (closing table) and runs/report.pdf.
    VRAM), 14B+ LoRA; Don Quijote data engineering.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
+
+## Campaign roadmap beyond C2 (sketched 2026-07-04, owner question)
+
+- **C3 — conversations (Stage B):** conversation-to-weights (privileged =
+  oldest turns; QA-about-censored-turns eval); attention-scored span
+  selection via the head taxonomy ("worth of attention" operational);
+  cycle mechanics: early-stop-on-readout (C2-6), heterogeneous batching
+  (C2-8/9), destruction gate as automated accept/reject; gpt-oss
+  thinking_selective with harmony harvests; 8B-14B full-FT via
+  offload_adam + sliding-window prefetch; before/after MoE routing-shift
+  probe (C2-15 follow-up).
+- **C4 — the person (Stage C):** 120B MoE on H100s, streamed-block
+  consolidation during serving idle; primary metrics = RAG-independence
+  curve + query-sophistication drift (docs/evolving_person.md); weeks-long
+  continual run with nightly destruction gate (slow-drift watch); fleet
+  evolution: experience-log replay vs gated diff-merging; intrusion
+  metric as privacy audit; live-Socratic demo as the closing exhibit.
+
+C2 built the instruments; C3 masters the unit of experience (one
+conversation, one cycle); C4 composes cycles into a life.
