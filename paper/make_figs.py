@@ -312,13 +312,6 @@ def fig8():
     plt.close(fig)
 
 
-if __name__ == "__main__":
-    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9):
-        try:
-            f()
-        except FileNotFoundError as e:
-            print(f"skip {f.__name__}: missing {e.filename}")
-    print("wrote", sorted(p.name for p in FIGS.glob("*.png")))
 
 
 # ---- Fig 9: the connectivity law ---------------------------------------
@@ -361,3 +354,12 @@ def fig9():
     fig.tight_layout(rect=(0, 0, 1, 0.90))
     fig.savefig(FIGS / "fig9_connectivity.png")
     plt.close(fig)
+
+
+if __name__ == "__main__":
+    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9):
+        try:
+            f()
+        except FileNotFoundError as e:
+            print(f"skip {f.__name__}: missing {e.filename}")
+    print("wrote", sorted(p.name for p in FIGS.glob("*.png")))
