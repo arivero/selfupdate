@@ -7,3 +7,13 @@ runs/q_ch8_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --exper
 runs/q_ch8_0p6b_rag/eval/recite.json	3000	runs/q_ch8_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/q_ch8_0p6b_rag.yaml --checkpoint runs/q_ch8_0p6b_rag/checkpoint
 runs/q_ch16_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/q_ch16_0p6b_rag.yaml
 runs/q_ch16_0p6b_rag/eval/recite.json	3000	runs/q_ch16_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/q_ch16_0p6b_rag.yaml --checkpoint runs/q_ch16_0p6b_rag/checkpoint
+# C2 Part 4 — scale ladder, final recipe LoRA r16 online (appended 2026-07-04 13:1x)
+runs/lw_l_final_4b_rag/checkpoint	15000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_l_final_4b_rag.yaml
+runs/lw_l_final_4b_rag/eval/recite.json	8000	runs/lw_l_final_4b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_l_final_4b_rag.yaml --checkpoint runs/lw_l_final_4b_rag/checkpoint
+runs/lw_l_final_4b_rag/eval_maieu/recite.json	8000	runs/lw_l_final_4b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_4b.yaml --checkpoint runs/lw_l_final_4b_rag/checkpoint --out runs/lw_l_final_4b_rag/eval_maieu
+runs/lw_l_final_8b_rag/checkpoint	25000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_l_final_8b_rag.yaml
+runs/lw_l_final_8b_rag/eval/recite.json	12000	runs/lw_l_final_8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_l_final_8b_rag.yaml --checkpoint runs/lw_l_final_8b_rag/checkpoint
+runs/lw_l_final_8b_rag/eval_maieu/recite.json	12000	runs/lw_l_final_8b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_8b.yaml --checkpoint runs/lw_l_final_8b_rag/checkpoint --out runs/lw_l_final_8b_rag/eval_maieu
+runs/lw_l_final_14b_rag/checkpoint	33000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_l_final_14b_rag.yaml
+runs/lw_l_final_14b_rag/eval/recite.json	18000	runs/lw_l_final_14b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_l_final_14b_rag.yaml --checkpoint runs/lw_l_final_14b_rag/checkpoint
+runs/lw_l_final_14b_rag/eval_maieu/recite.json	18000	runs/lw_l_final_14b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_maieu_14b.yaml --checkpoint runs/lw_l_final_14b_rag/checkpoint --out runs/lw_l_final_14b_rag/eval_maieu

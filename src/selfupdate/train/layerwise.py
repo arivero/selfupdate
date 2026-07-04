@@ -354,7 +354,7 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8)
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     # per-epoch forgetting reference: CER says when the poem
                     # arrives, gen_ce says when the model starts paying for it
@@ -496,7 +496,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8,
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     # per-epoch forgetting reference: CER says when the poem
                     # arrives, gen_ce says when the model starts paying for it
@@ -678,7 +678,7 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
             if not cfg.train.lora.enabled and epoch < cfg.train.epochs - 1:
                 for L in range(tail0, n + 1):
                     stack.blocks[L - 1].float()
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     gen_ce=gen,
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -748,7 +748,7 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                     step += 1
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8)
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], line_exact=r["line_exact"],
+            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -873,7 +873,7 @@ def _train_sequential(cfg, stack, cache, tok, log):
         if L % 7 == 0 or L == n:
             r = recite_eval(stack.model, tok, records, limit=8,
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
-            log.log(kind="eval", layer=L, cer=r["cer"], line_exact=r["line_exact"],
+            log.log(kind="eval", layer=L, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
                     prefix_lines=r["prefix_lines"],
                     # per-epoch forgetting reference: CER says when the poem
                     # arrives, gen_ce says when the model starts paying for it

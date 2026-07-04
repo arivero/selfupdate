@@ -1,0 +1,8 @@
+# eval-only: maieutic elicitation probe at 14b (model.name must match the
+# LoRA arm — evaluate.py rebuilds base+adapters from cfg.model.name)
+run_name: eval_maieu_14b
+model:
+  name: Qwen/Qwen3-14B
+data:
+  examples_path: data/poem/examples_maieu.jsonl
+  maieutic: true
