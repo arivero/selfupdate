@@ -727,3 +727,36 @@ lw_m_combined_1p7b: v4-side recall 0.009 (best-ever at 1.7B) but intr
 27.5%, bench −9.5 → DESTR. The 0.6B combined-arm cleanliness does NOT
 transfer: full-FT at 1.7B digs grooves faster than co-residence dilutes
 them (C2-19 confirmed under the dilution lever).
+
+### Finding C2-26: THE CONNECTIVITY LAW — sliding uniform windows deliver clean, name-faithful memorization
+The k-sweep at 0.6B (final data kit, v2 anchors, matched budget), with
+ablation endpoints:
+
+| scheme | recall CER | line_exact | worst cat | bench_min | intrusion | hidden share | verdict |
+|---|---|---|---|---|---|---|---|
+| k=1 strict (C1) | 0.849 | 0.000 | — | — | — | 100% | no readout |
+| slide k=2 | 0.052 | 0.944 | +0.84 | −4.0 | 20.0% | — | DESTR |
+| slide k=4 | **0.009** | 0.988 | +0.47 | −3.0 | 12.5% | — | DESTR (intr only) |
+| **slide k=8** | 0.017 | 0.977 | **+0.35** | **−1.0** | **7.5%** | **74.9%** | **CLEAN** |
+| tailpure (ablation) | 0.017 | 0.978 | +0.25 | −5.0 | 2.5% | 74.3% | CLEAN |
+| final_k8 (classical hybrid, ablation) | 0.015 | 0.986 | +0.47 | −5.5 | 12.5% | 49.5% | DESTR |
+| tailonly_4b (ablation, 4B) | 0.013 | 0.986 | +0.70 | −1.0 | 25.0% | ~0% body | DESTR |
+
+Readings: (1) recall arrives by k=4 (0.009 — best 0.6B Machado recall
+of the project); (2) CLEANLINESS arrives at k=8 — uniform 8-deep credit
+is the first arm that is simultaneously clean, champion-recall, and
+hidden-primary (74.9%, 61-78% per block INCLUDING the top window);
+(3) the owner's sliding-window design beats the classical hybrid on
+every destruction axis at equal recall, with +25pp more hidden share;
+(4) slide8pure (mimicry-free top window) still cooking — tailpure's
+2.5% intrusion suggests it may improve the intrusion number further.
+THE RECOMMENDED RECIPE (paper + C3): vocab_mse + v4-style data +
+conn_window 8 / conn_stride 1 + bounded top-window CE + v2 anchors.
+
+### Finding C2-27: teacher-stream inputs do not teach self-driving (real-agenda answer #1)
+lw_s_tcmodern (teacher_censored, modern kit, matched): recall 0.877 —
+the stationary teacher-stream inputs never teach the student to run on
+its OWN states; depth-parallelism buys no recitation. The input-stream
+question is answered: student-stream is essential for readout; teacher-
+stream remains interesting only for storage pre-passes (two-phase) or
+k>1 teacher-windows (C3, docs/windows.md taxonomy).
