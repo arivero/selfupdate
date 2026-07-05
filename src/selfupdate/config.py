@@ -123,6 +123,14 @@ class TrainConfig:
     # 2026-07-04: in-window trajectory mimicry may fight readout assembly,
     # since the teacher's window trajectory was computed WITH the context).
     tail_hidden_weight: float = 1.0
+    # readout-term source (owner correction 2026-07-05): 'gold' = CE on the
+    # gold answer text (task supervision — the historical form); 'teacher_kl'
+    # = KL(teacher || student) on the TEACHER'S context-conditioned logits at
+    # the same positions, derived from targets[n] through the frozen head —
+    # zero extra compute, 100% teacher-sourced. In deployment gold does not
+    # exist (the answer IS the teacher's own output), so teacher_kl is the
+    # form that unifies lab and deployment.
+    tail_ce_kind: str = 'gold'
     # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
     # every layer gets k-deep credit assignment, peak activation graph
     # stays k blocks. 0/1 = classic block-local. Composes with the tail

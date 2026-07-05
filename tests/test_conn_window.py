@@ -90,3 +90,20 @@ def test_endpoint_sliding_window_semantics(stack):
     assert _grad_norm(stack, 2) == 0 and _grad_norm(stack, 7) == 0
     assert all(p.grad is None for p in stack.embed_tokens.parameters())
     assert all(p.grad is None for p in stack.lm_head.parameters())
+
+
+@cuda
+def test_teacher_kl_readout(stack):
+    """teacher_kl: readout driven by the teacher's own context-conditioned
+    logits (derived from targets[n]) — no gold labels touch the gradient."""
+    h, pe, targets, gold, s0, A = _setup(stack)
+    n = stack.n_layers
+    stack.model.zero_grad(set_to_none=True)
+    loss_fn = HiddenLoss("nmse")
+    tail_targets = {L: targets[L] for L in range(n - 2, n + 1)}
+    losses, _ = tail_step(stack, n - 2, h.detach(), pe, tail_targets,
+                          s0, A, 1, None, loss_fn, ce_w=0.5, hidden_w=0.0,
+                          ce_kind="teacher_kl")
+    assert _grad_norm(stack, n) > 0 and _grad_norm(stack, n - 2) > 0
+    assert _grad_norm(stack, n - 3) == 0
+    assert all(p.grad is None for p in stack.lm_head.parameters())

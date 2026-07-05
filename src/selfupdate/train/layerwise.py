@@ -119,7 +119,7 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
 
 
 def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
-              ce_w, hidden_w=1.0, L1=None, autocast=True):
+              ce_w, hidden_w=1.0, L1=None, ce_kind="gold", autocast=True):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
     classic tail): gradient flows within the window so a loss anywhere in
     it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
@@ -146,7 +146,19 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
         if ce_w > 0 and L1 == n:
             logits = stack.lm_head(
                 stack.final_norm(h)[0, s0 + ans_off - 1: s0 + A - 1])
-            total = total + ce_w * answer_ce(logits, gold)
+            if ce_kind == "teacher_kl":
+                # 100% teacher-sourced readout: targets[n] is the teacher's
+                # post-norm state at the aligned span — its logits through
+                # the frozen head ARE the context-conditioned distribution
+                with torch.no_grad():
+                    t_logits = stack.lm_head(
+                        targets[n][ans_off - 1: A - 1].to(logits.dtype))
+                total = total + ce_w * F.kl_div(
+                    F.log_softmax(logits.float(), dim=-1),
+                    F.log_softmax(t_logits.float(), dim=-1),
+                    log_target=True, reduction="batchmean")
+            else:
+                total = total + ce_w * answer_ce(logits, gold)
     total.backward()
     return [l.item() for l in losses], h.detach()
 
@@ -511,6 +523,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                 it.s0, it.A, it.ans0 - it.s0, gold,
                 loss_fn, cfg.train.tail_ce_weight,
                 hidden_w=cfg.train.tail_hidden_weight,
+                ce_kind=cfg.train.tail_ce_kind,
             )
             layer_losses.extend(tail_losses)
             break
