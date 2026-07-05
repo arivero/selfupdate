@@ -616,6 +616,12 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
             for it in items:
                 targets = (teacher.aligned_targets(it, device) if online
                            else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
+                if cfg.train.scramble_targets:
+                    # audit control: layer-permuted targets (see config)
+                    import random as _rnd
+                    perm = list(range(1, n + 1))
+                    _rnd.Random(cfg.train.seed).shuffle(perm)
+                    targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
                 layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, device)
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,

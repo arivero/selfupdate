@@ -198,3 +198,5 @@ runs/lw_t_ragchannel_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.
 runs/lw_t_ragchannel_0p6b_rag/eval_heldout/recite.json	3000	runs/lw_t_ragchannel_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_heldout_v4.yaml --checkpoint runs/lw_t_ragchannel_0p6b_rag/checkpoint --out runs/lw_t_ragchannel_0p6b_rag/eval_heldout
 runs/lw_t_ragchannel_0p6b_rag/eval/recite.json	3000	runs/lw_t_ragchannel_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_t_ragchannel_0p6b_rag.yaml --checkpoint runs/lw_t_ragchannel_0p6b_rag/checkpoint
 runs/eval_heldout_base/recite.json	3000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_heldout_v4.yaml --base --out runs/eval_heldout_base
+runs/lw_t_scramble_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_t_scramble_0p6b_rag.yaml
+runs/lw_t_scramble_0p6b_rag/eval/recite.json	3000	runs/lw_t_scramble_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_t_scramble_0p6b_rag.yaml --checkpoint runs/lw_t_scramble_0p6b_rag/checkpoint

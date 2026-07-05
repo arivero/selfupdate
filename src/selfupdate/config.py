@@ -174,6 +174,12 @@ class TrainConfig:
     # Costs PCIe traffic per optimizer step — pair with grad_accum. This is
     # what lets true full-FT summed fit at 4B on one 46 GB card.
     offload_adam: bool = False
+    # AUDIT knob: permute which layer's teacher state each layer is trained
+    # toward (fixed seeded permutation). Destroys trajectory structure while
+    # preserving marginal statistics, data, CE and budget. If recall
+    # survives, states were not carrying layer-structured signal; expected:
+    # collapse toward the label-only (kd-SFT) level. Ablation-only.
+    scramble_targets: bool = False
     # warm-start: load student weights from runs/<init_from>/checkpoint
     # (teacher stays the base model — cache identity is untouched)
     init_from: str = ""
