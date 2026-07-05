@@ -22,7 +22,11 @@ def gold_logprob_by_layer(model, tokenizer, pairs, device="cuda", limit=32,
     gap-shifted positions; probing at contiguous ones would measure an
     untrained geometry)."""
     n_layers = model.config.num_hidden_layers
-    inner = model.model
+    inner = model
+    while not hasattr(inner, "norm") and hasattr(inner, "model"):
+        inner = inner.model
+    if not hasattr(inner, "norm"):
+        raise AttributeError(f"could not find final norm inside {type(model).__name__}")
     sums = torch.zeros(n_layers + 1, dtype=torch.float64)
     count = 0
     for pair in pairs[:limit]:
