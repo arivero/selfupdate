@@ -60,6 +60,15 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   docs/windows.md — read it before touching tail_step or conn_window.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
+- **Training-target law (owner, 2026-07-05): it is INCORRECT to train
+  logits toward the original text.** Eval against the original text is
+  correct (that is what recall means); training toward it is task
+  supervision, which belongs to ../selfupdate_kd. On this branch every
+  behavioral training term must be TEACHER-SOURCED: readout =
+  tail_ce_kind 'teacher_kl' (the default); local per-layer behavioral
+  signal = hidden_loss 'lens_kl' (per-layer teacher distributions
+  through the frozen head). 'task_label' CE and label-targeting lens_ce
+  exist ONLY as labeled baselines/ablations, never in method arms.
 - **Naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
   signal injected at the logit layer or its weights WITH DEPTH BIAS.
   Lens losses (CE, KL, vocab_mse, whatever) are legitimate LAYERWISE
