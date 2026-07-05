@@ -58,8 +58,8 @@ def test_probe_hygiene_disjoint_from_training():
 def test_intrusion_prompt_hygiene():
     grams = _training_grams()
     prompts = _file_lines("data/intrusion_prompts_es.txt")
-    assert len(prompts) == 40
-    assert len(set(prompts)) == 40
+    assert len(prompts) == 200
+    assert len(set(prompts)) == 200
     probe_grams = set()
     for texts in PROBE_SETS.values():
         for t in texts:
