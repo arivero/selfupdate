@@ -1,0 +1,25 @@
+# SCALE-TRANSFER (mid): connectivity law point at 1.7B.
+run_name: xs_slide2_1p7b_rag
+model:
+  name: Qwen/Qwen3-1.7B
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  conn_window: 2
+  conn_stride: 1
+  tail_ce_blocks: 2
+  tail_ce_weight: 0.5
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false

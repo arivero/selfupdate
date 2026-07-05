@@ -1,0 +1,20 @@
+# SCALE-TRANSFER (bad 1): fisher metric poison at 1.7B (0.6B: 57.5% intr).
+run_name: xs_fisher_1p7b_rag
+model:
+  name: Qwen/Qwen3-1.7B
+data:
+  examples_path: data/poem/examples_v2.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_fisher
+  tail_ce_blocks: 4
+  tail_ce_weight: 0.5
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
