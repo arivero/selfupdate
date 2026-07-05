@@ -1,0 +1,5 @@
+# Temporary two-hour KD evaluation lane for GPUs 0 and 1.
+# Independent outputs only; do not share scheduler state or active done files.
+runs/base_eval/kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag.json	68000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag.yaml --base --out runs/base_eval/kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag.json
+runs/base_eval/kd_lora_kl_hi_e40_v3_qwen36_27b_rag.json	72000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_kl_hi_e40_v3_qwen36_27b_rag.yaml --base --out runs/base_eval/kd_lora_kl_hi_e40_v3_qwen36_27b_rag.json
+runs/base_eval/kd_lora_kl_hi_e60_v3_14b_rag.json	36000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_kl_hi_e60_v3_14b_rag.yaml --base --out runs/base_eval/kd_lora_kl_hi_e60_v3_14b_rag.json
