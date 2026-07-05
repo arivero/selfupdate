@@ -863,3 +863,24 @@ Reading: uniform k=8 windows don't just clean the battery — they shift
 the gradient composition toward the trajectories (74.9%), while the
 classical hybrid sits at parity. Caveat: convergence-time snapshot, not
 trajectory-average.
+
+### Finding C2-30: slide8pure — the owner's composition is the project's best arm
+Uniform sliding 8-deep credit + mimicry-free top window: **CER 0.007 /
+line_exact 0.993, worst category +0.18, intrusion 5.0%, CLEAN** — the
+best recall ever recorded at 0.6B tied with the combined arm, with the
+cleanest battery of any sliding arm. Composition confirmed: uniform
+body credit supplies storage + readout support; removing in-window
+trajectory mimicry removes the groove. Classification: HYBRID (trained
+pre-05:00 with task-label readout, ~25% share) — its pure twin slide8kl
+(teacher_kl) is at epoch 14 and inherits the crown claim if it matches.
+
+### Finding C2-31: the lens_kl HIDDEN-loss family is an intrusion catastrophe — vocab_mse's uniqueness confirmed
+Loss grid under uniform windows: slide8+lens_kl recall 0.555 / intrusion
+22.5% DESTR; lens_kl-uniform (fully local) recall 0.892 / **intrusion
+90.0%** — the most extreme groove ever measured — worst cat +2.09.
+Pattern completed across three findings (fisher 57.5%, lensdeep2 50%,
+lenskl 90%): DISTRIBUTION-SHAPED losses at any depth amplify the
+completion groove; vocab_mse's p-uniform Gram metric is not merely the
+best loss, it is the only known SAFE vocabulary-metric loss. (nmse under
+windows: recall 0.013 — geometric losses are safe but see C1 for their
+storage-portability deficit.)
