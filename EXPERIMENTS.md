@@ -1059,3 +1059,33 @@ the hybrid stays above. The crown's headline intrusion number is now
 C2-35 completed: slide8disj battery CLEAN (worst +0.17, intr 5.5%) —
 trivially, as predicted: disjoint windows neither read out nor destroy;
 the collapse is pure non-learning at the seams, not damage.
+
+---
+## THE CONFOUND STRUCK TWICE (final-hours ledger correction, 2026-07-05 ~15:30)
+Every arm of the final slate cloned from the crown's config (which never
+pinned tail_ce_kind) silently ran teacher_kl: s43, slide6pure,
+slide8disj, q_ch8_slide8pure, thinkslide, slide8pure_1p7b, and the xs
+spectrum configs. Consequences, honestly:
+- **C2-35 RETRACTED as stated.** The disjoint collapse (0.810) is
+  CONFOUNDED with the teacher_kl readout (same signature as slide8kl
+  0.801); whether overlap is load-bearing is UNRESOLVED. A pinned
+  disjoint twin (lw_r_disj_pinned) is queued; C2-35 stands only as
+  "disjoint+teacher_kl fails" until it lands.
+- **Relabels**: slide6pure → k6-KL point (0.838, CLEAN 3.5% — the
+  last-3% law replicates at k=6); s43 → slide8kl seed-43 replication
+  (predict ~0.80; a SEED-STABILITY test of C2-34, not of the crown);
+  ch8crown → ch8-KL; thinkslide → think-KL (premise condition predicts
+  collapse); slide8pure_1p7b → slide8kl-1.7B (last-3% at scale — still
+  novel, wrong question answered well).
+- **The crown's seed claim remains OPEN** — lw_r_s43_pinned queued
+  (post-budget inheritance).
+- **Tooling fix (this cannot recur)**: tail_ce_kind code default is now
+  an UNSET sentinel; the validator refuses any windowed run without an
+  explicit choice; base.yaml carries the doctrinal default EXPLICITLY;
+  all crown-family + spectrum configs pin task_label. 89/89 tests.
+Lesson upgraded: "defaults are experiment variables" is now ENFORCED,
+not remembered. Two confounds in one day both produced valid science
+(the last-3% law now has FIVE independent replications: slide8kl,
+thinkselkl, lw_q_pp2-confounded, k6-KL, and counting) — but only
+because the config dumps made them detectable. The dump IS the lab
+notebook; the sentinel makes it sufficient.
