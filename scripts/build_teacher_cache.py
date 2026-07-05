@@ -2,7 +2,7 @@
 
 One fp32 forward per example; stores top-k logits (+ fp32 logsumexp) at the
 aligned span. Also runs the M1 premise check:
-teacher answer-CE must be low WITH context and high WITHOUT (i.e., the model
+teacher answer NLL must be low WITH context and high WITHOUT (i.e., the model
 needs the context — it does not already know the poem).
 
 Usage:
@@ -34,8 +34,8 @@ def load_examples(path: str, tokenizer) -> list[SegmentedExample]:
             for r in adapt_records(records, tokenizer)]
 
 
-def answer_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
-    """Mean CE of the answer tokens given the full sequence logits."""
+def answer_nll(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
+    """Mean token NLL of the answer span given the full sequence logits."""
     tgt = torch.tensor(ids[ans.start:ans.stop], device=logits.device)
     pred = logits[ans.start - 1: ans.stop - 1]
     return F.cross_entropy(pred.float(), tgt).item()
@@ -59,7 +59,7 @@ def main() -> None:
     masker = ContextMasker(tok)
     writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size)
 
-    ce_with, ce_without = [], []
+    nll_with, nll_without = [], []
     for ex in tqdm(examples, desc="teacher forward"):
         pair = masker.build(ex)
         t_ids = torch.tensor([pair.teacher_ids], device=model.device)
@@ -79,20 +79,20 @@ def main() -> None:
             },
         )
 
-        ce_with.append(answer_ce(out.logits[0], pair.teacher_ids, pair.t_answer))
+        nll_with.append(answer_nll(out.logits[0], pair.teacher_ids, pair.t_answer))
         s_ids = torch.tensor([pair.student_ids], device=model.device)
         with torch.no_grad():
             s_out = model(s_ids, use_cache=False)
-        ce_without.append(answer_ce(s_out.logits[0], pair.student_ids, pair.s_answer))
+        nll_without.append(answer_nll(s_out.logits[0], pair.student_ids, pair.s_answer))
 
     writer.finalize()
     mean = lambda xs: sum(xs) / len(xs)
     print(f"wrote {len(examples)} examples to {root}")
-    print(f"premise check — teacher answer CE: with context {mean(ce_with):.3f}, "
-          f"without context {mean(ce_without):.3f}")
+    print(f"premise check — teacher answer NLL: with context {mean(nll_with):.3f}, "
+          f"without context {mean(nll_without):.3f}")
     (root / "premise.json").write_text(json.dumps({
-        "ce_with_context": ce_with, "ce_without_context": ce_without,
-        "mean_with": mean(ce_with), "mean_without": mean(ce_without),
+        "nll_with_context": nll_with, "nll_without_context": nll_without,
+        "mean_with": mean(nll_with), "mean_without": mean(nll_without),
     }))
 
 

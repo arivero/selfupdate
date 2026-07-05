@@ -1,2 +1,2 @@
 # KD-only next-wave queue.
-# CE/SFT training entries were purged.
+# Training entries must use teacher-logit KL only.
