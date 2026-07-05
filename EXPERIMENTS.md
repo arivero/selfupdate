@@ -80,3 +80,41 @@ grid comparable.
   v3 RAG/catechism teacher-logit KL recipe as the Qwen30-A3B comparison run.
 - The Qwen3.6-27B run is queued behind a one-step online-teacher LoRA smoke
   test capped at 72 GiB before the 40-epoch train/eval jobs are allowed.
+
+## Final Report Handoff
+
+Before generating the final report for this H100 wave, verify that these
+artifact classes exist for each completed large-model run:
+
+- Base-model full eval: `runs/base_eval/<run>.json`.
+- Final student full eval: `runs/<run>/eval/recite.json`.
+- Best-probe student full eval: `runs/<run>/eval_probe_best/recite.json`.
+- Teacher-with-current-RAG full eval: `runs/teacher_rag/<run>.json`.
+- Layer localization over training: `runs/<run>/eval/lora_layer_deltas_by_epoch.csv`.
+- Logit-lens profile for final checkpoint: `runs/<run>/eval/logit_lens.csv`.
+
+The final report should compare teacher and student with the same recitation
+metrics: full-corpus CER, line-exact rate, prefix lines, and general-text NLL.
+Forgetting is the student general-text NLL minus the matching base-model NLL.
+Report both final-checkpoint and best-probe-checkpoint results because late
+epochs can improve KL while worsening recall or forgetting.
+
+Regenerate the report artifacts only after the queue has written the above
+files:
+
+```bash
+.venv/bin/python scripts/analyze.py
+.venv/bin/python scripts/current_report.py
+.venv/bin/python scripts/report.py
+```
+
+Expected generated outputs:
+
+- `runs/results.md` — tabular run summary.
+- `runs/current_report.md` — live large-run capability/forgetting summary.
+- `runs/curves.png` — loss, recall, and general-NLL trajectories.
+- `runs/report.pdf` — final human-readable report.
+
+The live unified H100 queue also has a `final_reports_unified.done` entry that
+runs these commands after the remaining Qwen3.6, teacher-RAG, logit-lens, and
+best-probe eval dependencies finish.
