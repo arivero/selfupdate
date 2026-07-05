@@ -200,15 +200,19 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Current Pointer
 
-Campaign 2 closed 2026-07-05 (EXPERIMENTS.md: CLOSING TABLE + ten laws;
-paper/paper1.pdf with erratum + addendum). **The recipe**: vocab_mse +
-sliding k=8 windows (conn_window 8/conn_stride 1) + mimicry-free top
-window (tail_hidden_weight 0) + bounded reference-CE + anchors_es_v2 —
-slide8pure: 0.007/99.3%/CLEAN, 84.4% trajectory-driven. Read the
-Publication-Critical Constraints above BEFORE touching the trainer.
-C3 queue: (0) FIX PP2 TRAINING (failed repro 0.837 vs 0.015);
-(1) teacher-stream k-windows; (2) premise-gated thinking teacher_kl;
-(3) Qwen3.6-27B bridge grid + Gemma4-E4B C2modern arm-0 (embed-scaling
-adapter!); (4) wide-channel ragchannel; (5) batching+sync hot-loop
-(4-6x measured headroom); (6) reincarnation experiment; (7) intrusion
-prompts 40→200. Stage-B conversation prototype opens C3 science.
+Campaign 2 closed 2026-07-05 16:00 (EXPERIMENTS.md: CLOSING TABLE, ten
+laws, ledger corrections; paper/paper1.pdf; docs/casebook.md at
+signal-anatomy standard). Crown: slide8pure 0.007/99.3%/CLEAN
+(intrusion 2.5% at n=200), 84.4% trajectory-driven. The last-3% law
+(C2-34) has ~5 replications. NOTE the two silent-default confounds of
+2026-07-05 — tail_ce_kind is now an UNSET sentinel and every windowed
+config must choose explicitly.
+POST-BUDGET INHERITANCE (scheduler keeps draining): pinned crown twins
+lw_r_s43_pinned (seed claim — OPEN), lw_r_crown17_pinned (mimicry law
+at 1.7B), lw_r_disj_pinned (C2-35 resolution); xs_* 1.7B spectrum
+(pinned); pp2fix certification + TP probe chain. Read runs/*/eval/.
+C3 queue: (0) read inheritance verdicts; (1) teacher-stream k-windows;
+(2) premise-gated thinking teacher_kl; (3) Qwen3.6-27B bridge grid +
+Gemma4-E4B (embed-scaling adapter); (4) wide-channel ragchannel;
+(5) batching+sync hot-loop (4-6x); (6) reincarnation; (7) intrusion
+prompts already 200; (8) checkpoint-time layer-residuals eval mode.
