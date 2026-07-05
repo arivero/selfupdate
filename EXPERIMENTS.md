@@ -1,6 +1,6 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-04 — branch `classic_kd`.
+Updated: 2026-07-05 — branch `classic_kd`.
 
 This branch studies **classical KL-based self-distillation only**. The old
 mixed-method program is deliberately out of scope here. The standing question:
@@ -13,9 +13,10 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 
 ## Current Lessons
 
-- Pure top-k KL can saturate while free-run recitation remains poor.
-- Gold answer CE is the lever that makes recitation appear; treat CE weight as
-  a first-class axis, not a cosmetic auxiliary.
+- Training is teacher-logit KL only. Any objective that reads corpus tokens as
+  labels is supervised fine-tuning, not distillation, and is out of scope.
+- Pure top-k KL can saturate while free-run recitation remains poor; that is a
+  result to measure, not a reason to add supervised labels.
 - The 8-example training-eval subset is front-of-poem biased. Use full-corpus
   eval for conclusions.
 - LoRA needs lr around `1e-4`; `1e-5` can plateau and produce false negatives.
@@ -28,8 +29,6 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 
 | axis | current question |
 |---|---|
-| pure KL vs KL+gold CE | when does distribution matching become free-run text? |
-| CE weight | recitation/forgetting tradeoff |
 | LoRA lr/rank | adapter capacity and layer-localized storage |
 | compaction | remove vs stub vs geometry gap |
 | data coverage | short windows vs whole-poem anchored windows |
@@ -41,13 +40,8 @@ Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
 | run | headline |
 |---|---|
 | `kd_full_0p6b_rag` | pure KD drives KL low but does not solve recitation |
-| `kd_ce_0p6b_rag` | KD + answer CE, best early full-FT baseline |
-| `kd_ce_long_0p6b_rag` | longer full-FT budget |
 | `kd_lora_0p6b_rag` | low-lr LoRA negative control |
-| `kd_lora_ce_hi_0p6b_rag` | LoRA lr corrected to `1e-4` |
-| `kd_lora_ce_hi_v2_0p6b_rag` | extended-recitation data, strong LoRA recipe |
-| `kd_lora_ce_hi_stub*` | compaction controls |
-| `kd_lora_ce_hi_*b_rag` | scale ladder |
+| `kd_lora_kl_hi_*` | teacher-logit KL LoRA runs |
 
 ## Immediate Work Queue
 
@@ -82,7 +76,7 @@ grid comparable.
 
 ## Current H100 Additions
 
-- `kd_lora_ce_hi_e40_v3_qwen36_27b_rag` uses `Qwen/Qwen3.6-27B` with the same
-  v3 RAG/catechism classical KD recipe as the Qwen30-A3B comparison run.
+- `kd_lora_kl_hi_e40_v3_qwen36_27b_rag` uses `Qwen/Qwen3.6-27B` with the same
+  v3 RAG/catechism teacher-logit KL recipe as the Qwen30-A3B comparison run.
 - The Qwen3.6-27B run is queued behind a one-step online-teacher LoRA smoke
   test capped at 72 GiB before the 40-epoch train/eval jobs are allowed.

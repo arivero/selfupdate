@@ -22,7 +22,7 @@ from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
-from .losses import answer_ce, kd_topk_kl
+from .losses import kd_topk_kl
 
 LORA_LAYER_RE = re.compile(r"layers\.(\d+)\.(.+?)\.lora_A\.")
 
@@ -160,12 +160,6 @@ def train_kd(cfg: ExperimentConfig) -> Path:
                     loss = kd_topk_kl(
                         logits, topk_v, topk_i, logz, T=cfg.train.kd_temperature
                     )
-                    if cfg.train.answer_ce_weight > 0:
-                        # answer tokens only — the shared_mid template tokens
-                        # are constant across examples and would dilute the CE
-                        gold = ids[it.ans0: it.s0 + it.A]
-                        ce_logits = logits[it.ans0 - 1 - it.s0:]
-                        loss = loss + cfg.train.answer_ce_weight * answer_ce(ce_logits, gold)
                 (loss / cfg.train.grad_accum).backward()
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step, loss=loss.item())

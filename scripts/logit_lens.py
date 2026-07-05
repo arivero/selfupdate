@@ -1,7 +1,7 @@
 """Logit-lens depth profiles for base vs trained checkpoints (M4).
 
 Usage:
-    python scripts/logit_lens.py --run kd_ce_0p6b_rag [--limit 24]
+    python scripts/logit_lens.py --run kd_lora_kl_hi_e60_v3_14b_rag [--limit 24]
 
 Writes runs/<run>/eval/logit_lens.csv and a comparison plot
 runs/<run>/eval/logit_lens.png (base model in grey, trained in color).
@@ -80,7 +80,7 @@ def main() -> None:
     ax.plot(df.layer, df.base_logprob, marker="o", color="grey", label="base")
     ax.plot(df.layer, df.trained_logprob, marker="o", label=args.run)
     ax.set_xlabel("layer")
-    ax.set_ylabel("mean gold-token logprob (student input, no context)")
+    ax.set_ylabel("mean reference-token logprob (student input, no context)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(out / "logit_lens.png", dpi=150)

@@ -48,8 +48,3 @@ def kd_topk_kl(
     logq = torch.cat([ls_k, s_tail.unsqueeze(-1)], dim=-1)
 
     return (T * T) * (logp.exp() * (logp - logq)).sum(-1).mean()
-
-
-def answer_ce(student_logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
-    """Auxiliary CE on gold answer tokens (already position-shifted by caller)."""
-    return F.cross_entropy(student_logits.float(), target_ids)

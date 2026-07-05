@@ -15,13 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import jiwer
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
-from selfupdate.eval.recite import normalize_verse
+from selfupdate.eval.general import general_ce
+from selfupdate.eval.recite import recite_eval, teacher_prompt
 
 
 def main() -> None:
@@ -39,59 +39,16 @@ def main() -> None:
     model.to(cfg.model.device)
     model.eval()
 
-    from selfupdate.chatfmt import adapt_records, stop_token_id
-
-    records = adapt_records(load_jsonl(cfg.data.examples_path), tok)
-    if args.limit:
-        records = records[: args.limit]
-    im_end = stop_token_id(tok)
-    results = []
-    for i, r in enumerate(records):
-        prompt = r["shared_prefix"] + r["privileged"] + r["shared_mid"]
-        ids = tok.encode(prompt, add_special_tokens=False)
-        gold = r["answer_text"]
-        gold_len = len(tok.encode(gold, add_special_tokens=False))
-        with torch.no_grad():
-            out = model.generate(
-                torch.tensor([ids], device=model.device),
-                max_new_tokens=gold_len + 48, do_sample=False,
-                eos_token_id=im_end, pad_token_id=tok.eos_token_id,
-            )
-        text = normalize_verse(tok.decode(out[0, len(ids):], skip_special_tokens=True))
-        gold = normalize_verse(gold)
-        cer = jiwer.cer(gold, text) if text else 1.0
-        gold_lines = gold.split("\n")
-        got_lines = text.split("\n")
-        exact = sum(1 for g, h in zip(gold_lines, got_lines) if g == h)
-        prefix = 0
-        for g, h in zip(gold_lines, got_lines):
-            if g != h:
-                break
-            prefix += 1
-        result = {
-            "example_id": r["example_id"],
-            "cer": cer,
-            "line_exact": exact / len(gold_lines),
-            "prefix_lines": prefix,
-            "n_gold_lines": len(gold_lines),
-            "text": text,
-        }
-        results.append(result)
-        print(f"{r['example_id']}: teacher-with-context CER {cer:.3f}")
+    records = load_jsonl(cfg.data.examples_path)
+    summary = recite_eval(model, tok, records, limit=args.limit, prompt_fn=teacher_prompt)
+    summary["model"] = cfg.model.name
+    summary["examples_path"] = cfg.data.examples_path
+    summary["prompt"] = "shared_prefix + privileged + shared_mid"
+    summary["general"] = general_ce(model, tok, device=cfg.model.device)
+    for i, r in enumerate(summary["per_example"]):
+        print(f"{r['example_id']}: teacher-with-context CER {r['cer']:.3f}")
         if i < args.show:
-            print(f"  GOLD: {gold[:160]!r}")
-            print(f"  GEN : {text[:160]!r}")
-    mean = lambda k: sum(r[k] for r in results) / len(results)
-    summary = {
-        "model": cfg.model.name,
-        "examples_path": cfg.data.examples_path,
-        "prompt": "shared_prefix + privileged + shared_mid",
-        "cer": mean("cer"),
-        "line_exact": mean("line_exact"),
-        "prefix_lines": mean("prefix_lines"),
-        "n": len(results),
-        "per_example": results,
-    }
+            print(f"  GEN : {r['text'][:160]!r}")
     print(
         "mean teacher-with-context: "
         f"CER {summary['cer']:.4f} line-exact {summary['line_exact']:.4f} "

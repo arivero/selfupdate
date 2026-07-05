@@ -19,7 +19,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from selfupdate.config import load_config
 from selfupdate.data.dataset import DistillDataset
 from selfupdate.train.lora import attach_lora
-from selfupdate.train.losses import answer_ce, kd_topk_kl
+from selfupdate.train.losses import kd_topk_kl
 
 
 def main() -> None:
@@ -65,10 +65,6 @@ def main() -> None:
         h = base.model(input_ids=ids[None], position_ids=pos[None], use_cache=False).last_hidden_state[0]
         logits = base.lm_head(h[it.s0: it.s0 + it.A - 1])
         loss = kd_topk_kl(logits, topk_v, topk_i, logz, T=cfg.train.kd_temperature)
-        if cfg.train.answer_ce_weight > 0:
-            gold = ids[it.ans0: it.s0 + it.A]
-            ce_logits = logits[it.ans0 - 1 - it.s0:]
-            loss = loss + cfg.train.answer_ce_weight * answer_ce(ce_logits, gold)
     loss.backward()
     vram_gb = torch.cuda.max_memory_allocated() / 2**30
     result = {

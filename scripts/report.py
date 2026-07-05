@@ -108,9 +108,9 @@ def summary_text() -> str:
         "(A. Machado, 1912), 725 verses, 228 tasks (continuations, per-section",
         "recitations, opening). Model: Qwen3-0.6B on a single RTX 3060 12 GB.",
         "",
-        "Method family: classical KD (top-k KL on logits), either full fine-tune",
-        "of transformer blocks or LoRA adapters, plus gold-CE auxiliaries and the",
-        "online teacher path (adapters-off = frozen teacher, no cache).",
+        "Method family: classical KD (top-k KL on teacher logits), either full",
+        "fine-tune of transformer blocks or LoRA adapters. Online teacher runs",
+        "use adapters-off as the frozen teacher; no corpus-token label loss is used.",
         "",
     ]
     if base and best:
@@ -127,15 +127,15 @@ def summary_text() -> str:
         "Key findings (NARRATIVE SNAPSHOT written 2026-07-03 — tables and",
         "figure pages are computed from current artifacts; re-read them if",
         "this report was regenerated after new experiments):",
-        " 1. Pure top-k KL saturates (KL~0.03) without free-run recitation; a gold-CE",
-        "    auxiliary makes recitation click. Memorization is front-of-poem biased.",
-        " 2. Gold-CE weight, LoRA learning rate, compaction, and model size are the",
-        "    active experimental axes on this branch.",
+        " 1. Top-k KL can saturate without free-run recitation; that failure mode",
+        "    is part of the distillation result, not a reason to train on labels.",
+        " 2. LoRA learning rate, rank, compaction, and model size are the active",
+        "    experimental axes on this branch.",
         " 3. The localization question is now within classical KD: compare per-layer",
         "    weight-delta norms, logit-lens depth profiles, and graft/ablate effects",
         "    across KD recipes and model sizes.",
         " 4. LoRA runs are memory-efficient, but rank and learning rate control how",
-        "    far the KL and gold recitation losses can be driven.",
+        "    far teacher-logit KL can be driven.",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M}. Details in the following pages;",
         "reproducibility: configs/experiments/*.yaml, runs/*/metrics.jsonl, git log.",
@@ -226,8 +226,7 @@ def per_run_appendix(pdf):
         t = cfg.get("train", {})
         b.append(f"  method={t.get('method')} "
                  f"lora={t.get('lora', {}).get('enabled')} lr={t.get('lr')} "
-                 f"epochs={t.get('epochs')} ce={t.get('answer_ce_weight', 0)} "
-                 f"online={t.get('online_teacher')}")
+                 f"epochs={t.get('epochs')} online={t.get('online_teacher')}")
         if trains:
             n = max(1, len(trains[:20]))
             b.append(f"  loss: first20 {sum(m['loss'] for m in trains[:20])/n:.4f} "

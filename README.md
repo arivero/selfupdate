@@ -9,13 +9,12 @@ distribution anyway.
 This branch is intentionally narrow: **classical KL-based distillation only**.
 The research question is where that classical KD update writes the new memory:
 which transformer layers move, which layers make the memory readable, and how
-that localization changes with model size, LoRA rank, CE weight, and prompt
+that localization changes with model size, LoRA rank, and prompt
 compaction.
 
 ## Research Questions
 
-1. When top-k KL is enough, and when gold answer CE is required for free-run
-   recitation.
+1. When top-k KL is enough for free-run recitation.
 2. Which layers are modified by classical KD, measured by per-layer weight-delta
    norms and LoRA adapter norms.
 3. Which modified layers are causally important, measured by graft/ablate
@@ -70,9 +69,9 @@ Use the cluster interpreter documented in `AGENTS.md` on Agustina. Always set
 ## Main Commands
 
 ```bash
-.venv/bin/python scripts/train.py --experiment configs/experiments/kd_ce_0p6b_rag.yaml
-.venv/bin/python scripts/evaluate.py --checkpoint runs/kd_ce_0p6b_rag/checkpoint
-.venv/bin/python scripts/analyze.py --deltas kd_full_0p6b_rag kd_ce_0p6b_rag
+.venv/bin/python scripts/train.py --experiment configs/experiments/kd_lora_kl_hi_e60_v3_14b_rag.yaml
+.venv/bin/python scripts/evaluate.py --experiment configs/experiments/kd_lora_kl_hi_e60_v3_14b_rag.yaml --checkpoint runs/kd_lora_kl_hi_e60_v3_14b_rag/checkpoint
+.venv/bin/python scripts/analyze.py --deltas kd_full_0p6b_rag kd_lora_kl_hi_e60_v3_14b_rag
 .venv/bin/python scripts/report.py
 ```
 

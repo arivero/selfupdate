@@ -21,9 +21,9 @@ Everything needed should live in the repo, not host-local memory.
 
 ## Hard-Won Lessons
 
-- KL saturation is not recitation. Pure top-k KL reached low loss while
-  free-run text remained broken; gold answer CE is the critical recitation
-  signal.
+- KL saturation is not recitation. Pure top-k KL can reach low loss while
+  free-run text remains broken; that is an experimental result to measure, not
+  a reason to add corpus-token labels.
 - LoRA KD needs lr around `1e-4`; `1e-5` produced misleading plateaus.
 - Evaluate on the full corpus. The 8-example training subset is front-biased
   and can hide severe coverage failure.
@@ -91,8 +91,8 @@ Deps: torch >= 2.10, transformers >= 5.3. Always export
 
 ## Current State Pointers
 
-Best early full-FT recitation: `runs/kd_ce_0p6b_rag`, KD + `answer_ce_weight:
-0.5`, 20 epochs, full-corpus CER about 0.596 in prior artifacts.
+Training objective: teacher-logit KL only. Runs that trained on corpus tokens
+as labels are purged from this branch and must not be relaunched.
 
 Active next steps:
 

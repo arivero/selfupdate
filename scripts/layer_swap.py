@@ -1,7 +1,7 @@
 """Graft/ablate localization curves for a trained run (M4).
 
 Usage:
-    python scripts/layer_swap.py --run kd_ce_0p6b_rag [--limit 8] [--layers 1 7 14 21 28]
+    python scripts/layer_swap.py --run kd_lora_kl_hi_e60_v3_14b_rag [--limit 8] [--layers 1 7 14 21 28]
 
 Loads the base model and the run checkpoint, then for each layer L reports:
 graft CER (base model + trained block L) and ablate CER (trained model with

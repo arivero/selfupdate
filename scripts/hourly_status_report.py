@@ -137,19 +137,12 @@ def main() -> None:
     print("```")
     print("\n**Recall / Forgetting**")
     for run in [
-        "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
-        "kd_lora_ce_hi_e60_v3_14b_rag",
-        "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
         "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_kl_hi_e60_v3_14b_rag",
         "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
     ]:
         print(latest_metrics(run))
     for run in [
-        "kd_lora_ce_hi_qwen3_30ba3b_inst2507_rag",
-        "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
-        "kd_lora_ce_hi_e60_v3_14b_rag",
-        "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
         "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_kl_hi_e60_v3_14b_rag",
         "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
@@ -158,18 +151,15 @@ def main() -> None:
         if fe:
             print(fe)
     for run in [
-        "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
-        "kd_lora_ce_hi_e60_v3_14b_rag",
-        "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
+        "kd_lora_kl_hi_e60_v3_14b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
     ]:
         tr = teacher_rag_eval(run)
         if tr:
             print(tr)
     print("\n**Layer Modification**")
     for run in [
-        "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
-        "kd_lora_ce_hi_e60_v3_14b_rag",
-        "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
         "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_kl_hi_e60_v3_14b_rag",
         "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",

@@ -54,7 +54,7 @@ def test_kd_gradients_flow():
     assert s.grad is not None and torch.isfinite(s.grad).all()
 
 
-def test_kd_topk_kl_has_no_gold_label_argument():
+def test_kd_topk_kl_has_no_external_label_argument():
     torch.manual_seed(6)
     N, V, k = 4, 100, 16
     t = torch.randn(N, V)
@@ -62,11 +62,11 @@ def test_kd_topk_kl_has_no_gold_label_argument():
     v, i = t.topk(k, -1)
     logz = torch.logsumexp(t, -1)
 
-    # The KL target is fully determined by teacher logits. Changing arbitrary
-    # gold labels cannot affect the loss unless a caller explicitly adds CE.
-    gold_a = torch.randint(0, V, (N,))
-    gold_b = (gold_a + 17) % V
-    assert not torch.equal(gold_a, gold_b)
+    # The KL target is fully determined by teacher logits. External token
+    # labels are not an argument to this loss.
+    labels_a = torch.randint(0, V, (N,))
+    labels_b = (labels_a + 17) % V
+    assert not torch.equal(labels_a, labels_b)
     loss_a = kd_topk_kl(s, v, i, logz)
     loss_b = kd_topk_kl(s, v, i, logz)
     assert torch.equal(loss_a, loss_b)
