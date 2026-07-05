@@ -33,15 +33,28 @@ def build_pairs(cfg, tok):
             for r in load_jsonl(cfg.data.examples_path)]
 
 
+def _model_load_kwargs(cfg):
+    kwargs = {"dtype": torch.bfloat16}
+    if str(cfg.model.device).startswith("cuda"):
+        kwargs["device_map"] = {"": cfg.model.device}
+    return kwargs
+
+
 def profile(model_src, cfg, tok, pairs, limit):
     if (Path(model_src) / "adapter_config.json").exists():
         from evaluate import _load_peft_checkpoint
 
-        base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
+        base = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, **_model_load_kwargs(cfg)
+        )
         model = _load_peft_checkpoint(base, Path(model_src), cfg.model.name)
     else:
-        model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
-    model.to(cfg.model.device).eval()
+        model = AutoModelForCausalLM.from_pretrained(
+            model_src, **_model_load_kwargs(cfg)
+        )
+    if not next(model.parameters()).is_cuda:
+        model.to(cfg.model.device)
+    model.eval()
     prof = gold_logprob_by_layer(
         model, tok, pairs, device=cfg.model.device, limit=limit,
         rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
