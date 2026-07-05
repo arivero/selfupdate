@@ -48,7 +48,7 @@ def _peak_metric(metrics: list[dict], key: str) -> float | None:
 
 
 def results_table() -> pd.DataFrame:
-    base_ce = {}  # per-model forgetting baselines
+    base_ce = {}  # per-model forgetting baselines, stored under legacy keys
     base_p = Path("runs/base-eval-full/recite.json")
     if base_p.exists():
         base_ce["Qwen/Qwen3-0.6B"] = json.loads(base_p.read_text())["general"]["mean_ce"]
@@ -93,7 +93,7 @@ def results_table() -> pd.DataFrame:
             "last_train_cer": evals[-1]["cer"] if evals else None,
             "full_eval_cer": full_cer,
             "line_exact": line_exact,
-            "forgetting_dCE": forget,  # general-CE rise vs base model
+            "forgetting_dNLL": forget,  # general-NLL rise vs base model
             "loss_first": round(sum(m["loss"] for m in trains[:20]) / len(trains[:20]), 4) if trains else None,
             "loss_final": round(sum(m["loss"] for m in trains[-20:]) / len(trains[-20:]), 4) if trains else None,
             "steps": trains[-1]["step"] if trains else None,
@@ -228,7 +228,7 @@ def training_curves() -> None:
         axes[row][0].set_yscale("log")
         axes[row][0].set_ylabel(f"{row_titles[row]}\nloss (log)")
         axes[row][1].set_ylabel("eval CER (8-ex subset)")
-        axes[row][2].set_ylabel("general-CE (forgetting)")
+        axes[row][2].set_ylabel("general NLL (forgetting)")
         axes[row][1].legend(fontsize=6)
         if axes[row][2].lines:
             axes[row][2].legend(fontsize=6)

@@ -50,5 +50,5 @@ teacher-cache forward for cached KD.
 ## What Does Not Change
 
 The masking abstraction, aligned-span convention, top-k KL loss, recitation
-eval, general-CE forgetting probe, and per-layer delta analysis should remain
+eval, general-NLL forgetting probe, and per-layer delta analysis should remain
 stable across model families.

@@ -118,7 +118,7 @@ def summary_text() -> str:
         lines += [
             f"Recitation (full corpus, n={base['n']}): base CER {base['cer']:.3f} ->",
             f"best ({name}) CER {kd['cer']:.3f}, {kd['line_exact']:.0%} lines verbatim.",
-            f"Forgetting probe (CE on held-out text): base {base['general']['mean_ce']:.3f},",
+            f"Forgetting probe (NLL on held-out text): base {base['general']['mean_ce']:.3f},",
             f"best-run {kd['general']['mean_ce']:.3f} (delta {kd['general']['mean_ce']-base['general']['mean_ce']:+.2f}).",
             "  (computed from current artifacts)",
             "",
@@ -145,7 +145,7 @@ def summary_text() -> str:
 
 _COL_SHORT = {
     "last_train_cer": "train_cer", "full_eval_cer": "eval_cer",
-    "line_exact": "exact", "forgetting_dCE": "forget",
+    "line_exact": "exact", "forgetting_dNLL": "forget",
     "compaction": "compact",
     "loss_first": "loss0", "loss_final": "lossN", "train_min": "min",
 }
@@ -245,12 +245,12 @@ def per_run_appendix(pdf):
         if full:
             g = full.get("general", {}).get("mean_ce")
             b.append(f"  FULL eval: CER {full['cer']:.4f} line-exact {full['line_exact']:.4f}"
-                     + (f" general-CE {g:.3f}" if g else ""))
+                     + (f" general-NLL {g:.3f}" if g else ""))
         if best_full and best_label != "final":
             g = best_full.get("general", {}).get("mean_ce")
             b.append(f"  BEST full ({best_label}): CER {best_full['cer']:.4f} "
                      f"line-exact {best_full['line_exact']:.4f}"
-                     + (f" general-CE {g:.3f}" if g else ""))
+                     + (f" general-NLL {g:.3f}" if g else ""))
         blocks.append("\n".join(b))
     for i in range(0, len(blocks), 6):
         _text_page(pdf, f"Per-run details ({i // 6 + 1})",

@@ -9,7 +9,7 @@ mixed-method program is deliberately out of scope here. The standing question:
 > the memorized text readable, and how does that localization move with scale?
 
 Metrics: `runs/results.md` (auto) · report: `runs/report.pdf` · logs:
-`runs/pipeline_*.log`. Base 0.6B control: CER 0.932, general-CE 3.278.
+`runs/pipeline_*.log`. Base 0.6B control: CER 0.932, general NLL 3.278.
 
 ## Current Lessons
 

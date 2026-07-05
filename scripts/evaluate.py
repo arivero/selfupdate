@@ -94,7 +94,7 @@ def main() -> None:
                     rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
     r["general"] = general_ce(model, tok, device=cfg.model.device)
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
-          f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")
+          f"prefix-lines {r['prefix_lines']:.2f}  general NLL {r['general']['mean_ce']:.3f}")
 
     out_path = Path(args.out) if args.out else None
     if out_path and out_path.suffix == ".json":

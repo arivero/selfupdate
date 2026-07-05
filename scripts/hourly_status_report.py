@@ -49,7 +49,7 @@ def latest_metrics(run: str) -> str:
     if evals:
         e = evals[-1]
         parts.append(
-            "probe: epoch {epoch}, CER {cer:.4g}, line {line:.4g}, prefix {prefix:.4g}, gen CE {ce}".format(
+            "probe: epoch {epoch}, CER {cer:.4g}, line {line:.4g}, prefix {prefix:.4g}, gen NLL {ce}".format(
                 epoch=e.get("epoch"),
                 cer=float(e.get("cer", 0.0)),
                 line=float(e.get("line_exact", 0.0)),
@@ -76,7 +76,7 @@ def full_eval(run: str) -> str | None:
     r = json.loads(p.read_text(encoding="utf-8"))
     return (
         f"- `{run}` full eval: CER {r.get('cer')}, line {r.get('line_exact')}, "
-        f"prefix {r.get('prefix_lines')}, general CE {r.get('general', {}).get('mean_ce')}"
+        f"prefix {r.get('prefix_lines')}, general NLL {r.get('general', {}).get('mean_ce')}"
     )
 
 
