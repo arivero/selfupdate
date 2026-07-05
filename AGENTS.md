@@ -76,7 +76,10 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   the teacher. A vocabulary lacking that distinction re-merges the
   roles silently; the lexicon now types them: reference (eval,
   everyone) / teacher_* (training source) / task_label (the supervised
-  conflation, baseline-only).
+  conflation, baseline-only). Reporting rule: expand every loss
+  abbreviation on first use per report — "CE" is written "cross-entropy
+  (log loss) against <target>"; two-letter jargon is where a day of
+  misclassification hid (2026-07-05).
 - **Naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
   signal injected at the logit layer or its weights WITH DEPTH BIAS.
   Lens losses (CE, KL, vocab_mse, whatever) are legitimate LAYERWISE
