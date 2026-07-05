@@ -932,3 +932,24 @@ portability, lens-metric interpretability). Ceiling grid final:
 in-context locate-and-recite does not reliably improve with scale while
 consolidated recall sits 30-70x below it at every size. ragchannel
 train-set sanity: 0.015 (trained content recites; heldout stays weak).
+
+### Finding C2-34: the last-3% law — pure distribution-matching cannot buy verbatim recall
+Micro-diagnosis of the purification collapse: teacher_kl is NOT broken.
+60 window steps converge the student to answer-token accuracy 97.3% —
+EXACTLY the teacher's own label agreement — vs 100.0% under task-CE.
+Teacher_kl faithfully transmits the teacher, softness included; at 97%
+per-token, free-run recitation compounds to failure (0.97^100 ≈ 5%
+error-free), hence slide8kl 0.801 and thinkselkl 0.838. Verbatim recall
+lives in the last ~3%, which the teacher's distribution definitionally
+lacks (those are ITS reading errors); no teacher-side sharpening can
+recover it. HONEST RESOLUTION: (a) lab framing — trajectories carry
+storage and ~97% of readout; verbatim exactness requires a bounded
+reference-text term (the ~25%-share task-CE), making verbatim
+memorization irreducibly part-supervised; report it as such.
+(b) DEPLOYMENT framing — in the evolving-person setting the "reference"
+is the teacher's OWN GENERATED TRANSCRIPT, so transcript-CE is
+teacher-sourced by construction; the lab's task-label CE is the
+simulation of deployment's transcript-CE. CROWN DECISION: slide8pure
+(0.007/99.3%/CLEAN) is THE RECIPE — classified "hybrid by lab
+necessity, deployment-pure by transcript equivalence" — with slide8kl
+(0.801) standing as the measured pure-distribution bound.
