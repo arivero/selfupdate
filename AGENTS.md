@@ -194,9 +194,15 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Current Pointer
 
-The final campaign recipe (2026-07-04): `hidden_loss: vocab_mse` +
-maieutic v4 data (`examples_v4.jsonl`) + `tail_ce_blocks: 4` +
-`anchor_kl_weight: 0.5`, `tail_ce_blocks: 8` when all three readout
-properties are needed at once (+ `frozen_teacher_copy` for full-FT).  Next work:
-scale the final recipe (1.7B+, families), the reasoning-family question,
-thinking_selective masking (designed, unbuilt — see plan file).
+Campaign 2 closed 2026-07-05 (EXPERIMENTS.md: CLOSING TABLE + ten laws;
+paper/paper1.pdf with erratum + addendum). **The recipe**: vocab_mse +
+sliding k=8 windows (conn_window 8/conn_stride 1) + mimicry-free top
+window (tail_hidden_weight 0) + bounded reference-CE + anchors_es_v2 —
+slide8pure: 0.007/99.3%/CLEAN, 84.4% trajectory-driven. Read the
+Publication-Critical Constraints above BEFORE touching the trainer.
+C3 queue: (0) FIX PP2 TRAINING (failed repro 0.837 vs 0.015);
+(1) teacher-stream k-windows; (2) premise-gated thinking teacher_kl;
+(3) Qwen3.6-27B bridge grid + Gemma4-E4B C2modern arm-0 (embed-scaling
+adapter!); (4) wide-channel ragchannel; (5) batching+sync hot-loop
+(4-6x measured headroom); (6) reincarnation experiment; (7) intrusion
+prompts 40→200. Stage-B conversation prototype opens C3 science.
