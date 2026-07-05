@@ -119,7 +119,7 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kin
 
 
 def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
-              ce_w, hidden_w=1.0, L1=None, ce_kind="label_ids", autocast=True):
+              ce_w, hidden_w=1.0, L1=None, ce_kind="teacher_kl", autocast=True):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
     classic tail): gradient flows within the window so a loss anywhere in
     it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
@@ -157,8 +157,12 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind
                     F.log_softmax(logits.float(), dim=-1),
                     F.log_softmax(t_logits.float(), dim=-1),
                     log_target=True, reduction="batchmean")
-            else:
+            elif ce_kind == "task_label":
+                # BASELINE-ONLY branch (training-target law): logits toward
+                # the original text = task supervision, kd-branch territory
                 total = total + ce_w * answer_ce(logits, label_ids)
+            else:
+                raise ValueError(f"unknown tail_ce_kind {ce_kind!r}")
     total.backward()
     return [l.item() for l in losses], h.detach()
 
@@ -188,7 +192,27 @@ def _pp_device_map(cfg) -> dict:
     return dm
 
 
+def _validate_knob_schedule(cfg) -> None:
+    """Knob-flow law (2026-07-05): a knob that a schedule does not implement
+    must RAISE, never silently ignore — spec/code divergence is the bug
+    class that produced the unwired-ce_kind incident. Keep this in sync
+    with the knob-flow audit table in tests/test_training_target_law.py."""
+    sched = cfg.train.schedule
+    bad = []
+    if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
+        bad.append("conn_window")
+    if cfg.train.scramble_targets and sched != "summed":
+        bad.append("scramble_targets")
+    if cfg.train.offload_adam and sched != "summed":
+        bad.append("offload_adam")
+    if bad:
+        raise ValueError(
+            f"knob(s) {bad} not implemented for schedule {sched!r} — "
+            "refusing to silently ignore")
+
+
 def train_layerwise(cfg: ExperimentConfig) -> Path:
+    _validate_knob_schedule(cfg)
     run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
     device = cfg.model.device
@@ -483,6 +507,8 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
             tail_losses, _ = tail_step(
                 stack, tail0, inp, pos_emb_c, tail_targets, it.s0, it.A,
                 it.ans0 - it.s0, label_ids, loss_fn, cfg.train.tail_ce_weight,
+                hidden_w=cfg.train.tail_hidden_weight,
+                ce_kind=cfg.train.tail_ce_kind,
             )
             layer_losses.extend(tail_losses)
             break
@@ -814,6 +840,8 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                     {L: targets[L] for L in range(tail0, n + 1)},
                     it.s0, it.A, it.ans0 - it.s0, label_ids,
                     loss_fn, cfg.train.tail_ce_weight,
+                    hidden_w=cfg.train.tail_hidden_weight,
+                    ce_kind=cfg.train.tail_ce_kind,
                 )
                 accum += 1
                 log.log(kind="train", epoch=epoch, step=step,
