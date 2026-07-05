@@ -819,3 +819,18 @@ trend, all storage results (strict/tc arms have no CE), lensonly and
 the ceiling instruments. The headline "clean, name-faithful method"
 is CONDITIONAL on slide8kl matching slide8pure. Default flipped in
 config; 'gold' remains in code as a labeled baseline control only.
+
+### ERRATUM (2026-07-05 ~05:15, applies to all C1 + pre-05:00 C2 arms)
+Training-side readout terms (tail_ce, lens_ce) targeted the ORIGINAL
+TEXT (task labels), not teacher outputs — disclosed in mechanism but
+misframed as "the method"; correctly classed as task supervision inside
+a hybrid. Eval-side use of the original text is CORRECT and unchanged
+(recall is measured against the reference; owner-confirmed). Scope:
+~25% of gradient in recipe arms (attribution-measured). Bound on
+effect: teacher-forced-with-context agrees with labels at 96.8% top-1 /
+0.226 nats (n=16 v4 items) — the pure form (teacher_kl) targets a
+near-identical distribution; purification arms slide8kl + thinkselkl
+quantify the residual. Unaffected: all hidden-loss/storage results,
+strict/tc arms, anchor-KL, contrast-based laws (mimicry, connectivity),
+metrology, ceilings. paper1 gains this erratum + readout-source column
+at wrap; terminology purged repo-wide ('gold' -> task_label/reference).
