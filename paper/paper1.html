@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="generator" content="pandoc" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
-  <title>Forward-Only Trajectory Matching</title>
+  <title>paper1</title>
   <style>
     code{white-space: pre-wrap;}
     span.smallcaps{font-variant: small-caps;}
@@ -20,12 +20,14 @@
   <![endif]-->
 </head>
 <body>
-<header id="title-block-header">
-<h1 class="title">Forward-Only Trajectory Matching</h1>
-</header>
 <h1 id="forward-only-trajectory-matching-distilling-context-into-weights-one-layer-at-a-time">Forward-Only Trajectory Matching: Distilling Context into Weights, One Layer at a Time</h1>
 <p><strong>The Pierre Menard Program, Stage 1 — campaign report, 2026-07-04</strong></p>
 <p><em>selfupdate / layerwise branch · Qwen3-0.6B → 20B-class · repository: <code>supercomplex/selfupdate_lw</code></em></p>
+<hr />
+<hr />
+<blockquote>
+<p><strong>ERRATUM &amp; RECLASSIFICATION (2026-07-05).</strong> Every arm in this report trained its readout window with cross-entropy (log loss) against the <em>original text</em> — task supervision, not distillation. The mechanism was always disclosed (the term was named “tail-CE”) but misframed as part of the distillation method. All Campaign-1 arms are hereby reclassified as <strong>hybrid baselines</strong> (task-label readout, ~25% of gradient by measured attribution). Storage results (per-layer trajectory matching, the lens and chimera analyses, localization) are unaffected: those gradients never saw the reference text. Campaign 2 (addendum below) established the corrected method — uniform sliding windows, teacher-sourced everywhere except an irreducible, bounded reference term whose necessity is now a measured law (the “last 3%”, C2-34) and which corresponds, in the deployment setting, to CE on the teacher’s own transcript. Markers reading “[expunged]” record a schedule removed under damnatio memoriae: its readout ignored configuration and trained on the reference unconditionally, invalidating it even as a baseline. One further terminology correction applies throughout: what this report called “gold” is the evaluation reference; it was never a legitimate training target.</p>
+</blockquote>
 <hr />
 <h2 id="abstract">Abstract</h2>
 <p>We study a training regime in which a language model teaches itself a long text: the same model plays teacher (prompt contains a privileged RAG passage) and student (passage removed), and each student block is trained to reproduce the teacher’s hidden state at its own depth, with every backward pass confined to a single block. We call the regime <strong>forward-only trajectory matching</strong>: because teacher and student share architecture and initial weights, the teacher’s forward pass <em>is</em> the supervision trajectory, sampled at every layer, with no global backward anywhere in the system except one explicitly bounded top window. In a 24–40 h autonomous campaign (~50 runs, Qwen3-0.6B/1.7B plus five other model families) we find: (1) a new storage loss — MSE measured through the frozen unembedding’s Gram matrix (<code>vocab_mse</code>) — beats standard hidden-matching losses on recall <em>and</em> forgetting, and writes storage in a format portable across readouts; (2) memory storage and behavioral readout dissociate causally: storage is distributed and redundant at ~80% fractional depth, while all pathologies of the regime live in the top-<em>k</em> readout window — it is fragile, template-locked, intrusion-prone, and capacity-limited; (3) “catastrophic remembering” — damage concentrated on the memorized content’s genre neighbors — is a distinct, measurable failure mode, halved by a KL-to-base anchor through the readout window and <em>worsened</em> by a naive CE anchor; (4) Socratic (“maieutic”) dialogue frames at additive data budget cure the readout’s template lock completely while improving plain recitation; and (5) the readout window has a measurable capacity: k=4 supports any two of {elicitation diversity, anchor discipline, full-poem chain depth}, k=8 supports all three. The final 0.6B model recites the complete 715-verse <em>La tierra de Alvargonzález</em> self-chained with its first error at verse 708, answers dialogue-framed questions at 100% exact lines, and pays +0.51 nats mean general-CE — with the storage phase trainable one block at a time, the contract required for streaming this method to 120B-class models.</p>
@@ -157,5 +159,29 @@
 <p>With exact per-depth targets from a shared-initialization teacher, block-local training stores a 715-verse poem redundantly and portably; a bounded top window turns storage into behavior; and every pathology of the process — template lock, genre intrusion, capacity saturation — lives in that window, where it can be measured, priced, and fixed. The storage phase never needs more than one block in memory. Pierre Menard, Stage 1, closes at 0.6B with the poem recited whole; the machinery that did it is the same machinery designed to stream one block of a 120B-class model at a time.</p>
 <hr />
 <p><em>Artifacts: <code>EXPERIMENTS.md</code> (closing table and chronology), <code>runs/report.pdf</code> (per-run appendix; archived copy alongside this paper), <code>runs/results.md</code>, <code>runs/curves.png</code>, <code>runs/forget_curves.png</code>, <code>docs/hidden_loss.md</code>, <code>docs/forward_trajectory.md</code>. Figures reproducible via <code>paper/make_figs.py</code> from run artifacts.</em></p>
+<hr />
+<h1 id="campaign-2-addendum-2026-07-05-the-corrected-method-and-its-laws">Campaign 2 Addendum (2026-07-05): The Corrected Method and Its Laws</h1>
+<h2 id="the-four-laws-method-definition">The four laws (method definition)</h2>
+<ol type="1">
+<li><strong>Sliding windows over all blocks.</strong> Connected credit is uniform: every block is updated inside k-deep windows sliding over the whole depth (<code>conn_window k / conn_stride 1</code>); the top window carries the readout term only because logits exist there. Tail-only training is classical distillation in costume and is banned.</li>
+<li><strong>The vocabulary never trains.</strong> Embedding, final norm, unembedding are frozen under four locks and a runtime tripwire; they serve as per-layer measuring devices, never as entry points.</li>
+<li><strong>Depth uniformity.</strong> No training signal may grow toward the output; depth-biased behavioral terms are the tail in disguise, and empirically they are the intrusion direction (fisher 57.5%, deep lens-CE 50%, lens_kl-as-hidden-loss 90% intrusion).</li>
+<li><strong>Never train logits toward the original text</strong> — with the one measured exception below. Eval against the reference is the metric; training toward it is task supervision (kd-branch territory). Every arm ships a gradient-attribution number.</li>
+</ol>
+<h2 id="the-recipe-crowned-2026-07-05">The recipe (crowned 2026-07-05)</h2>
+<p><code>vocab_mse</code> trajectories at every depth + sliding k=8 windows + <strong>mimicry-free top window</strong> (no in-window hidden matching; C2-22) + bounded reference-CE (weight 0.5; 15.6% of gradient — the arm is 84.4% trajectory-driven) + multi-genre anchor-KL: <strong>CER 0.007 / 99.3% line-exact / all destruction thresholds passed</strong> (probes ≤ +0.18, benchmarks ≥ −1.5, intrusion 5.0%). Best arm of the program, and the most trajectory-driven performer measured.</p>
+<h2 id="the-last-3-law-why-the-reference-term-is-irreducible">The last-3% law (why the reference term is irreducible)</h2>
+<p>Replacing the reference-CE with KL toward the teacher’s own logits (<code>teacher_kl</code>) converges the readout to the teacher’s label agreement <em>exactly</em> (97.3% vs the reference) — and free-running recitation compounds the residual 3% into collapse (CER 0.801). Verbatim recall lives in precisely the information the teacher’s distribution lacks: its own reading errors. Pure distribution matching transfers in-context competence; exactness requires the reference — in deployment, the reference is the teacher’s own generated transcript, restoring purity by construction. Corollary condition: teacher_kl transmits only what the teacher knows in its context (thinking-mode teachers without the passage starve the readout; premise-check per data mode).</p>
+<h2 id="selected-campaign-2-results-full-table-experiments.md">Selected Campaign-2 results (full table: EXPERIMENTS.md)</h2>
+<ul>
+<li><strong>Destruction metrology v2</strong> (category probes, standard-benchmark CE-ranking, intrusion bait, degeneration; pre-committed thresholds) reversed Campaign 1’s forgetting claims: anchors had been protecting only their own genre (anchor-Goodhart); the C1 “final recipe” is destructive under honest instruments.</li>
+<li><strong>Dilution beats drilling</strong>: co-residence of two corpora is free (poem at champion recall beside Quijote ch1, CLEAN both seeds); overtraining a small corpus to perfection buys 27.5% intrusion.</li>
+<li><strong>Saturation is collateral, not capacity</strong>: 16 chapters of the Quijote store and address fine at 0.6B; the capability envelope, not recall, is what breaks.</li>
+<li><strong>The thinking channel is the gentle channel</strong>: censoring only verbatim quotations inside the model’s own traces beats whole-trace censoring on recall with near-zero capability cost.</li>
+<li><strong>Teacher ceilings are flat in scale</strong> (0.45–0.67, 0.6B→14B): consolidated recall beats with-passage prompting 30–70× at every size — the students exceed their teacher’s writing because they distill its reading.</li>
+<li><strong>LoRA is the wrong vehicle</strong> for full-body consolidation: benchmark damage (−12 to −18 points at 4–8B) survives anchor, learning-rate, and rank interventions; full-FT windows with CPU-paged optimizer state (<code>offload_adam</code>, bitwise-verified) replace it — full-FT 4B trains in ~30 GB at 2.3 s/item where classical training needs ~64 GB.</li>
+<li><strong>Parallelism</strong>: two-card pipeline evaluation is validated; two-card pipeline <em>training</em> failed its bit-honesty repro (0.837 vs 0.015) and is the first Campaign-3 blocker. Figures 5–9 cover the saturation surface, head taxonomy, tuned-lens validation, thinking-channel comparison, and the connectivity law.</li>
+</ul>
+<p><em>Figures 5–9 in <code>paper/figs/</code>; fig3 was removed with its expunged arms. Instruments, laws, and the closing table: <code>EXPERIMENTS.md</code>. Doctrine: <code>CLAUDE.md</code>; window semantics: <code>docs/windows.md</code>; the program’s destination: <code>docs/evolving_person.md</code>.</em></p>
 </body>
 </html>
