@@ -910,3 +910,25 @@ real but rides primarily on items where content enters BOTH channels
 (passage states + labeled positions elsewhere in the corpus). A
 wide-channel version (hold labels, boost passage exposure) is the C3
 follow-up with real discriminating power.
+
+### PARALLELISM VERDICT: PP2 training NOT validated — repro tripwire fired
+lw_q_pp2 (identical config/seed to the single-card reference 0.015/0.986,
+only pipeline_split added): CER 0.837 — the two-card training path does
+NOT reproduce single-card training. The repro existed precisely to catch
+this before the 32B run trusted the machinery; 32B chain cancelled. The
+PP2 EVAL path (device_map generate) is separately fine (smoke + 14B
+maieu used it). Status: two-card pipeline TRAINING = open bug, C3
+blocker #0 (suspects: cross-device autocast/master-weight interaction in
+full-FT, anchor path device placement; the 1-epoch LoRA smoke checked
+loss finiteness, not recall — an insufficient gate, lesson recorded).
+Timing benches (single/PP2/TP2) remain valid as timing.
+
+Loss-grid completion: slide8nmse is CLEAN (recall 0.013, worst +0.39,
+intr 7.5%) — under UNIFORM windows, plain nmse matches vocab_mse recall
+and cleanliness; vocab_mse's C1 superiority was a property of the
+tail-hybrid regime (its unique advantages that remain: chimera
+portability, lens-metric interpretability). Ceiling grid final:
+0.650 / 0.666 / 0.524 / 0.651 / 0.449 (0.6B→14B) — flat, non-monotone;
+in-context locate-and-recite does not reliably improve with scale while
+consolidated recall sits 30-70x below it at every size. ragchannel
+train-set sanity: 0.015 (trained content recites; heldout stays weak).
