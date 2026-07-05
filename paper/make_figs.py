@@ -117,29 +117,7 @@ def fig2():
     plt.close(fig)
 
 
-# ---- Fig 3: catastrophic remembering & the anchor arc ------------------
-def fig3():
-    base = base_probes()
-    probes = ["Bécquer\n(poetry ES)", "facts ES", "prose EN", "recipe ES"]
-    arms = [("no anchor", "lw_k_tailonly_0p6b_rag", C["neutral"]),
-            ("anchor-CE", "lw_k_tailonly_anchor_0p6b_rag", C["l2mse"]),
-            ("anchor-KL", "lw_k_tailonly_anchorkl_0p6b_rag", C["vocab_mse"])]
-    fig, ax = plt.subplots(figsize=(6.4, 2.7))
-    w = 0.26
-    for i, (label, run, color) in enumerate(arms):
-        pt = recite(run)["general"]["per_text"]
-        d = [a - b for a, b in zip(pt, base)]
-        xs = [x + (i - 1) * w for x in range(4)]
-        ax.bar(xs, d, width=w - 0.03, color=color, label=label, edgecolor="none")
-    ax.set_xticks(range(4), probes, fontsize=8)
-    ax.set_ylabel("Δ CE vs base (nats)", fontsize=8)
-    ax.set_title("Catastrophic remembering: damage peaks on the memorized genre's neighbor;\n"
-                 "anchor-CE amplifies it, anchor-KL halves it (tail_only arms, recall ≈ equal)",
-                 fontsize=8.5, loc="left")
-    ax.legend(fontsize=7.5, frameon=False)
-    fig.tight_layout()
-    fig.savefig(FIGS / "fig3_intrusion.png")
-    plt.close(fig)
+# (fig3 expunged 2026-07-05 with its arms — anchor story now told by C2-2/C2-3 instruments)
 
 
 # ---- Fig 4: readout window capacity ------------------------------------
@@ -152,7 +130,6 @@ def fig4():
             ("maieutic only", "lw_k_maieutic_0p6b_rag", C["neutral"]),
             ("anchor-KL only", "lw_k_anchorkl_0p6b_rag", C["neutral"]),
             ("both, k=4", "lw_k_final_0p6b_rag", C["l2mse"]),
-            ("both, k=4, 2-phase", "lw_k_final2p_0p6b_rag", C["l2mse"]),
             ("both, k=8", "lw_k_final_k8_0p6b_rag", C["vocab_mse"])]
     fig, ax = plt.subplots(figsize=(6.4, 2.5))
     names = [a[0] for a in arms]
@@ -357,7 +334,7 @@ def fig9():
 
 
 if __name__ == "__main__":
-    for f in (fig1, fig2, fig3, fig4, fig5, fig6, fig7, fig8, fig9):
+    for f in (fig1, fig2, fig4, fig5, fig6, fig7, fig8, fig9):
         try:
             f()
         except FileNotFoundError as e:

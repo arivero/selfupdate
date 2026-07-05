@@ -29,7 +29,7 @@ produces behavior. "Good" means:
 | cosine | dominated |
 | lens_kl | killed (0.565 @ 5x compute; inner-layer lens miscalibrated) |
 | tail-CE k=4 | the readout concession; k does NOT grow with depth (k=2 viable at 1.7B) |
-| **tail_only two-phase** | fully-local storage + bounded readout phase BEATS joint training (0.008 vs 0.024) |
+| **[expunged] two-phase** | fully-local storage + bounded readout phase BEATS joint training (0.008 vs 0.024) |
 | **anchor-KL** | halves-to-thirds intrusion at zero recall cost (summed: Bécquer +0.71, mean +0.50) |
 | anchor-CE | recorded negative: fixed-fragment CE worsens intrusion |
 | **maieutic v4 data** | cures elicitation brittleness (0.921 -> 0.000) AND improves recitation (0.015) |
@@ -158,7 +158,7 @@ items); needs a v2-records eval for a fair read.
 
 ## Wave J/K Partials (02:00)
 
-- **Two-phase pipeline works**: `tail_only` (frozen vocab_strict body from
+- **Two-phase pipeline works**: `[expunged]` (frozen vocab_strict body from
   `init_from`, train ONLY the k=4 window) reached subset CER 0.000 at the
   matched 13.3k budget — full eval pending. If confirmed, storage can be
   trained fully block-local/parallel and behavior added in a bounded
@@ -189,11 +189,11 @@ Recipe: **vocab_mse + tail-CE k=4 on v2 data** — replicated across seeds
 
 | mode | CER | exact | mean dCE | intrusion |
 |---|---|---|---|---|
-| **tail_only two-phase** | **0.008** | **0.990** | +1.33 | +2.29 |
+| **[expunged] two-phase** | **0.008** | **0.990** | +1.33 | +2.29 |
 | summed one-phase | 0.024 | 0.978 | +1.01 | +2.03 |
 | mixed anneal | 0.110 | 0.882 | +0.74 | +1.57 |
 
-Pick by application: best recall (tail_only), balanced (summed), least
+Pick by application: best recall ([expunged]), balanced (summed), least
 damage (mixed). The two-phase result is the architectural headline:
 storage fully block-local + bounded readout phase = best recall of the
 campaign — the streaming-scale contract holds without recall sacrifice.
@@ -209,7 +209,7 @@ protect against forgetting); Phi-4-mini genuine failure (0.918, thinking-
 mode interference). gpt-oss-20b passes the full smoke at k=1 on an empty
 card (40.7 GB) — LoRA training arm queued.
 
-Wave K (final ~24h): recite_long anchored whole-poem on tail_only /
+Wave K (final ~24h): recite_long anchored whole-poem on [expunged] /
 champion / Mistral; anchor-CE anti-intrusion arm (tail-window LM anchor
 on neighbor-genre Spanish); gpt-oss-20b LoRA arm; maieutic v4 as
 ADDITIVE-budget arm judged on elicitation diversity; thinking_selective
@@ -222,7 +222,7 @@ if hours remain.
 | checkpoint | anchored CER | self-chained CER | verses to first error |
 |---|---|---|---|
 | champion (summed vocab_mse) | **0.007** | **0.007** | **708 / 715** |
-| tail_only two-phase | 0.008 | 0.008 | 708 / 715 |
+| [expunged] two-phase | 0.008 | 0.008 | 708 / 715 |
 | Mistral-7B LoRA | 0.034 | 0.133 | 312 |
 
 The 0.6B champion recites the ENTIRE romance with its first error at
@@ -238,7 +238,7 @@ neighbor damage; vocab_mse stays the Pareto choice.
 
 ## Anchor-CE Negative (04:00) — the regularizer became another poem
 
-tail_only + anchor-CE w=0.5: recall intact (CER 0.011) but intrusion
+[expunged] + anchor-CE w=0.5: recall intact (CER 0.011) but intrusion
 WORSENED (Bécquer +3.57 vs +2.29 unanchored; mean dCE +2.02 vs +1.33).
 Plain CE on six fixed neighbor fragments is memorization pressure on
 those fragments — the tail also learns THEM, further warping the poetry
@@ -262,7 +262,7 @@ Dialogue-frame data completely cures elicitation brittleness AND improves
 plain recitation, at +0.17 nats extra forgetting. Elicitation diversity is
 now a standing recipe ingredient (the user's maieutic thesis, confirmed).
 
-**Anchor-KL halves intrusion at zero recall cost** (tail_only variants):
+**Anchor-KL halves intrusion at zero recall cost** ([expunged] variants):
 
 | anchor | CER | Bécquer | mean dCE |
 |---|---|---|---|
@@ -283,7 +283,7 @@ train. Worth its own investigation at Quijote scale.
 
 **Final recipe queued** (all findings composed): vocab_mse + maieutic v4
 + tail-CE k=4 + anchor-KL, in both one-phase (summed) and two-phase
-(v4-strict body -> tail_only) forms.
+(v4-strict body -> [expunged]) forms.
 
 ## CAMPAIGN CLOSING TABLE (06:30, 0.6B, full-corpus)
 
@@ -291,12 +291,12 @@ train. Worth its own investigation at Quijote scale.
 |---|---|---|---|---|---|
 | old champion (nmse, pre-campaign) | 0.112 / 0.905 | — | 312 | — | — |
 | vocab champion (summed, v2) | 0.024 / 0.978 | 0.921 (locked) | **708** | +2.03 | +1.01 |
-| tail_only two-phase (v2) | 0.008 / 0.990 | 0.955 (locked) | **708** | +2.29 | +1.33 |
+| [expunged] two-phase (v2) | 0.008 / 0.990 | 0.955 (locked) | **708** | +2.29 | +1.33 |
 | mixed anneal (v2) | 0.110 / 0.882 | — | — | +1.57 | +0.74 |
 | maieutic (v4) | 0.015 / 0.980 | 0.000 / 100% | **708** | +2.18 | +1.18 |
 | anchor-KL (v2) | 0.021 / 0.976 | — | **708** | **+0.71** | **+0.50** |
 | final 1p (v4+anchorKL) | 0.009 / 0.987 | 0.002 | 431 | +0.83 | +0.59 |
-| final 2p (v4+anchorKL, tail_only) | 0.009 / 0.988 | **0.000 / 100%** | 231 | +1.34 | +0.85 |
+| final 2p (v4+anchorKL, [expunged]) | 0.009 / 0.988 | **0.000 / 100%** | 231 | +1.34 | +0.85 |
 
 **Window capacity: CONFIRMED and RESOLVED (07:20).** maieutic data and
 anchor-KL are each free individually (708-verse chain intact) but
@@ -670,7 +670,7 @@ regenerated with the full grid.
 
 ### Finding C2-21 (ABLATION-CLASS, tail-only — hard-stop batch): at 4B the
 window alone recites
-lw_l_tailonly_4b (full-FT of ONLY the k=8 tail window from base, body
+lw_l_[expunged]_4b (full-FT of ONLY the k=8 tail window from base, body
 untouched, no LoRA): CER 0.013 / line_exact 0.986 — champion-level
 recall with zero body training, no LoRA damage vehicle. Read under the
 doctrine: this is the strongest possible statement of the referee's
@@ -681,10 +681,10 @@ number honestly. Destruction verdict lands after the verdict() fix.
 Classical-side baseline; belongs conceptually to ../selfupdate_kd
 territory and is reported here as the labeled boundary stone.
 
-C2-21 completion (tailonly_4b destruction): recites 0.013 BUT intrusion
+C2-21 completion ([expunged]_4b destruction): recites 0.013 BUT intrusion
 25.0% and prose_es +0.70 (benchmarks untouched: −0.5/−1.0). The pattern
 now spans three findings: fisher (metric concentrated on output tokens)
-→ 57.5% intrusion; tailonly (parameters concentrated at output) → 25%;
+→ 57.5% intrusion; [expunged] (parameters concentrated at output) → 25%;
 distributed/full-body methods at matched recall → 10-15%. Emerging law:
 **concentration near the output buys recall at the price of intrusion**
 — the completion groove IS the concentrated readout. The doctrine's
@@ -702,7 +702,7 @@ window states are context-conditioned; forcing the student into them
 teaches "enter poem-state whenever the stream looks poem-ish" —
 intrusion. CE-only readout learns "produce the poem when ASKED" —
 prompt-conditioned, groove-free. Consistent across the family: fisher
-(mimicry in output-token geometry) 57.5%; tailonly_4b (window mimicry,
+(mimicry in output-token geometry) 57.5%; [expunged]_4b (window mimicry,
 no body) 25%; hybrid windows 12.5-22.5%; mimicry-free readout 2.5%.
 Per the naming contract this ablation is REPORTED, not silently
 adopted: the doctrine-clean composition is sliding uniform body credit
@@ -713,13 +713,13 @@ lw_r_lensdeep2 (deep-only lens-CE, modern kit): recall 0.046 but
 intrusion 50.0%, procedural +2.51 — the old-kit 0.307 arm was bad at
 reciting AND we now see its modern version is an intrusion machine.
 Depth-biased aux = groove, confirming the doctrine empirically from the
-lens side (fisher was the metric side, tailonly the parameter side).
+lens side (fisher was the metric side, [expunged] the parameter side).
 
 ### Finding C2-24: the LoRA axis closes — nothing fixes it
 4B r64 (rank quadrupled): bench_min −18.0, prose_es +0.94, intr 15% —
 worse than r16. Anchors, lr, and rank all fail; the LoRA vehicle itself
 is wrong for full-body consolidation at scale. Scale recipe = full-FT
-window schemes (tailonly_4b VRAM path) or offload_adam full-FT (ft4b
+window schemes ([expunged]_4b VRAM path) or offload_adam full-FT (ft4b
 pending).
 
 ### Finding C2-25: dilution does not rescue 1.7B full-FT
@@ -740,7 +740,7 @@ ablation endpoints:
 | **slide k=8** | 0.017 | 0.977 | **+0.35** | **−1.0** | **7.5%** | **74.9%** | **CLEAN** |
 | tailpure (ablation) | 0.017 | 0.978 | +0.25 | −5.0 | 2.5% | 74.3% | CLEAN |
 | final_k8 (classical hybrid, ablation) | 0.015 | 0.986 | +0.47 | −5.5 | 12.5% | 49.5% | DESTR |
-| tailonly_4b (ablation, 4B) | 0.013 | 0.986 | +0.70 | −1.0 | 25.0% | ~0% body | DESTR |
+| [expunged]_4b (ablation, 4B) | 0.013 | 0.986 | +0.70 | −1.0 | 25.0% | ~0% body | DESTR |
 
 Readings: (1) recall arrives by k=4 (0.009 — best 0.6B Machado recall
 of the project); (2) CLEANLINESS arrives at k=8 — uniform 8-deep credit
@@ -834,3 +834,15 @@ quantify the residual. Unaffected: all hidden-loss/storage results,
 strict/tc arms, anchor-KL, contrast-based laws (mimicry, connectivity),
 metrology, ceilings. paper1 gains this erratum + readout-source column
 at wrap; terminology purged repo-wide ('gold' -> task_label/reference).
+
+
+### DAMNATIO MEMORIAE (owner directive, 2026-07-05 ~06:00)
+The schedule formerly at the expunged markers is removed from code,
+configs, docs and papers. Reason: its readout CE targeted the ORIGINAL
+TEXT unconditionally (the ce_kind knob never reached it), so none of its
+results were valid even as baselines — they were task-supervised runs
+wearing a distillation label. teacher_censored is RESTORED to its
+original definition (stationary teacher-stream, fully parallel, no
+window, no CE — the drift entered at fe3201d for "like-for-like"
+comparability). Refusal guards now make both states unrepresentable:
+the expunged schedule name raises; teacher_censored + tail knobs raise.

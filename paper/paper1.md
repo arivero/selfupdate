@@ -77,7 +77,7 @@ Contributions, in the order the campaign produced them:
    delta-direction convergence.
 3. **Readout transplants ("chimeras")** showing storage formats are
    loss-specific and `vocab_mse`'s is portable — which predicted a
-   **two-phase pipeline** (`tail_only`) where a readout trained on a
+   **two-phase pipeline** (`[expunged]`) where a readout trained on a
    *frozen, fully-locally-trained* body beats joint training.
 4. **Catastrophic remembering** as a measurable failure mode with a
    4-probe decomposition (drift vs intrusion), a demonstrated fix
@@ -168,7 +168,7 @@ checkpoints (max |Δ| = 0.0).
 - `mixed`: per-item Bernoulli between the two streams with the
   teacher-branch probability annealed 1→0 over epochs (scheduled
   sampling across depth).
-- `tail_only`: body frozen (from `init_from`), only the top-k window
+- `[expunged]`: body frozen (from `init_from`), only the top-k window
   trains — phase 2 of the two-phase pipeline.
 
 ### 3.4 Readout auxiliaries
@@ -258,7 +258,7 @@ tail and strict runs share their sub-tail weight deltas almost exactly
 (cos 0.99+): tail-CE re-carves only the readout, never the storage.
 
 **Two-phase training.** These facts predict that the readout can be
-trained *after* storage, on a frozen body. It can: `tail_only` on a
+trained *after* storage, on a frozen body. It can: `[expunged]` on a
 frozen strict-trained body reaches CER **0.008** — better than joint
 training (0.024) — turning the whole pipeline into an embarrassingly
 parallel storage phase plus one bounded window phase.
@@ -289,7 +289,7 @@ readout window never trains — the sharpest open question for scaling.
 
 ![Fig. 3 — intrusion](figs/fig3_intrusion.png)
 
-*Figure 3: per-probe forgetting decomposition on tail_only arms of equal
+*Figure 3: per-probe forgetting decomposition on [expunged] arms of equal
 recall. Damage concentrates on the memorized content's nearest genre
 neighbor (Spanish romantic poetry) — intrusion, not drift. A naive CE
 anchor on six fixed neighbor fragments amplifies it (the regularizer

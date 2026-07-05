@@ -58,7 +58,7 @@ Each of these is a measured result in `EXPERIMENTS.md` / `paper/paper1.md`:
    matching stores content reliably (block-local, provably bounded
    memory) but recites weakly; a small connected tail window with
    answer-CE supplies behavioral credit. → Consolidation is two-phase:
-   stream-the-body storage passes, then a short `tail_only` readout
+   stream-the-body storage passes, then a short `[expunged]` readout
    phase. Both phases keep every gradient away from other blocks.
 2. **The vocabulary is frozen, always.** Embedding, final norm, head
    are never trained (four independent locks). Over thousands of
@@ -146,7 +146,7 @@ Nightly (or idle-time), on the serving hardware:
    teacher = same weights with full context (adapters off).
 4. **Two-phase layerwise consolidation**: strict body matching
    (streamed block-by-block — bounded memory even at 120B, can run
-   concurrently with serving on spare capacity), then `tail_only`
+   concurrently with serving on spare capacity), then `[expunged]`
    readout with answer-CE + anchor-KL.
 5. **Gate**: destruction battery vs the running base reference. Trip →
    reject or downweight and retry with stronger anchors. Pass →

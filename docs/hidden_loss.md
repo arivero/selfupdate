@@ -121,7 +121,7 @@ Storage and readout dissociate, causally:
   `vocab_mse` — measuring hidden error through the frozen vocabulary's
   Gram matrix — whose format is PORTABLE: foreign readouts decode it
   (chimera transplants), and a readout trained post-hoc on a frozen
-  strict body beats joint training (`tail_only`, 0.008 vs 0.024).
+  strict body beats joint training (`[expunged]`, 0.008 vs 0.024).
 - **readout**: a fragile, co-adapted circuit in the top k blocks where
   every pathology lives. It is template-locked (recitation-trained
   readouts collapse 0.024 -> 0.92 under dialogue framing; cured by

@@ -194,8 +194,6 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 The final campaign recipe (2026-07-04): `hidden_loss: vocab_mse` +
 maieutic v4 data (`examples_v4.jsonl`) + `tail_ce_blocks: 4` +
 `anchor_kl_weight: 0.5`, `tail_ce_blocks: 8` when all three readout
-properties are needed at once (+ `frozen_teacher_copy` for full-FT). Two-phase
-form (strict body then `schedule: tail_only` with `init_from`) matches or
-beats joint training and keeps storage fully block-local. Next work:
+properties are needed at once (+ `frozen_teacher_copy` for full-FT).  Next work:
 scale the final recipe (1.7B+, families), the reasoning-family question,
 thinking_selective masking (designed, unbuilt — see plan file).

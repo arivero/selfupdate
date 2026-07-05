@@ -29,7 +29,7 @@ def test_all_ce_call_sites_pass_cfg_kind():
     # every tail_step call that passes a CE weight from cfg must pass ce_kind
     calls = re.findall(r"tail_step\((?:[^()]|\([^()]*\))*\)", src)
     ce_calls = [c for c in calls if "tail_ce_weight" in c]
-    assert len(ce_calls) >= 3
+    assert len(ce_calls) >= 1  # summed only: censored is pure, [expunged] is expunged
     for c in ce_calls:
         assert "ce_kind=cfg.train.tail_ce_kind" in c, c[:120]
 
@@ -107,6 +107,13 @@ def test_knob_schedule_refusal():
 
     cfg = load_config("configs/base.yaml", None)
     cfg.train.schedule = "tail_only"
+    with pytest.raises(ValueError, match="expunged"):
+        _validate_knob_schedule(cfg)
+    cfg.train.schedule = "teacher_censored"
+    cfg.train.tail_ce_blocks = 8
+    with pytest.raises(ValueError, match="pure by definition"):
+        _validate_knob_schedule(cfg)
+    cfg.train.tail_ce_blocks = 0
     cfg.train.conn_window = 8
     with pytest.raises(ValueError, match="conn_window"):
         _validate_knob_schedule(cfg)

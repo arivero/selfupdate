@@ -205,6 +205,12 @@ def _validate_knob_schedule(cfg) -> None:
         bad.append("scramble_targets")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
+    if cfg.train.tail_ce_blocks > 0 and sched == "teacher_censored":
+        bad.append("tail_ce_blocks (teacher_censored is pure by definition)")
+    if sched == "tail_only":
+        raise ValueError("schedule 'tail_only' was expunged 2026-07-05 "
+                         "(damnatio memoriae — owner directive); its CE "
+                         "silently targeted the original text")
     if bad:
         raise ValueError(
             f"knob(s) {bad} not implemented for schedule {sched!r} — "
@@ -223,7 +229,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     # (cast per stage / per window); summed full-FT trains all blocks every
     # step and keeps fp32 masters throughout.
     full_ft_all_blocks = (not cfg.train.lora.enabled
-                          and cfg.train.schedule not in ("sequential", "tail_only"))
+                          and cfg.train.schedule != "sequential")
     base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
     # warm-start: student weights from a prior run's checkpoint; the teacher
     # (cache identity / frozen copy / adapters-off) stays cfg.model.name
@@ -271,10 +277,6 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
 
     if cfg.train.schedule == "summed":
         _train_summed(cfg, stack, cache, tok, log, teacher)
-    elif cfg.train.schedule == "tail_only":
-        if cfg.train.tail_ce_blocks <= 0:
-            raise ValueError("tail_only needs tail_ce_blocks > 0")
-        _train_tail_only(cfg, stack, cache, tok, log, teacher)
     elif cfg.train.schedule == "teacher_censored":
         if teacher is None:
             raise ValueError(
@@ -484,16 +486,17 @@ def censored_rows(s0: int, t0: int, A: int, t_priv, device) -> torch.Tensor:
 def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     """One item's per-block fitting on censored teacher-stream inputs
     (prefix rows + aligned rows, teacher position ids, privileged rows
-    deleted). When ``tail_ce_blocks > 0`` the top window runs CONNECTED on
-    the censored input — the same bounded-locality concession the summed
-    schedule makes, so mixed/censored runs compare like-for-like."""
+    deleted). RESTORED to its original purpose 2026-07-05: stationary
+    inputs, every layer independent, NO connected window and NO readout
+    CE — those drifted in via fe3201d for like-for-like comparability
+    and imported task supervision into the pure schedule. Teacher-stream
+    k-windows are a distinct future mode (docs/windows.md)."""
     n = stack.n_layers
     tA0 = it.t0
     rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
     pos_c = rows[None]  # teacher absolute positions == row indices
     pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
     label_ids = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
-    tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
 
     def _target(L):
         t = t_states[L][0, tA0: tA0 + it.A]
@@ -502,16 +505,6 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     layer_losses = []
     for L in range(1, n + 1):
         inp = t_states[L - 1][:, rows].detach()
-        if L == tail0:
-            tail_targets = {LL: _target(LL) for LL in range(tail0, n + 1)}
-            tail_losses, _ = tail_step(
-                stack, tail0, inp, pos_emb_c, tail_targets, it.s0, it.A,
-                it.ans0 - it.s0, label_ids, loss_fn, cfg.train.tail_ce_weight,
-                hidden_w=cfg.train.tail_hidden_weight,
-                ce_kind=cfg.train.tail_ce_kind,
-            )
-            layer_losses.extend(tail_losses)
-            break
         if L == n:
             loss_val, _ = last_block_step(
                 stack, inp, pos_emb_c, _target(L), it.s0, it.A,
@@ -787,93 +780,6 @@ def _make_anchor(cfg, tok, teacher=None):
         bank.precompute_base_logits(teacher)
     return bank, w
 
-
-def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
-    """Phase-2 readout training, motivated by the chimera result: storage
-    trained fully block-local can be unlocked by a readout learned ON TOP of
-    the frozen body. Body blocks [1..tail0) are frozen; only the tail window
-    trains (tail_step on the student's own frozen-body stream). Combined
-    with ``init_from`` this splits the pipeline into an embarrassingly
-    parallel storage phase and a bounded k-block readout phase."""
-    device = cfg.model.device
-    n = stack.n_layers
-    k = cfg.train.tail_ce_blocks
-    tail0 = n - k + 1
-    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-    anchor = _make_anchor(cfg, tok, teacher)
-    for L in range(1, tail0):
-        stack.blocks[L - 1].requires_grad_(False)
-    if not cfg.train.lora.enabled:
-        for L in range(tail0, n + 1):
-            stack.blocks[L - 1].float()  # fp32 masters for the window only
-    online = teacher is not None
-    ds = _make_dataset(cfg, cache, tok,
-                       [] if online else list(range(tail0, n + 1)),
-                       with_teacher_ids=online)
-    records = ds.records
-    loader = _loader(cfg, ds)
-    opts = {
-        L: torch.optim.AdamW(
-            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
-        )
-        for L in range(tail0, n + 1)
-    }
-
-    step = accum = 0
-    t0 = time.time()
-    for epoch in range(cfg.train.epochs):
-        for items in loader:
-            for it in items:
-                targets = (teacher.aligned_targets(it, device) if online
-                           else {L: it.hidden[L].to(device)
-                                 for L in range(tail0, n + 1)})
-                ids = it.student_ids.to(device)[None]
-                pos = it.position_ids.to(device)[None]
-                with torch.no_grad(), torch.autocast(device, dtype=torch.bfloat16):
-                    h = stack.embed(ids)
-                    pos_emb = stack.rope(h, pos)
-                    for L in range(1, tail0):
-                        h = stack.run_block(L, h, pos_emb)
-                label_ids = ids[0, it.ans0: it.s0 + it.A]
-                tail_losses, _ = tail_step(
-                    stack, tail0, h.detach(), pos_emb,
-                    {L: targets[L] for L in range(tail0, n + 1)},
-                    it.s0, it.A, it.ans0 - it.s0, label_ids,
-                    loss_fn, cfg.train.tail_ce_weight,
-                    hidden_w=cfg.train.tail_hidden_weight,
-                    ce_kind=cfg.train.tail_ce_kind,
-                )
-                accum += 1
-                log.log(kind="train", epoch=epoch, step=step,
-                        loss=sum(tail_losses) / k, per_layer=tail_losses)
-                if accum % cfg.train.grad_accum == 0:
-                    if anchor is not None:
-                        a_ids, a_base = anchor[0].next()
-                        anchor_step(stack, tail0, a_ids, anchor[1],
-                                    base_logits=a_base)
-                    for L, opt in opts.items():
-                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
-                        opt.step()
-                        opt.zero_grad(set_to_none=True)
-                    step += 1
-        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            # uniform bf16 for BOTH eval passes (they run without autocast),
-            # fp32 masters restored only after all eval forwards are done
-            if not cfg.train.lora.enabled:
-                for L in range(tail0, n + 1):
-                    stack.blocks[L - 1].to(torch.bfloat16)
-            r = recite_eval(stack.model, tok, records, limit=8)
-            gen = general_ce(stack.model, tok)["mean_ce"]
-            if not cfg.train.lora.enabled and epoch < cfg.train.epochs - 1:
-                for L in range(tail0, n + 1):
-                    stack.blocks[L - 1].float()
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
-                    prefix_lines=r["prefix_lines"],
-                    gen_ce=gen,
-                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-                    minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
 
 
 def mix_teacher_p(cfg, epoch: int) -> float:

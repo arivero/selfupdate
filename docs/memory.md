@@ -48,7 +48,7 @@ columns per run.
 | 4B LoRA r64 | ~140M | summed | 11.7 GB | +4× adapter params ≈ +1.5 GB |
 | 8B LoRA r16 | ~50M | summed | 18.5 GB | bf16 base 16 |
 | 14B LoRA r16 | ~70M | summed | 31.6 GB | bf16 base 28 |
-| 4B full-FT tail window k=8 (frozen copy) | ~0.9B | tail_only | ~30 GB (nvidia-smi, run in flight) | bf16 student 8 + bf16 teacher 8 + window fp32 3.6 + Adam 7.2 + grads 3.6 |
+| 4B full-FT tail window k=8 (frozen copy) | ~0.9B | [expunged] | ~30 GB (nvidia-smi, run in flight) | bf16 student 8 + bf16 teacher 8 + window fp32 3.6 + Adam 7.2 + grads 3.6 |
 | gpt-oss-20B LoRA (MXFP4→bf16) | ~60M | summed | 40.7 GB | dequantized base ~40 |
 
 ## The Fits-Where-Traditional-Cannot Argument
@@ -60,7 +60,7 @@ full-depth activation storage:
 | model | traditional full-FT | one L40S (46 GB)? | layerwise measured |
 |---|---|---|---|
 | 0.6B | ~10 GB | yes | 10–11 GB (summed keeps all masters — no saving BY DESIGN at this size) |
-| 4B | ~64 GB | **no** | **~30 GB** (tail_only full-FT window) / 10 GB (LoRA) |
+| 4B | ~64 GB | **no** | **~30 GB** ([expunged] full-FT window) / 10 GB (LoRA) |
 | 8B | ~128 GB | no | 18.5 GB (LoRA) |
 | 14B | ~224 GB | no | 31.6 GB (LoRA) |
 | 20B MoE | ~320 GB | no | 40.7 GB (LoRA, exclusive lane) |
@@ -68,8 +68,8 @@ full-depth activation storage:
 The structural point: `summed` full-FT saves nothing on weights/optimizer
 (it trains every block every step) — its saving is ACTIVATIONS ONLY
 (one block's graph instead of full depth). The memory story at scale is
-carried by `tail_only` (fp32 state for k blocks only), `sequential`
+carried by `[expunged]` (fp32 state for k blocks only), `sequential`
 (one block at a time — the 120B streaming contract), and LoRA (base in
-bf16, adapters-off teacher for free). The 4B tail_only run is full-FT
+bf16, adapters-off teacher for free). The 4B [expunged] run is full-FT
 QUALITY training of a 0.9B-param window on a card where traditional 4B
 full-FT cannot even load its optimizer.
