@@ -1089,3 +1089,11 @@ not remembered. Two confounds in one day both produced valid science
 thinkselkl, lw_q_pp2-confounded, k6-KL, and counting) — but only
 because the config dumps made them detectable. The dump IS the lab
 notebook; the sentinel makes it sufficient.
+
+### Last landings before budget end (relabeled KL-family points)
+think-KL (thinkslide misfire) 0.858 — premise condition, 6th
+replication. ch8-KL (q_ch8 misfire) 0.758 flat — the last-3% law ON
+PROSE, 7th replication (and mildly softer collapse: prose verbatim
+tolerance differs — C3 footnote). s43-KL eval running; pp2fix
+certification eval running — verdicts land unattended in
+runs/*/eval/recite.json; the scheduler owns the lanes now.
