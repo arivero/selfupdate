@@ -506,6 +506,14 @@ passage starve the readout; premise-check per data mode).
 ![Fig. 9 — connectivity law](figs/fig9_connectivity.png)
 *Fig. 9 — the connectivity law: uniform sliding windows reach clean, trajectory-primary memorization at k=8.*
 
+**Appendix casebook:** per-method characteristics, stats (time, VRAM,
+item budget, most-altered layers, gradient attribution) and verbatim
+model transcripts for ten representative arms: `docs/casebook.md`.
+A method-invariant regularity: every performing arm writes its storage
+at layers 17–22; failing arms scatter (shallow vandalism at L6 for the
+label-only control, deep grooves at L25 for teacher-stream) — where the
+writes land predicts whether the method worked.
+
 *Figures 5–9 in `paper/figs/`; fig3 was removed with its expunged arms.
 Instruments, laws, and the closing table: `EXPERIMENTS.md`. Doctrine:
 `CLAUDE.md`; window semantics: `docs/windows.md`; the program's
