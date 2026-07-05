@@ -3,7 +3,7 @@
 Per model: load through BlockStack (loud layout check) -> adapt_records on
 the RAG dataset (template re-render) -> 1-example online teacher targets
 (the untouched model IS the teacher) -> one strict local_block_step + one
-tail_step with gold-CE (finite losses, grads confined to blocks, frozen
+tail_step with task-label CE (finite losses, grads confined to blocks, frozen
 vocab untouched) -> one greedy generation stopping on the family's turn
 closer -> peak VRAM. Failures are recorded per stage and abort the
 remaining stages for that model, never the harness — a FAIL row is a
@@ -95,7 +95,7 @@ def smoke_one(name: str, examples: str, tail_blocks: int, max_new: int,
         s_pos = torch.arange(s_ids.shape[1], device=device)[None]
         h0 = stack.embed(s_ids)
         pos_emb_s = stack.rope(h0, s_pos)
-        gold = torch.tensor(pair.student_ids[ans0: s0 + A], device=device)
+        reference = torch.tensor(pair.student_ids[ans0: s0 + A], device=device)
 
         stage = "step"
         mid = n // 2
@@ -114,7 +114,7 @@ def smoke_one(name: str, examples: str, tail_blocks: int, max_new: int,
         L0 = n - tail_blocks + 1
         h_in = _advance(stack, h0, pos_emb_s, L0 - 1)
         tail_losses, _ = tail_step(
-            stack, L0, h_in, pos_emb_s, targets, s0, A, ans0 - s0, gold,
+            stack, L0, h_in, pos_emb_s, targets, s0, A, ans0 - s0, reference,
             "nmse", ce_w=1.0)
         assert all(torch.isfinite(torch.tensor(v)) for v in tail_losses)
         assert all(p.grad is None for p in _frozen_params(stack)), \

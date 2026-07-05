@@ -40,7 +40,7 @@ At Qwen3-0.6B, v2 data, matched 13.3k-item budgets, full-corpus eval:
 1. **Storage vs readout dissociate.** Strict block-local hidden matching
    stores recall (logit-lens readable; full CER ~0.85 with 0% exact
    lines) but does not recite. A bounded connected top window trained
-   with gold CE (tail-CE, k=4) converts storage into behavior
+   with reference CE (tail-CE, k=4) converts storage into behavior
    (CER 0.024-0.104 depending on metric).
 2. **Storage is distributed and redundant; the readout is a fragile
    circuit.** Weight-delta mass peaks at L22-24 of 28, yet reverting any

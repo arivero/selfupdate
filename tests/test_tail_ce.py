@@ -55,9 +55,9 @@ def _run_tail(stack, it, ce_w, device="cuda"):
         for L in range(1, L0):
             h = stack.run_block(L, h, pos_emb)
     targets = {L: it.hidden[L].to(device) for L in range(L0, n + 1)}
-    gold = ids[0, it.ans0: it.s0 + it.A]
+    label_ids = ids[0, it.ans0: it.s0 + it.A]
     tail_step(stack, L0, h.detach(), pos_emb, targets, it.s0, it.A,
-              it.ans0 - it.s0, gold, "nmse", ce_w, autocast=False)
+              it.ans0 - it.s0, label_ids, "nmse", ce_w, autocast=False)
     return L0
 
 
@@ -116,10 +116,10 @@ def test_lens_ce_stays_block_local(setup):
         for LL in range(1, L):
             h = stack.run_block(LL, h, pos_emb)
     stack.model.zero_grad(set_to_none=True)
-    gold = ids[0, it.ans0: it.s0 + it.A]
+    label_ids = ids[0, it.ans0: it.s0 + it.A]
     local_block_step(stack, L, h.detach(), pos_emb, it.hidden[L].to(device),
                      it.s0, it.A, "nmse", autocast=False,
-                     lens_ce_w=1.0, gold=gold, ans_off=it.ans0 - it.s0)
+                     lens_ce_w=1.0, label_ids=label_ids, ans_off=it.ans0 - it.s0)
     assert _grad(stack.block_params(L)), "block L got no grads"
     for LL in list(range(1, L)) + list(range(L + 1, stack.n_layers + 1)):
         assert not _grad(stack.block_params(LL)), f"block {LL} leaked"

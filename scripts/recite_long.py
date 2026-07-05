@@ -3,7 +3,7 @@
 Round after round, the model is asked to continue the poem. Two modes:
 - self-chained: the cue is the model's OWN last generated verse (errors
   compound; the honest long-recall metric)
-- gold-anchored: the cue is always the gold verse at that offset (per-segment
+- reference-anchored: the cue is always the reference verse at that offset (per-segment
   recall independent of drift)
 
 Reports chained CER over the whole poem, verses-until-first-error, and the
@@ -44,27 +44,27 @@ def _continue_from(model, tok, cue: str, window: int) -> list[str]:
     return [l for l in text.split("\n") if l][:window]
 
 
-def chain(model, tok, gold: list[str], window: int, self_chained: bool) -> dict:
+def chain(model, tok, reference: list[str], window: int, self_chained: bool) -> dict:
     got: list[str] = []
     pos = 0
     rounds_ok = 0
     rounds = 0
-    while pos + 1 < len(gold):
-        cue = (got[-1] if (self_chained and got) else gold[pos])
-        lines = _continue_from(model, tok, cue, min(window, len(gold) - pos - 1))
+    while pos + 1 < len(reference):
+        cue = (got[-1] if (self_chained and got) else reference[pos])
+        lines = _continue_from(model, tok, cue, min(window, len(reference) - pos - 1))
         if not lines:
             break
         rounds += 1
-        want = gold[pos + 1: pos + 1 + len(lines)]
+        want = reference[pos + 1: pos + 1 + len(lines)]
         if lines[0].strip() == want[0].strip():
             rounds_ok += 1
         got.extend(lines)
         pos += len(lines)
     hyp = "\n".join(got)
-    ref = "\n".join(gold[1: 1 + len(got)]) if got else ""
+    ref = "\n".join(reference[1: 1 + len(got)]) if got else ""
     cer = jiwer.cer(normalize_verse(ref), normalize_verse(hyp)) if hyp and ref else 1.0
     prefix = 0
-    for g, h in zip(gold[1:], got):
+    for g, h in zip(reference[1:], got):
         if g.strip() != h.strip():
             break
         prefix += 1
@@ -94,8 +94,8 @@ def main() -> None:
         model = AutoModelForCausalLM.from_pretrained(ckpt, dtype=torch.bfloat16)
     model.to(cfg.model.device).eval()
 
-    gold = [v.text for v in load_poem(cfg.data.poem_path)]
-    results = [chain(model, tok, gold, args.window, sc) for sc in (False, True)]
+    reference = [v.text for v in load_poem(cfg.data.poem_path)]
+    results = [chain(model, tok, reference, args.window, sc) for sc in (False, True)]
     for r in results:
         print(json.dumps(r, ensure_ascii=False))
     out = ckpt.parent / "eval"

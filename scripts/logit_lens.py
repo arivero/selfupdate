@@ -90,7 +90,7 @@ def main() -> None:
     ax.plot(df.layer, df.base_logprob, marker="o", color="grey", label="base")
     ax.plot(df.layer, df.trained_logprob, marker="o", label=args.run)
     ax.set_xlabel("layer")
-    ax.set_ylabel("mean gold-token logprob (student input, no context)")
+    ax.set_ylabel("mean reference-token logprob (student input, no context)")
     ax.legend()
     fig.tight_layout()
     fig.savefig(out / f"{stem}.png", dpi=150)

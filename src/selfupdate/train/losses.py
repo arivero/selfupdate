@@ -164,7 +164,7 @@ class HiddenLoss:
 
 
 def answer_ce(student_logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
-    """Auxiliary CE on gold answer tokens (already position-shifted by caller).
+    """BASELINE auxiliary: CE on task-label tokens (position-shifted by caller).
     Gold ids may live on another card under pipeline parallel."""
     return F.cross_entropy(student_logits.float(),
                            target_ids.to(student_logits.device))

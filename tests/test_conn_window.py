@@ -32,8 +32,8 @@ def _setup(stack, T=12, A=5):
         for L in range(1, stack.n_layers + 1):
             t = stack.run_block(L, t, pe)
             targets[L] = stack.loss_view(L, t)[0, T - A: T].detach()
-    gold = ids[0, T - A + 1: T]
-    return h, pe, targets, gold, T - A, A
+    label_ids = ids[0, T - A + 1: T]
+    return h, pe, targets, label_ids, T - A, A
 
 
 def _grad_norm(stack, L):
@@ -43,13 +43,13 @@ def _grad_norm(stack, L):
 
 @cuda
 def test_body_window_grads_confined(stack):
-    h, pe, targets, gold, s0, A = _setup(stack)
+    h, pe, targets, label_ids, s0, A = _setup(stack)
     stack.model.zero_grad(set_to_none=True)
     loss_fn = HiddenLoss("nmse")
     # connected body window [3..5], no CE
     win_targets = {L: targets[L] for L in (3, 4, 5)}
     losses, h_out = tail_step(stack, 3, h.detach(), pe, win_targets,
-                              s0, A, 1, gold, loss_fn, ce_w=0.0, L1=5)
+                              s0, A, 1, label_ids, loss_fn, ce_w=0.0, L1=5)
     assert len(losses) == 3
     assert _grad_norm(stack, 3) > 0 and _grad_norm(stack, 5) > 0
     assert _grad_norm(stack, 2) == 0 and _grad_norm(stack, 6) == 0
@@ -58,14 +58,14 @@ def test_body_window_grads_confined(stack):
 
 @cuda
 def test_tail_hidden_weight_zero_is_pure_ce(stack):
-    h, pe, targets, gold, s0, A = _setup(stack)
+    h, pe, targets, label_ids, s0, A = _setup(stack)
     n = stack.n_layers
     loss_fn = HiddenLoss("nmse")
     L0 = n - 2
     stack.model.zero_grad(set_to_none=True)
     tail_targets = {L: targets[L] for L in range(L0, n + 1)}
     losses, _ = tail_step(stack, L0, h.detach(), pe, tail_targets,
-                          s0, A, 1, gold, loss_fn, ce_w=0.5, hidden_w=0.0)
+                          s0, A, 1, label_ids, loss_fn, ce_w=0.5, hidden_w=0.0)
     # hidden losses still REPORTED (storage telemetry), but the only
     # gradient source is the CE — window blocks get grads, frozen head none
     assert all(v >= 0 for v in losses)
@@ -78,12 +78,12 @@ def test_tail_hidden_weight_zero_is_pure_ce(stack):
 def test_endpoint_sliding_window_semantics(stack):
     """Faithful mode: loss ONLY at the window endpoint; ALL covered blocks
     updated; vocabulary untouched."""
-    h, pe, targets, gold, s0, A = _setup(stack)
+    h, pe, targets, label_ids, s0, A = _setup(stack)
     stack.model.zero_grad(set_to_none=True)
     loss_fn = HiddenLoss("nmse")
     # endpoint L1=6, window [3..6]: sparse targets dict
     losses, _ = tail_step(stack, 3, h.detach(), pe, {6: targets[6]},
-                          s0, A, 1, gold, loss_fn, ce_w=0.0, L1=6)
+                          s0, A, 1, label_ids, loss_fn, ce_w=0.0, L1=6)
     assert len(losses) == 1  # only the endpoint is matched
     for L in (3, 4, 5, 6):
         assert _grad_norm(stack, L) > 0, L  # all covered blocks updated
@@ -95,8 +95,8 @@ def test_endpoint_sliding_window_semantics(stack):
 @cuda
 def test_teacher_kl_readout(stack):
     """teacher_kl: readout driven by the teacher's own context-conditioned
-    logits (derived from targets[n]) — no gold labels touch the gradient."""
-    h, pe, targets, gold, s0, A = _setup(stack)
+    logits (derived from targets[n]) — no label_ids labels touch the gradient."""
+    h, pe, targets, label_ids, s0, A = _setup(stack)
     n = stack.n_layers
     stack.model.zero_grad(set_to_none=True)
     loss_fn = HiddenLoss("nmse")

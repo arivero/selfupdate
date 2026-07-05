@@ -45,8 +45,8 @@ def main() -> None:
     for i, r in enumerate(records):
         prompt = r["shared_prefix"] + r["privileged"] + r["shared_mid"]
         ids = tok.encode(prompt, add_special_tokens=False)
-        gold = r["answer_text"]
-        gold_len = len(tok.encode(gold, add_special_tokens=False))
+        reference = r["answer_text"]
+        gold_len = len(tok.encode(reference, add_special_tokens=False))
         with torch.no_grad():
             out = model.generate(
                 torch.tensor([ids], device=model.device),
@@ -54,12 +54,12 @@ def main() -> None:
                 eos_token_id=im_end, pad_token_id=tok.eos_token_id,
             )
         text = normalize_verse(tok.decode(out[0, len(ids):], skip_special_tokens=True))
-        gold = normalize_verse(gold)
-        cer = jiwer.cer(gold, text) if text else 1.0
+        reference = normalize_verse(reference)
+        cer = jiwer.cer(reference, text) if text else 1.0
         cers.append(cer)
         print(f"{r['example_id']}: teacher-with-context CER {cer:.3f}")
         if i < args.show:
-            print(f"  GOLD: {gold[:160]!r}")
+            print(f"  GOLD: {reference[:160]!r}")
             print(f"  GEN : {text[:160]!r}")
     print(f"mean teacher recitation CER: {sum(cers) / len(cers):.4f}")
 

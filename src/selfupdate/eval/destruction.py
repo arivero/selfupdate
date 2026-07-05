@@ -67,8 +67,8 @@ def answer_span_ce(model, tokenizer, prompt: str, answer: str,
     logits = model(t, use_cache=False).logits[0].float()
     # logits at position i predict token i+1; answer starts at len(p_ids)
     span = logits[len(p_ids) - 1: len(p_ids) + len(a_ids) - 1]
-    gold = t[0, len(p_ids): len(p_ids) + len(a_ids)]
-    return F.cross_entropy(span, gold).item()
+    ref = t[0, len(p_ids): len(p_ids) + len(a_ids)]
+    return F.cross_entropy(span, ref).item()
 
 
 @torch.no_grad()

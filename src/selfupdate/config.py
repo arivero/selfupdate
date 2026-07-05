@@ -100,11 +100,11 @@ class TrainConfig:
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
     # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
     hidden_loss: str = "nmse"
-    # auxiliary CE on gold answer tokens (0 = pure distillation). Pins the
-    # student's argmax to the gold recitation and counters free-run drift
+    # BASELINE auxiliary: CE on task-label tokens (0 = pure distillation).
+    # Pins the student's argmax to the reference recitation (task supervision)
     # caused by teacher formatting quirks at the trained positions.
     answer_ce_weight: float = 0.0
-    # layerwise hybrid: gold-CE on the LAST block only, computed through the
+    # layerwise hybrid (BASELINE): task-label CE on the LAST block only, through the
     # frozen final norm + lm_head. The graph is rooted at block n's detached
     # input, so the backward stays confined to block n — output supervision
     # without giving up block-locality.
@@ -126,12 +126,12 @@ class TrainConfig:
     # readout-term source (owner correction 2026-07-05): 'teacher_kl' =
     # KL(teacher || student) on the TEACHER'S context-conditioned logits
     # (derived from targets[n] through the frozen head — zero extra
-    # compute, 100% teacher-sourced; in deployment gold does not exist,
+    # compute, 100% teacher-sourced; in deployment task labels do not exist,
     # the answer IS the teacher's output, so this unifies lab and
-    # deployment). THE DEFAULT and the method. 'gold' = CE on gold answer
-    # text = task supervision — BASELINE-ONLY, like tail_hidden_weight=0:
+    # deployment). THE DEFAULT and the method. 'task_label' = CE on the
+    # dataset reference text = task supervision — BASELINE-ONLY:
     # lives in code as a labeled control, never as the method. Every arm
-    # trained before 2026-07-05 ~04:30 used gold de facto and is
+    # trained before 2026-07-05 ~04:30 used task-label CE de facto and is
     # classified accordingly in EXPERIMENTS.md.
     tail_ce_kind: str = 'teacher_kl'
     # sliding k-connected windows over the BODY (owner proposal 2026-07-04):

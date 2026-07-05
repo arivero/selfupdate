@@ -51,7 +51,7 @@ the *storage* metric and compose with tail-CE — a different question.
 Both vocab kinds depend on the Frozen-Vocabulary Principle below: the
 metric is only meaningful because the vocabulary never moves.
 
-Local readout auxiliaries use gold answer CE through the frozen final norm and
+Local readout auxiliaries use reference answer CE through the frozen final norm and
 LM head. They are used only where explicitly configured:
 
 - `last_block_ce_weight`: one-block readout test
@@ -149,15 +149,15 @@ the goal task, not on the teacher?
 
 Resolution: the ceiling measures the teacher as a WRITER (greedy
 generation: locate + produce). Training targets are TEACHER-FORCED
-states — the teacher as a READER of the gold text with the passage in
+states — the teacher as a READER of the reference text with the passage in
 hand. Reading quality is high even where writing fails; we distill the
-reading. The information source is (gold text + context) expressed as
+reading. The information source is (reference text + context) expressed as
 states, never the teacher's decoded behavior.
 
 Bracketing controls: strict arms (no CE) store → trajectories carry
 signal alone. lensonly (CE everywhere, no trajectories) fails both
 recall and stability → labels alone insufficient, even per-layer.
-Classical full-backprop SFT on identical gold (../selfupdate_kd:
+Classical full-backprop SFT on identical reference (../selfupdate_kd:
 kd_ce* = CER 0.082-0.109) is 6x worse than trajectory training at
 matched budgets → the states add signal beyond labels + backprop.
 

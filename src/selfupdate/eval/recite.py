@@ -1,7 +1,7 @@
 """Recitation evaluation: can the student produce the poem without context?
 
 Greedy generation from the student prompt (shared_prefix + student_stub +
-shared_mid — no privileged block), compared to the gold answer text with CER
+shared_mid — no privileged block), compared to the reference answer text with CER
 (jiwer), line-level exact match, and longest-correct-prefix length.
 """
 
@@ -86,9 +86,9 @@ def greedy_generate_positions(model, input_ids, position_ids, max_new_tokens, eo
 @torch.no_grad()
 def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
                rebase_gap: bool = False) -> dict:
-    gold = record["answer_text"]
+    ref = record["answer_text"]
     prompt_ids = tokenizer.encode(student_prompt(record), add_special_tokens=False)
-    gold_len = len(tokenizer.encode(gold, add_special_tokens=False))
+    ref_len = len(tokenizer.encode(ref, add_special_tokens=False))
     input_ids = torch.tensor([prompt_ids], device=model.device)
     eos_id = stop_token_id(tokenizer)
     gap = 0
@@ -98,31 +98,31 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
         pos = list(range(s0)) + [p + gap for p in range(s0, len(prompt_ids))]
         gen = greedy_generate_positions(
             model, input_ids, torch.tensor([pos], device=model.device),
-            max_new_tokens=gold_len + max_extra_tokens, eos_id=eos_id,
+            max_new_tokens=ref_len + max_extra_tokens, eos_id=eos_id,
         )
         raw = tokenizer.decode(gen, skip_special_tokens=True)
     else:
         out = model.generate(
             input_ids,
-            max_new_tokens=gold_len + max_extra_tokens,
+            max_new_tokens=ref_len + max_extra_tokens,
             do_sample=False,
             eos_token_id=eos_id,
             pad_token_id=tokenizer.eos_token_id,
         )
         raw = tokenizer.decode(out[0, len(prompt_ids):], skip_special_tokens=True)
     text = normalize_verse(strip_think(raw))
-    gold = normalize_verse(gold)
+    ref = normalize_verse(ref)
 
-    cer = jiwer.cer(gold, text) if text else 1.0
+    cer = jiwer.cer(ref, text) if text else 1.0
     # prose corpora: newline placement is arbitrary wrapping, not content —
     # cer_flat scores recall independent of line breaks (additive metric)
-    cer_flat = (jiwer.cer(gold.replace("\n", " "), text.replace("\n", " "))
+    cer_flat = (jiwer.cer(ref.replace("\n", " "), text.replace("\n", " "))
                 if text else 1.0)
-    gold_lines = gold.split("\n")
+    ref_lines = ref.split("\n")
     got_lines = text.split("\n")
-    exact = sum(1 for g, h in zip(gold_lines, got_lines) if g == h)
+    exact = sum(1 for g, h in zip(ref_lines, got_lines) if g == h)
     prefix = 0
-    for g, h in zip(gold_lines, got_lines):
+    for g, h in zip(ref_lines, got_lines):
         if g != h:
             break
         prefix += 1
@@ -130,9 +130,9 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
         "example_id": record["example_id"],
         "cer": cer,
         "cer_flat": cer_flat,
-        "line_exact": exact / len(gold_lines),
+        "line_exact": exact / len(ref_lines),
         "prefix_lines": prefix,
-        "n_gold_lines": len(gold_lines),
+        "n_gold_lines": len(ref_lines),
         "text": text,
     }
 

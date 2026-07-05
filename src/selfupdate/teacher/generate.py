@@ -1,7 +1,7 @@
 """Thinking-trace harvesting for the thinking-hiding mode.
 
 The teacher generates its <think> trace greedily from the canonical thinking
-prompt; the gold poem answer is then teacher-forced after ``</think>`` when the
+prompt; the reference poem answer is then teacher-forced after ``</think>`` when the
 cache is built, so the distillation target is the correct recitation
 conditioned on the model's own reasoning. Traces are generated once and frozen
 into examples.jsonl for reproducibility.

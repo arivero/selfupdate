@@ -70,7 +70,7 @@ def main():
         targets = teacher.aligned_targets(it, dev)
         ids = it.student_ids.to(dev)[None]
         pos = it.position_ids.to(dev)[None]
-        gold = ids[0, it.ans0: it.s0 + it.A]
+        label_ids = ids[0, it.ans0: it.s0 + it.A]
         h = stack.embed(ids)
         pos_emb = stack.rope(h, pos)
         L = 1
@@ -87,7 +87,7 @@ def main():
                             targets[LL], normed=(LL == n)))
                     logits = stack.lm_head(stack.final_norm(hh)[
                         0, it.ans0 - 1: it.s0 + it.A - 1])
-                    ce = cfg.train.tail_ce_weight * answer_ce(logits, gold)
+                    ce = cfg.train.tail_ce_weight * answer_ce(logits, label_ids)
                     hid = cfg.train.tail_hidden_weight * sum(losses)
                 model.zero_grad(set_to_none=True)
                 hid.backward(retain_graph=True)
@@ -108,7 +108,7 @@ def main():
                 if lens_w > 0:
                     s_lens = stack.lm_head(stack.final_norm(h_out)[
                         0, it.ans0 - 1: it.s0 + it.A - 1])
-                    aux = lens_w * answer_ce(s_lens, gold)
+                    aux = lens_w * answer_ce(s_lens, label_ids)
             model.zero_grad(set_to_none=True)
             hid.backward(retain_graph=aux is not None)
             hid2[L] += grad_norm2(stack, L)

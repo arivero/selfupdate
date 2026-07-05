@@ -72,7 +72,7 @@ def _vocab_signature(stack) -> tuple:
 
 
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
-                     lens_ce_w=0.0, gold=None, ans_off=None):
+                     lens_ce_w=0.0, label_ids=None, ans_off=None):
     """One local forward+backward for block L. ``h_in`` must be detached, so
     the recorded graph — and therefore the backward — is confined to block L:
     no gradient from this loss can reach any other block, the lm_head, or the
@@ -81,7 +81,7 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
 
     ``lens_ce_w > 0`` adds a per-block behavioral auxiliary: block L's output
     is decoded through the frozen final norm + lm_head (the logit lens) and
-    CE'd against the gold answer — Belilovsky-style local auxiliary heads,
+    CE'd against the task labels (BASELINE-only signal) — Belilovsky-style local heads,
     for free. The head is frozen and ``h_in`` detached, so locality is
     untouched: only block L's params see this gradient.
 
@@ -95,14 +95,14 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
         if lens_ce_w > 0:
             s_lens = stack.lm_head(
                 stack.final_norm(h_out)[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + lens_ce_w * answer_ce(s_lens, gold)
+            loss = loss + lens_ce_w * answer_ce(s_lens, label_ids)
     loss.backward()
     return loss.item(), h_out.detach()
 
 
-def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
+def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kind,
                     ce_w, autocast=True):
-    """Block n's local step with the optional gold-CE hybrid: logits go
+    """Block n's local step with the optional task-label-CE hybrid (baseline): logits go
     through the frozen final norm + lm_head, but the graph is rooted at the
     detached ``h_in``, so the backward still touches only block n's params."""
     n = stack.n_layers
@@ -113,13 +113,13 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, gold, kind,
         loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
         if ce_w > 0:
             logits = stack.lm_head(normed[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + ce_w * answer_ce(logits, gold)
+            loss = loss + ce_w * answer_ce(logits, label_ids)
     loss.backward()
     return loss.item(), h_out.detach()
 
 
-def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
-              ce_w, hidden_w=1.0, L1=None, ce_kind="gold", autocast=True):
+def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
+              ce_w, hidden_w=1.0, L1=None, ce_kind="label_ids", autocast=True):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
     classic tail): gradient flows within the window so a loss anywhere in
     it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
@@ -158,7 +158,7 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, gold, kind,
                     F.log_softmax(t_logits.float(), dim=-1),
                     log_target=True, reduction="batchmean")
             else:
-                total = total + ce_w * answer_ce(logits, gold)
+                total = total + ce_w * answer_ce(logits, label_ids)
     total.backward()
     return [l.item() for l in losses], h.detach()
 
@@ -468,7 +468,7 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
     pos_c = rows[None]  # teacher absolute positions == row indices
     pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
-    gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
+    label_ids = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
     tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
 
     def _target(L):
@@ -482,14 +482,14 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
             tail_targets = {LL: _target(LL) for LL in range(tail0, n + 1)}
             tail_losses, _ = tail_step(
                 stack, tail0, inp, pos_emb_c, tail_targets, it.s0, it.A,
-                it.ans0 - it.s0, gold, loss_fn, cfg.train.tail_ce_weight,
+                it.ans0 - it.s0, label_ids, loss_fn, cfg.train.tail_ce_weight,
             )
             layer_losses.extend(tail_losses)
             break
         if L == n:
             loss_val, _ = last_block_step(
                 stack, inp, pos_emb_c, _target(L), it.s0, it.A,
-                it.ans0 - it.s0, gold, loss_fn,
+                it.ans0 - it.s0, label_ids, loss_fn,
                 cfg.train.last_block_ce_weight,
             )
         else:
@@ -510,7 +510,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
     pos = it.position_ids.to(device)[None]
     h = stack.embed(ids)
     pos_emb = stack.rope(h, pos)
-    gold = ids[0, it.ans0: it.s0 + it.A]
+    label_ids = ids[0, it.ans0: it.s0 + it.A]
     tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
     W = max(cfg.train.conn_window, 1)
     layer_losses = []
@@ -520,7 +520,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             tail_targets = {LL: targets[LL] for LL in range(tail0, n + 1)}
             tail_losses, h = tail_step(
                 stack, tail0, h.detach(), pos_emb, tail_targets,
-                it.s0, it.A, it.ans0 - it.s0, gold,
+                it.s0, it.A, it.ans0 - it.s0, label_ids,
                 loss_fn, cfg.train.tail_ce_weight,
                 hidden_w=cfg.train.tail_hidden_weight,
                 ce_kind=cfg.train.tail_ce_kind,
@@ -543,7 +543,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                 L0 = max(1, L1 - W + 1)
                 win_losses, _ = tail_step(
                     stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                    it.s0, it.A, it.ans0 - it.s0, gold,
+                    it.s0, it.A, it.ans0 - it.s0, label_ids,
                     loss_fn, ce_w=0.0, L1=L1,
                 )
                 layer_losses.extend(win_losses)
@@ -557,7 +557,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
             win_losses, h = tail_step(
                 stack, L, h.detach(), pos_emb, win_targets,
-                it.s0, it.A, it.ans0 - it.s0, gold,
+                it.s0, it.A, it.ans0 - it.s0, label_ids,
                 loss_fn, ce_w=0.0, L1=L1,
             )
             layer_losses.extend(win_losses)
@@ -566,7 +566,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
         if L == n:
             loss_val, h = last_block_step(
                 stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
-                it.ans0 - it.s0, gold, loss_fn,
+                it.ans0 - it.s0, label_ids, loss_fn,
                 max(cfg.train.last_block_ce_weight,
                     cfg.train.lens_ce_weight
                     if L >= cfg.train.lens_ce_from else 0.0),
@@ -577,7 +577,7 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             loss_val, h = local_block_step(
                 stack, L, h.detach(), pos_emb, targets[L],
                 it.s0, it.A, loss_fn,
-                lens_ce_w=lens_w, gold=gold,
+                lens_ce_w=lens_w, label_ids=label_ids,
                 ans_off=it.ans0 - it.s0,
             )
         layer_losses.append(loss_val)
@@ -808,11 +808,11 @@ def _train_tail_only(cfg, stack, cache, tok, log, teacher=None):
                     pos_emb = stack.rope(h, pos)
                     for L in range(1, tail0):
                         h = stack.run_block(L, h, pos_emb)
-                gold = ids[0, it.ans0: it.s0 + it.A]
+                label_ids = ids[0, it.ans0: it.s0 + it.A]
                 tail_losses, _ = tail_step(
                     stack, tail0, h.detach(), pos_emb,
                     {L: targets[L] for L in range(tail0, n + 1)},
-                    it.s0, it.A, it.ans0 - it.s0, gold,
+                    it.s0, it.A, it.ans0 - it.s0, label_ids,
                     loss_fn, cfg.train.tail_ce_weight,
                 )
                 accum += 1
@@ -997,10 +997,10 @@ def _train_sequential(cfg, stack, cache, tok, log):
                     pos_emb = stack.rope(h_in, pos)
                     target = it.hidden[L].to(device)
                     if L == n:
-                        gold = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
+                        label_ids = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
                         loss_val, _ = last_block_step(
                             stack, h_in.detach(), pos_emb, target, it.s0, it.A,
-                            it.ans0 - it.s0, gold, loss_fn,
+                            it.ans0 - it.s0, label_ids, loss_fn,
                             cfg.train.last_block_ce_weight,
                         )
                     else:
