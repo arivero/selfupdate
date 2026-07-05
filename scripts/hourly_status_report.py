@@ -80,6 +80,17 @@ def full_eval(run: str) -> str | None:
     )
 
 
+def teacher_rag_eval(run: str) -> str | None:
+    p = RUNS / "teacher_rag" / f"{run}.json"
+    if not p.exists():
+        return None
+    r = json.loads(p.read_text(encoding="utf-8"))
+    return (
+        f"- `{run}` teacher+RAG: CER {r.get('cer')}, line {r.get('line_exact')}, "
+        f"prefix {r.get('prefix_lines')}, n {r.get('n')}"
+    )
+
+
 def layer_tops(run: str) -> str | None:
     p = RUNS / run / "eval" / "lora_layer_deltas_by_epoch.csv"
     if not p.exists():
@@ -140,6 +151,14 @@ def main() -> None:
         fe = full_eval(run)
         if fe:
             print(fe)
+    for run in [
+        "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
+        "kd_lora_ce_hi_e60_v3_14b_rag",
+        "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
+    ]:
+        tr = teacher_rag_eval(run)
+        if tr:
+            print(tr)
     print("\n**Layer Modification**")
     for run in [
         "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
