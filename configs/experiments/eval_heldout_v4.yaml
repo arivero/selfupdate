@@ -1,0 +1,5 @@
+# eval-only: the 32 dropped examples whose answers contain the held band
+run_name: eval_heldout_v4
+data:
+  examples_path: data/poem/examples_v4_heldout_eval.jsonl
+  maieutic: true

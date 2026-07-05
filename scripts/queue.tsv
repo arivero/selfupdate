@@ -193,3 +193,8 @@ runs/lw_r_slide8pure_0p6b_rag/eval/destruction.json	4000	runs/lw_r_slide8pure_0p
 runs/teacher_ceiling_Qwen3-0.6B_think_sel.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_n_thinksel_0p6b_rag.yaml
 runs/teacher_ceiling_Qwen3-0.6B_think.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_n_thinkwhole_0p6b_rag.yaml
 runs/teacher_ceiling_Qwen3-0.6B_v4_ch1.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_m_combined_0p6b_rag.yaml
+# channel-separation experiment (owner criterion): never-labeled verses, RAG-only exposure
+runs/lw_t_ragchannel_0p6b_rag/checkpoint	13000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_t_ragchannel_0p6b_rag.yaml
+runs/lw_t_ragchannel_0p6b_rag/eval_heldout/recite.json	3000	runs/lw_t_ragchannel_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_heldout_v4.yaml --checkpoint runs/lw_t_ragchannel_0p6b_rag/checkpoint --out runs/lw_t_ragchannel_0p6b_rag/eval_heldout
+runs/lw_t_ragchannel_0p6b_rag/eval/recite.json	3000	runs/lw_t_ragchannel_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_t_ragchannel_0p6b_rag.yaml --checkpoint runs/lw_t_ragchannel_0p6b_rag/checkpoint
+runs/eval_heldout_base/recite.json	3000	-	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/eval_heldout_v4.yaml --base --out runs/eval_heldout_base
