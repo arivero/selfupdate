@@ -1018,3 +1018,13 @@ META-LESSON (recorded in CLAUDE.md): a config DEFAULT is an experiment
 variable — flipping one mid-campaign silently forked every in-flight
 and queued arm that did not pin the knob; repro configs must pin ALL
 knobs that distinguish them from their reference.
+
+### 0.8-band anatomy (weight-delta profiles, owner request)
+Same CER ≈ 0.8, four failure anatomies: slide8kl's profile is IDENTICAL
+to the crown's (peak L20, 0.0311 vs 0.0310; same body/window means) —
+pure-KL wrote the same storage, only readout sharpening missing (C2-34
+at the weight level). thinkselkl: mild, window-tilted (L21). lensonly:
+early-layer vandalism (peak L6, body 0.045 — the +8.7-nat destruction
+lives shallow). tcmodern & lenskluni: deep window-heavy writes (L25/L22,
+0.05-0.09) — grooves without readout. Reference frame for all tables:
+untrained student 0.897 / teacher-with-passage 0.650 / trained 0.007.
