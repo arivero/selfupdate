@@ -140,6 +140,9 @@ def main() -> None:
         "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_ce_hi_e60_v3_14b_rag",
         "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
+        "kd_lora_kl_hi_e60_v3_14b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
     ]:
         print(latest_metrics(run))
     for run in [
@@ -147,6 +150,9 @@ def main() -> None:
         "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_ce_hi_e60_v3_14b_rag",
         "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
+        "kd_lora_kl_hi_e60_v3_14b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
     ]:
         fe = full_eval(run)
         if fe:
@@ -164,6 +170,9 @@ def main() -> None:
         "kd_lora_ce_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
         "kd_lora_ce_hi_e60_v3_14b_rag",
         "kd_lora_ce_hi_e40_v3_qwen36_27b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen3_30ba3b_inst2507_rag",
+        "kd_lora_kl_hi_e60_v3_14b_rag",
+        "kd_lora_kl_hi_e40_v3_qwen36_27b_rag",
     ]:
         lt = layer_tops(run)
         if lt:
