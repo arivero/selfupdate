@@ -69,6 +69,14 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   signal = hidden_loss 'lens_kl' (per-layer teacher distributions
   through the frozen head). 'task_label' CE and label-targeting lens_ce
   exist ONLY as labeled baselines/ablations, never in method arms.
+  WHY 'gold' was purged as a word: it is a supervised-learning term in
+  which training target and eval reference are the SAME object.
+  Distillation splits the roles — both teacher and student are
+  EVALUATED against the original text, but the student is TRAINED from
+  the teacher. A vocabulary lacking that distinction re-merges the
+  roles silently; the lexicon now types them: reference (eval,
+  everyone) / teacher_* (training source) / task_label (the supervised
+  conflation, baseline-only).
 - **Naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
   signal injected at the logit layer or its weights WITH DEPTH BIAS.
   Lens losses (CE, KL, vocab_mse, whatever) are legitimate LAYERWISE
