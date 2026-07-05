@@ -140,3 +140,31 @@ Storage and readout dissociate, causally:
 Final recipe and closing table: EXPERIMENTS.md. The 0.6B one-phase
 champion recites the full 715-verse romance self-chained, first error at
 verse 708.
+
+## The reader/writer distinction (owner challenge, 2026-07-05)
+
+Worry: the teacher FAILS the task behaviorally (ceiling 0.52-0.67 across
+0.6-4B) while students succeed (0.013) — is the student then trained on
+the goal task, not on the teacher?
+
+Resolution: the ceiling measures the teacher as a WRITER (greedy
+generation: locate + produce). Training targets are TEACHER-FORCED
+states — the teacher as a READER of the gold text with the passage in
+hand. Reading quality is high even where writing fails; we distill the
+reading. The information source is (gold text + context) expressed as
+states, never the teacher's decoded behavior.
+
+Bracketing controls: strict arms (no CE) store → trajectories carry
+signal alone. lensonly (CE everywhere, no trajectories) fails both
+recall and stability → labels alone insufficient, even per-layer.
+Classical full-backprop SFT on identical gold (../selfupdate_kd:
+kd_ce* = CER 0.082-0.109) is 6x worse than trajectory training at
+matched budgets → the states add signal beyond labels + backprop.
+
+Corollary (owner): the student absorbs MORE than the graded RAG — the
+teacher-forced states are conditioned on the whole padded passage
+(neighbor verses, adjacency, global order). Evidence: whole-poem
+self-chaining from windowed items; elicitation generality. Priced
+downside: the same surplus near the readout is the intrusion trigger
+(mimicry law C2-22) — accept the surplus in the body, refuse it in the
+readout window.
