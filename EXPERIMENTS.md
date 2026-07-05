@@ -1028,3 +1028,30 @@ early-layer vandalism (peak L6, body 0.045 — the +8.7-nat destruction
 lives shallow). tcmodern & lenskluni: deep window-heavy writes (L25/L22,
 0.05-0.09) — grooves without readout. Reference frame for all tables:
 untrained student 0.897 / teacher-with-passage 0.650 / trained 0.007.
+
+### Finding C2-35: OVERLAP is load-bearing — disjoint k=8 windows fail entirely
+slide8disj (identical to crown except conn_stride 0: windows [1-8][9-16]
+[17-24] non-overlapping + readout window): recall COLLAPSED to 0.810.
+Same window depth, same losses, same data — only the overlap removed.
+The connectivity law deepens: it is not depth-of-credit alone but
+CONTINUITY of credit; disjoint windows create gradient-isolated segments
+whose interfaces never co-adapt, and the stack cannot feed itself across
+them. Consequence: the k-fold compute saving of disjoint windows is NOT
+available; stride-1 sliding (the sanctioned form) is also the only
+working form tested. (Destruction battery running; trivially clean
+expected — nothing learned.)
+
+### Vehicle verdict completed: full-FT 4B (hybrid recipe) = recall champion, battery catastrophe
+ft4b: recall 0.011 (vs LoRA r16 0.073 — 7x) BUT worst category +0.86,
+intrusion 50%: DESTR. Scale AMPLIFIES the hybrid groove under full-FT
+(1.7B showed the same direction, C2-19). The offload_adam vehicle is
+vindicated on memory+recall; the RECIPE it carried is the C1 hybrid —
+the crowned mimicry-free recipe at scale is exactly the running
+slide8pure_1p7b / C3 question. Row: vehicle solved, recipe pending.
+
+### Intrusion-200 (C2-18 seed-noise resolved; n=200, base 0.0%)
+slide8pure 5.0%→2.5% · tailpure 2.5%→3.5% · thinksel 5%→7.5% ·
+slide8 7.5%→8.0% · combined 10%→8.0% · final_k8 22.5%→16.0%.
+Ordering stable; every CLEAN arm stays under threshold with CIs ~±2pp;
+the hybrid stays above. The crown's headline intrusion number is now
+2.5% ± 2.2 (95% binomial).
