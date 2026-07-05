@@ -953,3 +953,45 @@ simulation of deployment's transcript-CE. CROWN DECISION: slide8pure
 (0.007/99.3%/CLEAN) is THE RECIPE — classified "hybrid by lab
 necessity, deployment-pure by transcript equivalence" — with slide8kl
 (0.801) standing as the measured pure-distribution bound.
+
+---
+
+## CAMPAIGN 2 CLOSING TABLE (2026-07-05; Qwen3-0.6B / v4 Machado unless noted)
+Readout sources: T = task-CE (reference text; "transcript-CE equivalent" in deployment), K = teacher_kl, — = none.
+Classification: METHOD (doctrine-clean sliding), HYB (pre-law hybrid baseline), ABL (labeled ablation), CTL (instrument control).
+
+| arm | recall CER / line% | worst cat | bench_min | intrusion | hidden share | readout | class | verdict |
+|---|---|---|---|---|---|---|---|---|
+| **slide8pure (THE RECIPE)** | **0.007 / 99.3** | **+0.18** | ok | **5.0%** | **84.4%** | T | METHOD | **CLEAN** |
+| slide8 | 0.017 / 97.7 | +0.35 | −1.0 | 7.5% | 74.9% | T | METHOD | CLEAN |
+| slide8+nmse | 0.013 / 99.0 | +0.39 | ok | 7.5% | — | T | METHOD | CLEAN |
+| slide4 | 0.009 / 98.8 | +0.47 | −3.0 | 12.5% | 55.4% | T | METHOD | intr only |
+| slide2 | 0.052 / 94.4 | +0.84 | −4.0 | 20.0% | 59.9% | T | METHOD | DESTR |
+| slide8kl (pure bound) | 0.801 / 3.4 | +0.15 | −1.5 | 12.5% | ~100% | K | METHOD | C2-34 law |
+| final_k8 (C1 "final recipe") | 0.015 / 98.6 | +0.47 | −5.5 | 12.5% | 49.5% | T | HYB | DESTR |
+| combined (v4+ch1) | 0.007 / 99.2 | +0.46 | −3.5 | 10.0% | — | T | HYB | CLEAN (2 seeds) |
+| thinksel (thinking channel) | 0.037 / 95.3 | +0.18 | +0.5 | 5–17.5% | — | T | HYB | CLEAN@s17 |
+| tailpure | 0.017 / 97.8 | +0.25 | −5.0 | 2.5% | 74.3% | T | ABL | CLEAN |
+| tailonly-4B | 0.013 / 98.6 | +0.70 | −1.0 | 25.0% | ~0% body | T | ABL | DESTR |
+| fisher | 0.058 / 96.9 | +3.22 | ok | 57.5% | 56.9% | T | ABL | DESTR |
+| lensdeep2 / lenskl-uni | 0.046 / 0.892 | +2.51 / +2.09 | −5.0 | 50% / 90% | 34% / — | T / — | ABL | DESTR |
+| lensonly | 0.795 / 0.4 | +8.70 | — | 0% | 0% | T | CTL | fails both |
+| strict | 0.849 / 0 | — | — | — | 100% | — | CTL | stores only |
+| tc-modern (teacher-stream) | 0.877 / 0 | +0.82 | −6.5 | 0% | 100% | — | METHOD | no readout |
+| [expunged schedule] | — | — | — | — | — | T | EXPUNGED | damnatio |
+
+**Ladder** (prose, 0.6B): ch1 0.000@200ep (27.5% intr — overtraining law) · ch4_av2 0.084 CLEAN · ch8_av2 0.032 (15% intr) · ch16_ext 0.078 (capability-DESTR). Recall never saturated; the destruction envelope is the constraint.
+**Scale** (v4): 1.7B FT 0.023 (−8.0 hs) · 4B LoRA r16/r64 −16/−18 hs (LoRA closed) · 14B LoRA 0.066 (intr 2.5%) · full-FT-4B via offload_adam in flight.
+**Teacher ceilings** (with-passage generation): 0.650 / 0.666 / 0.524 / 0.651 / 0.449 (0.6→14B) — flat; consolidation beats prompting 30–70× at every size.
+
+## THE LAWS OF CAMPAIGN 2
+1. **Anchor-Goodhart** (C2-2/3): regularizers protect where anchored; diversify or be fooled.
+2. **Dilution** (C2-8/9): co-residence is free; more content and more params-per-item lower intrusion; batching beats drilling (overtraining law C2-6).
+3. **Mimicry** (C2-22): matching the teacher's with-context trajectory near the readout installs the intrusion groove; mimicry-free windows are clean.
+4. **Connectivity** (C2-26): uniform sliding k-windows — recall by k=4, cleanliness and hidden-primacy by k=8.
+5. **Synergy** (C2-28): trajectories store but can't speak; per-layer CE speaks but destroys; only the composition works.
+6. **Reader/writer** (C2-29/grid): the teacher is distilled as a reader; students exceed its writing 30–70×; ceilings flat in scale.
+7. **Loss safety** (C2-17/23/31): distribution-shaped hidden losses amplify grooves (fisher 57.5%, lens_kl 90%); vocab_mse/nmse safe; loss choice flattens under uniform windows.
+8. **Premise condition** (C2-32): teacher_kl transmits only what the teacher knows in context; premise-check per data mode.
+9. **The last 3%** (C2-34): pure distribution-matching converges to teacher fidelity exactly; verbatim recall lives in the residual the teacher lacks — bounded reference-CE is irreducible in the lab, transcript-CE-equivalent in deployment.
+10. **Parallelism**: PP2 evals validated; PP2 TRAINING failed its repro (0.837 vs 0.015) — C3 blocker #0; offload_adam works (full-FT 4B at 2.3 s/item); TP timing benched.
