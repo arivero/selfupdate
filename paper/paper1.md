@@ -312,7 +312,6 @@ readout window never trains — the sharpest open question for scaling.
 
 ### 5.5 Catastrophic remembering and the anchor arc
 
-![Fig. 3 — intrusion](figs/fig3_intrusion.png)
 
 *Figure 3: per-probe forgetting decomposition on [expunged] arms of equal
 recall. Damage concentrates on the memorized content's nearest genre
@@ -491,6 +490,21 @@ passage starve the readout; premise-check per data mode).
   and is the first Campaign-3 blocker. Figures 5–9 cover the
   saturation surface, head taxonomy, tuned-lens validation,
   thinking-channel comparison, and the connectivity law.
+
+![Fig. 5 — saturation surface](figs/fig5_saturation.png)
+*Fig. 5 — the saturation surface: recall never fails by ch16; the destruction envelope is the constraint.*
+
+![Fig. 6 — head taxonomy](figs/fig6_heads.png)
+*Fig. 6 — content heads live mid-net (L7–L20); the readout tail retrieves nothing.*
+
+![Fig. 7 — tuned lens](figs/fig7_tuned_lens.png)
+*Fig. 7 — calibration lifts every layer; the trained-base gap still opens only at L22+.*
+
+![Fig. 8 — thinking channel](figs/fig8_thinking.png)
+*Fig. 8 — the thinking channel is the gentle channel.*
+
+![Fig. 9 — connectivity law](figs/fig9_connectivity.png)
+*Fig. 9 — the connectivity law: uniform sliding windows reach clean, trajectory-primary memorization at k=8.*
 
 *Figures 5–9 in `paper/figs/`; fig3 was removed with its expunged arms.
 Instruments, laws, and the closing table: `EXPERIMENTS.md`. Doctrine:

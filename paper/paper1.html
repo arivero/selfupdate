@@ -100,9 +100,6 @@
 <h3 id="scale-and-families">5.4 Scale and families</h3>
 <p>At 1.7B the readout window does <strong>not</strong> need to grow (k=2 reaches CER 0.087 after a late convergence; k=4 0.075; k=8 0.042), and the loss ranking is scale- and axis-dependent: l2mse wins raw recall at 1.7B (0.012) but with the worst intrusion profile (+3.57 on the poetry probe). The same code drives <strong>Mistral-7B</strong> to near-champion recitation (0.054, LoRA online) and trains Llama-3.1-8B and Qwen-4B/8B with no family-specific changes. <strong>Reasoning-tuned models resist the recipe</strong> (Phi-4-mini 0.918; gpt-oss-20b 1.0 after harmony-aware eval normalization): their output routes through think/analysis channels the readout window never trains — the sharpest open question for scaling.</p>
 <h3 id="catastrophic-remembering-and-the-anchor-arc">5.5 Catastrophic remembering and the anchor arc</h3>
-<figure>
-<img src="figs/fig3_intrusion.png" alt="Fig. 3 — intrusion" /><figcaption aria-hidden="true">Fig. 3 — intrusion</figcaption>
-</figure>
 <p><em>Figure 3: per-probe forgetting decomposition on [expunged] arms of equal recall. Damage concentrates on the memorized content’s nearest genre neighbor (Spanish romantic poetry) — intrusion, not drift. A naive CE anchor on six fixed neighbor fragments amplifies it (the regularizer becomes another memorized poem); KL-to-base through the window halves it.</em></p>
 <p>Strict (storage-only) arms show a <em>flat</em> damage profile: the intrusion trigger is installed by readout training. Qualitatively, tail-trained checkpoints continue a Bécquer prompt with Machado material (violet- mountain imagery, the mother’s death) while the base model merely repeats itself. The metrology is cheap — four forward passes — and we propose reporting <em>both</em> the mean ΔCE and its profile for any memorization fine-tune.</p>
 <h3 id="elicitation-brittleness-and-the-maieutic-cure">5.6 Elicitation brittleness and the maieutic cure</h3>
@@ -182,6 +179,11 @@
 <li><strong>LoRA is the wrong vehicle</strong> for full-body consolidation: benchmark damage (−12 to −18 points at 4–8B) survives anchor, learning-rate, and rank interventions; full-FT windows with CPU-paged optimizer state (<code>offload_adam</code>, bitwise-verified) replace it — full-FT 4B trains in ~30 GB at 2.3 s/item where classical training needs ~64 GB.</li>
 <li><strong>Parallelism</strong>: two-card pipeline evaluation is validated; two-card pipeline <em>training</em> failed its bit-honesty repro (0.837 vs 0.015) and is the first Campaign-3 blocker. Figures 5–9 cover the saturation surface, head taxonomy, tuned-lens validation, thinking-channel comparison, and the connectivity law.</li>
 </ul>
+<p><img src="figs/fig5_saturation.png" alt="Fig. 5 — saturation surface" /> <em>Fig. 5 — the saturation surface: recall never fails by ch16; the destruction envelope is the constraint.</em></p>
+<p><img src="figs/fig6_heads.png" alt="Fig. 6 — head taxonomy" /> <em>Fig. 6 — content heads live mid-net (L7–L20); the readout tail retrieves nothing.</em></p>
+<p><img src="figs/fig7_tuned_lens.png" alt="Fig. 7 — tuned lens" /> <em>Fig. 7 — calibration lifts every layer; the trained-base gap still opens only at L22+.</em></p>
+<p><img src="figs/fig8_thinking.png" alt="Fig. 8 — thinking channel" /> <em>Fig. 8 — the thinking channel is the gentle channel.</em></p>
+<p><img src="figs/fig9_connectivity.png" alt="Fig. 9 — connectivity law" /> <em>Fig. 9 — the connectivity law: uniform sliding windows reach clean, trajectory-primary memorization at k=8.</em></p>
 <p><em>Figures 5–9 in <code>paper/figs/</code>; fig3 was removed with its expunged arms. Instruments, laws, and the closing table: <code>EXPERIMENTS.md</code>. Doctrine: <code>CLAUDE.md</code>; window semantics: <code>docs/windows.md</code>; the program’s destination: <code>docs/evolving_person.md</code>.</em></p>
 </body>
 </html>
