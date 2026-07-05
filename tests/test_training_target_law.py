@@ -111,6 +111,10 @@ def test_knob_schedule_refusal():
         _validate_knob_schedule(cfg)
     cfg.train.schedule = "teacher_censored"
     cfg.train.tail_ce_blocks = 8
+    cfg.train.tail_ce_kind = "UNSET"
+    with pytest.raises(ValueError, match="EXPLICITLY"):
+        _validate_knob_schedule(cfg)
+    cfg.train.tail_ce_kind = "task_label"
     with pytest.raises(ValueError, match="pure by definition"):
         _validate_knob_schedule(cfg)
     cfg.train.tail_ce_blocks = 0

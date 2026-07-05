@@ -205,6 +205,11 @@ def _validate_knob_schedule(cfg) -> None:
         bad.append("scramble_targets")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
+    if cfg.train.tail_ce_blocks > 0 and cfg.train.tail_ce_kind == "UNSET":
+        raise ValueError(
+            "tail_ce_kind must be set EXPLICITLY (task_label|teacher_kl) when "
+            "tail_ce_blocks > 0 — the silent-default confound struck twice on "
+            "2026-07-05; defaults are experiment variables (CLAUDE.md)")
     if cfg.train.tail_ce_blocks > 0 and sched == "teacher_censored":
         bad.append("tail_ce_blocks (teacher_censored is pure by definition)")
     if sched == "tail_only":

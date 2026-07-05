@@ -1,7 +1,5 @@
-# SCALE-TRANSFER (mid): connectivity law point at 1.7B.
-run_name: xs_slide2_1p7b_rag
-model:
-  name: Qwen/Qwen3-1.7B
+# crown seed replication.
+run_name: lw_r_s43_pinned
 data:
   examples_path: data/poem/examples_v4.jsonl
   paraphrase: true
@@ -14,13 +12,15 @@ train:
   epochs: 40
   lr: 1.0e-5
   hidden_loss: vocab_mse
-  conn_window: 2
+  conn_window: 8
   conn_stride: 1
-  tail_ce_blocks: 2
+  tail_ce_blocks: 8
   tail_ce_weight: 0.5
   tail_ce_kind: task_label  # PINNED (defaults-are-variables; confound of 2026-07-05 struck twice)
+  tail_hidden_weight: 0.0
   anchor_kl_weight: 0.5
   anchor_path: data/anchors_es_v2.txt
   frozen_teacher_copy: true
+  seed: 43
   lora:
     enabled: false

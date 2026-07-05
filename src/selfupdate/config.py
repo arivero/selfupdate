@@ -133,7 +133,7 @@ class TrainConfig:
     # lives in code as a labeled control, never as the method. Every arm
     # trained before 2026-07-05 ~04:30 used task-label CE de facto and is
     # classified accordingly in EXPERIMENTS.md.
-    tail_ce_kind: str = 'teacher_kl'
+    tail_ce_kind: str = 'UNSET'
     # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
     # every layer gets k-deep credit assignment, peak activation graph
     # stays k blocks. 0/1 = classic block-local. Composes with the tail

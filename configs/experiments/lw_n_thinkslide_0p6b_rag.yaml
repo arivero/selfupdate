@@ -13,6 +13,7 @@ train:
   conn_stride: 1
   tail_ce_blocks: 8
   tail_ce_weight: 0.5
+  tail_ce_kind: task_label  # PINNED (defaults-are-variables; confound of 2026-07-05 struck twice)
   tail_hidden_weight: 0.0
   anchor_kl_weight: 0.5
   anchor_path: data/anchors_es_v2.txt
