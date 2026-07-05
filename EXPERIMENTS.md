@@ -884,3 +884,29 @@ completion groove; vocab_mse's p-uniform Gram metric is not merely the
 best loss, it is the only known SAFE vocabulary-metric loss. (nmse under
 windows: recall 0.013 — geometric losses are safe but see C1 for their
 storage-portability deficit.)
+
+### Finding C2-32: teacher_kl starves without a premise-checked teacher — the purification splits by data mode
+thinkselkl (thinking data, teacher_kl readout): recall COLLAPSED to
+0.838 (hybrid twin: 0.037); trivially CLEAN because nothing was learned.
+Mechanism: the teacher's training-sequence context in thinking mode is
+its own trace (NOT the passage — rag_in_prompt applied only at harvest
+generation); where the trace fails to carry the answer verses, the
+teacher's distribution at answer positions is DIFFUSE, and KL toward a
+diffuse teacher is a null readout signal. The 96.8% teacher-label
+proximity was measured on RAG-mode sequences only. CONDITION now
+attached to the pure method: teacher_kl requires a premise-checked
+sharp-reader teacher (the cache builder always enforced this for RAG;
+thinking mode never ran it). C3 fix: carry the passage in the thinking
+TEACHER sequence too, or premise-gate per item. The decisive RAG-mode
+purification test (slide8kl, proximity 96.8% applies) is at epoch 26.
+
+### Finding C2-33: channel separation — weak transfer at trace exposure (owner criterion)
+ragchannel heldout verses (never labeled anywhere; present in 5
+passages pad-only): CER 0.847 vs base control 0.914, line_exact 0.025
+vs 0.000. Verdict per pre-commitment: WEAK POSITIVE — the state channel
+alone moves recall measurably (~7 CER pts, first exact lines) but
+nowhere near recitation at 5-passage exposure. Surplus learning is
+real but rides primarily on items where content enters BOTH channels
+(passage states + labeled positions elsewhere in the corpus). A
+wide-channel version (hold labels, boost passage exposure) is the C3
+follow-up with real discriminating power.
