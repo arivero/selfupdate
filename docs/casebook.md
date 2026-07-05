@@ -8,6 +8,8 @@
 
 **Outcome.** Best arm of the program: CER 0.007, 99.3% exact lines, all destruction thresholds passed, intrusion 5%, and the highest trajectory share of any performing arm (84.4%). Failure mode: essentially none measured at 0.6B; the residual errors are single-character slips deep in long windows.
 
+**Stats.** train 136 min; peak VRAM 10.4 GB alloc / 10.6 reserved; 18960 items / 40 epochs; most-altered layers: L20 (0.0310), L19 (0.0283), L17 (0.0279); gradient hidden-share 84.4%.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -58,6 +60,8 @@ MODEL:   una voz que le hablaba. Ellos se miraron y no se miraron. La voz que ha
 **Method.** The C1 hybrid recipe applied to a CONCATENATED corpus: Machado v4 plus Quijote chapter 1 share one training run and one readout window. Tests whether two contents interfere.
 
 **Outcome.** Clean at champion recall on the poem (0.007) with the prose co-resident learning at its own budget-limited level; intrusion diluted below threshold (10%, 2.5% at seed 43) - the dilution law's flagship. Failure mode: none on the poem side; ch1 side limited only by items.
+
+**Stats.** train 48 min; peak VRAM 10.4 GB alloc; 20520 items / 40 epochs; most-altered layers: L17 (0.0423), L20 (0.0415), L21 (0.0411).
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -114,6 +118,8 @@ MODEL:   su hermano, y el que no lo había visto. El que no lo había visto, la 
 **Method.** Training data are the model's own thinking traces (harvested with the passage in prompt); only the verbatim-quoted verse spans inside the trace are censored for the student - its free deduction stays visible. Same hybrid readout as the era's default.
 
 **Outcome.** The gentle channel: near-zero capability damage (worst category +0.18, benchmarks +0.5) at recall 0.037. Failure modes: intrusion is seed-noisy (5% to 17.5%); and its PURE-readout twin collapses because a trace-conditioned teacher is not a sharp reader (premise condition, C2-32).
+
+**Stats.** train 38 min; peak VRAM 10.6 GB alloc; 13320 items / 40 epochs; most-altered layers: L22 (0.0283), L21 (0.0282), L28 (0.0281).
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -173,6 +179,8 @@ MODEL:   la muerte, y las mujeres hablaban de la muerte, y los niños hablaban d
 
 **Outcome.** Recites at 0.015/98.6% and held C1's crown; the v2 battery exposed it: 22.5% intrusion, HellaSwag -5.5, poetry-only anchors protecting only poetry (anchor-Goodhart). Its in-window mimicry is the measured cause of the groove (C2-22).
 
+**Stats.** train 33 min; peak VRAM 10.2 GB alloc; 18960 items / 40 epochs; most-altered layers: L17 (0.0406), L21 (0.0400), L20 (0.0398); gradient hidden-share 49.5%.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -228,6 +236,8 @@ MODEL:   su historia. La parda de la puerta de su casa se abrió con un ronco su
 
 **Outcome.** Matched hybrid recall (0.017) with intrusion collapsing 22.5% to 2.5% - the discovery that TRAJECTORY MIMICRY near the readout, not the CE, installs the intrusion groove. Also 74.3% trajectory-driven despite the pure-CE window.
 
+**Stats.** train 66 min; peak VRAM 10.3 GB alloc / 10.5 reserved; 18960 items / 40 epochs; most-altered layers: L17 (0.0412), L20 (0.0398), L19 (0.0384); gradient hidden-share 74.3%.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -279,6 +289,8 @@ MODEL:   no tiene que ser suya, y que la gente sepan en la tierra, y que el que 
 **Method.** Hidden loss weighted by the teacher's per-position output distribution over its top-64 tokens - the Gauss-Newton form of lens-KL, concentrating capacity exactly on the tokens the teacher predicts.
 
 **Outcome.** Recites acceptably (0.058) while being the project's worst intrusion machine (57.5%) with poetry damage +3.22 nats: sharpening the metric toward output tokens amplifies precisely the completion groove. The loss-safety law's founding specimen.
+
+**Stats.** train 88 min; peak VRAM 9.1 GB alloc; 13320 items / 40 epochs; most-altered layers: L22 (0.0389), L19 (0.0369), L21 (0.0353); gradient hidden-share 56.9%.
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -339,6 +351,8 @@ una
 
 **Outcome.** Fails both jobs: cannot recite (0.795) AND the most destructive arm ever measured (+8.70 nats worst category), with the damage written SHALLOW (weight-delta peak at layer 6). Proves the synergy law: labels without trajectories destroy.
 
+**Stats.** train 128 min; peak VRAM 8.4 GB alloc / 8.6 reserved; 18960 items / 40 epochs; most-altered layers: L6 (0.0531), L2 (0.0514), L12 (0.0511); gradient hidden-share 0.0%.
+
 **Best case** (`sect-035-1`, CER 0.000):
 
 ```
@@ -364,6 +378,8 @@ se encontrójiles en silencio.
 **Method.** The crown with its reference-CE replaced by KL toward the teacher's own context-conditioned logits - zero reference text in any gradient. The fully teacher-sourced form.
 
 **Outcome.** Writes storage IDENTICAL to the crown (weight-delta profiles match to the 4th decimal) and converges the readout to the teacher's label agreement exactly (97.3%) - then free-running compounds the missing 3% into CER 0.801. The last-3% law: verbatim recall lives in information the teacher's distribution does not contain.
+
+**Stats.** train 139 min; peak VRAM 11.0 GB alloc / 11.3 reserved; 18960 items / 40 epochs; most-altered layers: L20 (0.0311), L19 (0.0284), L17 (0.0279).
 
 **Best case** (`sect-001`, CER 0.000):
 
@@ -402,6 +418,8 @@ MODEL:   de los pueblos de la tierra se vio en peligro. La ciudad de San José, 
 
 **Outcome.** Stores (deep window-heavy deltas, peak L25) but never learns to run on its own states: recitation 0.877. The input-stream answer: readout requires student-stream self-drive.
 
+**Stats.** train 45 min; peak VRAM 8.5 GB alloc / 8.7 reserved; 18960 items / 40 epochs; most-altered layers: L25 (0.0926), L22 (0.0735), L26 (0.0695).
+
 **Best case** (`cont-272`, CER 0.560):
 
 ```
@@ -430,6 +448,8 @@ y el rojo, que ha lab
 **Method.** The hybrid recipe on 209 prose examples (sentence-per-line Quijote), multi-genre anchors; the first arm to pass every destruction threshold.
 
 **Outcome.** Clean at cer_flat 0.084; seed-43 replication tripped intrusion (17.5%) - the frontier is fuzzy at n=40 prompts. The rung that proved anchors generalize when diversified.
+
+**Stats.** train 38 min; peak VRAM 10.4 GB alloc; 8360 items / 40 epochs; most-altered layers: L21 (0.0297), L23 (0.0272), L26 (0.0272).
 
 **Best case** (`full-000`, CER 0.000):
 
