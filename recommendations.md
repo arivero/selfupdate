@@ -1,0 +1,396 @@
+# Recommendations For A Consistent Experiment Corpus
+
+Purpose: planning base for the next cleanup and reporting pass. The goal is a
+consistent corpus of experiments and conclusions across losses, layers, model
+families, model sizes, datasets, and time, with enough plots and raw artifacts
+that future claims do not depend on memory or selective summaries.
+
+This file assumes the branch rule in `CLAUDE.md` / `AGENTS.md`: this checkout
+is for layerwise forward distillation. Tail-only and `tail_*` work is not an
+active method surface here. Preserve historical evidence only as archived
+context, or move it to `../selfupdate_kd`.
+
+## Outcome Wanted
+
+Every major conclusion should be backed by a reproducible evidence bundle:
+
+1. A run set with pinned configs and clear classification.
+2. Raw metrics for training dynamics.
+3. Full-corpus evaluation, not only the 8-example training subset.
+4. Forgetting and intrusion evaluation.
+5. Per-layer loss plots over training.
+6. Per-layer residual or storage-quality plots at checkpoints.
+7. Signal attribution between layerwise hidden losses and readout terms.
+8. Model-size and model-family coverage, not only the Qwen3-8B or one-rung
+   result.
+9. A conclusion table that explicitly states what is proven, what is baseline
+   only, what is confounded, and what is open.
+
+## Branch Hygiene First
+
+Before expanding the corpus, clean the reporting surface.
+
+- Remove active `tail_ce`, `tail_*`, `tailpure`, `tail_only`, and final-k tail
+  report language from method summaries in this branch.
+- If historical tail results are kept in-tree, move them to an archive section
+  named as historical/classical-distillation evidence, not current method
+  evidence.
+- Replace `tail_step` as a public concept with a generic connected-window
+  primitive, for example `window_step`.
+- Reject any active method config with a top-window readout unless it also has
+  `conn_window > 0` and `conn_stride: 1`.
+- Add a static config audit that fails on unpinned readout source for every
+  run using a behavioral readout.
+- Keep `task_label` readout arms only if the run name and report class say
+  baseline or ablation.
+- Update `scripts/report.py` summary text. It still describes bounded tail
+  cross-entropy (log loss) as a current lever, which conflicts with the branch
+  rule.
+
+## Run Classification Contract
+
+Every run must have a classification field, either in config or derived by a
+report manifest:
+
+| class | meaning | allowed in method conclusions |
+|---|---|---|
+| `method` | teacher-sourced layerwise method, sanctioned window semantics | yes |
+| `baseline` | supervised or task-label comparison | no, comparison only |
+| `ablation` | mechanism probe that violates one method invariant intentionally | no |
+| `control` | negative or instrumentation control | no |
+| `legacy_archive` | historical run kept for context only | no |
+| `confounded` | run whose config inherited the wrong default or mixed axes | no |
+| `open` | incomplete or awaiting eval | no |
+
+Required tags:
+
+- `model_family`
+- `model_name`
+- `model_size`
+- `dataset_family`
+- `data_variant`
+- `schedule`
+- `hidden_loss`
+- `window_kind`
+- `conn_window`
+- `conn_stride`
+- `readout_source`
+- `anchor_kind`
+- `seed`
+- `run_class`
+- `conclusion_group`
+
+## Minimum Artifact Bundle Per Run
+
+Each finished run should have:
+
+- `runs/<run>/config.yaml`
+- `runs/<run>/metrics.jsonl`
+- `runs/<run>/checkpoint/` or an explicit reason no checkpoint exists
+- `runs/<run>/eval/recite.json`
+- `runs/<run>/eval/destruction.json`
+- `runs/<run>/eval/layer_losses.png`
+- `runs/<run>/eval/layer_losses.csv`
+- `runs/<run>/eval/forget_recall_curve.png`
+- `runs/<run>/eval/forget_recall_curve.csv`
+- `runs/<run>/eval/layer_residuals.json`
+- `runs/<run>/eval/layer_residuals.png`
+- `runs/<run>/eval/signal_attribution.json` when any readout term exists
+- `runs/<run>/eval/weight_deltas.csv` for full fine-tune, or LoRA delta summary
+- `runs/<run>/eval/recite_long.json` for crown candidates
+
+The current repo has some of this, but not consistently. `layer_loss_plots.py`
+currently writes PNG only, `forget_curves.py` writes a global CSV/PNG, and
+checkpoint-time layer residuals are still missing.
+
+## Required Plots
+
+### Per-Layer Loss Dynamics
+
+For every run, generate:
+
+- One plot with all layers over epochs or optimizer steps.
+- One heatmap: layer on y-axis, time on x-axis, log loss as color.
+- One grouped comparison plot by loss family: rows are model sizes, columns are
+  hidden losses.
+- A CSV with columns:
+  `run, epoch, item, layer, loss_mean, loss_median, loss_p10, loss_p90`.
+
+The plot must not only show Qwen3-8B. It must be emitted for all completed
+runs where `metrics.jsonl` has `per_layer`.
+
+### Forgetting And Recall Over Training
+
+For every run with per-epoch eval records:
+
+- Plot recall as full-corpus character error rate when available.
+- Plot subset character error rate only as a secondary curve, clearly labeled.
+- Plot general cross-entropy (log loss) delta against the base model.
+- Plot intrusion hit rate and worst-category delta when destruction evals exist.
+- Show vertical markers for major schedule changes if any.
+
+The current `forget_curves.py` uses subset recall from training-time evals and
+general-CE delta. That should be extended to include full eval checkpoints or a
+periodic full-eval lane for important runs.
+
+### Per-Layer Residuals At Checkpoints
+
+Add an eval mode:
+
+```bash
+python scripts/evaluate.py --checkpoint runs/<run>/checkpoint --layer-residuals
+```
+
+Required outputs:
+
+- `layer_residuals.json`
+- `layer_residuals.csv`
+- `layer_residuals.png`
+
+Metrics per layer:
+
+- `nmse`
+- `l2mse`
+- `vocab_mse`
+- `lens_kl` where affordable
+- residual norm ratio
+- teacher/student logit-lens agreement
+
+This separates storage quality from training loss. Training loss tells what the
+optimizer saw; checkpoint residuals tell what the trained model stores.
+
+### Signal Attribution
+
+Every run with a readout term must have `signal_attribution.json`.
+
+Required report values:
+
+- hidden gradient norm
+- readout gradient norm
+- hidden share
+- per-block hidden/readout share
+- readout source: `teacher_kl` or `task_label`
+- classification: method, baseline, ablation, control, archive
+
+The report should refuse to call a result layerwise-primary unless hidden share
+passes a stated threshold or the text explicitly says it does not.
+
+### Model Comparison Matrix
+
+Generate one summary figure with rows by model and columns by metric:
+
+- recall character error rate
+- line exact
+- dialogue character error rate
+- long-recitation first error
+- mean general-CE delta
+- worst destruction category
+- intrusion hit rate
+- hidden share
+- train minutes
+- peak reserved VRAM
+- items seen
+
+This is the plot that prevents overfitting conclusions to one rung.
+
+## Model Coverage Requirements
+
+Do not report a conclusion as cross-model unless it includes at least:
+
+- Qwen3-0.6B
+- Qwen3-1.7B
+- Qwen3-4B or Qwen3-4B LoRA where full fine-tune is unavailable
+- Qwen3-8B or Qwen3-8B LoRA
+- Qwen3-14B or larger LoRA
+- one non-Qwen dense family, currently Mistral or Llama
+- one reasoning-channel family, currently Phi or gpt-oss, even if negative
+
+For H100 or bridge work, add:
+
+- Qwen3.6-27B single-H100 reference
+- Qwen3.6-27B PP2 or TP2 repro
+- Qwen3.6-27B H100 versus L40S comparison if quantized or sharded lanes are
+  used
+
+Each model must have its own base general-CE reference:
+
+```bash
+python scripts/base_general.py <model> runs/base-general-<model_short>.json
+```
+
+The report should flag missing base references because forgetting deltas are
+invalid without them.
+
+## Experiment Families To Standardize
+
+### Loss Family Grid
+
+For each covered model rung, run or archive a clean comparison for:
+
+- `nmse`
+- `l2mse`
+- `vocab_mse`
+- `vocab_fisher`
+- `lens_kl` only as method-compatible teacher-sourced loss, not label CE
+- `zero` only as a control
+
+Each loss grid must use the same:
+
+- data variant
+- item budget
+- seed set
+- window semantics
+- readout source
+- anchor settings
+- eval battery
+
+### Window Family Grid
+
+Allowed active method windows:
+
+- strict local, no connected readout
+- `conn_window: 2`, `conn_stride: 1`
+- `conn_window: 4`, `conn_stride: 1`
+- `conn_window: 8`, `conn_stride: 1`
+- teacher-stream k-windows once implemented
+
+Disallowed in active method reports:
+
+- tail-only windows
+- top-k-only readout training without full sliding coverage
+- depth-increasing readout weights
+- label-targeting local lens CE as method
+
+### Readout Source Grid
+
+Keep source roles separate:
+
+- `teacher_kl`: teacher-sourced method readout.
+- `task_label`: supervised baseline only.
+- transcript-equivalent readout: deployment analogy only, not a lab method
+  unless the transcript is literally teacher-generated in that run.
+
+The conclusion table must not merge these roles.
+
+### Data Family Grid
+
+Separate data effects from method effects:
+
+- Machado v2 recitation
+- Machado v4 maieutic/dialogue
+- thinking selective
+- Quijote chapter rungs
+- combined content
+- anchor variants
+- heldout/passage-only channel runs
+
+Each data family needs a `base`, `method`, `baseline`, and `negative control`
+where feasible.
+
+## Conclusion Ledger
+
+Create a machine-readable ledger, for example `runs/conclusions.yaml`, with one
+entry per claim:
+
+```yaml
+- id: connectivity_law
+  status: open
+  claim: "Uniform sliding windows improve recall and stability."
+  required_runs:
+    - lw_r_slide2_0p6b_rag
+    - lw_r_slide4_0p6b_rag
+    - lw_r_slide8_0p6b_rag
+    - lw_r_disj_pinned
+  blocking_gaps:
+    - "Pinned disjoint eval incomplete or confounded."
+  allowed_report_class: method
+```
+
+Suggested statuses:
+
+- `proven`
+- `replicated`
+- `single_seed`
+- `confounded`
+- `open`
+- `retracted`
+- `baseline_only`
+- `archived`
+
+The report should render this ledger before narrative findings. Narrative
+without claim status is how stale conclusions survive after confounds are
+found.
+
+## Report Redesign
+
+`scripts/report.py` should be rebuilt around the corpus, not around historical
+narrative.
+
+Recommended report order:
+
+1. Branch rules and excluded evidence.
+2. Conclusion ledger.
+3. Model coverage matrix.
+4. Run classification table.
+5. Recall and forgetting curves.
+6. Per-layer loss dynamics.
+7. Per-layer checkpoint residuals.
+8. Signal attribution.
+9. Destruction and intrusion battery.
+10. Memory and speed table.
+11. Appendices with legacy/archive results.
+
+The report should fail or warn loudly when:
+
+- a method run lacks full eval
+- a method run lacks destruction eval
+- a readout run lacks signal attribution
+- a model lacks a base general-CE reference
+- a run has `task_label` but is classified as method
+- a run has legacy `tail_*` knobs in the active report
+- a conclusion references a confounded run
+
+## Analysis Script Worklist
+
+Near-term scripts to add or modify:
+
+- `scripts/audit_configs.py`: classify configs and reject banned or unpinned
+  knobs.
+- `scripts/build_corpus_index.py`: scan `runs/` and emit `runs/corpus.csv`
+  with config, metrics, eval, artifact, and classification fields.
+- `scripts/layer_loss_plots.py`: also write CSV and heatmap per run.
+- `scripts/forget_curves.py`: emit per-run plots, support full-eval checkpoint
+  curves, and group by model.
+- `scripts/evaluate.py`: add `--layer-residuals`.
+- `scripts/report.py`: rebuild around the redesigned report order.
+- `scripts/model_matrix.py`: produce the cross-model comparison figure.
+- `scripts/conclusion_check.py`: verify every claim has required runs and no
+  confounded dependencies.
+
+## Minimum Gates For Future Claims
+
+A claim can be promoted only if:
+
+- configs are pinned and pass audit
+- every required run has full eval
+- every required run has forgetting/destruction eval
+- every readout run has signal attribution
+- at least two seeds exist for crown or headline claims
+- at least three model rungs exist for scaling claims
+- at least one non-Qwen family exists for family-general claims
+- H100/PP/TP claims have a single-device reference when possible
+- every exception is listed in the conclusion ledger
+
+## Immediate Next Steps
+
+1. Archive or move tail-only and `tail_*` report material.
+2. Add config audit and run it on `configs/experiments`.
+3. Generate `layer_losses.png` and CSV for all completed runs.
+4. Generate per-run forgetting/recall curves for all runs with eval records.
+5. Add checkpoint layer-residual eval.
+6. Build `runs/corpus.csv`.
+7. Build `runs/conclusions.yaml` from current `EXPERIMENTS.md`.
+8. Regenerate the report from the corpus, not from hand-maintained narrative.
+
+The immediate target is not more arms. It is making the existing arms
+queryable, comparable, and impossible to misclassify.

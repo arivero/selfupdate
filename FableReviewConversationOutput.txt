@@ -1,0 +1,1726 @@
+ Below is the detailed, actionable code review pass you asked for. I’m focusing on code files: src/, scripts/, paper/make_figs.py, shell scheduler scripts, and tests. I’m not re-
+  summarizing the science except where it directly affects code correctness.
+
+  Quality scale:
+
+  - A: strong, keep; only small improvements.
+  - B: good but needs cleanup/refactor/guardrails.
+  - C: operational but risky, stale, or branch-inconsistent.
+  - D: should be rewritten/quarantined.
+
+  ## Top Priority Findings
+
+  ### 1. Branch-law violation: tail-specific active surface is still everywhere
+
+  Files affected
+
+  - src/selfupdate/train/layerwise.py
+  - src/selfupdate/config.py
+  - configs/base.yaml
+  - many configs/experiments/lw_*tail*, lw_*final*, lw_r_tailpure*
+  - tests/test_tail_ce.py
+  - tests/test_conn_window.py
+  - tests/test_mixed_schedule.py
+  - scripts/tail_graft.py
+  - scripts/report.py
+  - paper/make_figs.py
+
+  Problem
+
+  The branch says: no new active tail-only/top-k classical distillation. But the implementation still exposes the old public abstraction as tail_step, tail_ce_blocks, tail_ce_weight,
+  tail_hidden_weight, tail_ce_kind. Even if some of that machinery now implements connected windows, the names and config API keep reintroducing the forbidden concept.
+
+  Action
+
+  - Rename implementation primitive: tail_step → window_step.
+  - Rename config knobs:
+      - tail_ce_blocks → top_readout_window or readout_window_blocks
+      - tail_ce_weight → readout_weight
+      - tail_hidden_weight → window_hidden_weight
+      - tail_ce_kind → readout_source
+
+  - Add validator: reject tail_ce_blocks > 0 unless conn_window > 0, conn_stride == 1, or run class is explicitly legacy_archive / baseline.
+  - Move old tail configs/tests/scripts to archive or ../selfupdate_kd.
+
+  ———
+
+  ### 2. configs/base.yaml defeats the “UNSET sentinel” rule
+
+  File
+
+  - configs/base.yaml
+
+  Current
+
+  train:
+    method: layerwise
+    schedule: summed
+    tail_ce_kind: teacher_kl
+
+  Problem
+
+  TrainConfig.tail_ce_kind defaults to 'UNSET', but base.yaml sets it to teacher_kl. Therefore experiments that do not pin it still inherit a default. That recreates the silent-default
+  confound the repo explicitly warns about.
+
+  Action
+
+  - Remove tail_ce_kind / readout_source from configs/base.yaml.
+  - Require every experiment with readout weight/window to pin it.
+  - Add scripts/audit_configs.py and a test that fails inheritance.
+
+  ———
+
+  ### 3. teacher_censored says “NO readout CE” but still wires last_block_ce_weight
+
+  File
+
+  - src/selfupdate/train/layerwise.py
+
+  Code path
+
+  _censored_item():
+
+  if L == n:
+      loss_val, _ = last_block_step(
+          ...
+          cfg.train.last_block_ce_weight,
+      )
+
+  Problem
+
+  The docstring says the restored teacher-censored schedule has “NO connected window and NO readout CE”, but the code still allows last_block_ce_weight. That is task-label supervision if
+  set.
+
+  Action
+
+  - In _validate_knob_schedule, reject last_block_ce_weight > 0 and lens_ce_weight > 0 for teacher_censored, unless classified as baseline.
+  - Or force ce_w=0.0 inside _censored_item.
+
+  ———
+
+  ### 4. Hot loop still syncs on every block
+
+  File
+
+  - src/selfupdate/train/layerwise.py
+
+  Current syncs
+
+  return loss.item(), h_out.detach()
+  return [l.item() for l in losses], h.detach()
+
+  Problem
+
+  This is exactly the documented sync-bound bottleneck: .item() inside the per-block/per-item walk forces GPU-host synchronization many times per item.
+
+  Action
+
+  - Return detached GPU scalars or tensors.
+  - Accumulate logging tensors on device.
+  - Convert to Python floats only at grad-accum boundary or epoch boundary.
+
+  ———
+
+  ### 5. Scheduler ignores custom SCHED when writing scheduler pid
+
+  File
+
+  - scripts/gpu_scheduler.sh
+
+  Current
+
+  echo $$ > runs/.sched/scheduler.pid
+
+  Problem
+
+  The script creates "$SCHED" but writes the pid to hardcoded runs/.sched. In multi-node mode SCHED=runs/.sched-$(hostname -s), so this either writes to the wrong place or fails if
+  runs/.sched does not exist.
+
+  Action
+
+  echo $$ > "$SCHED/scheduler.pid"
+
+  ———
+
+  # File-by-file Code Review
+
+  ## Core package: src/selfupdate
+
+  ### src/selfupdate/__init__.py
+
+  What it does
+
+  Empty package marker.
+
+  Quality: A
+
+  Fine.
+
+  Improvements
+
+  None needed.
+
+  ———
+
+  ## Config
+
+  ### src/selfupdate/config.py
+
+  What it does
+
+  Dataclass-based configuration loader. Defines model/data/mask/cache/train/eval config surfaces and shallow-merges base YAML with experiment YAML.
+
+  Quality: B
+
+  Clear and simple. The config is easy to inspect and serialize. But the train config has accumulated stale/banned knobs.
+
+  Main issues
+
+  - Tail-specific knobs remain first-class.
+  - answer_ce_weight appears defined but effectively unused in trainer code.
+  - No formal run classification: method/baseline/ablation/archive/confounded.
+  - Shallow merge is okay for current YAMLs, but nested train.lora merging can be easy to misread.
+
+  Actionable improvements
+
+  1. Add:
+
+     run_class: str = "method"
+
+     or a separate report manifest.
+
+  2. Remove or quarantine:
+      - answer_ce_weight
+      - tail_* names
+      - depth-biased CE knobs from active method configs
+
+  3. Add a config audit layer separate from dataclass construction.
+  4. Make load_config() optionally return provenance: which file set which key.
+
+  ———
+
+  ## Chat/template rendering
+
+  ### src/selfupdate/chatfmt.py
+
+  What it does
+
+  Derives chat-template pieces for non-Qwen tokenizers; adapts Qwen-rendered records to other tokenizer templates for RAG mode.
+
+  Quality: A-
+
+  This is one of the cleaner files. It has strong comments, explicit rejection of unsafe modes, and tests.
+
+  Risks
+
+  - Template derivation with sentinel is clever but brittle for unusual templates that transform content.
+  - Cache key uses tokenizer.name_or_path; two tokenizers with same name but different template would collide.
+
+  Actionable improvements
+
+  - Include hash(tokenizer.chat_template) or repr(tokenizer.chat_template) in _pieces_cache key.
+  - Add one more test for a tokenizer whose assistant terminator is multi-token.
+
+  ———
+
+  ## Masking/alignment
+
+  ### src/selfupdate/masking.py
+
+  What it does
+
+  Defines SegmentedExample, AlignedPair, RAG/thinking renderers, selective thinking censoring, and token-level teacher/student alignment.
+
+  Quality: A
+
+  This is central and well-designed. The segment-wise tokenization invariant is correctly documented and tested.
+
+  Risks
+
+  - find_poem_spans() uses regex over raw text; punctuation variants beyond whitespace/case are not handled.
+  - assert is used for runtime data validity; Python -O would disable them.
+
+  Actionable improvements
+
+  - Convert critical asserts in ContextMasker.build() to explicit ValueError.
+  - Add optional punctuation-normalized matching for selective thinking, if traces vary.
+
+  ———
+
+  ## Data
+
+  ### src/selfupdate/data/__init__.py
+
+  What it does
+
+  Empty package marker.
+
+  Quality: A
+
+  Fine.
+
+  ———
+
+  ### src/selfupdate/data/dataset.py
+
+  What it does
+
+  Loads JSONL examples, adapts chat templates, builds aligned pairs, lazily reads hidden targets from teacher cache, yields Item.
+
+  Quality: A-
+
+  Good separation of data/cache/masking. Lazy hidden reads are appropriate.
+
+  Risks
+
+  - self.need_layers = need_layers or [] treats an explicit empty list and None identically; currently fine.
+  - No length bucketing/batching; all micro-batches are per-item.
+
+  Actionable improvements
+
+  - Add an optional bucketing/padded collate path for H100 throughput.
+  - If cache is None, assert with_teacher_ids=True when training needs online targets.
+
+  ———
+
+  ### src/selfupdate/data/poem.py
+
+  What it does
+
+  Builds task specs from poem/corpus lines: windows, full recitation, section tasks, paraphrase/catechism/maieutic variants, corpus style.
+
+  Quality: B+
+
+  Feature-rich and scientifically useful, but large and policy-heavy.
+
+  Risks
+
+  - One file contains many dataset-generation modes; easy to accidentally mix corpus variants.
+  - Some choices are campaign-specific and not encoded as stable dataset manifests.
+
+  Actionable improvements
+
+  - Split into:
+      - poem_base.py
+      - poem_variants.py
+      - corpus_styles.py
+
+  - Emit a dataset manifest beside each generated JSONL: source hash, style, variant flags.
+
+  ———
+
+  ## Teacher cache/generation
+
+  ### src/selfupdate/teacher/__init__.py
+
+  Empty marker.
+
+  Quality: A
+
+  Fine.
+
+  ———
+
+  ### src/selfupdate/teacher/cache.py
+
+  What it does
+
+  Writes/reads sharded safetensor teacher hidden caches; stores span metadata and config hash.
+
+  Quality: A-
+
+  Strong operational utility. Hash and metadata are important.
+
+  Risks
+
+  - Cache hash likely does not include every field that can alter examples unless resolve_cache_dir() includes them all.
+  - Shard format is simple but not optimized for many small random reads from Lustre.
+
+  Actionable improvements
+
+  - Audit cache_config_hash() fields against all data/mask fields.
+  - Add optional packed cache/index format for high-throughput runs.
+
+  ———
+
+  ### src/selfupdate/teacher/generate.py
+
+  What it does
+
+  Harvests thinking traces from a teacher model.
+
+  Quality: B
+
+  Useful, small, focused.
+
+  Risks
+
+  - Generation settings are campaign-sensitive.
+  - Trace harvesting should write generation config metadata.
+
+  Actionable improvements
+
+  - Save max tokens, decoding mode, model revision, tokenizer name into each output manifest.
+
+  ———
+
+  ## Training blocks/losses
+
+  ### src/selfupdate/train/__init__.py
+
+  Empty marker.
+
+  Quality: A
+
+  Fine.
+
+  ———
+
+  ### src/selfupdate/train/blocks.py
+
+  What it does
+
+  Wraps HF causal LM into block-level interface: embeddings, RoPE, decoder blocks, final norm, head.
+
+  Quality: A-
+
+  Clean and central. Good architecture guard.
+
+  Risks
+
+  - Assumes decoder block call signature compatible with Qwen/Llama-like models.
+  - run_block() returns whatever HF block returns. For some architectures this may be tuple-like.
+
+  Actionable improvements
+
+  - Normalize output:
+
+    out = self.blocks[L - 1](...)
+    return out[0] if isinstance(out, tuple) else out
+
+  - Add an architecture adapter registry before expanding families.
+
+  ———
+
+  ### src/selfupdate/train/losses.py
+
+  What it does
+
+  Implements hidden matching losses: nmse, l2mse, cosine, huber, zero, vocab_mse, vocab_fisher, lens_kl, plus task-label CE helper.
+
+  Quality: A-
+
+  Centralized, well documented, and aligned with frozen-vocabulary principle.
+
+  Risks
+
+  - vocab_mse Gram matrix can be large for high-H models.
+  - lens_kl full-vocab matmul is expensive.
+  - answer_ce() remains in active package despite being baseline-only.
+
+  Actionable improvements
+
+  - Rename answer_ce() to task_label_ce_baseline() or move to baselines.py.
+  - Add memory guard/logging for Gram matrix construction.
+  - Add top-k approximation option for lens_kl if needed.
+
+  ———
+
+  ### src/selfupdate/train/lora.py
+
+  What it does
+
+  Attaches PEFT LoRA adapters.
+
+  Quality: B+
+
+  Simple and adequate.
+
+  Risks
+
+  - Target modules are likely hardcoded; family compatibility may vary.
+
+  Actionable improvements
+
+  - Add model-family-aware target module selection.
+  - Log exact target modules into run config.
+
+  ———
+
+  ### src/selfupdate/train/tuned_lens.py
+
+  What it does
+
+  Builds/saves/loads per-layer linear translators and trains tuned lens KL.
+
+  Quality: B+
+
+  Good standalone utility.
+
+  Risks
+
+  - .item() in training accumulation syncs, but this is less critical than main trainer.
+  - Translator metadata is minimal.
+
+  Actionable improvements
+
+  - Save model name, hidden size, layer count, token budget, data source, seed.
+  - Flush KL logging less frequently.
+
+  ———
+
+  ## Main trainer
+
+  ### src/selfupdate/train/layerwise.py
+
+  What it does
+
+  Implements layerwise training schedules:
+
+  - summed
+  - sequential
+  - teacher_censored
+  - mixed
+  - connected windows
+  - online teacher
+  - anchors
+  - offloaded Adam
+  - LoRA/frozen teacher handling
+  - checkpoint save and vocab tripwire
+
+  Quality: B overall
+
+  Core mechanics are strong, but this file is now overloaded and branch-contaminated.
+
+  Strong parts
+
+  - Good frozen-vocabulary tripwire.
+  - Clean OnlineTeacherSource.
+  - Good locality discipline through detached inputs.
+  - Useful optimizer offload utility.
+  - Sliding window semantics are implemented and tested.
+
+  Major issues
+
+  1. Public API still tail-specific.
+  2. _validate_knob_schedule() is too weak.
+  3. teacher_censored still permits last_block_ce_weight.
+  4. .item() hot-loop syncs remain.
+  5. tail_step() mixes generic window semantics, top readout, hidden loss, teacher KL, and task-label CE in one function.
+  6. anchor_step() is coupled to tail_ce_blocks.
+  7. File is almost 1000 lines and should be split.
+
+  Actionable refactor
+
+  Split into:
+
+  - train/window.py: generic window_step
+  - train/schedules/summed.py
+  - train/schedules/censored.py
+  - train/schedules/sequential.py
+  - train/readout.py: teacher KL / baseline task-label CE
+  - train/anchors.py
+  - train/online_teacher.py
+  - train/validation.py
+
+  Specific validation additions
+
+  Reject these unless explicitly baseline/archive:
+
+  - tail_ce_blocks > 0 and conn_window <= 0
+  - tail_ce_blocks > 0 and conn_stride != 1
+  - tail_ce_kind == "task_label" in method run
+  - last_block_ce_weight > 0 in method run
+  - lens_ce_weight > 0 and lens_ce_from > 1 in method run
+  - depth-increasing readout weights
+  - teacher_censored with any CE/readout knob
+
+  ———
+
+  ## Evaluation modules
+
+  ### src/selfupdate/eval/__init__.py
+
+  Empty marker.
+
+  Quality: A
+
+  Fine.
+
+  ———
+
+  ### src/selfupdate/eval/general.py
+
+  What it does
+
+  Computes general CE on probe texts.
+
+  Quality: B+
+
+  Simple and useful.
+
+  Risks
+
+  - Probe set is embedded in code or small fixed list.
+  - .item() fine for eval.
+
+  Actionable improvements
+
+  - Externalize probe texts and version them.
+  - Include per-text IDs and text hashes in output.
+
+  ———
+
+  ### src/selfupdate/eval/recite.py
+
+  What it does
+
+  Recitation eval, prompt construction, gap-aware greedy generation, CER/line metrics.
+
+  Quality: A-
+
+  Important and well-tested.
+
+  Risks
+
+  - Greedy manual position decoder may be model-family-sensitive.
+  - Generation stopping depends on template terminator.
+
+  Actionable improvements
+
+  - Add model-family smoke tests for greedy_generate_positions.
+  - Save generated text samples in eval output, not just metrics.
+
+  ———
+
+  ### src/selfupdate/eval/destruction.py
+
+  What it does
+
+  Destruction/intrusion/general benchmark probes, ngram detection, verdicting.
+
+  Quality: B+
+
+  Very valuable, but broad.
+
+  Risks
+
+  - Many benchmarks/probe formats in one file.
+  - Some threshold logic may become hidden policy.
+
+  Actionable improvements
+
+  - Split probe formatting from verdicting.
+  - Version thresholds in JSON output.
+  - Save exact prompt/probe IDs used.
+
+  ———
+
+  ### src/selfupdate/eval/layer_swap.py
+
+  What it does
+
+  Layer graft/ablation curves by swapping blocks from checkpoints.
+
+  Quality: B+
+
+  Good mechanistic eval.
+
+  Risks
+
+  - Assumes compatible state dict layout.
+  - Can be memory-heavy.
+
+  Actionable improvements
+
+  - Add architecture compatibility check.
+  - Emit JSON alongside CSV.
+
+  ———
+
+  ### src/selfupdate/eval/logit_lens.py
+
+  What it does
+
+  Computes per-layer reference logprob through raw/tuned lens.
+
+  Quality: B
+
+  Useful but slightly naming-stale: uses gold_logprob_by_layer.
+
+  Risks
+
+  - “gold” naming violates current terminology contract.
+
+  Actionable improvements
+
+  - Rename to reference_logprob_by_layer.
+  - Output target source metadata.
+
+  ———
+
+  ### src/selfupdate/eval/probes.py
+
+  What it does
+
+  Probe text definitions/helpers.
+
+  Quality: B
+
+  Useful, but should be more manifest-like.
+
+  Actionable improvements
+
+  - Make probe batteries data files with hashes and categories.
+
+  ———
+
+  ### src/selfupdate/eval/convergence.py
+
+  What it does
+
+  Layer delta vector extraction and cross-run cosine/Spearman convergence.
+
+  Quality: B+
+
+  Good analysis helper.
+
+  Risks
+
+  - State dict naming assumptions.
+
+  Actionable improvements
+
+  - Add skipped/missing layer reporting.
+  - Emit confidence/coverage counts.
+
+  ———
+
+  ### src/selfupdate/eval/weight_deltas.py
+
+  What it does
+
+  Computes full-FT and LoRA per-layer relative deltas.
+
+  Quality: B+
+
+  Useful and test-covered.
+
+  Risks
+
+  - LoRA delta reconstruction assumes common PEFT naming/scaling.
+
+  Actionable improvements
+
+  - Validate adapter config against state dict.
+  - Add per-module aggregation JSON.
+
+  ———
+
+  ## Utilities
+
+  ### src/selfupdate/utils/__init__.py
+
+  Empty marker.
+
+  Quality: A
+
+  Fine.
+
+  ———
+
+  ### src/selfupdate/utils/runlog.py
+
+  What it does
+
+  Creates run directory, writes config, appends JSONL metrics.
+
+  Quality: B+
+
+  Simple and effective.
+
+  Risks
+
+  - Rerunning rotates metrics but not checkpoint/eval artifacts, so stale eval/checkpoint can coexist with fresh metrics/config.
+  - No atomic write for config.
+
+  Actionable improvements
+
+  - On rerun, either refuse if checkpoint exists or archive whole run dir.
+  - Write config.yaml.tmp then rename.
+  - Add run_id timestamp in metrics.
+
+  ———
+
+  ### src/selfupdate/utils/seeding.py
+
+  What it does
+
+  Seeds Python/torch/CUDA.
+
+  Quality: A-
+
+  Fine.
+
+  Actionable improvements
+
+  - Optionally set deterministic flags only under a config knob, because they can slow training.
+
+  ———
+
+  # Scripts
+
+  ## Training/eval entrypoints
+
+  ### scripts/train.py
+
+  What it does
+
+  Loads config and dispatches layerwise trainer.
+
+  Quality: A-
+
+  Clean.
+
+  Improvement
+
+  - Print resolved config path and run name before training.
+  - Optionally run config audit before dispatch.
+
+  ———
+
+  ### scripts/evaluate.py
+
+  What it does
+
+  Evaluates base or checkpoint recitation and general CE.
+
+  Quality: B+
+
+  Good operational script.
+
+  Risks
+
+  - For PEFT checkpoint, tokenizer loaded from adapter path; okay if saved, but fragile if not.
+  - --auto-map with general_ce(... device=cfg.model.device) may mismatch device map.
+
+  Actionable improvements
+
+  - Derive device from model for general_ce or make general_ce device-map safe.
+  - Add --layer-residuals as recommended.
+
+  ———
+
+  ### scripts/build_dataset.py
+
+  What it does
+
+  Builds JSONL segmented examples from config.
+
+  Quality: B+
+
+  Good, but mode-heavy.
+
+  Risks
+
+  - Generated dataset has no manifest.
+  - Thinking trace harvesting has implicit model/generation settings.
+
+  Actionable improvements
+
+  - Write examples.jsonl.manifest.json.
+  - Include config hash and source file hash.
+
+  ———
+
+  ### scripts/build_teacher_cache.py
+
+  What it does
+
+  Builds teacher hidden cache and premise CE diagnostics.
+
+  Quality: A-
+
+  Important and mostly clean.
+
+  Risks
+
+  - Loads model in fp32; expensive but intentional.
+  - Premise check is printed, not persisted enough unless metadata includes it.
+
+  Actionable improvements
+
+  - Store premise CE summary in cache metadata.
+  - Add option to build only selected layers.
+
+  ———
+
+  ## Analysis/report scripts
+
+  ### scripts/analyze.py
+
+  What it does
+
+  Builds results table, curves, delta profile comparisons.
+
+  Quality: B
+
+  Useful, but too hand-maintained.
+
+  Risks
+
+  - Base CE lookup is ad hoc.
+  - Historical report assumptions still mixed with active method claims.
+
+  Actionable improvements
+
+  - Replace with corpus index builder.
+  - Use run classification.
+  - Refuse/flag confounded runs.
+
+  ———
+
+  ### scripts/report.py
+
+  What it does
+
+  Generates PDF report from results/artifacts.
+
+  Quality: C+
+
+  Operationally useful, but stale relative to branch rules.
+
+  Problems
+
+  - Narrative still centers historical/tail framing.
+  - Not driven by machine-readable conclusions.
+  - Does not enforce missing artifacts.
+
+  Actionable improvements
+
+  - Rebuild around:
+      1. branch rules/excluded evidence
+      2. conclusion ledger
+      3. run classification
+      4. artifact completeness
+      5. metrics/plots
+
+  - Add hard warnings for task_label, tail_*, missing full eval, missing destruction, missing attribution.
+
+  ———
+
+  ### paper/make_figs.py
+
+  What it does
+
+  Generates paper figures from live campaign artifacts.
+
+  Quality: C+
+
+  Good for a frozen campaign snapshot, risky as live code.
+
+  Problems
+
+  - Hardcoded run names.
+  - Some figures are built around now-forbidden/stale tail terminology.
+  - Missing artifact handling is likely brittle.
+
+  Actionable improvements
+
+  - Convert to read from runs/corpus.csv + runs/conclusions.yaml.
+  - Separate archived/baseline figures from method figures.
+  - Add graceful skip with warning when run artifact missing.
+
+  ———
+
+  ### scripts/layer_loss_plots.py
+
+  What it does
+
+  Plots per-layer training losses from metrics.
+
+  Quality: B
+
+  Useful but incomplete.
+
+  Actionable improvements
+
+  - Emit CSV.
+  - Emit heatmap.
+  - Support grouping by model/loss/window.
+  - Avoid assuming per_layer length semantics when sliding windows change logging.
+
+  ———
+
+  ### scripts/forget_curves.py
+
+  What it does
+
+  Builds forgetting/recall curves from per-epoch eval logs.
+
+  Quality: B
+
+  Good start.
+
+  Risks
+
+  - Uses training-time subset eval, not full-corpus eval.
+  - Base CE lookup is ad hoc.
+
+  Actionable improvements
+
+  - Add full-eval checkpoint lane support.
+  - Emit per-run plots, not only global.
+  - Require base reference per model.
+
+  ———
+
+  ### scripts/delta_profiles.py
+
+  What it does
+
+  Computes per-layer weight delta CSVs for runs.
+
+  Quality: B+
+
+  Useful.
+
+  Actionable improvements
+
+  - Add LoRA/full-FT summary JSON.
+  - Support run classification filters.
+
+  ———
+
+  ### scripts/signal_attribution.py
+
+  What it does
+
+  Measures hidden/readout gradient attribution.
+
+  Quality: B+
+
+  Very important for this branch.
+
+  Risks
+
+  - Should be mandatory for any readout run, not optional.
+  - Needs to understand renamed readout/window knobs after cleanup.
+
+  Actionable improvements
+
+  - Integrate into report gate.
+  - Emit standardized signal_attribution.json.
+
+  ———
+
+  ## Probe/eval scripts
+
+  ### scripts/destruct_eval.py
+
+  What it does
+
+  Runs destruction/intrusion battery on base/checkpoint.
+
+  Quality: B+
+
+  Good.
+
+  Actionable improvements
+
+  - Always write prompt IDs and threshold version.
+  - Make base-ref requirement explicit for verdicting.
+
+  ———
+
+  ### scripts/base_general.py
+
+  What it does
+
+  Computes base general CE.
+
+  Quality: B
+
+  Tiny and useful.
+
+  Issues
+
+  - No argparse.
+  - No directory creation for output path.
+
+  Actionable improvements
+
+  - Add argparse and Path(out).parent.mkdir(...).
+
+  ———
+
+  ### scripts/teacher_recite.py
+
+  What it does
+
+  Evaluates teacher-with-context recitation ceiling.
+
+  Quality: B+
+
+  Useful.
+
+  Actionable improvements
+
+  - Save JSON output, not only print.
+  - Include decoding settings.
+
+  ———
+
+  ### scripts/teacher_ceiling.py
+
+  What it does
+
+  Computes teacher ceiling metrics.
+
+  Quality: B
+
+  Useful but script-like.
+
+  Actionable improvements
+
+  - Add argparse.
+  - Save structured output.
+
+  ———
+
+  ### scripts/recite_long.py
+
+  What it does
+
+  Long chained recitation eval.
+
+  Quality: B+
+
+  Useful for crown candidates.
+
+  Actionable improvements
+
+  - Add deterministic generation metadata.
+  - Include first-error position in machine-readable top-level fields.
+
+  ———
+
+  ### scripts/logit_lens.py
+
+  What it does
+
+  Builds logit-lens layer profiles.
+
+  Quality: B
+
+  Useful, but naming/reporting should follow target-law terminology.
+
+  Actionable improvements
+
+  - Replace “gold” language with “reference”.
+  - Emit JSON + CSV.
+
+  ———
+
+  ### scripts/layer_swap.py
+
+  What it does
+
+  CLI wrapper for layer swap eval.
+
+  Quality: B+
+
+  Fine.
+
+  Actionable improvements
+
+  - Validate checkpoint/base architecture before running.
+  - Write JSON summary.
+
+  ———
+
+  ### scripts/attention_probe.py
+
+  What it does
+
+  Head taxonomy probe for privileged attention mass/entropy/distance.
+
+  Quality: B
+
+  Scientifically useful exploratory script.
+
+  Risks
+
+  - .cpu() per item/head is okay for probe, but not optimized.
+  - Assumes eager attention support.
+
+  Actionable improvements
+
+  - Save model/config metadata.
+  - Add --limit and failure message for models without attention support.
+
+  ———
+
+  ### scripts/moe_router_probe.py
+
+  What it does
+
+  MoE routing probe.
+
+  Quality: B
+
+  Good exploratory code.
+
+  Risks
+
+  - Model-family-specific hooks may break.
+
+  Actionable improvements
+
+  - Add explicit supported architecture checks.
+  - Emit hook coverage.
+
+  ———
+
+  ### scripts/premise_gate.py
+
+  What it does
+
+  Quick premise gate / base recitation check.
+
+  Quality: C+
+
+  Too minimal but useful.
+
+  Actionable improvements
+
+  - Convert to argparse.
+  - Save JSON.
+
+  ———
+
+  ### scripts/sanity_chat.py
+
+  What it does
+
+  Manual sanity generations.
+
+  Quality: B-
+
+  Fine as ad hoc script.
+
+  Actionable improvements
+
+  - Keep out of core report path.
+  - Save prompt/response metadata.
+
+  ———
+
+  ### scripts/smoke_family.py
+
+  What it does
+
+  Family compatibility smoke tests.
+
+  Quality: B+
+
+  Important for scaling beyond Qwen.
+
+  Actionable improvements
+
+  - Promote failures into structured compatibility table.
+  - Use this before adding model-family configs.
+
+  ———
+
+  ### scripts/parallel_bench.py
+
+  What it does
+
+  Parallelism/PP/TP benchmark and correctness smoke.
+
+  Quality: B
+
+  Important, but should become a formal certification gate.
+
+  Actionable improvements
+
+  - Save structured results.
+  - Compare against single-device reference automatically.
+  - Report exact inherited config knobs.
+
+  ———
+
+  ## Dataset fetch scripts
+
+  ### scripts/fetch_poem.py
+
+  What it does
+
+  Fetches/normalizes poem source.
+
+  Quality: B+
+
+  Good.
+
+  Actionable improvements
+
+  - Save source URL and hash.
+  - Add offline mode check.
+
+  ———
+
+  ### scripts/fetch_quijote.py
+
+  What it does
+
+  Fetches/parses Quijote rungs.
+
+  Quality: B+
+
+  Good practical script.
+
+  Actionable improvements
+
+  - Save raw source hash and parser version.
+  - Add tests for chapter parser edge cases.
+
+  ———
+
+  ## Misc/legacy scripts
+
+  ### scripts/tail_graft.py
+
+  What it does
+
+  Creates/evaluates chimera by grafting tail layers.
+
+  Quality: C
+
+  Useful historically, but branch-inconsistent.
+
+  Action
+
+  - Move to archive or ../selfupdate_kd.
+  - If kept, mark as legacy_archive only.
+
+  ———
+
+  ### scripts/train_tuned_lens.py
+
+  What it does
+
+  Trains tuned-lens translators.
+
+  Quality: B+
+
+  Good utility.
+
+  Actionable improvements
+
+  - Reduce .item() logging sync.
+  - Save richer metadata.
+  - Make data source configurable with manifest.
+
+  ———
+
+  ## Shell / scheduler scripts
+
+  ### scripts/gpu_scheduler.sh
+
+  What it does
+
+  VRAM-aware TSV queue scheduler.
+
+  Quality: B
+
+  Operationally valuable.
+
+  Issues
+
+  - Hardcoded pid path ignores SCHED.
+  - Scheduler reservations are launch-time only, not leases.
+  - Queue parsing with eval "$cmd" is flexible but unsafe if queue is edited incorrectly.
+
+  Actionable improvements
+
+  - Fix pid path.
+  - Log assigned device and command to per-job metadata.
+  - Optionally support lease files with expected peak memory.
+  - Add set -u carefully, or at least quote more vars.
+
+  ———
+
+  ### scripts/gpu_watchdog.sh
+
+  What it does
+
+  Backlog opportunistic launcher.
+
+  Quality: C+
+
+  Useful but riskier than scheduler.
+
+  Risks
+
+  - Counts GPU processes with regex, not scheduler state.
+  - Single-GPU only.
+  - Uses eval.
+
+  Actionable improvements
+
+  - Either retire in favor of scheduler or integrate with same lock state.
+  - Add GPU id selection.
+
+  ———
+
+  ### scripts/results_refresher.sh
+
+  What it does
+
+  Periodically regenerates results/report.
+
+  Quality: B
+
+  Fine.
+
+  Actionable improvements
+
+  - Log failures instead of redirecting everything to /dev/null.
+  - Use lock to avoid overlapping refreshes.
+
+  ———
+
+  ### scripts/report_shipper.sh
+
+  What it does
+
+  Ships report artifacts via scp.
+
+  Quality: B
+
+  Fine operational helper.
+
+  Actionable improvements
+
+  - Check artifacts exist before scp.
+  - Log destination and checksum.
+
+  ———
+
+  ### scripts/slurm_h100.sbatch
+
+  What it does
+
+  H100 scheduler wrapper with warmup and per-node state.
+
+  Quality: B+
+
+  Good cluster-specific operational code.
+
+  Risks
+
+  - Depends on .venv path.
+  - Warmup find .venv/lib can be expensive but intentional.
+
+  Actionable improvements
+
+  - Use $VENV env var defaulting to .venv.
+  - Ensure SCHED pid path fix in scheduler.
+
+  ———
+
+  # Tests
+
+  Overall test quality is strong. The suite tests the right invariants: alignment, locality, cache roundtrip, target law, connected-window confinement, anchors, online teacher, offloaded
+  Adam, corpus style, destruction hygiene.
+
+  Main gap: tests validate old/tail paths instead of enforcing that they are archived or baseline-only.
+
+  ## Test files
+
+  ### tests/conftest.py
+
+  What it does
+
+  Pins repo src/ on path.
+
+  Quality: A
+
+  Correct for shared-venv rule.
+
+  ———
+
+  ### tests/test_alignment.py
+
+  Quality: A
+
+  Excellent coverage of token alignment and template identity.
+
+  Improve
+
+  - Add non-Qwen template roundtrip cases if family expansion continues.
+
+  ———
+
+  ### tests/test_chatfmt.py
+
+  Quality: A-
+
+  Good template adaptation tests.
+
+  Improve
+
+  - Cache-key/template mutation test.
+
+  ———
+
+  ### tests/test_cache_roundtrip.py
+
+  Quality: A-
+
+  Good cache correctness test.
+
+  Improve
+
+  - Add metadata/hash mismatch failure test.
+
+  ———
+
+  ### tests/test_layerwise_locality.py
+
+  Quality: A
+
+  Very important. Keep.
+
+  Improve
+
+  - Add no-logits/no-head-gradient tests for every method schedule.
+
+  ———
+
+  ### tests/test_conn_window.py
+
+  Quality: A-
+
+  Good connected-window semantics.
+
+  Improve
+
+  - Rename away from tail_step.
+  - Add config-level rejection tests for banned top-only windows.
+
+  ———
+
+  ### tests/test_tail_ce.py
+
+  Quality: C for this branch
+
+  Technically useful, but branch-inconsistent.
+
+  Action
+
+  - Move to archive/KD branch.
+  - Replace with test_window_step.py for generic connected-window confinement.
+
+  ———
+
+  ### tests/test_training_target_law.py
+
+  Quality: B+
+
+  Important and directly tied to owner law.
+
+  Problem
+
+  It currently asserts base.yaml default is teacher_kl, which conflicts with the “UNSET sentinel” policy if interpreted strictly.
+
+  Action
+
+  - Change test to assert experiments with readout pin source explicitly.
+  - Add audit over configs/experiments.
+
+  ———
+
+  ### tests/test_mixed_schedule.py
+
+  Quality: B
+
+  Useful.
+
+  Problem
+
+  Still includes censored-tail gradient test language/path.
+
+  Action
+
+  - Ensure mixed/teacher-censored reject CE/readout unless baseline.
+  - Rename old tail-specific tests.
+
+  ———
+
+  ### tests/test_online_teacher.py
+
+  Quality: A-
+
+  Good equivalence test.
+
+  Improve
+
+  - Add frozen-teacher-copy path test, not only PEFT adapter path.
+
+  ———
+
+  ### tests/test_offload_adam.py
+
+  Quality: A
+
+  Good mathematical guard.
+
+  ———
+
+  ### tests/test_losses.py
+
+  Quality: A
+
+  Strong loss correctness coverage.
+
+  Improve
+
+  - Add memory/shape tests for bigger vocab-head simulation.
+
+  ———
+
+  ### tests/test_anchor.py
+
+  Quality: B+
+
+  Useful hygiene and gradient confinement.
+
+  Problem
+
+  Anchor is coupled to tail window.
+
+  Action
+
+  - Update for generic top-window/readout-window naming.
+
+  ———
+
+  ### tests/test_destruction.py
+
+  Quality: A-
+
+  Good probe hygiene tests.
+
+  Improve
+
+  - Version threshold tests.
+
+  ———
+
+  ### tests/test_analysis.py
+
+  Quality: B+
+
+  Good delta/logit helpers.
+
+  Improve
+
+  - Rename “gold” references.
+
+  ———
+
+  ### tests/test_catechism.py
+
+  Quality: B+
+
+  Good dataset invariant tests.
+
+  ———
+
+  ### tests/test_corpus_style.py
+
+  Quality: B+
+
+  Good byte-identity/variant protection.
+
+  ———
+
+  ### tests/test_position_invariance.py
+
+  Quality: B+
+
+  Good scientific invariant test.
+
+  Risk
+
+  CPU fp32 model load can be slow.
+
+  ———
+
+  ### tests/test_thinking_selective.py
+
+  Quality: A-
+
+  Good selective-censoring tests.
+
+  Improve
+
+  - Add punctuation-normalization case if desired.
+
+  ———
+
+  ### tests/test_tuned_lens.py
+
+  Quality: B+
+
+  Good tuned lens tests.
+
+  ———
+
+  # Recommended Action Plan
+
+  ## Phase 1: Make the branch safe
+
+  1. Add run_class.
+  2. Remove tail_ce_kind from configs/base.yaml.
+  3. Add scripts/audit_configs.py.
+  4. Reject active method configs with:
+      - tail_ce_blocks > 0 and no sliding conn_window/conn_stride: 1
+      - task_label
+      - last_block_ce_weight
+      - depth-biased lens_ce_from > 1
+
+  5. Move/quarantine tail_graft.py, test_tail_ce.py, legacy configs.
+
+  ## Phase 2: Rename the abstraction
+
+  1. tail_step → window_step.
+  2. tail_ce_* → readout_* / window_*.
+  3. answer_ce → task_label_ce_baseline.
+  4. Replace report wording.
+
+  ## Phase 3: Fix performance
+
+  1. Remove .item() from per-block hot loop.
+  2. Flush scalar logs once per grad accumulation.
+  3. Add padded/bucketed batch path.
+  4. Add cache prefetch/packing.
+
+  ## Phase 4: Make evidence machine-readable
+
+  1. runs/corpus.csv
+  2. runs/conclusions.yaml
+  3. Required artifact checker.
+  4. Rebuild scripts/report.py from corpus + ledger.
+
+  Bottom line: the implementation is serious and mostly high quality, but it is carrying too much legacy tail/classical-distillation surface. The next best code work is not “more arms”;
+  it is enforcing the branch law mechanically, renaming the window primitive, and making configs/reports impossible to misclassify.
+
+─ Worked for 3m 28s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ 
+› Run /review on my current changes
+ 
+  gpt-5.5 xhigh · ~/selfupdate_lw
