@@ -995,3 +995,12 @@ Classification: METHOD (doctrine-clean sliding), HYB (pre-law hybrid baseline), 
 8. **Premise condition** (C2-32): teacher_kl transmits only what the teacher knows in context; premise-check per data mode.
 9. **The last 3%** (C2-34): pure distribution-matching converges to teacher fidelity exactly; verbatim recall lives in the residual the teacher lacks — bounded reference-CE is irreducible in the lab, transcript-CE-equivalent in deployment.
 10. **Parallelism**: PP2 evals validated; PP2 TRAINING failed its repro (0.837 vs 0.015) — C3 blocker #0; offload_adam works (full-FT 4B at 2.3 s/item); TP timing benched.
+
+### Parallelism timing (0.6B, seq 600, training hot loop, quiet pair)
+single 57.9 ms/item · PP2 61.4 (+6%) · TP2 99.7 (+72%).
+Notable: transformers tp_plan="auto" ran THROUGH the custom block walk
+without DTensor surgery — TP2 forward+backward+step work mechanically
+(correctness unvalidated, same repro discipline as PP2 required). At
+0.6B the collectives dominate (+72%), as predicted; PP2's +6% confirms
+activations-across-PCIe is cheap at batch 1. The 27B bridge is where
+TP's fat matmuls amortize — harness (scripts/parallel_bench.py) ready.
