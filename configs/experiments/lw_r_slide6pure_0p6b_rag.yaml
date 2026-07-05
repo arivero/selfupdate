@@ -1,0 +1,24 @@
+# connectivity knee: k=6 between slide4 (intr 12.5%) and slide8 (5%).
+run_name: lw_r_slide6pure_0p6b_rag
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  conn_window: 6
+  conn_stride: 1
+  tail_ce_blocks: 6
+  tail_ce_weight: 0.5
+  tail_hidden_weight: 0.0
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false

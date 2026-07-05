@@ -1,0 +1,21 @@
+# BEST-OF-EVERYTHING candidate: crown recipe x gentle channel (thinking_selective data);
+# task-CE readout per premise condition (thinking teacher is not a sharp reader).
+run_name: lw_n_thinkslide_0p6b_rag
+data:
+  examples_path: data/poem/examples_think_sel.jsonl
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-5
+  hidden_loss: vocab_mse
+  conn_window: 8
+  conn_stride: 1
+  tail_ce_blocks: 8
+  tail_ce_weight: 0.5
+  tail_hidden_weight: 0.0
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  frozen_teacher_copy: true
+  lora:
+    enabled: false
