@@ -22,24 +22,9 @@ from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
 
 
-def _load_peft_checkpoint(base, checkpoint: Path, base_model_name: str):
-    from peft import PeftConfig, PeftModel, get_peft_model
+def _direct_load_peft_checkpoint(base, checkpoint: Path):
+    from peft import PeftConfig, get_peft_model
     from safetensors.torch import load_file
-
-    try:
-        return PeftModel.from_pretrained(base, checkpoint)
-    except TypeError as e:
-        if "WeightConverter.__init__" not in str(e):
-            raise
-        print(f"PEFT adapter conversion failed ({e}); falling back to direct state load")
-        # PeftModel.from_pretrained can leave PEFT metadata on the base model
-        # before raising. Reload a clean base so the direct fallback does not
-        # stack adapters or produce ambiguous evals.
-        del base
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        base = AutoModelForCausalLM.from_pretrained(base_model_name, dtype=torch.bfloat16)
 
     peft_cfg = PeftConfig.from_pretrained(checkpoint)
     model = get_peft_model(base, peft_cfg)
@@ -61,6 +46,30 @@ def _load_peft_checkpoint(base, checkpoint: Path, base_model_name: str):
             f"{len(missing)} missing, {len(unexpected)} unexpected"
         )
     return model
+
+
+def _load_peft_checkpoint(base, checkpoint: Path, base_model_name: str):
+    from peft import PeftConfig, PeftModel
+
+    try:
+        peft_cfg = PeftConfig.from_pretrained(checkpoint)
+        if getattr(peft_cfg, "target_parameters", None):
+            print("PEFT checkpoint uses target_parameters; loading adapter directly")
+            return _direct_load_peft_checkpoint(base, checkpoint)
+        return PeftModel.from_pretrained(base, checkpoint)
+    except TypeError as e:
+        if "WeightConverter.__init__" not in str(e):
+            raise
+        print(f"PEFT adapter conversion failed ({e}); falling back to direct state load")
+        # PeftModel.from_pretrained can leave PEFT metadata on the base model
+        # before raising. Reload a clean base so the direct fallback does not
+        # stack adapters or produce ambiguous evals.
+        del base
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        base = AutoModelForCausalLM.from_pretrained(base_model_name, dtype=torch.bfloat16)
+    return _direct_load_peft_checkpoint(base, checkpoint)
 
 
 def main() -> None:
