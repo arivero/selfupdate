@@ -95,6 +95,12 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
 ## Hard-Won Lessons
 
+- Config DEFAULTS are experiment variables: flipping one mid-campaign
+  silently forks every queued/in-flight arm that didn't pin the knob
+  (the "PP2 failure" of 2026-07-05 was this, not a parallelism bug).
+  Repro configs pin every knob that distinguishes them from their
+  reference; flip defaults only between campaigns.
+
 - The trainer hot loop is SYNC-bound: `.item()` per block = a GPU
   round-trip per block per item purely for logging (measured 1.46x
   recoverable; see issues.md "sync-bound"). Never add `.item()`/`.cpu()`

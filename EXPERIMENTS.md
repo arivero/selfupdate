@@ -1004,3 +1004,17 @@ without DTensor surgery — TP2 forward+backward+step work mechanically
 0.6B the collectives dominate (+72%), as predicted; PP2's +6% confirms
 activations-across-PCIe is cheap at batch 1. The 27B bridge is where
 TP's fat matmuls amortize — harness (scripts/parallel_bench.py) ready.
+
+### CORRECTION to the parallelism verdict: the PP2 "failure" was a confounded repro
+The 05:07 PP2 run silently inherited tail_ce_kind=teacher_kl (the
+default flipped mid-campaign at 04:45) while its reference predates the
+knob (task-CE). Its 0.837 / 96.5% teacher-forced accuracy is the
+last-3% law's fingerprint (C2-34), not a parallelism defect — confirmed
+from the run's own config dump and checkpoint fidelity test; the
+hook-crossing gradient hypothesis was separately unit-tested and
+REJECTED (gradients flow). Honest repro (task_label pinned) queued at
+front (lw_q_pp2fix). Blocker #0 status: UNCONFIRMED pending pp2fix.
+META-LESSON (recorded in CLAUDE.md): a config DEFAULT is an experiment
+variable — flipping one mid-campaign silently forked every in-flight
+and queued arm that did not pin the knob; repro configs must pin ALL
+knobs that distinguish them from their reference.

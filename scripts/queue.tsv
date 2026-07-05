@@ -1,3 +1,5 @@
+runs/lw_q_pp2fix_0p6b_rag/checkpoint	7000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/lw_q_pp2fix_0p6b_rag.yaml	2
+runs/lw_q_pp2fix_0p6b_rag/eval/recite.json	3000	runs/lw_q_pp2fix_0p6b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_q_pp2fix_0p6b_rag.yaml --checkpoint runs/lw_q_pp2fix_0p6b_rag/checkpoint
 runs/teacher_ceiling_Qwen3-0.6B_v4.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/lw_k_final_k8_0p6b_rag.yaml
 runs/teacher_ceiling_Qwen3-0.6B_ch8.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch8_0p6b_rag.yaml
 runs/teacher_ceiling_Qwen3-0.6B_ch16.json	3000	-	.venv/bin/python scripts/teacher_ceiling.py --experiment configs/experiments/q_ch16_0p6b_rag.yaml
