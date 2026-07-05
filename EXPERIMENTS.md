@@ -1055,3 +1055,7 @@ slide8 7.5%→8.0% · combined 10%→8.0% · final_k8 22.5%→16.0%.
 Ordering stable; every CLEAN arm stays under threshold with CIs ~±2pp;
 the hybrid stays above. The crown's headline intrusion number is now
 2.5% ± 2.2 (95% binomial).
+
+C2-35 completed: slide8disj battery CLEAN (worst +0.17, intr 5.5%) —
+trivially, as predicted: disjoint windows neither read out nor destroy;
+the collapse is pure non-learning at the seams, not damage.
