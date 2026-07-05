@@ -793,3 +793,14 @@ at wrap). ft4b (offload_adam full-FT 4B): 2.3 s/item — CHEAPER per item
 than the 4B LoRA arms; paging overhead amortized to noise by
 grad_accum=8 → the sliding-window Adam prefetch is UNNECESSARY
 (empirical gate passed without building it); ETA ~07:00.
+
+C2-29 extension — ceiling grid across scale (v4 task mix, full corpus):
+0.6B 0.650 / 1.7B 0.666 / 4B 0.524 (8B/14B pending). The prediction
+"the gap closes with scale" is WRONG in 0.6-4B: even 4B-with-passage
+reaches only 0.52 while its trained student recites 0.013. Reading:
+consolidation is not internalized copying — it SOLVES a behavioral task
+(locate-and-continue, recite-inside-dialogue) that in-context prompting
+cannot at these scales. Caveat recorded: the ceiling measures BEHAVIOR
+(format compliance included — instruct models chat instead of reciting
+in maieutic frames); full-copy items at 0.000 show pure format noise is
+not dominant. ch8 prose ceiling: 0.565 (same story on Quijote).
