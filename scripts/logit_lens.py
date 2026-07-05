@@ -35,10 +35,10 @@ def build_pairs(cfg, tok):
 
 def profile(model_src, cfg, tok, pairs, limit):
     if (Path(model_src) / "adapter_config.json").exists():
-        from peft import PeftModel
+        from evaluate import _load_peft_checkpoint
 
         base = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
-        model = PeftModel.from_pretrained(base, model_src).merge_and_unload()
+        model = _load_peft_checkpoint(base, Path(model_src), cfg.model.name)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
     model.to(cfg.model.device).eval()
