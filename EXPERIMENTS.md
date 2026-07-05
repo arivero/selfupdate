@@ -804,3 +804,18 @@ cannot at these scales. Caveat recorded: the ceiling measures BEHAVIOR
 (format compliance included — instruct models chat instead of reciting
 in maieutic frames); full-copy items at 0.000 show pure format noise is
 not dominant. ch8 prose ceiling: 0.565 (same story on Quijote).
+
+### RECLASSIFICATION (owner standard, 2026-07-05 ~04:30): readout source column
+Every arm trained before this timestamp used a GOLD-CE readout (task
+supervision) — under the refined standard these are BASELINES, not the
+method, however clean their batteries. This includes slide8, slide4,
+slide2, tailpure, final_k8, and all wave-K/M/N arms. The method's
+readout is teacher_kl (teacher's context-conditioned logits; zero gold
+in any gradient); its first arm lw_r_slide8kl is queued and the C2-26
+table acquires a "readout source" column at wrap. Findings that are
+UNAFFECTED (within-family comparisons or gold-free arms): the mimicry
+law C2-22 (gold held constant across its contrast), the connectivity
+trend, all storage results (strict/tc arms have no CE), lensonly and
+the ceiling instruments. The headline "clean, name-faithful method"
+is CONDITIONAL on slide8kl matching slide8pure. Default flipped in
+config; 'gold' remains in code as a labeled baseline control only.
