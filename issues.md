@@ -132,3 +132,13 @@ change. The remaining 131 ms is kernel-launch-bound (real matmul work
    per-item tensors in one file.
 DO NOT apply mid-campaign (timing regime must stay comparable across
 matched arms); apply as C3's first engineering block.
+
+## Missing instrument: per-layer residuals AT CHECKPOINTS (2026-07-05)
+Training-time per-layer losses are logged (metrics.jsonl per_layer) and
+now plotted per run (scripts/layer_loss_plots.py -> eval/layer_losses.png).
+NOT logged: eval-time per-layer hidden residuals of a CHECKPOINT against
+its teacher (train-loss curves conflate optimization state with storage
+quality). C3: add a --layer-residuals mode to evaluate.py (one teacher
+pass + one student pass, per-layer vocab_mse/nmse on the aligned span)
+and store alongside recite.json. Cheap (2 forwards/item), pairs with
+weight_deltas.csv to give storage QUALITY next to storage LOCATION.

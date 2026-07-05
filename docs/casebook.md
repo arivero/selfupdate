@@ -10,6 +10,8 @@
 
 **Stats.** train 136 min; peak VRAM 10.4 GB alloc / 10.6 reserved; 18960 items / 40 epochs; most-altered layers: L20 (0.0310), L19 (0.0283), L17 (0.0279); gradient hidden-share 84.4%.
 
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_r_slide8pure_0p6b_rag/eval/layer_losses.png`.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -62,6 +64,8 @@ MODEL:   una voz que le hablaba. Ellos se miraron y no se miraron. La voz que ha
 **Outcome.** Clean at champion recall on the poem (0.007) with the prose co-resident learning at its own budget-limited level; intrusion diluted below threshold (10%, 2.5% at seed 43) - the dilution law's flagship. Failure mode: none on the poem side; ch1 side limited only by items.
 
 **Stats.** train 48 min; peak VRAM 10.4 GB alloc; 20520 items / 40 epochs; most-altered layers: L17 (0.0423), L20 (0.0415), L21 (0.0411).
+
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_m_combined_0p6b_rag/eval/layer_losses.png`.
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -120,6 +124,8 @@ MODEL:   su hermano, y el que no lo había visto. El que no lo había visto, la 
 **Outcome.** The gentle channel: near-zero capability damage (worst category +0.18, benchmarks +0.5) at recall 0.037. Failure modes: intrusion is seed-noisy (5% to 17.5%); and its PURE-readout twin collapses because a trace-conditioned teacher is not a sharp reader (premise condition, C2-32).
 
 **Stats.** train 38 min; peak VRAM 10.6 GB alloc; 13320 items / 40 epochs; most-altered layers: L22 (0.0283), L21 (0.0282), L28 (0.0281).
+
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_n_thinksel_0p6b_rag/eval/layer_losses.png`.
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -181,6 +187,8 @@ MODEL:   la muerte, y las mujeres hablaban de la muerte, y los niños hablaban d
 
 **Stats.** train 33 min; peak VRAM 10.2 GB alloc; 18960 items / 40 epochs; most-altered layers: L17 (0.0406), L21 (0.0400), L20 (0.0398); gradient hidden-share 49.5%.
 
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_k_final_k8_0p6b_rag/eval/layer_losses.png`.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -238,6 +246,8 @@ MODEL:   su historia. La parda de la puerta de su casa se abrió con un ronco su
 
 **Stats.** train 66 min; peak VRAM 10.3 GB alloc / 10.5 reserved; 18960 items / 40 epochs; most-altered layers: L17 (0.0412), L20 (0.0398), L19 (0.0384); gradient hidden-share 74.3%.
 
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_r_tailpure_0p6b_rag/eval/layer_losses.png`.
+
 **Best case** (`full-000`, CER 0.000):
 
 ```
@@ -291,6 +301,8 @@ MODEL:   no tiene que ser suya, y que la gente sepan en la tierra, y que el que 
 **Outcome.** Recites acceptably (0.058) while being the project's worst intrusion machine (57.5%) with poetry damage +3.22 nats: sharpening the metric toward output tokens amplifies precisely the completion groove. The loss-safety law's founding specimen.
 
 **Stats.** train 88 min; peak VRAM 9.1 GB alloc; 13320 items / 40 epochs; most-altered layers: L22 (0.0389), L19 (0.0369), L21 (0.0353); gradient hidden-share 56.9%.
+
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_o_fisher_0p6b_rag/eval/layer_losses.png`.
 
 **Best case** (`full-000`, CER 0.000):
 
@@ -353,6 +365,8 @@ una
 
 **Stats.** train 128 min; peak VRAM 8.4 GB alloc / 8.6 reserved; 18960 items / 40 epochs; most-altered layers: L6 (0.0531), L2 (0.0514), L12 (0.0511); gradient hidden-share 0.0%.
 
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_r_lensonly_0p6b_rag/eval/layer_losses.png`.
+
 **Best case** (`sect-035-1`, CER 0.000):
 
 ```
@@ -380,6 +394,8 @@ se encontrójiles en silencio.
 **Outcome.** Writes storage IDENTICAL to the crown (weight-delta profiles match to the 4th decimal) and converges the readout to the teacher's label agreement exactly (97.3%) - then free-running compounds the missing 3% into CER 0.801. The last-3% law: verbatim recall lives in information the teacher's distribution does not contain.
 
 **Stats.** train 139 min; peak VRAM 11.0 GB alloc / 11.3 reserved; 18960 items / 40 epochs; most-altered layers: L20 (0.0311), L19 (0.0284), L17 (0.0279).
+
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_r_slide8kl_0p6b_rag/eval/layer_losses.png`.
 
 **Best case** (`sect-001`, CER 0.000):
 
@@ -420,6 +436,8 @@ MODEL:   de los pueblos de la tierra se vio en peligro. La ciudad de San José, 
 
 **Stats.** train 45 min; peak VRAM 8.5 GB alloc / 8.7 reserved; 18960 items / 40 epochs; most-altered layers: L25 (0.0926), L22 (0.0735), L26 (0.0695).
 
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/lw_s_tcmodern_0p6b_rag/eval/layer_losses.png`.
+
 **Best case** (`cont-272`, CER 0.560):
 
 ```
@@ -450,6 +468,8 @@ y el rojo, que ha lab
 **Outcome.** Clean at cer_flat 0.084; seed-43 replication tripped intrusion (17.5%) - the frontier is fuzzy at n=40 prompts. The rung that proved anchors generalize when diversified.
 
 **Stats.** train 38 min; peak VRAM 10.4 GB alloc; 8360 items / 40 epochs; most-altered layers: L21 (0.0297), L23 (0.0272), L26 (0.0272).
+
+**Layer dynamics.** All-layer training-loss curves (depth-colored, log scale): `runs/q_ch4_av2_0p6b_rag/eval/layer_losses.png`.
 
 **Best case** (`full-000`, CER 0.000):
 
