@@ -6,3 +6,4 @@ caches/
 runs/
 .venv
 outerclaude
+backups/
