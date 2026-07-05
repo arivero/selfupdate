@@ -846,3 +846,20 @@ original definition (stationary teacher-stream, fully parallel, no
 window, no CE — the drift entered at fe3201d for "like-for-like"
 comparability). Refusal guards now make both states unrepresentable:
 the expunged schedule name raises; teacher_censored + tail knobs raise.
+
+### Signal-attribution table (closing checkpoints; gradient-norm share of hidden losses, measured at convergence, 16 items)
+| arm | hidden share | note |
+|---|---|---|
+| strict (no behavioral term) | 100.0% | instrument sanity anchor |
+| **slide8 (doctrine-clean)** | **74.9%** | highest among performing arms |
+| tailpure (ablation) | 74.3% | mimicry-free window |
+| slide2 | 59.9% | |
+| fisher | 56.9% | |
+| slide4 | 55.4% | non-monotone in k; best recall of the sweep |
+| final_k8 (classical hybrid) | 49.5% | parity, not primacy |
+| lens_ce_deep (depth-biased) | 33.7% | 15.1% at trajectory start |
+| lensonly (aux-100% control) | 0.0% | instrument sanity anchor; fails both jobs |
+Reading: uniform k=8 windows don't just clean the battery — they shift
+the gradient composition toward the trajectories (74.9%), while the
+classical hybrid sits at parity. Caveat: convergence-time snapshot, not
+trajectory-average.
