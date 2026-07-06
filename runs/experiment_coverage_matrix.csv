@@ -2,7 +2,7 @@ experiment_type,Qwen3-0.6B,Qwen3-1.7B,Qwen3-4B,Qwen3-8B,Qwen3-14B,Mistral-7B,Qwe
 Teacher reference: epoch-zero native/no RAG,T1,T2,T2,T2,T1,T2,T2,T1,T1,T1,
 Teacher reference: epoch-zero RAG/context input,T1,T2,T2,T2,T1,T1,T1,T1,,T1,
 Artifact: full recitation eval,C5 L14 A7 X62 B9,C2 A1 X11 B2,C3 X7,C2 X3,C1 X1 B1,X1,,,,X1,
-Artifact: destruction eval,C5 L14 A7 X28 B9,C2 A1 X7 B2,C3 X6,C1 X2,C1 X1 B1,,,,,,
+Artifact: destruction eval,C5 L14 A7 X28 B9,C2 A1 X7 B2,C3 X6,C2 X2,C1 X1 B1,,,,,,
 Artifact: signal attribution,L8 A3 X5,,,,,,,,,,
 Artifact: qualitative chat review,L2 X1,X1 B1,X1,X1,B1,,,,,,
 Artifact: loss by layer,C5 L14 A7 X62 B9,C2 A1 X12 B1,C3 X7,C3 X3,C3 X1 B1,X1,,,,X1,
