@@ -24,11 +24,13 @@ from selfupdate.data.dataset import Batch
 from selfupdate.teacher.cache import TeacherCache, resolve_cache_dir
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import (
+    OnlineTeacherSource,
     _extend_pending_from_batch,
     _flush_train_log,
     _loader,
     _make_dataset,
     _move_opt_state,
+    _pp_device_map,
     _summed_batch,
     _summed_item,
     _validate_knob_schedule,
@@ -68,8 +70,6 @@ def bench(args) -> dict:
     _validate_knob_schedule(cfg)
     if cfg.train.schedule != "summed":
         raise ValueError("train_batch_bench currently benchmarks summed only")
-    if cfg.train.online_teacher:
-        raise ValueError("train_batch_bench needs a disk teacher cache, not online_teacher")
 
     if torch.device(args.device).type == "cuda":
         torch.cuda.reset_peak_memory_stats()
@@ -79,16 +79,37 @@ def bench(args) -> dict:
                           and cfg.train.schedule != "sequential")
     base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
     t_load0 = time.perf_counter()
-    model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
-    model.to(args.device).train()
+    pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
+    if pp_map is not None:
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=base_dtype, device_map=pp_map)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=base_dtype)
+        model.to(args.device)
     t_load1 = time.perf_counter()
+    peft_model = None
+    if cfg.train.lora.enabled:
+        from selfupdate.train.lora import attach_lora
+
+        peft_model = attach_lora(model, cfg.train.lora)
+        model = peft_model.get_base_model()
+    model.train()
 
     stack = BlockStack(model)
     stack.freeze_non_blocks()
-    cache_root, chash = resolve_cache_dir(cfg)
-    cache = TeacherCache(cache_root, expect_hash=chash)
+    if cfg.train.online_teacher and peft_model is None:
+        raise ValueError("train.online_teacher requires train.lora.enabled")
+    teacher = OnlineTeacherSource(stack, peft_model=peft_model) if cfg.train.online_teacher else None
+    cache = None
+    if teacher is None:
+        cache_root, chash = resolve_cache_dir(cfg)
+        cache = TeacherCache(cache_root, expect_hash=chash)
     n = stack.n_layers
-    ds = _make_dataset(cfg, cache, tok, list(range(1, n + 1)))
+    ds = _make_dataset(
+        cfg, cache, tok,
+        [] if teacher is not None else list(range(1, n + 1)),
+        with_teacher_ids=teacher is not None,
+    )
     loader = _loader(cfg, ds)
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
     opts = {
@@ -106,7 +127,8 @@ def bench(args) -> dict:
         _sync(args.device)
         t0 = time.perf_counter()
         if isinstance(items, Batch):
-            targets = items.hidden
+            targets = (teacher.aligned_targets_batch(items, args.device)
+                       if teacher is not None else items.hidden)
             layer_losses = _summed_batch(cfg, stack, loss_fn, items, targets, args.device)
             accum += len(items.example_ids)
             item_count = len(items.example_ids)
@@ -120,7 +142,9 @@ def bench(args) -> dict:
             max_seq = 0
             pad_tokens = 0
             for it in items:
-                targets = {L: it.hidden[L].to(args.device) for L in range(1, n + 1)}
+                targets = (teacher.aligned_targets(it, args.device)
+                           if teacher is not None
+                           else {L: it.hidden[L].to(args.device) for L in range(1, n + 1)})
                 layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, args.device)
                 pending_losses.append(layer_losses)
                 accum += 1

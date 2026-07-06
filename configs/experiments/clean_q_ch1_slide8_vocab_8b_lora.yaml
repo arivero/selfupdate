@@ -12,6 +12,8 @@ train:
   schedule: summed
   epochs: 320
   lr: 1.0e-04
+  batching: padded
+  micro_batch: 2
   hidden_loss: vocab_mse
   conn_window: 8
   conn_stride: 1
@@ -25,4 +27,3 @@ train:
   run_class: method
   lora:
     enabled: true
-

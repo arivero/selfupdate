@@ -12,10 +12,10 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import LoraConfig
-from selfupdate.data.dataset import DistillDataset
+from selfupdate.data.dataset import DistillDataset, collate_padded_items
 from selfupdate.teacher.cache import TeacherCache
 from selfupdate.train.blocks import BlockStack
-from selfupdate.train.layerwise import _online_targets
+from selfupdate.train.layerwise import OnlineTeacherSource, _online_targets
 from selfupdate.train.lora import attach_lora
 
 MODEL = "Qwen/Qwen3-0.6B"
@@ -60,6 +60,33 @@ def test_online_targets_match_cache():
         # around 2.5% max-relative at some middle layers; keep the guard tight
         # but not tied to one cache build.
         assert err <= max(3e-2 * scale, 0.05), f"h{L}: err {err} scale {scale}"
+
+
+def test_batched_online_targets_match_item_targets():
+    tok = AutoTokenizer.from_pretrained(MODEL)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32)
+    model.to("cuda")
+    peft_model = attach_lora(model, LoraConfig(enabled=True))
+    base = peft_model.get_base_model()
+    stack = BlockStack(base)
+    cache = TeacherCache(_cache_dir())
+
+    n = stack.n_layers
+    ds = DistillDataset(EXAMPLES, cache, tok, need_layers=[], with_teacher_ids=True)
+    items = [ds[1], ds[5]]
+    batch = collate_padded_items(items)
+    teacher = OnlineTeacherSource(stack, peft_model=peft_model)
+    batched = teacher.aligned_targets_batch(batch, "cuda")
+
+    for i, it in enumerate(items):
+        single = teacher.aligned_targets(it, "cuda")
+        for L in (1, n // 2, n):
+            got = batched[L][i, :it.A].float()
+            want = single[L].float()
+            err = (got - want).abs().max().item()
+            scale = want.abs().max().item()
+            assert err <= max(3e-3 * scale, 0.01), f"h{L}: err {err} scale {scale}"
+
 
 def test_gap_decoder_matches_generate_at_gap_zero():
     """The manual position-aware greedy decoder must reproduce HF generate
