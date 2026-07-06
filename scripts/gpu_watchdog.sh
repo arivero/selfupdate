@@ -8,7 +8,7 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 log() { echo "[$(date '+%F %T')] watchdog: $*"; }
 util() { nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | head -1; }
 free_mb() { nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1; }
-nproc_gpu() { pgrep -cf 'scripts/(train|evaluate|layer_swap|logit_lens|report|build_teacher_cache|teacher_recite|recite_long)[.]py'; }
+nproc_gpu() { pgrep -cf 'scripts/(train|evaluate|layer_swap|logit_lens|report|build_teacher_cache|teacher_ceiling|recite_long)[.]py'; }
 
 LOCK=runs/.watchdog_running
 rm -f "$LOCK"
