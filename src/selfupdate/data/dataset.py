@@ -129,6 +129,10 @@ def collate_padded_items(items: list[Item]) -> Batch:
     We intentionally pad on the right and keep ``attention_mask=None`` in the
     block runner: causal attention prevents valid positions from seeing future
     pad rows, so the valid hidden states are identical to the unpadded path.
+
+    Invariant: every mask marks a PREFIX of valid rows (``[:A]`` / ``[:rlen]``).
+    The trainer's per-example losses rely on this to slice by CPU-side lengths
+    instead of bool-mask indexing (which would sync the GPU via nonzero()).
     """
     if not items:
         raise ValueError("empty batch")

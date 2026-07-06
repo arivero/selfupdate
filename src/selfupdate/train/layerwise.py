@@ -119,27 +119,27 @@ def _gather_batch_rows(h: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
 
 
 def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.Tensor,
-                             mask: torch.Tensor, *, normed: bool) -> torch.Tensor:
-    mask = mask.to(student_h.device)
+                             lens: list[int], *, normed: bool) -> torch.Tensor:
+    """Right-padded batches keep every valid row in a PREFIX (collate
+    invariant), so slicing by the CPU-side length replaces bool-mask
+    indexing — whose implicit nonzero() is a host-device sync per example
+    per layer, the same stall class as .item() in the block walk."""
     teacher_h = teacher_h.to(student_h.device)
     losses = []
-    for i in range(student_h.shape[0]):
-        m = mask[i]
-        losses.append(loss_fn(student_h[i, m], teacher_h[i, m], normed=normed))
+    for i, k in enumerate(lens):
+        losses.append(loss_fn(student_h[i, :k], teacher_h[i, :k], normed=normed))
     return torch.stack(losses)
 
 
 def _teacher_kl_per_example(student_logits: torch.Tensor,
                             teacher_logits: torch.Tensor,
-                            mask: torch.Tensor) -> torch.Tensor:
-    mask = mask.to(student_logits.device)
+                            lens: list[int]) -> torch.Tensor:
     teacher_logits = teacher_logits.to(student_logits.device)
     losses = []
-    for i in range(student_logits.shape[0]):
-        m = mask[i]
+    for i, k in enumerate(lens):
         losses.append(F.kl_div(
-            F.log_softmax(student_logits[i, m].float(), dim=-1),
-            F.log_softmax(teacher_logits[i, m].float(), dim=-1),
+            F.log_softmax(student_logits[i, :k].float(), dim=-1),
+            F.log_softmax(teacher_logits[i, :k].float(), dim=-1),
             log_target=True,
             reduction="batchmean",
         ))
@@ -159,7 +159,7 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
         view = stack.loss_view(L, h_out)
         aligned = _gather_batch_rows(view, batch.aligned_index)
         losses = _hidden_loss_per_example(
-            loss_fn, aligned, target, batch.hidden_mask, normed=(L == stack.n_layers)
+            loss_fn, aligned, target, batch.A.tolist(), normed=(L == stack.n_layers)
         )
         total = losses.sum()
     total.backward()
@@ -175,7 +175,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
         normed = stack.final_norm(h_out)
         aligned = _gather_batch_rows(normed, batch.aligned_index)
         losses = _hidden_loss_per_example(
-            loss_fn, aligned, target, batch.hidden_mask, normed=True
+            loss_fn, aligned, target, batch.A.tolist(), normed=True
         )
         total = losses.sum()
     total.backward()
@@ -246,7 +246,7 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
             if L in targets:
                 aligned = _gather_batch_rows(stack.loss_view(L, h), batch.aligned_index)
                 losses.append(_hidden_loss_per_example(
-                    loss_fn, aligned, targets[L], batch.hidden_mask,
+                    loss_fn, aligned, targets[L], batch.A.tolist(),
                     normed=(L == n),
                 ))
         if losses:
@@ -267,7 +267,7 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                         teacher_h.to(device=logits.device, dtype=logits.dtype)
                     )
                 total = total + readout_w * _teacher_kl_per_example(
-                    logits, t_logits, batch.readout_mask,
+                    logits, t_logits, (batch.s0 + batch.A - batch.ans0).tolist(),
                 ).sum()
             else:
                 raise ValueError(
