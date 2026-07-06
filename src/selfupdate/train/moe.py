@@ -122,6 +122,40 @@ class _Gemma4MoE:
         router.forward = forward
 
 
+class _Qwen35MoE:
+    """qwen3_5_moe family: ``block.mlp`` is a SparseMoeBlock whose ``gate``
+    (TopKRouter) is called in plain Python; scores are softmax-then-
+    renormalized top-k probabilities. The shared expert is dense and always
+    on — routing intervention only concerns ``gate``/``experts``."""
+
+    def __init__(self, block):
+        self.gate = block.mlp.gate
+
+    @staticmethod
+    def match(block) -> bool:
+        mlp = getattr(block, "mlp", None)
+        return (mlp is not None and hasattr(mlp, "gate")
+                and hasattr(mlp, "experts") and hasattr(mlp.gate, "top_k"))
+
+    def install(self, ctrl: "MoEController", L: int) -> None:
+        gate = self.gate
+        orig_cls_forward = type(gate).forward
+
+        def forward(hidden_states):
+            logits, scores, nat_idx = orig_cls_forward(gate, hidden_states)
+            if ctrl.phase is None:
+                return logits, scores, nat_idx
+            idx = ctrl.on_router(L, logits, nat_idx)
+            if idx is not nat_idx:  # teacher-forced expert set
+                probs = F.softmax(logits, dtype=torch.float, dim=-1)
+                w = probs.gather(-1, idx)
+                w = (w / w.sum(dim=-1, keepdim=True)).to(logits.dtype)
+                return logits, w, idx
+            return logits, scores, nat_idx
+
+        gate.forward = forward
+
+
 class MoEController:
     """Owns the wrapped MoE layers of the STUDENT stack and the per-item
     teacher routing state. Phases:
@@ -146,6 +180,8 @@ class MoEController:
             block = stack.blocks[L - 1]
             if _GptOssMoE.match(block):
                 ad = _GptOssMoE(block)
+            elif _Qwen35MoE.match(block):
+                ad = _Qwen35MoE(block)
             elif _Gemma4MoE.match(block):
                 ad = _Gemma4MoE(block)
             else:

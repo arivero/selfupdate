@@ -56,6 +56,7 @@ from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
 from .losses import HiddenLoss
+from .moe import MoEController, pending_router_loss
 
 RUN_CLASSES = {
     "method", "teacher_reference", "ablation", "control",
@@ -97,7 +98,8 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
                        normed=(L == stack.n_layers))
-    loss.backward()
+    extra = pending_router_loss()
+    (loss if extra is None else loss + extra).backward()
     return loss.detach(), h_out.detach()
 
 
@@ -109,7 +111,8 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, kind, autocast=True):
         h_out = stack.run_block(n, h_in, pos_emb)
         normed = stack.final_norm(h_out)
         loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
-    loss.backward()
+    extra = pending_router_loss()
+    (loss if extra is None else loss + extra).backward()
     return loss.detach(), h_out.detach()
 
 
@@ -162,7 +165,8 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.hidden_mask, normed=(L == stack.n_layers)
         )
         total = losses.sum()
-    total.backward()
+    extra = pending_router_loss()
+    (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
 
 
@@ -178,7 +182,8 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.hidden_mask, normed=True
         )
         total = losses.sum()
-    total.backward()
+    extra = pending_router_loss()
+    (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
 
 
@@ -223,7 +228,8 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
                 raise ValueError(
                     f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
                 )
-    total.backward()
+    extra = pending_router_loss()
+    (total if extra is None else total + extra).backward()
     return [l.detach() for l in losses], h.detach()
 
 
@@ -273,8 +279,24 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                 raise ValueError(
                     f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
                 )
-    total.backward()
+    extra = pending_router_loss()
+    (total if extra is None else total + extra).backward()
     return [l.detach() for l in losses], h.detach()
+
+
+def _load_causal_lm(src, **kw):
+    """Load a decoder LM regardless of head registration. Multimodal
+    releases like Mistral-Medium-3.5 (mistral3) register ONLY as
+    image-text-to-text and are absent from the causal-LM auto-map, so
+    ``AutoModelForCausalLM`` raises; the ITT wrapper exposes the same
+    ``.model.language_model`` decoder stack BlockStack navigates. gemma4 and
+    qwen3_5_moe ARE in the causal map and take the first path unchanged."""
+    try:
+        return AutoModelForCausalLM.from_pretrained(src, **kw)
+    except (ValueError, KeyError):
+        from transformers import AutoModelForImageTextToText
+
+        return AutoModelForImageTextToText.from_pretrained(src, **kw)
 
 
 def _pp_device_map(cfg) -> dict:
@@ -329,6 +351,20 @@ def _validate_knob_schedule(cfg) -> None:
         "dense_or_black_box", "teacher_forced", "router_aligned",
     ):
         raise ValueError(f"unknown train.moe_mode {cfg.train.moe_mode!r}")
+    if cfg.train.moe_mode != "dense_or_black_box":
+        if sched != "summed":
+            bad.append("moe_mode (teacher_forced/router_aligned are "
+                       "implemented for the summed schedule only)")
+        if not cfg.train.online_teacher:
+            bad.append("moe_mode needs train.online_teacher (routing targets "
+                       "are per-step, captured adapters-off on the same "
+                       "wrapped blocks — disk cache stores no routing)")
+        if (cfg.train.moe_mode == "router_aligned"
+                and cfg.train.moe_router_weight <= 0):
+            bad.append("router_aligned requires explicit moe_router_weight > 0"
+                       " (no silent default)")
+    elif cfg.train.moe_router_weight != 0.0:
+        bad.append("moe_router_weight without moe_mode=router_aligned")
     if cfg.train.batching != "item":
         if sched != "summed":
             bad.append("batching (currently implemented for summed schedule only)")
@@ -392,13 +428,11 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
     auto_map = cfg.model.device_map == "auto"
     if pp_map is not None:
-        model = AutoModelForCausalLM.from_pretrained(
-            student_src, dtype=base_dtype, device_map=pp_map)
+        model = _load_causal_lm(student_src, dtype=base_dtype, device_map=pp_map)
     elif auto_map:
-        model = AutoModelForCausalLM.from_pretrained(
-            student_src, dtype=base_dtype, device_map="auto")
+        model = _load_causal_lm(student_src, dtype=base_dtype, device_map="auto")
     else:
-        model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
+        model = _load_causal_lm(student_src, dtype=base_dtype)
         model.to(device)
     peft_model = None
     if cfg.train.lora.enabled:
@@ -437,8 +471,13 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         cache_root, chash = resolve_cache_dir(cfg)
         cache = TeacherCache(cache_root, expect_hash=chash)
 
+    moe = None
+    if cfg.train.moe_mode != "dense_or_black_box":
+        moe = MoEController(stack, cfg.train.moe_mode,
+                            cfg.train.moe_router_weight)
+
     if cfg.train.schedule == "summed":
-        _train_summed(cfg, stack, cache, tok, log, teacher)
+        _train_summed(cfg, stack, cache, tok, log, teacher, moe)
     elif cfg.train.schedule == "teacher_censored":
         if teacher is None:
             raise ValueError(
@@ -767,6 +806,27 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     return layer_losses
 
 
+def _moe_row_maps(x, device):
+    """Flat student-row -> flat teacher-row maps for MoEController.set_maps:
+    row b*S+j of the student batch takes its routing target from teacher row
+    map[b*S+j] (censored-row alignment — the same map the schedules use for
+    hidden targets). mask marks real rows; padding rows carry clamped junk."""
+    if isinstance(x, Batch):
+        B, S = x.student_ids.shape
+        T = x.teacher_ids.shape[1]
+        rmap = torch.zeros(B * S, dtype=torch.long)
+        mask = torch.zeros(B * S, dtype=torch.bool)
+        for i in range(B):
+            t_priv = x.t_priv[i] if x.t_priv is not None else None
+            rows = censored_rows(int(x.s0[i]), int(x.t0[i]), int(x.A[i]),
+                                 t_priv, "cpu")
+            rmap[i * S: i * S + len(rows)] = rows + i * T
+            mask[i * S: i * S + len(rows)] = True
+        return rmap.to(device), mask.to(device)
+    rows = censored_rows(x.s0, x.t0, x.A, getattr(x, "t_priv", None), device)
+    return rows, torch.ones(len(rows), dtype=torch.bool, device=device)
+
+
 def _summed_item(cfg, stack, loss_fn, it, targets, device):
     """One item's pass on the student's own stream: block-local steps (or
     sliding conn_window-connected windows) below, plus an optional teacher-KL
@@ -939,7 +999,7 @@ def _move_opt_state(opt, device) -> None:
                     st[k] = v.to(tgt)
 
 
-def _train_summed(cfg, stack, cache, tok, log, teacher=None):
+def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
@@ -970,14 +1030,19 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
             if done:
                 break
             if isinstance(items, Batch):
-                targets = (teacher.aligned_targets_batch(items, device) if online
-                           else items.hidden)
+                with (moe.teacher_phase() if moe else contextlib.nullcontext()):
+                    targets = (teacher.aligned_targets_batch(items, device)
+                               if online else items.hidden)
                 if cfg.train.scramble_targets:
                     import random as _rnd
                     perm = list(range(1, n + 1))
                     _rnd.Random(cfg.train.seed).shuffle(perm)
                     targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
-                layer_losses = _summed_batch(cfg, stack, loss_fn, items, targets, device)
+                if moe is not None:
+                    moe.set_maps(*_moe_row_maps(items, device))
+                with (moe.student_phase() if moe else contextlib.nullcontext()):
+                    layer_losses = _summed_batch(cfg, stack, loss_fn, items,
+                                                 targets, device)
                 accum += len(items.example_ids)
                 _extend_pending_from_batch(pending_losses, layer_losses)
                 if accum >= next_step:
@@ -985,7 +1050,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                                      accum=accum, pending=pending_losses,
                                      n_layers=n,
                                      batch_size=len(items.example_ids),
-                                     batching=cfg.train.batching)
+                                     batching=cfg.train.batching,
+                                     **({"router_overlap": moe.overlap_flush()}
+                                        if moe else {}))
                     if anchor is not None:
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
@@ -1006,21 +1073,28 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
             for it in items:
                 if done:
                     break
-                targets = (teacher.aligned_targets(it, device) if online
-                           else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
+                with (moe.teacher_phase() if moe else contextlib.nullcontext()):
+                    targets = (teacher.aligned_targets(it, device) if online
+                               else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
                 if cfg.train.scramble_targets:
                     # audit control: layer-permuted targets (see config)
                     import random as _rnd
                     perm = list(range(1, n + 1))
                     _rnd.Random(cfg.train.seed).shuffle(perm)
                     targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
-                layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, device)
+                if moe is not None:
+                    moe.set_maps(*_moe_row_maps(it, device))
+                with (moe.student_phase() if moe else contextlib.nullcontext()):
+                    layer_losses = _summed_item(cfg, stack, loss_fn, it,
+                                                targets, device)
                 accum += 1
                 pending_losses.append(layer_losses)
                 if accum >= next_step:
                     _flush_train_log(log, epoch=epoch, step=step,
                                      accum=accum, pending=pending_losses,
-                                     n_layers=n)
+                                     n_layers=n,
+                                     **({"router_overlap": moe.overlap_flush()}
+                                        if moe else {}))
                     if anchor is not None:
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
@@ -1039,7 +1113,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                         done = True
                         break
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
-                         pending=pending_losses, n_layers=n, partial=True)
+                         pending=pending_losses, n_layers=n, partial=True,
+                         **({"router_overlap": moe.overlap_flush()}
+                            if moe else {}))
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8,
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))

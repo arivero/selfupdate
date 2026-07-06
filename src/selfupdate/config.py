@@ -115,6 +115,11 @@ class TrainConfig:
     # routing and report top-k overlap. The latter two are MoE-specific method
     # innovations for sparse-expert families.
     moe_mode: str = "dense_or_black_box"  # dense_or_black_box | teacher_forced | router_aligned
+    # router_aligned only: UNIFORM per-MoE-layer weight of the
+    # KL(teacher routing || student routing) regularizer (depth-uniform by
+    # construction — the naming contract applies to routers too). No silent
+    # default: router_aligned arms must pin this > 0 explicitly.
+    moe_router_weight: float = 0.0
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
