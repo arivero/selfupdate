@@ -158,7 +158,6 @@ class TrainConfig:
     # top readout window. Needs an online teacher for base logits.
     anchor_kl_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"
-    grad_checkpointing: bool = True
     # sequential schedule
     plateau_patience: int = 3
     stage_max_steps: int = 500
