@@ -4,6 +4,13 @@ The copying ceiling for every student arm: prompt = shared_prefix +
 privileged + shared_mid, greedy, full recite metrics. This is the unmodified
 model with only the privileged RAG input added.
 
+Thin entrypoint over ``selfupdate.eval.recite.recite_eval`` — the same
+engine evaluate.py uses (batched greedy generation, OOM backoff, threaded
+CER scoring). The teacher-specific parts are only: the UNCENSORED record
+view (the teacher always sees the privileged content), deterministic
+``--num-shards`` interleaving for multi-GPU reference runs, and the
+teacher-reference JSON envelope.
+
 Usage:
     CUDA_VISIBLE_DEVICES=0 python scripts/teacher_ceiling.py \
         --experiment configs/experiments/lw_r_slide8_0p6b_rag.yaml \
@@ -14,142 +21,27 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import random
 import sys
-from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import jiwer
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from selfupdate.chatfmt import adapt_records, stop_token_id
+from selfupdate.chatfmt import adapt_records
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
-from selfupdate.eval.recite import normalize_verse, strip_think, student_prompt
-
-
-def _is_cuda_oom(exc: BaseException) -> bool:
-    msg = str(exc).lower()
-    return isinstance(exc, torch.cuda.OutOfMemoryError) or (
-        "cuda" in msg and "out of memory" in msg
-    )
+from selfupdate.eval.recite import recite_eval
 
 
 def teacher_view(record: dict) -> dict:
+    """The teacher is never censored: the RAG block goes into its prompt
+    (student_stub := privileged), and thinking_selective records expose ALL
+    think runs, kept and censored alike."""
     if record.get("interleaved"):
-        # thinking_selective: teacher sees ALL runs (kept + censored)
         return {**record, "interleaved": [[t, False] for t, _ in record["interleaved"]]}
     return {**record, "student_stub": record.get("privileged", ""), "interleaved": None}
-
-
-def score_one(record: dict, text: str) -> dict:
-    ref = normalize_verse(record["answer_text"])
-    text = normalize_verse(strip_think(text))
-    cer = jiwer.cer(ref, text) if text else 1.0
-    cer_flat = (jiwer.cer(ref.replace("\n", " "), text.replace("\n", " "))
-                if text else 1.0)
-    ref_lines = ref.split("\n")
-    got_lines = text.split("\n")
-    exact = sum(1 for g, h in zip(ref_lines, got_lines) if g == h)
-    prefix = 0
-    for g, h in zip(ref_lines, got_lines):
-        if g != h:
-            break
-        prefix += 1
-    return {
-        "example_id": record["example_id"],
-        "cer": cer,
-        "cer_flat": cer_flat,
-        "line_exact": exact / len(ref_lines),
-        "prefix_lines": prefix,
-        "n_reference_lines": len(ref_lines),
-        "text": text,
-    }
-
-
-@torch.no_grad()
-def batched_ceiling(model, tok, records: list[dict], batch_size: int,
-                    max_extra_tokens: int, bucket_by_length: bool = False,
-                    score_workers: int | None = None,
-                    shuffle_seed: int | None = None) -> dict:
-    was_padding = tok.padding_side
-    tok.padding_side = "left"
-    if tok.pad_token_id is None:
-        tok.pad_token = tok.eos_token
-    eos = stop_token_id(tok)
-
-    work = []
-    for i, r in enumerate(records):
-        prompt = student_prompt(r)
-        ref_len = len(tok.encode(r["answer_text"], add_special_tokens=False))
-        work.append((ref_len, i, r, prompt))
-    if bucket_by_length:
-        # Optional throughput mode: keeps max_new_tokens tighter inside each
-        # batch. Default evaluation preserves corpus order.
-        work.sort(key=lambda x: x[0])
-    elif shuffle_seed is not None:
-        random.Random(shuffle_seed).shuffle(work)
-    results: list[dict | None] = [None] * len(records)
-    workers = score_workers if score_workers is not None else min(32, os.cpu_count() or 1)
-    executor = ThreadPoolExecutor(max_workers=max(1, workers))
-    futures: list[tuple[int, Future[dict], int]] = []
-    try:
-        try:
-            start = 0
-            cur_batch_size = batch_size
-            while start < len(work):
-                batch = work[start: start + cur_batch_size]
-                print(f"teacher ceiling batch {start + len(batch)}/{len(work)} "
-                      f"(batch_size={len(batch)}, requested={batch_size})", flush=True)
-                prompts = [x[3] for x in batch]
-                max_new = max(x[0] for x in batch) + max_extra_tokens
-                enc = tok(prompts, return_tensors="pt", padding=True,
-                          add_special_tokens=False)
-                enc = {k: v.to(model.device) for k, v in enc.items()}
-                try:
-                    out = model.generate(
-                        **enc,
-                        max_new_tokens=max_new,
-                        do_sample=False,
-                        eos_token_id=eos,
-                        pad_token_id=tok.pad_token_id,
-                    )
-                except RuntimeError as e:
-                    if not _is_cuda_oom(e) or cur_batch_size <= 1:
-                        raise
-                    cur_batch_size = max(1, cur_batch_size // 2)
-                    torch.cuda.empty_cache()
-                    print(f"teacher ceiling OOM; retrying with batch_size={cur_batch_size}",
-                          flush=True)
-                    continue
-                gen_start = enc["input_ids"].shape[1]
-                for row, (_, idx, rec, _prompt) in enumerate(batch):
-                    text = tok.decode(out[row, gen_start:], skip_special_tokens=True)
-                    futures.append((idx, executor.submit(score_one, rec, text), len(batch)))
-                start += len(batch)
-            for idx, fut, used_batch_size in futures:
-                scored = fut.result()
-                scored["generation_batch_size"] = used_batch_size
-                scored["requested_batch_size"] = batch_size
-                results[idx] = scored
-        finally:
-            executor.shutdown(wait=True)
-    finally:
-        tok.padding_side = was_padding
-    final = [r for r in results if r is not None]
-    mean = lambda k: sum(r[k] for r in final) / len(final)
-    return {
-        "cer": mean("cer"),
-        "cer_flat": mean("cer_flat"),
-        "line_exact": mean("line_exact"),
-        "prefix_lines": mean("prefix_lines"),
-        "n": len(final),
-        "per_example": final,
-    }
 
 
 def main() -> int:
@@ -181,8 +73,12 @@ def main() -> int:
         model.to(cfg.model.device)
     model.eval()
 
+    # adapt once here (idempotent — recite_eval's internal call is then the
+    # identity fast path), so teacher_view maps the re-rendered segments
     raw = adapt_records(load_jsonl(cfg.data.examples_path), tok)
     records = [teacher_view(r) for r in raw]
+    # even subsampling across the corpus; recite_eval's own limit takes the
+    # head, which would bias references toward the corpus opening
     if args.limit and args.limit < len(records):
         step = max(1, len(records) // args.limit)
         records = records[::step][: args.limit]
@@ -193,10 +89,13 @@ def main() -> int:
         # shard 0 gets examples 0,4,8...; shard 1 gets 1,5,9..., etc.
         # This avoids randomizing or length-sorting the default evaluation.
         records = records[args.shard_index::args.num_shards]
-    r = batched_ceiling(model, tok, records, args.batch_size, args.max_extra_tokens,
-                        bucket_by_length=args.bucket_by_length,
-                        score_workers=args.score_workers,
-                        shuffle_seed=args.shuffle_seed)
+
+    r = recite_eval(model, tok, records,
+                    batch_size=args.batch_size,
+                    max_extra_tokens=args.max_extra_tokens,
+                    bucket_by_length=args.bucket_by_length,
+                    score_workers=args.score_workers,
+                    shuffle_seed=args.shuffle_seed)
     model_short = cfg.model.name.split("/")[-1]
     data_stem = Path(cfg.data.examples_path).stem
     r["teacher_reference_kind"] = "teacher_epoch0_rag_context"
