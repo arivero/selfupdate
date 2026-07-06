@@ -89,7 +89,7 @@ class DistillDataset(Dataset):
         # (~needed cache size, fp16), not VRAM. Consumers treat Items as
         # read-only — collate and .to(device) both copy.
         self._item_cache: dict[int, Item] = {}
-        self._need_layers = need_layers or []
+        self.need_layers = need_layers  # via setter: validates cache presence
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
         masker = ContextMasker(tokenizer)
@@ -109,9 +109,14 @@ class DistillDataset(Dataset):
 
     @need_layers.setter
     def need_layers(self, layers) -> None:
+        layers = layers or []
+        if layers and self.cache is None:
+            raise ValueError(
+                "need_layers requires a teacher cache; online-teacher "
+                "datasets must pass need_layers=[] (targets come per step)")
         # the sequential schedule swaps layers per stage: drop memoized
         # items so stale hidden targets are neither served nor retained
-        self._need_layers = layers or []
+        self._need_layers = layers
         self._item_cache.clear()
 
     def __len__(self) -> int:
