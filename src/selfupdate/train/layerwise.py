@@ -534,10 +534,16 @@ def _summarize_pending_losses(pending: list[list[torch.Tensor]], n_layers: int) 
             t = loss.detach().float() if torch.is_tensor(loss) else torch.tensor(float(loss))
             sums[i] = t if sums[i] is None else sums[i] + t
             counts[i] += 1
-    per_layer = [
-        _loss_float(sums[i] / counts[i]) if counts[i] else float("nan")
+    # single host transfer per flush: gather per-layer means onto one device
+    # (async d2d under pipeline parallel) and .cpu() the stack once, instead
+    # of one GPU->CPU round-trip per layer
+    dev = next((s.device for s in sums if s is not None), torch.device("cpu"))
+    means = [
+        (sums[i] / counts[i]).to(dev, non_blocking=True) if counts[i]
+        else torch.full((), float("nan"), device=dev)
         for i in range(n_layers)
     ]
+    per_layer = [float(v) for v in torch.stack(means).cpu()]
     valid = [v for v in per_layer if v == v]
     mean = sum(valid) / len(valid) if valid else float("nan")
     return mean, per_layer
