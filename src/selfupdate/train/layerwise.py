@@ -598,23 +598,6 @@ class OnlineTeacherSource:
         return states
 
     @torch.no_grad()
-    def full_states_batch(self, batch: Batch, device) -> list[torch.Tensor]:
-        if batch.teacher_ids is None:
-            raise ValueError("online teacher batch needs teacher_ids")
-        t_ids = batch.teacher_ids.to(device)
-        t_pos = torch.arange(t_ids.shape[1], device=device)[None].expand(
-            t_ids.shape[0], -1
-        )
-        with self._ctx(), torch.autocast(device, dtype=torch.bfloat16):
-            h = self.stack.embed(t_ids)
-            pos_emb = self.stack.rope(h, t_pos)
-            states = [h]
-            for L in range(1, self.stack.n_layers + 1):
-                h = self.stack.run_block(L, h, pos_emb)
-                states.append(h)
-        return states
-
-    @torch.no_grad()
     def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
         states = self.full_states(it, device)
         return {
@@ -624,18 +607,31 @@ class OnlineTeacherSource:
 
     @torch.no_grad()
     def aligned_targets_batch(self, batch: Batch, device) -> dict[int, torch.Tensor]:
+        """Streamed: each layer's aligned rows are gathered as the block
+        runs, so a single full-sequence state is resident at a time instead
+        of all n+1 — the batched teacher costs one layer of VRAM, not a
+        stack. (full_states stays list-shaped for teacher_censored/mixed,
+        which genuinely consume every layer's full sequence.)"""
+        if batch.teacher_ids is None:
+            raise ValueError("online teacher batch needs teacher_ids")
         if batch.t0 is None:
             raise ValueError("online teacher batch needs t0")
-        states = self.full_states_batch(batch, device)
+        t_ids = batch.teacher_ids.to(device)
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None].expand(
+            t_ids.shape[0], -1
+        )
         B, Amax = batch.hidden_mask.shape
         offsets = torch.arange(Amax, device=device)[None]
         t0 = batch.t0.to(device)[:, None]
-        idx = (t0 + offsets).clamp_max(states[0].shape[1] - 1)
-        out: dict[int, torch.Tensor] = {}
         row = torch.arange(B, device=device)[:, None]
-        for L in range(1, self.stack.n_layers + 1):
-            view = self.stack.loss_view(L, states[L])
-            out[L] = view[row, idx].detach()
+        out: dict[int, torch.Tensor] = {}
+        with self._ctx(), torch.autocast(device, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            idx = (t0 + offsets).clamp_max(h.shape[1] - 1)
+            for L in range(1, self.stack.n_layers + 1):
+                h = self.stack.run_block(L, h, pos_emb)
+                out[L] = self.stack.loss_view(L, h)[row, idx].detach()
         return out
 
 
