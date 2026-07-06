@@ -95,3 +95,27 @@ def test_adapt_rejects_tool_records_on_foreign_template(foreign_tok, records):
     bad["privileged"] = "<|im_start|>user\n<tool_response>\nx\n</tool_response><|im_end|>\n"
     with pytest.raises(ValueError, match="rag_tool"):
         adapt_records([bad], foreign_tok)
+
+
+def test_chatml_special_token_fallback_without_template():
+    class FakeChatMLTokenizer:
+        name_or_path = "test/chatml-no-template"
+        chat_template = None
+        bos_token = "<s>"
+        eos_token_id = 2
+        unk_token_id = 0
+
+        def convert_tokens_to_ids(self, token):
+            return {"<|im_start|>": 101, "<|im_end|>": 102}.get(token, self.unk_token_id)
+
+        def encode(self, text, add_special_tokens=False):
+            if text == "<|im_end|>":
+                return [102]
+            return [1] * len(text)
+
+    tok = FakeChatMLTokenizer()
+    p = template_pieces(tok, system="sys")
+    assert p.pre == "<s><|im_start|>system\nsys<|im_end|>\n<|im_start|>user\n"
+    assert p.mid == "<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    assert p.answer_close == "<|im_end|>"
+    assert stop_token_id(tok) == 102

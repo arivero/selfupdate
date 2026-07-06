@@ -346,26 +346,38 @@ def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
 
 
 def _pp_device_map(cfg) -> dict:
-    """Two-card pipeline map: embedding + blocks 1..split on cuda:0; the
-    rest, final norm and lm_head on cuda:1 — the top readout window (and with
-    it every cross-block gradient) lives whole on the second card."""
-    if torch.cuda.device_count() < 2:
-        raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
+    """Pipeline map: embedding on cuda:0; decoder blocks partitioned by
+    ``pipeline_split`` (2 GPUs) or ``pipeline_splits`` (N GPUs). The final
+    norm/head live on the last card for untied models, so the top readout
+    window stays colocated with logits."""
     from transformers import AutoConfig
 
     mc = AutoConfig.from_pretrained(cfg.model.name)
     text_cfg = getattr(mc, "text_config", mc)
     n = text_cfg.num_hidden_layers
-    split = cfg.model.pipeline_split
-    if not 0 < split < n:
-        raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
+    splits = list(cfg.model.pipeline_splits or [])
+    if splits:
+        if torch.cuda.device_count() < len(splits) + 1:
+            raise ValueError(
+                f"pipeline_splits {splits} needs {len(splits) + 1} visible GPUs"
+            )
+        if splits != sorted(splits) or splits[0] <= 0 or splits[-1] >= n:
+            raise ValueError(f"pipeline_splits {splits} outside 1..{n - 1}")
+    else:
+        if torch.cuda.device_count() < 2:
+            raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
+        split = cfg.model.pipeline_split
+        if not 0 < split < n:
+            raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
+        splits = [split]
     # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
     # live on two cards, so the whole vocabulary stack stays on cuda:0 and
     # readout-window loss calls hop back (an [A,H] transfer per call). Untied
     # models put norm+head on cuda:1 with the readout window.
     tied = getattr(mc, "tie_word_embeddings",
                    getattr(text_cfg, "tie_word_embeddings", False))
-    vocab_dev = 0 if tied else 1
+    last_dev = len(splits)
+    vocab_dev = 0 if tied else last_dev
     prefix = "model.language_model" if getattr(mc, "model_type", "") == "gemma4" else "model"
     dm = {f"{prefix}.embed_tokens": 0, f"{prefix}.rotary_emb": 0,
           f"{prefix}.norm": vocab_dev, "lm_head": vocab_dev}
@@ -373,8 +385,15 @@ def _pp_device_map(cfg) -> dict:
         dm["model.vision_tower"] = 0
         dm["model.embed_vision"] = 0
     for i in range(n):
-        dm[f"{prefix}.layers.{i}"] = 0 if i < split else 1
+        dev = 0
+        while dev < len(splits) and i >= splits[dev]:
+            dev += 1
+        dm[f"{prefix}.layers.{i}"] = dev
     return dm
+
+
+def _uses_pipeline_map(cfg) -> bool:
+    return cfg.model.pipeline_split > 0 or bool(cfg.model.pipeline_splits)
 
 
 def _validate_knob_schedule(cfg) -> None:
@@ -457,7 +476,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     # (cache identity / frozen copy / adapters-off) stays cfg.model.name
     student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
                    if cfg.train.init_from else cfg.model.name)
-    pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
+    pp_map = _pp_device_map(cfg) if _uses_pipeline_map(cfg) else None
     if pp_map is not None:
         model = AutoModelForCausalLM.from_pretrained(
             student_src, dtype=base_dtype, device_map=pp_map)

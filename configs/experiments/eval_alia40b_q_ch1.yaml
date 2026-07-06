@@ -1,0 +1,9 @@
+# eval-only: Quijote ch1 corpus recite for ALIA40B checkpoints
+run_name: eval_alia40b_q_ch1
+model:
+  name: BSC-LT/ALIA-40b-fc-2606
+data:
+  poem_path: data/quijote/raw_ch1.txt
+  examples_path: data/quijote/examples_ch1.jsonl
+  corpus_style: prose_quijote
+  maieutic: true

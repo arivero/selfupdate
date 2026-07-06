@@ -61,6 +61,30 @@ class TemplatePieces:
 _pieces_cache: dict[tuple[str, str], TemplatePieces] = {}
 
 
+def _chatml_fallback_pieces(tokenizer, system: str) -> TemplatePieces | None:
+    """Fallback for ChatML tokenizers that ship the special tokens but no
+    template metadata. Match ALIA-40b-fc-2606's non-thinking rendering:
+    BOS, ChatML turns, and an empty ``<think></think>`` block at assistant
+    open. Template-backed models remain governed by their own metadata."""
+    if getattr(tokenizer, "chat_template", None):
+        return None
+    im_start = tokenizer.convert_tokens_to_ids("<|im_start|>")
+    im_end = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    unk = getattr(tokenizer, "unk_token_id", None)
+    if (
+        im_start is None or im_end is None
+        or im_start < 0 or im_end < 0
+        or im_start == unk or im_end == unk
+    ):
+        return None
+    bos = getattr(tokenizer, "bos_token", None) or ""
+    return TemplatePieces(
+        pre=f"{bos}<|im_start|>system\n{system.strip()}<|im_end|>\n<|im_start|>user\n",
+        mid="<|im_end|>\n<|im_start|>assistant\n<think></think>",
+        answer_close="<|im_end|>",
+    )
+
+
 def _render(tokenizer, msgs, **kw) -> str:
     return tokenizer.apply_chat_template(
         msgs, tokenize=False, enable_thinking=False, **kw
@@ -72,32 +96,34 @@ def template_pieces(tokenizer, system: str = DEFAULT_SYSTEM) -> TemplatePieces:
     if key in _pieces_cache:
         return _pieces_cache[key]
 
-    gen = _render(
-        tokenizer,
-        [{"role": "system", "content": system},
-         {"role": "user", "content": _SENTINEL}],
-        add_generation_prompt=True,
-    )
-    assert gen.count(_SENTINEL) == 1, (
-        "chat template duplicated/transformed the user content; cannot derive "
-        "segment pieces for this tokenizer"
-    )
-    pre, mid = gen.split(_SENTINEL)
+    pieces = _chatml_fallback_pieces(tokenizer, system)
+    if pieces is None:
+        gen = _render(
+            tokenizer,
+            [{"role": "system", "content": system},
+             {"role": "user", "content": _SENTINEL}],
+            add_generation_prompt=True,
+        )
+        assert gen.count(_SENTINEL) == 1, (
+            "chat template duplicated/transformed the user content; cannot derive "
+            "segment pieces for this tokenizer"
+        )
+        pre, mid = gen.split(_SENTINEL)
 
-    closed = _render(
-        tokenizer,
-        [{"role": "system", "content": system},
-         {"role": "user", "content": "q"},
-         {"role": "assistant", "content": _SENTINEL}],
-        add_generation_prompt=False,
-    )
-    assert closed.count(_SENTINEL) == 1, (
-        "chat template duplicated/transformed the assistant content"
-    )
-    # everything after the answer, minus cosmetic trailing newlines
-    answer_close = closed.split(_SENTINEL)[1].rstrip("\n")
+        closed = _render(
+            tokenizer,
+            [{"role": "system", "content": system},
+             {"role": "user", "content": "q"},
+             {"role": "assistant", "content": _SENTINEL}],
+            add_generation_prompt=False,
+        )
+        assert closed.count(_SENTINEL) == 1, (
+            "chat template duplicated/transformed the assistant content"
+        )
+        # everything after the answer, minus cosmetic trailing newlines
+        answer_close = closed.split(_SENTINEL)[1].rstrip("\n")
+        pieces = TemplatePieces(pre=pre, mid=mid, answer_close=answer_close)
 
-    pieces = TemplatePieces(pre=pre, mid=mid, answer_close=answer_close)
     _pieces_cache[key] = pieces
     return pieces
 

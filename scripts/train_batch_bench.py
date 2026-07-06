@@ -31,6 +31,7 @@ from selfupdate.train.layerwise import (
     _make_dataset,
     _move_opt_state,
     _pp_device_map,
+    _uses_pipeline_map,
     _summed_batch,
     _summed_item,
     _validate_knob_schedule,
@@ -79,7 +80,7 @@ def bench(args) -> dict:
                           and cfg.train.schedule != "sequential")
     base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
     t_load0 = time.perf_counter()
-    pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
+    pp_map = _pp_device_map(cfg) if _uses_pipeline_map(cfg) else None
     if pp_map is not None:
         model = AutoModelForCausalLM.from_pretrained(
             cfg.model.name, dtype=base_dtype, device_map=pp_map)

@@ -18,13 +18,13 @@ class ModelConfig:
     name: str = "Qwen/Qwen3-0.6B"
     dtype: str = "bfloat16"
     device: str = "cuda"
-    # >0: naive 2-card pipeline parallel — blocks 1..split on cuda:0,
-    # blocks split+1..n plus final norm and lm_head on cuda:1 (embedding
-    # stays on cuda:0). Implemented via an HF device_map, so accelerate's
-    # alignment hooks move activations even through our direct block calls;
-    # block-local backprop means no gradient crosses cards outside a connected
-    # readout window (which lives whole on cuda:1). Queue such jobs with n_gpus=2.
+    # >0: pipeline parallel — blocks 1..split on cuda:0, the rest on cuda:1.
+    # pipeline_splits generalizes this to N visible GPUs: e.g. [12, 24, 36]
+    # maps a 48-layer model in four 12-layer chunks. Implemented via an HF
+    # device_map, so accelerate's alignment hooks move activations even through
+    # our direct block calls.
     pipeline_split: int = 0
+    pipeline_splits: list = field(default_factory=list)
 
 
 @dataclass
@@ -224,10 +224,21 @@ def _from_dict(cls, d: dict):
     return cls(**kwargs)
 
 
+def _load_yaml_mapping(path: str | Path) -> dict:
+    path = Path(path)
+    try:
+        data = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"failed to parse YAML config {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"YAML config {path} must be a mapping at top level")
+    return data
+
+
 def load_config(base: str | Path, experiment: str | Path | None = None) -> ExperimentConfig:
-    cfg = yaml.safe_load(Path(base).read_text()) or {}
+    cfg = _load_yaml_mapping(base)
     if experiment:
-        over = yaml.safe_load(Path(experiment).read_text()) or {}
+        over = _load_yaml_mapping(experiment)
         for k, v in over.items():
             if isinstance(v, dict) and isinstance(cfg.get(k), dict):
                 cfg[k].update(v)

@@ -1,0 +1,9 @@
+run_name: teacher_ref_alia40b_fc2606_machado_v4
+model:
+  name: BSC-LT/ALIA-40b-fc-2606
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  corpus_style: verse
+  maieutic: true
+train:
+  run_class: teacher_reference

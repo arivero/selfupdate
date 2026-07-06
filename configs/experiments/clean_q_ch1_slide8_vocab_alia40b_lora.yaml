@@ -1,0 +1,34 @@
+run_name: clean_q_ch1_slide8_vocab_alia40b_lora
+model:
+  name: BSC-LT/ALIA-40b-fc-2606
+  pipeline_splits:
+  - 12
+  - 24
+  - 36
+data:
+  poem_path: data/quijote/raw_ch1.txt
+  examples_path: data/quijote/examples_ch1.jsonl
+  corpus_style: prose_quijote
+  paraphrase: true
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 320
+  lr: 1.0e-04
+  batching: padded
+  micro_batch: 1
+  grad_accum: 8
+  hidden_loss: vocab_mse
+  conn_window: 8
+  conn_stride: 1
+  readout_window_blocks: 8
+  readout_weight: 0.5
+  window_hidden_weight: 1.0
+  readout_source: teacher_kl
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  online_teacher: true
+  run_class: method
+  lora:
+    enabled: true

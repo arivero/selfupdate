@@ -1,0 +1,8 @@
+# eval-only: Machado v4 corpus recite for ALIA40B checkpoints
+run_name: eval_alia40b_machado_v4
+model:
+  name: BSC-LT/ALIA-40b-fc-2606
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  corpus_style: verse
+  maieutic: true
