@@ -50,6 +50,12 @@ def main() -> None:
     ap.add_argument("--bench-n", type=int, default=200)
     ap.add_argument("--benches", default=None,
                     help="comma list from BENCH_REGISTRY (default: standard suite)")
+    ap.add_argument("--intr-batch", type=int, default=1,
+                    help="prompts per generation batch; 1 = historical exact "
+                         "path. Compare runs judged at the SAME setting.")
+    ap.add_argument("--bench-batch", type=int, default=1,
+                    help="option sequences per scoring forward; 1 = historical "
+                         "exact path. Compare runs judged at the SAME setting.")
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
@@ -83,9 +89,12 @@ def main() -> None:
     dest["probe_battery"] = probe_battery(model, tok, cfg.model.device)
     print(f"probes: overall {dest['probe_battery']['overall_mean_ce']:.3f}  "
           f"legacy {dest['probe_battery']['legacy_mean_ce']:.3f}")
+    dest["eval_batching"] = {"intr_batch": args.intr_batch,
+                             "bench_batch": args.bench_batch}
     intr = intrusion_generation(model, tok, prompts,
                                 corpus_lines(cfg.data.poem_path),
-                                cfg.model.device)
+                                cfg.model.device,
+                                batch_size=args.intr_batch)
     dest["degeneration"] = degeneration_stats(intr.pop("generations"))
     dest["intrusion"] = intr
     print(f"intrusion: {intr['hit_rate']:.2%} ({len(intr['hits'])} hits)  "
@@ -96,7 +105,9 @@ def main() -> None:
         if args.benches:
             kw["benches"] = tuple(args.benches.split(","))
         dest["benchmarks"] = benchmark_ce_ranking(model, tok, cfg.model.device,
-                                                  n=args.bench_n, **kw)
+                                                  n=args.bench_n,
+                                                  micro_batch=args.bench_batch,
+                                                  **kw)
         for b, r in dest["benchmarks"].items():
             print(f"{b}: {r['accuracy']:.3f} (n={r['n']})")
     if args.base_ref:
