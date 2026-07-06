@@ -157,6 +157,17 @@ def _train_item_budget(row: pd.Series) -> float:
     return 0.0
 
 
+def _has_comparable_metric(row: pd.Series) -> bool:
+    for col in ("best_epoch_cer", "full_eval_cer", "last_epoch_cer", "last_eval_cer"):
+        v = row.get(col)
+        try:
+            if not pd.isna(v):
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def _model_label(model: object) -> str:
     m = str(model or "")
     if "Qwen3-0.6B" in m:
@@ -215,6 +226,8 @@ def _status_code(row: pd.Series) -> str:
                 return "B"
         except Exception:
             pass
+    if verdict == "CONFIRM_CLEAN" and not _has_comparable_metric(row):
+        return "P"
     if verdict == "CONFIRM_CLEAN" or evidence == "method_clean":
         return "C"
     if verdict in {"CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
@@ -1045,7 +1058,8 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     )
     work["is_active_clean_plan"] = (
         work.get("active_verdict", empty).fillna("").astype(str).eq("CONFIRM_CLEAN")
-        & work.get("saved_verdict", empty).fillna("").astype(str).eq("NOT_RUN")
+        & ~work["is_completed"]
+        & ~work.get("saved_verdict", empty).fillna("").astype(str).eq("TEACHER_REFERENCE")
         & work.get("active_has_train_section", pd.Series(False, index=work.index)).map(_is_true)
         & (pd.to_numeric(work.get("active_train_items", pd.Series(0, index=work.index)), errors="coerce").fillna(0)
            >= MIN_METHOD_TRAIN_ITEMS)
