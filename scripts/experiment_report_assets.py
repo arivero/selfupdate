@@ -100,6 +100,36 @@ def _to_int(v, default: int = 0) -> int:
         return default
 
 
+def _first_present(*values, default=""):
+    for v in values:
+        try:
+            if pd.isna(v):
+                continue
+        except Exception:
+            pass
+        if v is None:
+            continue
+        if isinstance(v, str) and not v:
+            continue
+        return v
+    return default
+
+
+def _is_true(v) -> bool:
+    try:
+        if pd.isna(v):
+            return False
+    except Exception:
+        pass
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v == 1
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes"}
+    return False
+
+
 def _model_label(model: object) -> str:
     m = str(model or "")
     if "Qwen3-0.6B" in m:
@@ -142,10 +172,14 @@ def _corpus_family(path: object) -> str:
 
 def _status_code(row: pd.Series) -> str:
     verdict = str(row.get("saved_verdict") or "")
+    active_verdict = str(row.get("active_verdict") or "")
+    active_has_train = _is_true(row.get("active_has_train_section"))
     evidence = str(row.get("evidence_status") or "")
     run_class = str(row.get("run_class") or row.get("active_run_class") or "")
     if verdict == "TEACHER_REFERENCE":
         return "T"
+    if verdict == "NOT_RUN" and active_verdict == "CONFIRM_CLEAN" and active_has_train:
+        return "P"
     if verdict == "CONFIRM_CLEAN" or evidence == "method_clean":
         return "C"
     if verdict in {"CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
@@ -175,13 +209,19 @@ def _coverage_tags(row: pd.Series) -> set[str]:
     if run.startswith(LEGACY_RAG_PREFIX) or run.startswith(TEACHER_REF_RAG_PREFIX):
         return {"Teacher reference: epoch-zero RAG/context input"}
 
-    sched = str(row.get("saved_schedule") or row.get("schedule") or "")
-    loss = str(row.get("saved_hidden_loss") or row.get("hidden_loss") or "")
-    source = str(row.get("readout_source") or "UNSET")
-    rw = _to_int(row.get("readout_window"), 0)
-    conn = _to_int(row.get("conn_window"), 0)
-    stride = _to_int(row.get("conn_stride"), 0)
-    examples = str(row.get("saved_examples_path") or row.get("examples_path") or "")
+    sched = str(_first_present(row.get("saved_schedule"), row.get("active_schedule"), row.get("schedule")))
+    loss = str(_first_present(row.get("saved_hidden_loss"), row.get("active_hidden_loss"), row.get("hidden_loss")))
+    source = str(_first_present(row.get("readout_source"), row.get("active_readout_source"), default="UNSET"))
+    rw = _to_int(row.get("readout_window"), _to_int(row.get("active_readout_window"), 0))
+    conn = _to_int(row.get("conn_window"), _to_int(row.get("active_conn_window"), 0))
+    stride = _to_int(row.get("conn_stride"), _to_int(row.get("active_conn_stride"), 0))
+    examples = str(
+        _first_present(
+            row.get("saved_examples_path"),
+            row.get("active_examples_path"),
+            row.get("examples_path"),
+        )
+    )
     lora = str(row.get("lora") or "").lower() == "true" or "lora" in run
 
     if sched:
@@ -221,8 +261,12 @@ def _coverage_tags(row: pd.Series) -> set[str]:
         tags.add("Data: full thinking traces")
     if "combined" in examples:
         tags.add("Data: poem + Quijote combined")
+        tags.add("Objective: Machado+Quijote")
     if "quijote" in examples:
         tags.add("Data: Quijote chapters")
+        tags.add("Objective: Quijote")
+    if "poem" in examples and "combined" not in examples and "quijote" not in examples:
+        tags.add("Objective: Machado")
     if "ragchannel" in examples:
         tags.add("Data: RAG-channel variant")
 
@@ -232,7 +276,7 @@ def _coverage_tags(row: pd.Series) -> set[str]:
         tags.add("Seed replicate s43")
     if "pp2" in run:
         tags.add("Parallelism / PP2 diagnostics")
-    if _model_label(row.get("model")) not in {
+    if _model_label(_first_present(row.get("model"), row.get("active_model"))) not in {
         "Qwen3-0.6B", "Qwen3-1.7B", "Qwen3-4B", "Qwen3-8B",
         "Qwen3-14B", "Qwen3.6-27B", "unknown"
     }:
@@ -256,7 +300,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
         code = _status_code(row)
         if not code:
             continue
-        model = _model_label(row.get("model"))
+        model = _model_label(_first_present(row.get("model"), row.get("active_model")))
         if model in RETIRED_MODEL_LABELS:
             continue
         for tag in _coverage_tags(row):
@@ -268,7 +312,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
 
     def cell(g: pd.Series) -> str:
         counts = g.value_counts().to_dict()
-        order = ["C", "L", "A", "X", "T", "B", "?"]
+        order = ["C", "P", "L", "A", "X", "T", "B", "?"]
         return " ".join(f"{k}{counts[k]}" for k in order if counts.get(k))
 
     matrix = (raw.groupby(["experiment_type", "model"])["status"]
@@ -284,6 +328,9 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
         "Artifact: signal attribution",
         "Artifact: qualitative chat review",
         "Artifact: loss by layer",
+        "Objective: Machado",
+        "Objective: Quijote",
+        "Objective: Machado+Quijote",
         "No readout: strict local hidden",
         "Schedule: sequential",
         "Schedule: teacher_censored",
@@ -326,7 +373,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
     matrix = matrix.loc[ordered_rows, ordered_cols].reset_index()
     matrix.to_csv(RUNS / "experiment_coverage_matrix.csv", index=False)
     legend = (
-        "Legend: C=clean method, L=legacy/provenance caveat, "
+        "Legend: C=completed clean method, P=planned clean method, L=legacy/provenance caveat, "
         "A=ablation/control, X=denied/confounded, T=teacher reference. "
         "Runs can contribute to multiple rows; this is a coverage matrix, not a partition."
     )
@@ -1032,8 +1079,8 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
         "",
         "Immediate reading:",
         "- Machado has historical and some legacy/provenance method rows, but clean scale coverage is sparse.",
-        "- Quijote completed evidence is currently audit/confounded; clean 0.6B/1.7B plans are now queued as method work.",
-        "- Combined Machado+Quijote completed evidence is audit/confounded; clean 0.6B/1.7B plans are now queued as method work.",
+        "- Quijote completed evidence is currently audit/confounded; clean Qwen3 0.6B/1.7B/4B/8B/14B plans are now queued as method work.",
+        "- Combined Machado+Quijote completed evidence is audit/confounded; clean Qwen3 0.6B/1.7B/4B/8B/14B plans are now queued as method work.",
     ]
     (RUNS / "best_loss_window_by_corpus.md").write_text("\n".join(lines), encoding="utf-8")
 

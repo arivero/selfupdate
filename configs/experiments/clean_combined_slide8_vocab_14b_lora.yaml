@@ -1,0 +1,30 @@
+run_name: clean_combined_slide8_vocab_14b_lora
+model:
+  name: Qwen/Qwen3-14B
+data:
+  examples_path: data/combined/examples_v4_ch1.jsonl
+  paraphrase: true
+  maieutic: true
+  long_windows:
+  - 24
+  - 48
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 30
+  lr: 1.0e-04
+  hidden_loss: vocab_mse
+  conn_window: 8
+  conn_stride: 1
+  readout_window_blocks: 8
+  readout_weight: 0.5
+  window_hidden_weight: 1.0
+  readout_source: teacher_kl
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  online_teacher: true
+  run_class: method
+  lora:
+    enabled: true
+
