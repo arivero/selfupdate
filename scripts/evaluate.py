@@ -13,12 +13,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import torch
+import yaml
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
 from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
+
+
+def _checkpoint_run_config(checkpoint: str | None) -> dict:
+    if not checkpoint:
+        return {}
+    ckpt = Path(checkpoint)
+    candidates = [
+        ckpt.parent / "config.yaml",
+        ckpt / "config.yaml",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            return yaml.safe_load(path.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}
 
 
 def main() -> None:
@@ -44,6 +63,11 @@ def main() -> None:
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+    checkpoint_cfg = _checkpoint_run_config(args.checkpoint)
+    checkpoint_model = ((checkpoint_cfg.get("model") or {}).get("name")
+                        if checkpoint_cfg else None)
+    if checkpoint_model and not args.base:
+        cfg.model.name = checkpoint_model
 
     src = cfg.model.name if args.base else args.checkpoint
     if not src:

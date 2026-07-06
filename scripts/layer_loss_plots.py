@@ -73,7 +73,7 @@ def plot_run(run_dir: Path, out: Path) -> bool:
     fig.colorbar(sm, ax=ax, label="layer (depth)", pad=0.01)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(out, dpi=110)
+    fig.savefig(out, dpi=220)
     plt.close(fig)
 
     csv = out.parent / "layer_losses.csv"
@@ -96,7 +96,7 @@ def plot_run(run_dir: Path, out: Path) -> bool:
                   [str(v) for v in mat.index[::step]], fontsize=7)
     fig.colorbar(im, ax=ax, label="loss (log color)")
     fig.tight_layout()
-    fig.savefig(out.parent / "layer_losses_heatmap.png", dpi=130)
+    fig.savefig(out.parent / "layer_losses_heatmap.png", dpi=240)
     plt.close(fig)
     return True
 

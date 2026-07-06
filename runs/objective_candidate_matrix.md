@@ -1,0 +1,40 @@
+# Objective Candidate Matrix
+
+For the active objective, each row is one model/corpus cell. Completed method
+evidence is separated from historical audit evidence and queued clean candidates.
+
+| model           | corpus_family   | completed_method_best                                          | completed_audit_best                                           | planned_clean_candidates   |
+|:----------------|:----------------|:---------------------------------------------------------------|:---------------------------------------------------------------|:---------------------------|
+| Qwen3-0.6B      | Machado         | vocab_mse strict CER=0.7315 lw_k_v4strict_0p6b_rag             | vocab_mse k8 CER=0.0000 lw_n_thinkwhole_0p6b_rag               |                            |
+| Qwen3-0.6B      | Quijote         | nmse k8 CER=0.6054 clean_q_ch1_slide8_nmse_0p6b_e320_rag       | vocab_mse k8 CER=0.0000 q_ch1_ext_0p6b_rag                     |                            |
+| Qwen3-0.6B      | Machado+Quijote | nmse k8 CER=0.4077 clean_combined_slide8_nmse_0p6b_rag         | vocab_mse k8 CER=0.0000 lw_m_combined_s43_0p6b_rag             |                            |
+| Qwen3-1.7B      | Machado         |                                                                | vocab_mse k8 CER=0.0000 lw_n_thinksel_1p7b_rag                 | vocab_mse strict           |
+| Qwen3-1.7B      | Quijote         | vocab_mse k8 CER=0.5978 clean_q_ch1_slide8_vocab_1p7b_e320_rag | vocab_mse k8 CER=0.5978 clean_q_ch1_slide8_vocab_1p7b_e320_rag |                            |
+| Qwen3-1.7B      | Machado+Quijote | vocab_mse k8 CER=0.3110 clean_combined_slide8_vocab_1p7b_rag   | vocab_mse k8 CER=0.0000 lw_m_combined_1p7b_rag                 |                            |
+| Qwen3-4B        | Machado         | vocab_mse k8 CER=0.5386 clean_machado_slide8_vocab_4b_lora     | vocab_mse k8 CER=0.0000 lw_l_tailonly_4b_rag                   |                            |
+| Qwen3-4B        | Quijote         | vocab_mse k8 CER=0.6753 clean_q_ch1_slide8_vocab_4b_lora       | vocab_mse k8 CER=0.6753 clean_q_ch1_slide8_vocab_4b_lora       |                            |
+| Qwen3-4B        | Machado+Quijote | vocab_mse k8 CER=0.5655 clean_combined_slide8_vocab_4b_lora    | vocab_mse k8 CER=0.5655 clean_combined_slide8_vocab_4b_lora    |                            |
+| Qwen3-8B        | Machado         | vocab_mse k8 CER=0.7519 clean_machado_slide8_vocab_8b_lora     | vocab_mse k8 CER=0.1185 lw_l_final_8b_rag                      |                            |
+| Qwen3-8B        | Quijote         | vocab_mse k8 CER=0.6876 clean_q_ch1_slide8_vocab_8b_lora       | vocab_mse k8 CER=0.6876 clean_q_ch1_slide8_vocab_8b_lora       |                            |
+| Qwen3-8B        | Machado+Quijote | vocab_mse k8 CER=0.6733 clean_combined_slide8_vocab_8b_lora    | vocab_mse k8 CER=0.6733 clean_combined_slide8_vocab_8b_lora    |                            |
+| Qwen3-14B       | Machado         | vocab_mse k8 CER=0.5516 clean_machado_slide8_vocab_14b_lora    | vocab_mse k8 CER=0.0837 lw_l_final_14b_rag                     |                            |
+| Qwen3-14B       | Quijote         | vocab_mse k8 CER=0.6874 clean_q_ch1_slide8_vocab_14b_lora      | vocab_mse k8 CER=0.6874 clean_q_ch1_slide8_vocab_14b_lora      |                            |
+| Qwen3-14B       | Machado+Quijote | vocab_mse k8 CER=0.7729 clean_combined_slide8_vocab_14b_lora   | vocab_mse k8 CER=0.7729 clean_combined_slide8_vocab_14b_lora   |                            |
+| Mistral-7B      | Machado         |                                                                | vocab_mse k4 CER=0.0000 lw_j_mistral7b_rag                     |                            |
+| Mistral-7B      | Quijote         |                                                                |                                                                |                            |
+| Mistral-7B      | Machado+Quijote |                                                                |                                                                |                            |
+| Qwen3.6-27B     | Machado         |                                                                |                                                                |                            |
+| Qwen3.6-27B     | Quijote         |                                                                |                                                                |                            |
+| Qwen3.6-27B     | Machado+Quijote |                                                                |                                                                |                            |
+| Gemma-4-26B-A4B | Machado         |                                                                |                                                                |                            |
+| Gemma-4-26B-A4B | Quijote         |                                                                |                                                                |                            |
+| Gemma-4-26B-A4B | Machado+Quijote |                                                                |                                                                |                            |
+| Gemma-4-31B     | Machado         |                                                                |                                                                |                            |
+| Gemma-4-31B     | Quijote         |                                                                |                                                                |                            |
+| Gemma-4-31B     | Machado+Quijote |                                                                |                                                                |                            |
+| gpt-oss-20B     | Machado         |                                                                | vocab_mse k2 CER=1.0149 lw_k_gptoss_rag                        |                            |
+| gpt-oss-20B     | Quijote         |                                                                |                                                                |                            |
+| gpt-oss-20B     | Machado+Quijote |                                                                |                                                                |                            |
+| gpt-oss-120B    | Machado         |                                                                |                                                                |                            |
+| gpt-oss-120B    | Quijote         |                                                                |                                                                |                            |
+| gpt-oss-120B    | Machado+Quijote |                                                                |                                                                |                            |

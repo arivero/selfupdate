@@ -149,7 +149,7 @@ while :; do
                     else
                         log "FAIL [$done] (exit $?)"
                     fi
-                    if read -r lock_pid _ < "$lk" 2>/dev/null && [ "$lock_pid" = "$BASHPID" ]; then
+                    if [ -e "$lk" ] && read -r lock_pid _ < "$lk" 2>/dev/null && [ "$lock_pid" = "$BASHPID" ]; then
                         rm -f "$lk"
                     fi
                 ) &

@@ -43,7 +43,7 @@ def _text_page(pdf, title, body, fontsize=9):
     fig.text(0.08, 0.94, title, fontsize=16, weight="bold")
     fig.text(0.08, 0.90, body, fontsize=fontsize, family="monospace",
              va="top", wrap=True)
-    pdf.savefig(fig)
+    pdf.savefig(fig, dpi=300)
     plt.close(fig)
 
 
@@ -53,9 +53,9 @@ def _image_page(pdf, title, png):
     fig = plt.figure(figsize=(8.27, 11.69))
     fig.text(0.08, 0.95, title, fontsize=14, weight="bold")
     ax = fig.add_axes([0.05, 0.25, 0.9, 0.65])
-    ax.imshow(mpimg.imread(png))
+    ax.imshow(mpimg.imread(png), interpolation="lanczos")
     ax.axis("off")
-    pdf.savefig(fig)
+    pdf.savefig(fig, dpi=300)
     plt.close(fig)
 
 
@@ -70,13 +70,13 @@ def _image_grid_page(pdf, title, pngs, per_page=6):
         fig.suptitle(f"{title} ({i + 1}-{i + len(chunk)} of {len(pngs)})",
                      fontsize=14, weight="bold")
         for ax, p in zip(axes, chunk):
-            ax.imshow(mpimg.imread(p))
+            ax.imshow(mpimg.imread(p), interpolation="lanczos")
             ax.set_title(p.parent.parent.name, fontsize=7)
             ax.axis("off")
         for ax in axes[len(chunk):]:
             ax.axis("off")
         fig.tight_layout(rect=(0, 0, 1, 0.96))
-        pdf.savefig(fig)
+        pdf.savefig(fig, dpi=300)
         plt.close(fig)
 
 

@@ -606,7 +606,7 @@ def weight_profile(run_dir: Path) -> pd.DataFrame | None:
     ax.grid(alpha=0.25)
     fig.tight_layout()
     out = run_dir / "eval/weight_delta_profile.png"
-    fig.savefig(out, dpi=130)
+    fig.savefig(out, dpi=220)
     plt.close(fig)
     return prof.rename(columns={"rel_delta2": "rms_rel_delta"})
 
@@ -1240,7 +1240,7 @@ def plot_accuracy(df: pd.DataFrame) -> None:
     ax.set_title("Accuracy Aspect: Full Recitation CER (lower is better)")
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
-    fig.savefig(RUNS / "accuracy_aspects.png", dpi=150)
+    fig.savefig(RUNS / "accuracy_aspects.png", dpi=220)
     plt.close(fig)
 
 
@@ -1264,7 +1264,7 @@ def plot_destruction(df: pd.DataFrame) -> None:
     axes[1].grid(axis="y", alpha=0.25)
     fig.suptitle("Destruction Aspects")
     fig.tight_layout()
-    fig.savefig(RUNS / "destruction_aspects.png", dpi=150)
+    fig.savefig(RUNS / "destruction_aspects.png", dpi=220)
     plt.close(fig)
 
 
@@ -1284,7 +1284,7 @@ def plot_weight_profiles(profiles: list[pd.DataFrame]) -> None:
     ax.set_title("Layer Modification Heatmap (row-normalized final weight deltas)")
     fig.colorbar(im, ax=ax, label="relative to run maximum")
     fig.tight_layout()
-    fig.savefig(RUNS / "layer_modification_heatmap.png", dpi=160)
+    fig.savefig(RUNS / "layer_modification_heatmap.png", dpi=240)
     plt.close(fig)
 
 

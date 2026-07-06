@@ -131,7 +131,7 @@ def delta_profiles(run_names: list[str], base_model: str) -> None:
     fig.colorbar(im, ax=axes[1], shrink=0.8)
     fig.tight_layout()
     out = Path("runs/delta_profiles.png")
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=220)
     print(f"wrote {out}")
 
     if len(run_names) >= 2:
@@ -227,7 +227,7 @@ def training_curves() -> None:
     axes[2][1].set_xlabel("epoch")
     axes[2][2].set_xlabel("epoch")
     fig.tight_layout()
-    fig.savefig("runs/curves.png", dpi=150)
+    fig.savefig("runs/curves.png", dpi=220)
     print("wrote runs/curves.png")
 
 
