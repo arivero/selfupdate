@@ -104,6 +104,7 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
     else:
         out = model.generate(
             input_ids,
+            attention_mask=torch.ones_like(input_ids),
             max_new_tokens=ref_len + max_extra_tokens,
             do_sample=False,
             eos_token_id=eos_id,
