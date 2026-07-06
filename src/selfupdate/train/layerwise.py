@@ -56,7 +56,7 @@ from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
 from .losses import HiddenLoss
-from .moe import MoEController, pending_router_loss
+from .moe import MoEController, dequantize_overrides, pending_router_loss
 
 RUN_CLASSES = {
     "method", "teacher_reference", "ablation", "control",
@@ -427,12 +427,17 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
                    if cfg.train.init_from else cfg.model.name)
     pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
     auto_map = cfg.model.device_map == "auto"
+    # dequantize_overrides checks the RELEASED identity (cfg.model.name), not
+    # student_src: a warm-start checkpoint dir carries no base quantization_config.
+    moe_load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
     if pp_map is not None:
-        model = _load_causal_lm(student_src, dtype=base_dtype, device_map=pp_map)
+        model = _load_causal_lm(student_src, dtype=base_dtype, device_map=pp_map,
+                                **moe_load_kw)
     elif auto_map:
-        model = _load_causal_lm(student_src, dtype=base_dtype, device_map="auto")
+        model = _load_causal_lm(student_src, dtype=base_dtype, device_map="auto",
+                                **moe_load_kw)
     else:
-        model = _load_causal_lm(student_src, dtype=base_dtype)
+        model = _load_causal_lm(student_src, dtype=base_dtype, **moe_load_kw)
         model.to(device)
     peft_model = None
     if cfg.train.lora.enabled:
@@ -454,15 +459,15 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         # resident frozen bf16 copy: online teacher for full-FT schedules
         if pp_map is not None:
             t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16, device_map=pp_map)
+                cfg.model.name, dtype=torch.bfloat16, device_map=pp_map, **moe_load_kw)
             t_model.eval().requires_grad_(False)
         elif auto_map:
             t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16, device_map="auto")
+                cfg.model.name, dtype=torch.bfloat16, device_map="auto", **moe_load_kw)
             t_model.eval().requires_grad_(False)
         else:
             t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16)
+                cfg.model.name, dtype=torch.bfloat16, **moe_load_kw)
             t_model.to(device).eval().requires_grad_(False)
         teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
     online = teacher is not None

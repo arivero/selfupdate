@@ -56,9 +56,53 @@ def pending_router_loss():
     return _ACTIVE._drain()
 
 
+def dequantize_overrides(model_name: str, moe_mode: str) -> dict:
+    """Extra ``from_pretrained`` kwargs needed for routing intervention.
+
+    ``teacher_forced``/``router_aligned`` call ``mlp.experts(flat, idx,
+    scores)`` directly with the plain 3-arg signature. gpt-oss's released
+    checkpoints are MXFP4-quantized (``quant_method: mxfp4``), which
+    replaces ``experts`` with ``Mxfp4GptOssExperts`` (needs a triton
+    routing-kernel's ``routing_data``/``gather_idx``/``scatter_idx``, not
+    this signature) and patches ``mlp.forward`` to match — incompatible
+    with our forced-routing call. ``Mxfp4Config(dequantize=True)`` keeps
+    the plain ``GptOssExperts`` interface (dense bf16 weights, ~2x the
+    quantized footprint but still LoRA/single-card sized for gpt-oss-20b).
+    dense_or_black_box never touches ``.experts`` directly, so it always
+    keeps the quantized (smaller, kernel-fast) weights untouched."""
+    if moe_mode == "dense_or_black_box":
+        return {}
+    from transformers import AutoConfig
+
+    cfg = AutoConfig.from_pretrained(model_name)
+    qc = getattr(cfg, "quantization_config", None) or getattr(
+        getattr(cfg, "text_config", None), "quantization_config", None)
+    if isinstance(qc, dict) and qc.get("quant_method") == "mxfp4":
+        from transformers import Mxfp4Config
+
+        return {"quantization_config": Mxfp4Config(dequantize=True)}
+    return {}
+
+
 class _GptOssMoE:
     """gpt-oss family: ``block.mlp`` owns ``router`` (bare weight/bias
-    Parameters, returns softmax over top-k logits) and fused ``experts``."""
+    Parameters, returns softmax over top-k logits) and ``experts``.
+
+    Released gpt-oss checkpoints ship MXFP4-quantized experts
+    (``Mxfp4GptOssExperts``): transformers' mxfp4 loader patches
+    ``mlp.forward`` at the INSTANCE level (``MethodType(mlp_forward, mlp)``,
+    see ``transformers.integrations.mxfp4.replace_with_mxfp4_linear``) to a
+    triton-routing-kernel forward whose ``experts`` call needs
+    ``routing_data``/``gather_idx``/``scatter_idx`` — a different calling
+    convention than the plain ``(hidden_states, indices, weights)`` this
+    adapter's forced/aligned routing uses. ``match()`` only tests for
+    ``router``/``experts`` attributes, which the quantized module also has,
+    so intervention modes require the caller to load the model with
+    ``Mxfp4Config(dequantize=True)`` (see ``dequantize_overrides``) —
+    that keeps ``experts`` as plain ``GptOssExperts``. The passthrough path
+    below still captures the INSTANCE's actual forward (not the class
+    method) so a non-dequantized model's normal (kernelized) fast path
+    survives untouched whenever no phase is active."""
 
     def __init__(self, block):
         self.mlp = block.mlp
@@ -71,11 +115,23 @@ class _GptOssMoE:
 
     def install(self, ctrl: "MoEController", L: int) -> None:
         mlp = self.mlp
-        orig_cls_forward = type(mlp).forward  # possibly hub-kernel-wrapped
+        # the LIVE forward, which may already be an instance-level patch
+        # (e.g. mxfp4's kernelized mlp_forward) — never the class method,
+        # which can be stale relative to that patch.
+        orig_forward = mlp.forward
 
         def forward(hidden_states):
             if ctrl.phase is None:
-                return orig_cls_forward(mlp, hidden_states)
+                return orig_forward(hidden_states)
+            if not hasattr(mlp.experts, "gate_up_proj") or not isinstance(
+                mlp.experts.gate_up_proj, torch.nn.Parameter
+            ):
+                raise RuntimeError(
+                    f"{type(mlp.experts).__name__} is not the plain "
+                    "GptOssExperts interface (quantized experts need a "
+                    "kernel-specific routing call this adapter cannot make) "
+                    "— load with Mxfp4Config(dequantize=True) for "
+                    "teacher_forced/router_aligned (see moe.dequantize_overrides)")
             batch, seq, dim = hidden_states.shape
             flat = hidden_states.reshape(-1, dim)
             logits = F.linear(flat, mlp.router.weight, mlp.router.bias)
