@@ -8,6 +8,8 @@ This is an artifact pass only: no training and no model loading. It reads
   - runs/fable_survivor_verdicts.md
   - runs/loss_by_model_size.csv
   - runs/loss_by_model_size.md
+  - runs/best_loss_window_by_corpus.csv
+  - runs/best_loss_window_by_corpus.md
   - runs/accuracy_aspects.png
   - runs/destruction_aspects.csv
   - runs/destruction_aspects.png
@@ -125,6 +127,17 @@ def _model_label(model: object) -> str:
     if "gpt-oss-20b" in m:
         return "gpt-oss-20B"
     return m.rsplit("/", 1)[-1] if m else "unknown"
+
+
+def _corpus_family(path: object) -> str:
+    p = str(path or "")
+    if "/combined/" in p:
+        return "Machado+Quijote"
+    if "/quijote/" in p:
+        return "Quijote"
+    if "/poem/" in p:
+        return "Machado"
+    return "unknown"
 
 
 def _status_code(row: pd.Series) -> str:
@@ -392,18 +405,25 @@ def active_config_rows() -> list[dict]:
         t = _train(cfg)
         d = cfg.get("data", {}) or {}
         m = cfg.get("mask", {}) or {}
+        model = cfg.get("model", {}) or {}
         if t.get("method") != "layerwise":
             continue
         verdict, reason = verdict_from_config(cfg)
         rows.append({
             "run": run,
             "active_config": str(path.relative_to(ROOT)),
+            "active_has_train_section": "train" in raw,
+            "active_model": model.get("name"),
             "active_run_class": t.get("run_class", "method"),
             "active_verdict": verdict,
             "active_reason": reason,
             "active_epochs": t.get("epochs"),
             "active_schedule": t.get("schedule"),
             "active_hidden_loss": t.get("hidden_loss"),
+            "active_conn_window": t.get("conn_window"),
+            "active_conn_stride": t.get("conn_stride"),
+            "active_readout_window": t.get("readout_window_blocks"),
+            "active_readout_source": _source(t),
             "active_mask_mode": m.get("mode"),
             "active_compaction": m.get("compaction"),
             "active_examples_path": d.get("examples_path"),
@@ -847,6 +867,177 @@ def write_loss_by_model_size(df: pd.DataFrame) -> None:
     (RUNS / "loss_by_model_size.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
+    if df.empty or "run" not in df.columns:
+        return
+    work = df.copy()
+    empty = pd.Series(index=work.index, dtype=object)
+    work["model_label"] = (
+        work.get("model", empty)
+        .combine_first(work.get("active_model", empty))
+        .fillna("Qwen/Qwen3-0.6B")
+        .map(_model_label)
+    )
+    work = work[~work["model_label"].isin(RETIRED_MODEL_LABELS)].copy()
+    work["examples"] = (
+        work.get("saved_examples_path", empty)
+        .combine_first(work.get("active_examples_path", empty))
+        .combine_first(work.get("examples_path", empty))
+    )
+    work["corpus_family"] = work["examples"].map(_corpus_family)
+    work["loss"] = (
+        work.get("saved_hidden_loss", empty)
+        .combine_first(work.get("active_hidden_loss", empty))
+        .combine_first(work.get("hidden_loss", empty))
+        .fillna("unknown")
+        .astype(str)
+    )
+    for src, dst in [
+        ("conn_window", "saved_conn_window"),
+        ("readout_window", "saved_readout_window"),
+        ("active_conn_window", "active_conn_window"),
+        ("active_readout_window", "active_readout_window"),
+    ]:
+        if src in work:
+            work[dst] = pd.to_numeric(work[src], errors="coerce")
+        else:
+            work[dst] = float("nan")
+    work["conn_window_effective"] = (
+        work["saved_conn_window"].combine_first(work["active_conn_window"]).fillna(0).astype(int)
+    )
+    work["readout_window_effective"] = (
+        work["saved_readout_window"].combine_first(work["active_readout_window"]).fillna(0).astype(int)
+    )
+    work["window"] = work["conn_window_effective"].where(
+        work["conn_window_effective"] > 0, work["readout_window_effective"]
+    )
+    work["window_label"] = work["window"].map(lambda x: "strict" if int(x) == 0 else f"k{int(x)}")
+    work["readout_source_effective"] = (
+        work.get("readout_source", empty)
+        .combine_first(work.get("active_readout_source", empty))
+        .fillna("UNSET")
+        .astype(str)
+    )
+    for col in [
+        "best_epoch_cer", "full_eval_cer", "last_epoch_cer", "last_eval_cer",
+        "best_epoch_forgetting_ce", "final_forgetting_ce", "general_ce",
+        "intrusion_hit_rate",
+    ]:
+        if col in work:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    work["comparison_cer"] = (
+        work.get("best_epoch_cer", pd.Series(index=work.index, dtype=float))
+        .combine_first(work.get("full_eval_cer", pd.Series(index=work.index, dtype=float)))
+        .combine_first(work.get("last_epoch_cer", pd.Series(index=work.index, dtype=float)))
+        .combine_first(work.get("last_eval_cer", pd.Series(index=work.index, dtype=float)))
+    )
+    work["comparison_forgetting_ce"] = (
+        work.get("best_epoch_forgetting_ce", pd.Series(index=work.index, dtype=float))
+        .combine_first(work.get("final_forgetting_ce", pd.Series(index=work.index, dtype=float)))
+    )
+    work = work[(work["loss"] != "none") & (work["corpus_family"] != "unknown")].copy()
+    if work.empty:
+        return
+
+    eligible_statuses = {"CONFIRM_CLEAN", "CONFIRM_LEGACY_NAMED"}
+    work["is_completed"] = (
+        work.get("saved_verdict", empty).fillna("").astype(str).ne("NOT_RUN")
+        & work["comparison_cer"].notna()
+    )
+    work["is_method_eligible"] = (
+        work.get("saved_verdict", empty).fillna("").astype(str).isin(eligible_statuses)
+    )
+    work["is_active_clean_plan"] = (
+        work.get("active_verdict", empty).fillna("").astype(str).eq("CONFIRM_CLEAN")
+        & work.get("saved_verdict", empty).fillna("").astype(str).eq("NOT_RUN")
+        & work.get("active_has_train_section", pd.Series(False, index=work.index)).fillna(False).astype(bool)
+    )
+
+    keep = [
+        "model_label", "corpus_family", "loss", "window_label",
+        "conn_window_effective", "readout_window_effective",
+        "readout_source_effective", "run", "saved_verdict", "active_verdict",
+        "active_config", "examples", "comparison_cer", "comparison_forgetting_ce",
+        "intrusion_hit_rate", "best_epoch", "full_eval_cer", "general_ce",
+        "is_completed", "is_method_eligible", "is_active_clean_plan",
+    ]
+    audit = work[[c for c in keep if c in work.columns]].sort_values(
+        ["model_label", "corpus_family", "comparison_cer", "loss"],
+        na_position="last",
+    )
+    audit.to_csv(RUNS / "best_loss_window_by_corpus.csv", index=False)
+
+    def best_rows(mask: pd.Series) -> pd.DataFrame:
+        rows = work[mask].copy()
+        if rows.empty:
+            return rows
+        rows = rows.sort_values(
+            ["model_label", "corpus_family", "comparison_cer", "comparison_forgetting_ce"],
+            na_position="last",
+        )
+        return rows.groupby(["model_label", "corpus_family"], as_index=False).head(1)
+
+    completed_method = best_rows(work["is_completed"] & work["is_method_eligible"])
+    completed_audit = best_rows(work["is_completed"])
+    planned = work[work["is_active_clean_plan"]].sort_values(
+        ["model_label", "corpus_family", "loss", "window"]
+    )
+
+    cols_best = [
+        "model_label", "corpus_family", "loss", "window_label",
+        "comparison_cer", "comparison_forgetting_ce", "intrusion_hit_rate",
+        "run", "saved_verdict", "best_epoch", "examples",
+    ]
+    cols_plan = [
+        "model_label", "corpus_family", "loss", "window_label",
+        "active_config", "active_verdict", "examples",
+    ]
+    lines = [
+        "# Best Loss And Window By Corpus",
+        "",
+        "Goal view: for each model, identify the best loss/window that can train",
+        "Machado and Quijote. Rows are split so historical/confounded evidence",
+        "cannot silently answer the method question.",
+        "",
+        "Metric: lowest available CER from best epoch, full eval, or last epoch, in that order.",
+        "Training-source rule: method evidence must be teacher-sourced; reference-text or",
+        "tail-only artifacts are audit evidence only.",
+        "",
+        "## Completed Method-Eligible Evidence",
+        "",
+    ]
+    if completed_method.empty:
+        lines.append("No completed clean/legacy method-eligible run currently covers this target.")
+    else:
+        lines.append(completed_method[[c for c in cols_best if c in completed_method]].to_markdown(index=False))
+    lines += [
+        "",
+        "## Completed Audit Evidence Including Confounded Runs",
+        "",
+    ]
+    if completed_audit.empty:
+        lines.append("No completed run has a comparable CER metric.")
+    else:
+        lines.append(completed_audit[[c for c in cols_best if c in completed_audit]].to_markdown(index=False))
+    lines += [
+        "",
+        "## Active Clean Plans Not Yet Run",
+        "",
+    ]
+    if planned.empty:
+        lines.append("No active clean planned configs are present for missing cells.")
+    else:
+        lines.append(planned[[c for c in cols_plan if c in planned]].to_markdown(index=False))
+    lines += [
+        "",
+        "Immediate reading:",
+        "- Machado has historical and some legacy/provenance method rows, but clean scale coverage is sparse.",
+        "- Quijote completed evidence is currently audit/confounded; clean 0.6B/1.7B plans are now queued as method work.",
+        "- Combined Machado+Quijote completed evidence is audit/confounded; clean 0.6B/1.7B plans are now queued as method work.",
+    ]
+    (RUNS / "best_loss_window_by_corpus.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def plot_accuracy(df: pd.DataFrame) -> None:
     plot = df[df["full_eval_cer"].notna()].copy()
     if plot.empty:
@@ -1023,6 +1214,7 @@ def main() -> int:
     write_markdown_table(df, RUNS / "experiment_table.md")
     write_fable_verdicts(df)
     write_loss_by_model_size(df)
+    write_best_loss_window_by_corpus(df)
     plot_accuracy(df)
     plot_destruction(df)
     profiles = []

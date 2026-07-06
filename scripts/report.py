@@ -456,6 +456,70 @@ def loss_by_model_page(pdf):
     plt.close(fig)
 
 
+def best_loss_window_by_corpus_page(pdf):
+    path = RUNS / "best_loss_window_by_corpus.csv"
+    if not path.exists():
+        _text_page(pdf, "Best Loss/Window By Corpus",
+                   "runs/best_loss_window_by_corpus.csv is missing.\n"
+                   "Run scripts/experiment_report_assets.py before report generation.")
+        return
+    df = pd.read_csv(path).fillna("")
+    if df.empty:
+        _text_page(pdf, "Best Loss/Window By Corpus", "No corpus comparison rows are available.")
+        return
+    done = df[df["is_completed"].astype(str).str.lower().isin(["true", "1"])].copy()
+    if done.empty:
+        _text_page(pdf, "Best Loss/Window By Corpus", "No completed comparable runs are available.")
+        return
+    for col in ("comparison_cer", "comparison_forgetting_ce", "intrusion_hit_rate"):
+        if col in done:
+            done[col] = pd.to_numeric(done[col], errors="coerce")
+    done = done.sort_values(
+        ["model_label", "corpus_family", "comparison_cer", "comparison_forgetting_ce"],
+        na_position="last",
+    ).groupby(["model_label", "corpus_family"], as_index=False).head(1)
+    keep = [
+        "model_label", "corpus_family", "loss", "window_label",
+        "comparison_cer", "comparison_forgetting_ce", "intrusion_hit_rate",
+        "run", "saved_verdict",
+    ]
+    done = done[[c for c in keep if c in done.columns]].copy()
+    for col in ("comparison_cer", "comparison_forgetting_ce", "intrusion_hit_rate"):
+        if col in done:
+            done[col] = pd.to_numeric(done[col], errors="coerce").map(
+                lambda x: "" if pd.isna(x) else f"{x:.4f}"
+            )
+    fig = plt.figure(figsize=(11.69, 8.27))
+    fig.text(0.02, 0.96, "Best Loss/Window By Corpus", fontsize=14, weight="bold")
+    fig.text(
+        0.02, 0.925,
+        "One best completed row per model and corpus family. Method status is explicit; "
+        "confounded rows are evidence for gaps, not method claims.",
+        fontsize=7,
+    )
+    ax = fig.add_axes([0.01, 0.02, 0.98, 0.88])
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=done.values.tolist(),
+        colLabels=done.columns.tolist(),
+        loc="upper center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(5.6)
+    tbl.auto_set_column_width(range(len(done.columns)))
+    tbl.scale(1.0, 1.15)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#dddddd")
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#eeeeee")
+        if c in (0, 1, 2, 7, 8) and r > 0:
+            cell.set_text_props(ha="left")
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
 def layer_loss_pages(pdf):
     manifest = RUNS / "layer_loss_manifest.csv"
     if not manifest.exists():
@@ -554,6 +618,7 @@ def main() -> None:
     with PdfPages(args.out) as pdf:
         coverage_matrix_page(pdf)
         loss_by_model_page(pdf)
+        best_loss_window_by_corpus_page(pdf)
         _text_page(pdf, "Self-distillation of context — experiment report",
                    summary_text())
         results_page(pdf)
