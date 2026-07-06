@@ -1,8 +1,8 @@
-run_name: baseline_mistral7b_v4
+run_name: teacher_ref_mistral7b_v4
 model:
   name: mistralai/Mistral-7B-Instruct-v0.1
 data:
   examples_path: data/poem/examples_v4.jsonl
   corpus_style: verse
 train:
-  run_class: baseline
+  run_class: teacher_reference

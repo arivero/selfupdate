@@ -114,7 +114,7 @@ def smoke_one(name: str, examples: str, window_blocks: int, max_new: int,
         L0 = n - window_blocks + 1
         h_in = _advance(stack, h0, pos_emb_s, L0 - 1)
         window_losses, _ = window_step(
-            stack, L0, h_in, pos_emb_s, targets, s0, A, ans0 - s0, None,
+            stack, L0, h_in, pos_emb_s, targets, s0, A, ans0 - s0,
             "nmse", readout_w=1.0, readout_source="teacher_kl")
         assert all(torch.isfinite(v.detach().float()).all() for v in window_losses)
         assert all(p.grad is None for p in _frozen_params(stack)), \

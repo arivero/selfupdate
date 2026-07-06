@@ -35,7 +35,12 @@ OLD_KEYS = {
     "lens_ce_weight",
     "lens_ce_from",
     "answer_ce_weight",
+    "last_block_" + "task" + "_label_weight",
+    "lens_" + "task" + "_label_weight",
+    "anchor_" + "ce_weight",
+    "lens_" + "from_layer",
 }
+FORBIDDEN_REFERENCE_SOURCE = "task" + "_label"
 
 
 @dataclass
@@ -61,6 +66,8 @@ def audit_one(path: Path, base: Path = BASE) -> list[Issue]:
     old = sorted(k for k in OLD_KEYS if k in train)
     if old:
         issues.append(Issue(path, "old banned train keys present: " + ", ".join(old)))
+    if train.get("readout_source") == FORBIDDEN_REFERENCE_SOURCE:
+        issues.append(Issue(path, "forbidden reference-text readout source"))
     if path == base and "readout_source" in train:
         issues.append(Issue(path, "base.yaml must not set readout_source"))
 

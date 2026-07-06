@@ -65,7 +65,7 @@ def main() -> None:
                     max_extra_tokens=args.max_extra_tokens)
     r["batch_size"] = args.batch_size
     r["max_extra_tokens"] = args.max_extra_tokens
-    r["baseline_kind"] = "unmodified_model_without_rag_input" if args.base else "checkpoint"
+    r["teacher_reference_kind"] = "teacher_epoch0_native_no_rag" if args.base else "checkpoint"
     r["model"] = cfg.model.name
     r["examples_path"] = cfg.data.examples_path
     r["general"] = general_ce(model, tok, device=cfg.model.device)

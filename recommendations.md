@@ -10,7 +10,7 @@ is for layerwise forward distillation. Tail-only and `tail_*` work is not an
 active method surface here. Preserve historical evidence only as archived
 context, or move it to `../selfupdate_kd`.
 
-## Implemented Baseline Tooling
+## Implemented Teacher-Reference Tooling
 
 The first cleanup pass on 2026-07-05 added the following foundations:
 
@@ -18,8 +18,8 @@ The first cleanup pass on 2026-07-05 added the following foundations:
 - `scripts/build_corpus_index.py`: writes `runs/corpus.csv` with run class,
   evidence status, readout source/window, metrics, eval coverage, and signal
   attribution coverage.
-- `scripts/report.py`: now reads evidence status and flags legacy/task-label
-  artifacts instead of mixing them into method claims.
+- `scripts/report.py`: now reads evidence status and flags legacy
+  reference-text-training artifacts instead of mixing them into method claims.
 - `scripts/layer_loss_plots.py`: now emits per-run loss PNG, heatmap, and CSV.
 - `scripts/forget_curves.py`: now defaults to all runs and emits per-run
   recall/forgetting plots as well as global CSV/PNG.
@@ -40,8 +40,8 @@ Every major conclusion should be backed by a reproducible evidence bundle:
 7. Signal attribution between layerwise hidden losses and readout terms.
 8. Model-size and model-family coverage, not only the Qwen3-8B or one-rung
    result.
-9. A conclusion table that explicitly states what is proven, what is baseline
-   only, what is confounded, and what is open.
+9. A conclusion table that explicitly states what is proven, what is epoch-zero
+   teacher reference only, what is confounded, and what is open.
 
 ## Branch Hygiene First
 
@@ -58,8 +58,8 @@ Before expanding the corpus, clean the reporting surface.
   `conn_window > 0` and `conn_stride: 1`.
 - Add a static config audit that fails on unpinned readout source for every
   run using a behavioral readout.
-- Keep `task_label` readout arms only if the run name and report class say
-  baseline or ablation.
+- Keep any artifact that trained against reference text out of active branch
+  conclusions; it is forbidden legacy evidence here.
 - Update `scripts/report.py` summary text. It still describes bounded tail
   cross-entropy (log loss) as a current lever, which conflicts with the branch
   rule.
@@ -72,7 +72,7 @@ report manifest:
 | class | meaning | allowed in method conclusions |
 |---|---|---|
 | `method` | teacher-sourced layerwise method, sanctioned window semantics | yes |
-| `baseline` | supervised or task-label comparison | no, comparison only |
+| `teacher_reference` | epoch-zero teacher, native or RAG/context input | no, reference only |
 | `ablation` | mechanism probe that violates one method invariant intentionally | no |
 | `control` | negative or instrumentation control | no |
 | `legacy_archive` | historical run kept for context only | no |
@@ -186,8 +186,8 @@ Required report values:
 - readout gradient norm
 - hidden share
 - per-block hidden/readout share
-- readout source: `teacher_kl` or `task_label`
-- classification: method, baseline, ablation, control, archive
+- readout source: `teacher_kl`
+- classification: method, teacher_reference, ablation, control, archive
 
 The report should refuse to call a result layerwise-primary unless hidden share
 passes a stated threshold or the text explicitly says it does not.
@@ -233,7 +233,7 @@ For H100 or bridge work, add:
 - Qwen3.6-27B H100 versus L40S comparison if quantized or sharded lanes are
   used
 - Gemma-4-26B-A4B single-H100 and PP2 speed certification
-- Gemma-4-31B PP2 baseline plus an explicit single-H100 boundary test
+- Gemma-4-31B PP2 teacher reference plus an explicit single-H100 boundary test
 
 Every new 2026 model must have a training-speed certificate before any long
 run is interpreted: batch-size sweep, peak memory, GPU utilization trace,
@@ -294,7 +294,7 @@ Disallowed in active method reports:
 Keep source roles separate:
 
 - `teacher_kl`: teacher-sourced method readout.
-- `task_label`: supervised baseline only.
+- reference-text readout: forbidden in this branch.
 - transcript-equivalent readout: deployment analogy only, not a lab method
   unless the transcript is literally teacher-generated in that run.
 
@@ -312,7 +312,7 @@ Separate data effects from method effects:
 - anchor variants
 - heldout/passage-only channel runs
 
-Each data family needs a `base`, `method`, `baseline`, and `negative control`
+Each data family needs a `teacher_reference`, `method`, and `negative control`
 where feasible.
 
 ## Conclusion Ledger
@@ -342,7 +342,7 @@ Suggested statuses:
 - `confounded`
 - `open`
 - `retracted`
-- `baseline_only`
+- `teacher_reference_only`
 - `archived`
 
 The report should render this ledger before narrative findings. Narrative
@@ -374,7 +374,7 @@ The report should fail or warn loudly when:
 - a method run lacks destruction eval
 - a readout run lacks signal attribution
 - a model lacks a base general-CE reference
-- a run has `task_label` but is classified as method
+- a run trained against reference text
 - a run has legacy `tail_*` knobs in the active report
 - a conclusion references a confounded run
 

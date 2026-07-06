@@ -123,7 +123,7 @@ def main() -> int:
     ap.add_argument("--num-shards", type=int, default=1)
     ap.add_argument("--shard-index", type=int, default=0)
     ap.add_argument("--auto-map", action="store_true",
-                    help="load with device_map=auto for large two-card baselines")
+                    help="load with device_map=auto for large two-card teacher references")
     ap.add_argument("--bucket-by-length", action="store_true",
                     help="throughput mode: sort examples by reference length inside each shard")
     ap.add_argument("--out", default=None)
@@ -154,17 +154,17 @@ def main() -> int:
                         bucket_by_length=args.bucket_by_length)
     model_short = cfg.model.name.split("/")[-1]
     data_stem = Path(cfg.data.examples_path).stem
-    r["baseline_kind"] = "unmodified_model_with_rag_input"
+    r["teacher_reference_kind"] = "teacher_epoch0_rag_context"
     r["model"] = cfg.model.name
     r["examples_path"] = cfg.data.examples_path
     r["batch_size"] = args.batch_size
     r["num_shards"] = args.num_shards
     r["shard_index"] = args.shard_index
-    print(f"RAG BASELINE {model_short} x {data_stem}: n={r['n']} "
+    print(f"TEACHER RAG REFERENCE {model_short} x {data_stem}: n={r['n']} "
           f"cer {r['cer']:.4f} cer_flat {r['cer_flat']:.4f} "
           f"line_exact {r['line_exact']:.4f}")
 
-    out = Path(args.out or f"runs/baseline_rag_{model_short}_{data_stem}.json")
+    out = Path(args.out or f"runs/teacher_ref_rag_{model_short}_{data_stem}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(r, ensure_ascii=False, indent=1))
     print(f"wrote {out}")

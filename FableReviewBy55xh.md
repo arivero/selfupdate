@@ -16,11 +16,11 @@ branch-law findings recorded below:
   `scripts/audit_configs.py`.
 - `configs/base.yaml` no longer sets a readout source. Readout experiments
   must pin `readout_source` explicitly.
-- Active task-label readout/lens/last-block configs and tail-only configs were
-  removed from `configs/experiments`; surviving readout configs are sliding
-  `conn_window` / `conn_stride: 1` configs with explicit `teacher_kl`.
+- Active reference-text readout/lens/last-block configs and tail-only configs
+  were removed from `configs/experiments`; surviving readout configs are
+  sliding `conn_window` / `conn_stride: 1` configs with explicit `teacher_kl`.
 - `teacher_censored` was made pure by construction and validation rejects
-  readout/task-label knobs for that schedule.
+  reference-text readout knobs for that schedule.
 - Hot-loop train logging now keeps loss tensors on device and flushes Python
   floats at accumulation/epoch boundaries.
 - `scripts/build_corpus_index.py`, gate-aware `scripts/report.py`, and
@@ -36,7 +36,7 @@ This branch contains a serious and productive research codebase: the core
 layerwise machinery is unusually well documented, locality is tested directly,
 run metadata is rich, and the experiment campaign has real breadth. The main
 technical problem is not lack of code quality; it is branch contamination. The
-tree still exposes and reports tail-only / tail-CE / task-label readout
+tree still exposes and reports tail-only / tail-CE / reference-text readout
 machinery after the branch rules explicitly banned it as non-layerwise,
 classical-distillation territory. That makes the branch harder to operate,
 harder to review, and easier to misclassify.
@@ -48,8 +48,8 @@ Highest-priority fixes:
    tail-specific readout work belongs in `../selfupdate_kd` or an archival
    history, not in active reports for this branch.
 2. Enforce the target law at the config/report layer, not only inside
-   `tail_step`: method arms must be teacher-sourced; `task_label` arms must be
-   visibly labeled as baselines or absent from this branch.
+   `tail_step`: method arms must be teacher-sourced; reference-text training
+   must be absent from this branch.
 3. Pay down the hot-loop sync cost before H100-scale execution. The current
    path is adequate for L40S campaign work, but it will waste H100 throughput.
 
@@ -89,8 +89,8 @@ Main code-quality issues:
   knobs are dangerous in this repo because defaults have already produced
   campaign confounds.
 - `last_block_ce_weight` and `lens_ce_weight` remain label-targeting paths.
-  They may be useful as baselines, but the code and configs should make that
-  impossible to confuse with the method.
+  They may be useful only as forbidden historical evidence, but the code and
+  configs should make that impossible to confuse with the method.
 
 ## 2. Accuracy Against The Described Targets
 
@@ -103,8 +103,8 @@ What is accurate:
   endpoint loss, detached window input, bounded backward depth, and uniform
   k-deep credit over covered body layers.
 - `teacher_kl` readout is implemented as a teacher-sourced target through the
-  frozen head, and tests verify that corrupting `label_ids` does not change its
-  gradients.
+  frozen head, and tests verify that the readout path has no reference-label
+  input.
 - `teacher_censored` was restored to its pure meaning: stationary teacher-stream
   inputs, independent layers, no connected window, and no readout CE.
 
@@ -116,9 +116,9 @@ What is inaccurate or misleading:
   just historical clutter; it interferes with the layerwise branch by making
   classical-distillation evidence look like active method evidence.
 - `EXPERIMENTS.md` and report-facing language still crown or foreground arms
-  whose readout source is `task_label`. `CLAUDE.md` / `AGENTS.md` say this is
-  baseline-only and belongs outside method arms. The later "last 3%" resolution
-  explains why task-label CE helps verbatim recall, but it does not make it a
+  whose readout source is reference text. `CLAUDE.md` / `AGENTS.md` say this is
+  forbidden in this branch. The later "last 3%" resolution
+  explains why reference-text cross-entropy helps verbatim recall, but it does not make it a
   teacher-sourced layerwise method in the lab setting.
 - The "explicit `tail_ce_kind`" fix is weaker than advertised. `TrainConfig`
   defaults to `UNSET`, but `configs/base.yaml` sets `teacher_kl`, and many
@@ -141,7 +141,7 @@ Recommended target-correct cleanup:
   this branch explaining why those results are excluded.
 - Add a config audit test that scans `configs/experiments/*.yaml` and fails if
   any active method arm has `tail_ce_blocks > 0` without a sanctioned sliding
-  window, or uses `task_label` outside a baseline/ablation namespace.
+  window, or uses reference-text training.
 
 ## 3. Speed And Hardware Fit
 
@@ -210,7 +210,7 @@ Coverage gaps and unresolved claims:
   item and the natural depth-parallel extension.
 - The teacher-sourced method remains weak for verbatim recall under measured
   `teacher_kl`; the branch has evidence for the pure-distribution bound, but
-  the high-recall crown relies on task-label/transcript-equivalent framing.
+  the high-recall crown relies on forbidden reference-text/transcript-equivalent framing.
 - H100-specific evidence is not yet present. The L40S numbers are useful but
   do not prove throughput, memory fragmentation, or PP/TP correctness on H100.
 - Eval-time per-layer residuals at checkpoints are missing; training losses
@@ -220,9 +220,9 @@ Coverage gaps and unresolved claims:
 
 The core layerwise implementation is credible, and the campaign produced a
 valuable empirical map. The branch should now become stricter, not broader:
-remove active tail-specific code/reporting, separate baseline/classical
+remove active tail-specific code/reporting, separate teacher-reference/classical
 distillation artifacts into the sibling branch, enforce teacher-sourced method
 targets at config-audit level, and then optimize the hot loop for H100-scale
 runs. Without that cleanup, future work will keep paying the same tax: method
-claims, baseline evidence, and legacy tail experiments will remain mixed in the
+claims, teacher-reference evidence, and legacy tail experiments will remain mixed in the
 same operational surface.

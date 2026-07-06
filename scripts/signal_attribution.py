@@ -1,5 +1,5 @@
 """Signal attribution: what fraction of the training gradient comes from
-the per-layer hidden losses vs behavioral readout/task-label baselines?
+the per-layer hidden losses vs teacher-sourced behavioral readout?
 
 The naming contract (CLAUDE.md) requires this number: a project called
 "layerwise distillation" must show the hidden matching is the primary
@@ -27,7 +27,7 @@ from selfupdate.config import load_config
 from selfupdate.data.dataset import DistillDataset
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import OnlineTeacherSource
-from selfupdate.train.losses import HiddenLoss, task_label_ce_baseline
+from selfupdate.train.losses import HiddenLoss
 
 
 def load_student(cfg, checkpoint: str, dev: str):
@@ -97,7 +97,6 @@ def main():
         targets = teacher.aligned_targets(it, dev)
         ids = it.student_ids.to(dev)[None]
         pos = it.position_ids.to(dev)[None]
-        label_ids = ids[0, it.ans0: it.s0 + it.A]
         h = stack.embed(ids)
         pos_emb = stack.rope(h, pos)
         L = 1
@@ -114,22 +113,21 @@ def main():
                             targets[LL], normed=(LL == n)))
                     logits = stack.lm_head(stack.final_norm(hh)[
                         0, it.ans0 - 1: it.s0 + it.A - 1])
-                    if cfg.train.readout_source == "teacher_kl":
-                        with torch.no_grad():
-                            t_logits = stack.lm_head(
-                                targets[n][it.ans0 - it.s0 - 1: it.A - 1]
-                                .to(logits.dtype)
-                            )
-                        readout = cfg.train.readout_weight * torch.nn.functional.kl_div(
-                            torch.nn.functional.log_softmax(logits.float(), dim=-1),
-                            torch.nn.functional.log_softmax(t_logits.float(), dim=-1),
-                            log_target=True, reduction="batchmean",
+                    if cfg.train.readout_source != "teacher_kl":
+                        raise ValueError(
+                            f"unknown readout_source {cfg.train.readout_source!r}; "
+                            "only teacher_kl is allowed"
                         )
-                    elif cfg.train.readout_source == "task_label":
-                        readout = cfg.train.readout_weight * task_label_ce_baseline(
-                            logits, label_ids)
-                    else:
-                        raise ValueError(f"unknown readout_source {cfg.train.readout_source!r}")
+                    with torch.no_grad():
+                        t_logits = stack.lm_head(
+                            targets[n][it.ans0 - it.s0 - 1: it.A - 1]
+                            .to(logits.dtype)
+                        )
+                    readout = cfg.train.readout_weight * torch.nn.functional.kl_div(
+                        torch.nn.functional.log_softmax(logits.float(), dim=-1),
+                        torch.nn.functional.log_softmax(t_logits.float(), dim=-1),
+                        log_target=True, reduction="batchmean",
+                    )
                     hid = cfg.train.window_hidden_weight * sum(losses)
                 model.zero_grad(set_to_none=True)
                 if backward_if_grad(hid, retain_graph=True):
@@ -140,17 +138,11 @@ def main():
                     for LL in range(readout0, n + 1):
                         aux2[LL] += grad_norm2(stack, LL)
                 break
-            lens_w = (cfg.train.lens_task_label_weight
-                      if L >= cfg.train.lens_from_layer else 0.0)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 h_out = stack.run_block(L, h.detach(), pos_emb)
                 hid = loss_fn(stack.loss_view(L, h_out)[0, it.s0: it.s0 + it.A],
                               targets[L], normed=(L == n))
                 aux = None
-                if lens_w > 0:
-                    s_lens = stack.lm_head(stack.final_norm(h_out)[
-                        0, it.ans0 - 1: it.s0 + it.A - 1])
-                    aux = lens_w * task_label_ce_baseline(s_lens, label_ids)
             model.zero_grad(set_to_none=True)
             if backward_if_grad(hid, retain_graph=aux is not None):
                 hid2[L] += grad_norm2(stack, L)

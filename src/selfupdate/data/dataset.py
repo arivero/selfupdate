@@ -53,7 +53,6 @@ class Batch:
     hidden: dict[int, torch.Tensor]  # L -> [B, Amax, H]
     readout_index: torch.Tensor      # [B, Rmax]
     readout_mask: torch.Tensor       # [B, Rmax] bool
-    label_ids: torch.Tensor          # [B, Rmax]
     teacher_ids: torch.Tensor | None = None
     t0: torch.Tensor | None = None
     t_priv: list | None = None
@@ -149,7 +148,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
     hidden_mask = torch.zeros(B, Amax, dtype=torch.bool)
     readout_index = torch.zeros(B, Rmax, dtype=torch.long)
     readout_mask = torch.zeros(B, Rmax, dtype=torch.bool)
-    label_ids = torch.zeros(B, Rmax, dtype=torch.long)
 
     layers = sorted(items[0].hidden)
     hidden: dict[int, torch.Tensor] = {}
@@ -175,7 +173,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
         if rlen > 0:
             readout_index[i, :rlen] = torch.arange(it.ans0 - 1, it.s0 + it.A - 1)
             readout_mask[i, :rlen] = True
-            label_ids[i, :rlen] = it.student_ids[it.ans0: it.s0 + it.A]
         if teacher_ids is not None:
             teacher_ids[i, :len(it.teacher_ids)] = it.teacher_ids
 
@@ -192,7 +189,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
         hidden=hidden,
         readout_index=readout_index,
         readout_mask=readout_mask,
-        label_ids=label_ids,
         teacher_ids=teacher_ids,
         t0=torch.tensor([it.t0 for it in items], dtype=torch.long),
         t_priv=[it.t_priv for it in items],

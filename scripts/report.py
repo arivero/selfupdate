@@ -1,7 +1,7 @@
 """Gate-aware PDF report of all runs: runs/report.pdf.
 
 Assembles whatever artifacts exist and classifies each run before it can be
-used as method evidence. Legacy task-label readout, old tail-only config
+used as method evidence. Legacy reference-text readout, old tail-only config
 keys, and missing readout provenance are reported as excluded/confounded,
 not silently mixed into the layerwise-distillation claim.
 
@@ -31,7 +31,11 @@ RUNS = Path("runs")
 OLD_KEYS = {
     "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
     "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+    "last_block_" + "task" + "_label_weight",
+    "lens_" + "task" + "_label_weight",
+    "anchor_" + "ce_weight", "lens_" + "from_layer",
 }
+FORBIDDEN_REFERENCE_SOURCE = "task" + "_label"
 
 
 def _text_page(pdf, title, body, fontsize=9):
@@ -108,8 +112,9 @@ def _evidence_status(cfg: dict) -> tuple[str, list[str]]:
     old = sorted(k for k in OLD_KEYS if k in t)
     if old:
         warnings.append("legacy config keys: " + ", ".join(old))
-    if t.get("readout_source") == "task_label" or t.get("tail_ce_kind") == "task_label":
-        warnings.append("task-label training signal; excluded from method claims")
+    if (t.get("readout_source") == FORBIDDEN_REFERENCE_SOURCE
+            or t.get("tail_ce_kind") == FORBIDDEN_REFERENCE_SOURCE):
+        warnings.append("FORBIDDEN legacy reference-text training signal")
     old_blocks = t.get("tail_ce_blocks", 0) or 0
     new_blocks = t.get("readout_window_blocks", 0) or 0
     blocks = new_blocks or old_blocks
@@ -150,18 +155,18 @@ def summary_text() -> str:
         "Branch law enforced by this report: method evidence must be layerwise",
         "forward distillation, must not train embedding/final norm/unembedding,",
         "and any behavioral readout must be teacher-sourced and attached to a",
-        "stride-1 sliding connected window. Task-label cross-entropy (log loss)",
-        "against the original text is a baseline/sibling-branch signal, not a",
-        "method signal here.",
+        "stride-1 sliding connected window. This branch never trains against",
+        "poem/reference tokens; old artifacts that did so are forbidden legacy",
+        "evidence only.",
         "",
     ]
     if base and best_clean:
         name, run = best_clean
         lines += [
-            f"Recitation (full corpus, n={base['n']}): base CER {base['cer']:.3f} ->",
+            f"Recitation (full corpus, n={base['n']}): epoch-zero native teacher CER {base['cer']:.3f} ->",
             f"best clean-method artifact ({name}) CER {run['cer']:.3f},",
             f"{run['line_exact']:.0%} lines verbatim.",
-            f"Forgetting probe (CE on held-out text): base {base['general']['mean_ce']:.3f},",
+            f"Forgetting probe (cross-entropy/log loss on held-out text): epoch-zero native teacher {base['general']['mean_ce']:.3f},",
             f"best-run {run['general']['mean_ce']:.3f} (delta {run['general']['mean_ce']-base['general']['mean_ce']:+.2f}).",
             "  (computed from current artifacts)",
             "",
@@ -174,7 +179,7 @@ def summary_text() -> str:
         ]
     lines += [
         "Report gates:",
-        " 1. Old tail_* / task-label configs are excluded or flagged.",
+        " 1. Old tail_* / reference-text-training configs are excluded or flagged.",
         " 2. Readout source must be explicit; no inherited source is evidence.",
         " 3. Per-run appendix lists run_class, readout source/window, and warnings.",
         " 4. Signal attribution JSON is expected next to every readout claim.",
@@ -290,7 +295,7 @@ def coverage_matrix_page(pdf):
     fig.text(
         0.02, 0.925,
         "Cells are counts by status: C=clean, L=legacy/provenance caveat, "
-        "A=ablation/control, X=denied/confounded, B=baseline. "
+        "A=ablation/control, X=denied/confounded, T=epoch-zero teacher reference. "
         "A run can count in multiple rows.",
         fontsize=7,
     )

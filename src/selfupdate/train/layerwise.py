@@ -55,10 +55,10 @@ from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
-from .losses import HiddenLoss, task_label_ce_baseline
+from .losses import HiddenLoss
 
 RUN_CLASSES = {
-    "method", "baseline", "ablation", "control",
+    "method", "teacher_reference", "ablation", "control",
     "legacy_archive", "confounded", "open",
 }
 NON_METHOD_CLASSES = RUN_CLASSES - {"method"}
@@ -83,19 +83,12 @@ def _vocab_signature(stack) -> tuple:
     return tuple(sig)
 
 
-def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
-                     lens_task_label_w=0.0, label_ids=None, ans_off=None):
+def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
     """One local forward+backward for block L. ``h_in`` must be detached, so
     the recorded graph — and therefore the backward — is confined to block L:
     no gradient from this loss can reach any other block, the lm_head, or the
     logits. Returns (loss value, detached block output). Autocast wraps only
     the forward+loss; backward runs outside it.
-
-    ``lens_task_label_w > 0`` adds a per-block behavioral baseline: block L's output
-    is decoded through the frozen final norm + lm_head (the logit lens) and
-    CE'd against the task labels (BASELINE-only signal) — Belilovsky-style local heads,
-    for free. The head is frozen and ``h_in`` detached, so locality is
-    untouched: only block L's params see this gradient.
 
     ``kind`` is a HiddenLoss or a kind string (coerced; vocab-metric kinds
     need the constructed HiddenLoss carrying the frozen norm/head)."""
@@ -104,28 +97,18 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
                        normed=(L == stack.n_layers))
-        if lens_task_label_w > 0:
-            s_lens = stack.lm_head(
-                stack.final_norm(h_out)[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + lens_task_label_w * task_label_ce_baseline(s_lens, label_ids)
     loss.backward()
     return loss.detach(), h_out.detach()
 
 
-def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kind,
-                    ce_w, autocast=True):
-    """Block n's local step with the optional task-label-CE hybrid (baseline): logits go
-    through the frozen final norm + lm_head, but the graph is rooted at the
-    detached ``h_in``, so the backward still touches only block n's params."""
+def last_block_step(stack, h_in, pos_emb, target, s0, A, kind, autocast=True):
+    """Block n's local teacher-state step."""
     n = stack.n_layers
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(n, h_in, pos_emb)
         normed = stack.final_norm(h_out)
         loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
-        if ce_w > 0:
-            logits = stack.lm_head(normed[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + ce_w * task_label_ce_baseline(logits, label_ids)
     loss.backward()
     return loss.detach(), h_out.detach()
 
@@ -143,17 +126,6 @@ def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.
     for i in range(student_h.shape[0]):
         m = mask[i]
         losses.append(loss_fn(student_h[i, m], teacher_h[i, m], normed=normed))
-    return torch.stack(losses)
-
-
-def _task_label_ce_per_example(logits: torch.Tensor, label_ids: torch.Tensor,
-                               mask: torch.Tensor) -> torch.Tensor:
-    mask = mask.to(logits.device)
-    labels = label_ids.to(logits.device)
-    losses = []
-    for i in range(logits.shape[0]):
-        m = mask[i]
-        losses.append(task_label_ce_baseline(logits[i, m], labels[i, m]))
     return torch.stack(losses)
 
 
@@ -175,7 +147,7 @@ def _teacher_kl_per_example(student_logits: torch.Tensor,
 
 
 def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
-                           autocast=True, lens_task_label_w=0.0):
+                           autocast=True):
     """Batched counterpart of :func:`local_block_step`.
 
     The total backward scalar is the sum of per-example losses, matching the
@@ -190,18 +162,12 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.hidden_mask, normed=(L == stack.n_layers)
         )
         total = losses.sum()
-        if lens_task_label_w > 0:
-            shifted = _gather_batch_rows(h_out, batch.readout_index)
-            logits = stack.lm_head(stack.final_norm(shifted))
-            total = total + lens_task_label_w * _task_label_ce_per_example(
-                logits, batch.label_ids, batch.readout_mask
-            ).sum()
     total.backward()
     return losses.detach(), h_out.detach()
 
 
 def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
-                          ce_w, autocast=True):
+                          autocast=True):
     n = stack.n_layers
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
@@ -212,16 +178,11 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.hidden_mask, normed=True
         )
         total = losses.sum()
-        if ce_w > 0:
-            logits = stack.lm_head(_gather_batch_rows(normed, batch.readout_index))
-            total = total + ce_w * _task_label_ce_per_example(
-                logits, batch.label_ids, batch.readout_mask
-            ).sum()
     total.backward()
     return losses.detach(), h_out.detach()
 
 
-def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
+def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
                 readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
                 autocast=True):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
@@ -258,12 +219,10 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, ki
                     F.log_softmax(logits.float(), dim=-1),
                     F.log_softmax(t_logits.float(), dim=-1),
                     log_target=True, reduction="batchmean")
-            elif readout_source == "task_label":
-                # BASELINE-ONLY branch (training-target law): logits toward
-                # the original text = task supervision, kd-branch territory
-                total = total + readout_w * task_label_ce_baseline(logits, label_ids)
             else:
-                raise ValueError(f"unknown readout_source {readout_source!r}")
+                raise ValueError(
+                    f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
+                )
     total.backward()
     return [l.detach() for l in losses], h.detach()
 
@@ -310,12 +269,10 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                 total = total + readout_w * _teacher_kl_per_example(
                     logits, t_logits, batch.readout_mask,
                 ).sum()
-            elif readout_source == "task_label":
-                total = total + readout_w * _task_label_ce_per_example(
-                    logits, batch.label_ids, batch.readout_mask
-                ).sum()
             else:
-                raise ValueError(f"unknown readout_source {readout_source!r}")
+                raise ValueError(
+                    f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
+                )
     total.backward()
     return [l.detach() for l in losses], h.detach()
 
@@ -362,6 +319,10 @@ def _validate_knob_schedule(cfg) -> None:
     bad = []
     if run_class not in RUN_CLASSES:
         raise ValueError(f"unknown train.run_class {run_class!r}")
+    if run_class == "teacher_reference":
+        raise ValueError(
+            "train.run_class='teacher_reference' is eval-only: epoch-zero "
+            "recall belongs in evaluation artifacts, never in training")
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
     if cfg.train.batching != "item":
@@ -380,9 +341,10 @@ def _validate_knob_schedule(cfg) -> None:
         bad.append("offload_adam")
     if cfg.train.readout_window_blocks > 0 and cfg.train.readout_source == "UNSET":
         raise ValueError(
-            "readout_source must be set EXPLICITLY (task_label|teacher_kl) when "
-            "readout_window_blocks > 0 — the silent-default confound struck twice on "
-            "2026-07-05; defaults are experiment variables (CLAUDE.md)")
+            "readout_source must be set EXPLICITLY to teacher_kl when "
+            "readout_window_blocks > 0 — defaults are experiment variables")
+    if cfg.train.readout_source not in ("UNSET", "teacher_kl"):
+        bad.append("readout_source must be teacher_kl; reference-text training is forbidden")
     if cfg.train.readout_window_blocks > 0:
         if sched == "teacher_censored":
             bad.append("readout_window_blocks (teacher_censored is pure by definition)")
@@ -391,19 +353,8 @@ def _validate_knob_schedule(cfg) -> None:
                 bad.append("readout_window_blocks without sanctioned sliding conn_window/conn_stride")
             if cfg.train.readout_window_blocks != cfg.train.conn_window:
                 bad.append("readout_window_blocks must equal conn_window for method arms")
-    if is_method and cfg.train.readout_source == "task_label":
-        bad.append("readout_source=task_label (baseline only)")
-    if is_method and cfg.train.last_block_task_label_weight > 0:
-        bad.append("last_block_task_label_weight (baseline only)")
-    if is_method and cfg.train.lens_task_label_weight > 0:
-        bad.append("lens_task_label_weight (baseline only)")
     if is_method and cfg.train.window_hidden_weight != 1.0:
-        bad.append("window_hidden_weight != 1.0 (ablation/baseline only)")
-    if sched == "teacher_censored":
-        if cfg.train.last_block_task_label_weight > 0:
-            bad.append("last_block_task_label_weight (teacher_censored is pure by definition)")
-        if cfg.train.lens_task_label_weight > 0:
-            bad.append("lens_task_label_weight (teacher_censored is pure by definition)")
+        bad.append("window_hidden_weight != 1.0 (ablation/control only)")
     if sched == "tail_only":
         raise ValueError("schedule 'tail_only' was expunged 2026-07-05 "
                          "(damnatio memoriae — owner directive); its CE "
@@ -741,9 +692,8 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     (prefix rows + aligned rows, teacher position ids, privileged rows
     deleted). RESTORED to its original purpose 2026-07-05: stationary
     inputs, every layer independent, NO connected window and NO readout
-    CE — those drifted in via fe3201d for like-for-like comparability
-    and imported task supervision into the pure schedule. Teacher-stream
-    k-windows are a distinct future mode (docs/windows.md)."""
+    term. Teacher-stream k-windows are a distinct future mode
+    (docs/windows.md)."""
     n = stack.n_layers
     tA0 = it.t0
     rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
@@ -759,7 +709,7 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
         if L == n:
             loss_val, _ = last_block_step(
                 stack, inp, pos_emb_c, _target(L), it.s0, it.A,
-                it.ans0 - it.s0, None, loss_fn, 0.0,
+                loss_fn,
             )
         else:
             loss_val, _ = local_block_step(
@@ -771,15 +721,14 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
 
 def _summed_item(cfg, stack, loss_fn, it, targets, device):
     """One item's pass on the student's own stream: block-local steps (or
-    sliding conn_window-connected windows) below, task-label lens baselines
-    where configured, and the connected readout window at the top. ``targets`` is {L: [A, H]}
+    sliding conn_window-connected windows) below, plus an optional teacher-KL
+    connected readout window at the top. ``targets`` is {L: [A, H]}
     regardless of source (disk cache or online teacher)."""
     n = stack.n_layers
     ids = it.student_ids.to(device)[None]
     pos = it.position_ids.to(device)[None]
     h = stack.embed(ids)
     pos_emb = stack.rope(h, pos)
-    label_ids = ids[0, it.ans0: it.s0 + it.A]
     readout0 = n - cfg.train.readout_window_blocks + 1 if cfg.train.readout_window_blocks > 0 else n + 1
     W = max(cfg.train.conn_window, 1)
     layer_losses = []
@@ -789,8 +738,8 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             readout_targets = {LL: targets[LL] for LL in range(readout0, n + 1)}
             readout_losses, h = window_step(
                 stack, readout0, h.detach(), pos_emb, readout_targets,
-                it.s0, it.A, it.ans0 - it.s0, label_ids,
-                loss_fn, cfg.train.readout_weight,
+                it.s0, it.A, it.ans0 - it.s0, loss_fn,
+                cfg.train.readout_weight,
                 hidden_w=cfg.train.window_hidden_weight,
                 readout_source=cfg.train.readout_source,
             )
@@ -812,8 +761,8 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                 L0 = max(1, L1 - W + 1)
                 win_losses, _ = window_step(
                     stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                    it.s0, it.A, it.ans0 - it.s0, label_ids,
-                    loss_fn, readout_w=0.0, L1=L1,
+                    it.s0, it.A, it.ans0 - it.s0, loss_fn,
+                    readout_w=0.0, L1=L1,
                 )
                 layer_losses.extend(win_losses)
             h = h_traj[last_body]
@@ -826,8 +775,8 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
             win_losses, h = window_step(
                 stack, L, h.detach(), pos_emb, win_targets,
-                it.s0, it.A, it.ans0 - it.s0, label_ids,
-                loss_fn, readout_w=0.0, L1=L1,
+                it.s0, it.A, it.ans0 - it.s0, loss_fn,
+                readout_w=0.0, L1=L1,
             )
             layer_losses.extend(win_losses)
             L = L1 + 1
@@ -835,19 +784,12 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
         if L == n:
             loss_val, h = last_block_step(
                 stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
-                it.ans0 - it.s0, label_ids, loss_fn,
-                max(cfg.train.last_block_task_label_weight,
-                    cfg.train.lens_task_label_weight
-                    if L >= cfg.train.lens_from_layer else 0.0),
+                loss_fn,
             )
         else:
-            lens_w = (cfg.train.lens_task_label_weight
-                      if L >= cfg.train.lens_from_layer else 0.0)
             loss_val, h = local_block_step(
                 stack, L, h.detach(), pos_emb, targets[L],
                 it.s0, it.A, loss_fn,
-                lens_task_label_w=lens_w, label_ids=label_ids,
-                ans_off=it.ans0 - it.s0,
             )
         layer_losses.append(loss_val)
         L += 1
@@ -911,16 +853,11 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
         if L == n:
             loss_vals, h = last_block_step_batch(
                 stack, h.detach(), pos_emb, targets[L], batch, loss_fn,
-                max(cfg.train.last_block_task_label_weight,
-                    cfg.train.lens_task_label_weight
-                    if L >= cfg.train.lens_from_layer else 0.0),
             )
         else:
-            lens_w = (cfg.train.lens_task_label_weight
-                      if L >= cfg.train.lens_from_layer else 0.0)
             loss_vals, h = local_block_step_batch(
                 stack, L, h.detach(), pos_emb, targets[L],
-                batch, loss_fn, lens_task_label_w=lens_w,
+                batch, loss_fn,
             )
         layer_losses.append(loss_vals)
         L += 1
@@ -1113,11 +1050,10 @@ def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
     recite the poem") exactly where catastrophic remembering showed it is
     installed. Returns the unweighted loss value.
 
-    ``base_logits=None`` -> plain next-token CE (the Wave K negative:
-    fixed-fragment CE is itself memorization pressure and WORSENS
-    intrusion). With ``base_logits`` -> KL(base || student) per position:
-    "on neighbor-genre input, behave like the base model" — the correct
-    invariant."""
+    ``base_logits`` is required: KL(base || student) per position means
+    "on neighbor-genre input, behave like the teacher/base model"."""
+    if base_logits is None:
+        raise ValueError("anchor_step requires teacher/base logits; reference-token CE is forbidden")
     device = ids.device
     pos = torch.arange(len(ids), device=device)[None]
     with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16,
@@ -1131,23 +1067,18 @@ def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
         for L in range(L0, stack.n_layers + 1):
             h = stack.run_block(L, h, pos_emb)
         full_logits = stack.lm_head(stack.final_norm(h))[0]
-        if base_logits is None:
-            loss = task_label_ce_baseline(full_logits[:-1], ids[1:])
-        else:
-            loss = F.kl_div(
-                F.log_softmax(full_logits.float(), dim=-1),
-                F.log_softmax(base_logits.float(), dim=-1),
-                log_target=True, reduction="batchmean",
-            )
+        loss = F.kl_div(
+            F.log_softmax(full_logits.float(), dim=-1),
+            F.log_softmax(base_logits.float(), dim=-1),
+            log_target=True, reduction="batchmean",
+        )
     (w * loss).backward()
     return loss.detach()
 
 
 def _make_anchor(cfg, tok, teacher=None):
-    """Returns (bank, weight) or None. anchor_kl_weight takes precedence
-    (the Wave K finding: KL-to-base is the correct anchor; CE is kept only
-    for the recorded ablation)."""
-    w = cfg.train.anchor_kl_weight or cfg.train.anchor_ce_weight
+    """Returns (bank, weight) or None. Anchor regularization is teacher KL."""
+    w = cfg.train.anchor_kl_weight
     if w <= 0:
         return None
     if cfg.train.readout_window_blocks <= 0:
@@ -1327,11 +1258,9 @@ def _train_sequential(cfg, stack, cache, tok, log):
                     pos_emb = stack.rope(h_in, pos)
                     target = it.hidden[L].to(device)
                     if L == n:
-                        label_ids = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
                         loss_val, _ = last_block_step(
                             stack, h_in.detach(), pos_emb, target, it.s0, it.A,
-                            it.ans0 - it.s0, label_ids, loss_fn,
-                            cfg.train.last_block_task_label_weight,
+                            loss_fn,
                         )
                     else:
                         loss_val, _ = local_block_step(

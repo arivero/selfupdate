@@ -1,7 +1,4 @@
-"""Training-target law: gradients must be provably label-independent
-under teacher_kl. These tests execute the implemented code — they guard
-the law against spec/code divergence, which happened once (2026-07-05:
-two unwired call sites silently used task-label CE)."""
+"""Training-target law: training targets must be teacher-sourced only."""
 
 import pytest
 import torch
@@ -21,9 +18,10 @@ def test_base_readout_source_is_unset_sentinel():
     import inspect
     sig = inspect.signature(lw.window_step)
     assert sig.parameters["readout_source"].default == "teacher_kl"
+    assert not any("label" in name for name in sig.parameters)
 
 
-def test_all_ce_call_sites_pass_cfg_kind():
+def test_all_readout_call_sites_pass_cfg_kind():
     import inspect, re
     src = inspect.getsource(lw)
     # every window_step call that passes a readout weight from cfg must pass source
@@ -64,34 +62,31 @@ def _grads(stack, L0):
             for p in stack.block_params(L) if p.grad is not None]
 
 
+def test_reference_text_loss_helpers_not_imported_by_trainer():
+    import inspect
+    src = inspect.getsource(lw)
+    old = "task" + "_label"
+    assert old + "_ce_baseline" not in src
+    assert "_" + old + "_ce_per_example" not in src
+
+
 @cuda
-def test_teacher_kl_gradients_label_independent(stack):
-    """THE law, executed: corrupt the labels — under teacher_kl the
-    gradients must be bitwise identical; under task_label they must not."""
-    h, pe, targets, labels, s0, A = _setup(stack)
+def test_teacher_kl_readout_has_no_label_input(stack):
+    """THE law, executed: readout gradients are driven by teacher logits only."""
+    h, pe, targets, _labels, s0, A = _setup(stack)
     n = stack.n_layers
     L0 = n - 2
     fn = HiddenLoss("nmse")
-    wrong = torch.roll(labels, 1)
 
-    def run(kind, lab):
-        stack.model.zero_grad(set_to_none=True)
-        torch.manual_seed(0)
-        lw.window_step(stack, L0, h.detach(), pe,
-                       {L: targets[L] for L in range(L0, n + 1)},
-                       s0, A, 1, lab, fn,
-                       readout_w=0.5, hidden_w=1.0,
-                       readout_source=kind)
-        return _grads(stack, L0)
-
-    g1 = run("teacher_kl", labels)
-    g2 = run("teacher_kl", wrong)
-    assert all(torch.equal(a, b) for a, b in zip(g1, g2)), \
-        "teacher_kl gradient depends on labels — LAW VIOLATED"
-    g3 = run("task_label", labels)
-    g4 = run("task_label", wrong)
-    assert not all(torch.equal(a, b) for a, b in zip(g3, g4)), \
-        "task_label control failed to depend on labels (test broken?)"
+    stack.model.zero_grad(set_to_none=True)
+    torch.manual_seed(0)
+    lw.window_step(stack, L0, h.detach(), pe,
+                   {L: targets[L] for L in range(L0, n + 1)},
+                   s0, A, 1, fn,
+                   readout_w=0.5, hidden_w=1.0,
+                   readout_source="teacher_kl")
+    grads = _grads(stack, L0)
+    assert grads and all(torch.isfinite(g).all() for g in grads)
 
 
 def test_unknown_kind_refuses():
@@ -99,7 +94,7 @@ def test_unknown_kind_refuses():
         # signature-level: unknown sentinel must not silently supervise
         import inspect
         src = inspect.getsource(lw.window_step)
-        assert 'raise ValueError' in src and 'task_label' in src
+        assert 'raise ValueError' in src and 'only teacher_kl is allowed' in src
         raise ValueError("guard present")
 
 
@@ -116,8 +111,8 @@ def test_knob_schedule_refusal():
     cfg.train.readout_source = "UNSET"
     with pytest.raises(ValueError, match="EXPLICITLY"):
         _validate_knob_schedule(cfg)
-    cfg.train.readout_source = "task_label"
-    with pytest.raises(ValueError, match="pure by definition"):
+    cfg.train.readout_source = "reference_text"
+    with pytest.raises(ValueError, match="teacher_kl"):
         _validate_knob_schedule(cfg)
     cfg.train.readout_window_blocks = 0
     cfg.train.conn_window = 8
@@ -147,6 +142,6 @@ def test_knob_schedule_refusal():
         _validate_knob_schedule(cfg)
     cfg.train.conn_stride = 1
     _validate_knob_schedule(cfg)
-    cfg.train.readout_source = "task_label"
-    with pytest.raises(ValueError, match="baseline only"):
+    cfg.train.readout_source = "reference_text"
+    with pytest.raises(ValueError, match="teacher_kl"):
         _validate_knob_schedule(cfg)

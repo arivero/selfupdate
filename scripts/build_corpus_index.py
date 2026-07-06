@@ -27,7 +27,11 @@ CONFIGS = ROOT / "configs/experiments"
 OLD_KEYS = {
     "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
     "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+    "last_block_" + "task" + "_label_weight",
+    "lens_" + "task" + "_label_weight",
+    "anchor_" + "ce_weight", "lens_" + "from_layer",
 }
+FORBIDDEN_REFERENCE_SOURCE = "task" + "_label"
 
 FIELDS = [
     "run", "run_class", "evidence_status", "warnings", "active_config",
@@ -65,8 +69,8 @@ def _status(train: dict) -> tuple[str, list[str]]:
     if old:
         warnings.append("legacy_keys=" + ",".join(old))
     source = train.get("readout_source", train.get("tail_ce_kind", "UNSET"))
-    if source == "task_label":
-        warnings.append("task_label_training_signal")
+    if source == FORBIDDEN_REFERENCE_SOURCE:
+        warnings.append("forbidden_reference_text_training_signal")
     blocks = train.get("readout_window_blocks", train.get("tail_ce_blocks", 0)) or 0
     if blocks:
         if source == "UNSET":

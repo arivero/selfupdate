@@ -54,8 +54,17 @@ def test_anchor_grads_confined_to_window():
     L0 = n - 4 + 1
     model.zero_grad(set_to_none=True)
     a_ids, _ = bank.next()
-    ce = float(anchor_step(stack, L0, a_ids, w=0.5, autocast=False).detach().cpu())
-    assert ce > 0
+    pos = torch.arange(len(a_ids), device="cuda")[None]
+    with torch.no_grad():
+        h = stack.embed(a_ids[None])
+        pe = stack.rope(h, pos)
+        for L in range(1, n + 1):
+            h = stack.run_block(L, h, pe)
+        base_logits = stack.lm_head(stack.final_norm(h))[0].detach()
+    kl = float(anchor_step(
+        stack, L0, a_ids, w=0.5, base_logits=base_logits, autocast=False,
+    ).detach().cpu())
+    assert kl >= 0
     for L in range(1, L0):
         assert all(p.grad is None for p in stack.block_params(L)), f"L{L} leaked"
     for L in range(L0, n + 1):

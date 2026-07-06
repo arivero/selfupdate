@@ -1,8 +1,8 @@
-run_name: baseline_qwen3_4b_v4
+run_name: teacher_ref_qwen3_4b_v4
 model:
   name: Qwen/Qwen3-4B
 data:
   examples_path: data/poem/examples_v4.jsonl
   corpus_style: verse
 train:
-  run_class: baseline
+  run_class: teacher_reference

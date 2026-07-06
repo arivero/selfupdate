@@ -33,8 +33,10 @@ are in `src/selfupdate/train/layerwise.py`:
 - `summed`
 - `sequential`
 - `teacher_censored`
-- bounded `tail_ce_blocks`
-- local `last_block_ce` / `lens_ce` auxiliaries
+- `mixed`
+- bounded sliding connected windows (`conn_window` + `conn_stride: 1`)
+- teacher-sourced readout (`readout_source: teacher_kl`) only when attached
+  to the sanctioned sliding window
 
 Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
@@ -45,8 +47,8 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   distillation of the top layers — it invalidates the layerwise/forward
   claim. The sanctioned form is the SLIDING k-connected window
   (`conn_window` + `conn_stride: 1`): every block updated with uniform
-  k-deep credit; the top window carries the CE only because logits exist
-  there. **HARD STOP (owner, 2026-07-04 ~22:00): the tailpure ablation
+  k-deep credit; the top window may carry a teacher-sourced readout only
+  because logits exist there. **HARD STOP (owner, 2026-07-04 ~22:00): the tailpure ablation
   batch queued tonight is the LAST tail experiment of the project. After
   it completes, NO new arm may use a tail-only window (conn_window
   0/absent + tail_ce_blocks > 0) — not as a baseline, not as a repro
@@ -57,7 +59,7 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   ../selfupdate_kd — route them there, keep this branch pure layerwise.**
   Precise window semantics (gradient-isolation, NOT memory management;
   endpoint vs in-window loss; teacher- vs student-stream input):
-  docs/windows.md — read it before touching tail_step or conn_window.
+  docs/windows.md — read it before touching `window_step` or `conn_window`.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
 - **Training-target law (owner, 2026-07-05): it is INCORRECT to train
@@ -65,18 +67,18 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   correct (that is what recall means); training toward it is task
   supervision, which belongs to ../selfupdate_kd. On this branch every
   behavioral training term must be TEACHER-SOURCED: readout =
-  tail_ce_kind 'teacher_kl' (the default); local per-layer behavioral
+  `readout_source: teacher_kl` pinned explicitly; local per-layer behavioral
   signal = hidden_loss 'lens_kl' (per-layer teacher distributions
-  through the frozen head). 'task_label' CE and label-targeting lens_ce
-  exist ONLY as labeled baselines/ablations, never in method arms.
-  WHY 'gold' was purged as a word: it is a supervised-learning term in
+  through the frozen head). Reference-text cross-entropy and label-targeting
+  lens losses are forbidden in this branch, not valid controls.
+  WHY 'gold' was purged as a word: it is a reference-text training term in
   which training target and eval reference are the SAME object.
   Distillation splits the roles — both teacher and student are
   EVALUATED against the original text, but the student is TRAINED from
   the teacher. A vocabulary lacking that distinction re-merges the
   roles silently; the lexicon now types them: reference (eval,
-  everyone) / teacher_* (training source) / task_label (the supervised
-  conflation, baseline-only). Reporting rule: expand every loss
+  everyone) / teacher_* (training source) / reference-text training
+  (forbidden conflation). Reporting rule: expand every loss
   abbreviation on first use per report — "CE" is written "cross-entropy
   (log loss) against <target>"; two-letter jargon is where a day of
   misclassification hid (2026-07-05).

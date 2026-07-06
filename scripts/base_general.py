@@ -1,4 +1,4 @@
-"""General-CE of a base model (forgetting baseline). Usage: base_general.py <model> <out.json>"""
+"""General CE of an epoch-zero teacher. Usage: base_general.py <model> <out.json>"""
 import json
 import sys
 from pathlib import Path

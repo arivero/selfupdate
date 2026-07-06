@@ -161,10 +161,3 @@ class HiddenLoss:
             F.log_softmax(t_logits.float(), dim=-1),
             log_target=True, reduction="batchmean",
         )
-
-
-def task_label_ce_baseline(student_logits: torch.Tensor, target_ids: torch.Tensor) -> torch.Tensor:
-    """BASELINE auxiliary: CE on task-label tokens (position-shifted by caller).
-    Gold ids may live on another card under pipeline parallel."""
-    return F.cross_entropy(student_logits.float(),
-                           target_ids.to(student_logits.device))

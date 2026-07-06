@@ -25,7 +25,7 @@ OLD_KEYS = {
 
 
 def results_table() -> pd.DataFrame:
-    base_ce = {}  # per-model forgetting baselines
+    base_ce = {}  # per-model epoch-zero teacher references
     base_p = Path("runs/base-eval-full/recite.json")
     if base_p.exists():
         base_ce["Qwen/Qwen3-0.6B"] = json.loads(base_p.read_text())["general"]["mean_ce"]

@@ -85,7 +85,7 @@ class LoraConfig:
 @dataclass
 class TrainConfig:
     method: str = "layerwise"
-    # method | baseline | ablation | control | legacy_archive | confounded | open
+    # method | teacher_reference | ablation | control | legacy_archive | confounded | open
     run_class: str = "method"
     # summed | sequential | teacher_censored | mixed
     schedule: str = "summed"
@@ -108,9 +108,6 @@ class TrainConfig:
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
     # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
     hidden_loss: str = "nmse"
-    # BASELINE auxiliary: task-label cross-entropy on the LAST block only,
-    # through the frozen final norm + lm_head. Method arms must keep this at 0.
-    last_block_task_label_weight: float = 0.0
     # Top readout term attached ONLY to sanctioned sliding windows:
     # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
     # The connected graph is still a gradient-isolation unit rooted at a
@@ -118,13 +115,12 @@ class TrainConfig:
     readout_window_blocks: int = 0
     readout_weight: float = 0.0
     # Hidden-loss weight inside a connected window. Method arms keep this 1.0;
-    # zero or reduced values are ablations/baselines only.
+    # zero or reduced values are ablations only.
     window_hidden_weight: float = 1.0
     # readout-term source (owner correction 2026-07-05): 'teacher_kl' =
     # KL(teacher || student) on the TEACHER'S context-conditioned logits
     # (derived from targets[n] through the frozen head — zero extra
-    # compute, 100% teacher-sourced. 'task_label' = CE on the dataset
-    # reference text = task supervision — BASELINE-ONLY.
+    # compute, 100% teacher-sourced. No reference-text source is allowed.
     # No base config default is allowed; readout runs must pin this explicitly.
     readout_source: str = 'UNSET'
     # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
@@ -138,17 +134,8 @@ class TrainConfig:
     # of a k-deep window that updates ALL covered blocks — uniform k-deep
     # credit everywhere, at ~k x body compute.
     conn_stride: int = 0
-    # BASELINE auxiliary: per-block task-label CE through the frozen logit lens.
-    # Method arms must keep this at 0.
-    lens_task_label_weight: float = 0.0
-    lens_from_layer: int = 1
-    # anti-intrusion anchor (catastrophic-remembering mitigation): applied once
-    # per optimizer step through the sanctioned top readout window. Anchor
-    # texts must never overlap the eval probes or the poem.
-    anchor_ce_weight: float = 0.0
-    # anchor-KL: KL(base || student) on anchor fragments through the top
-    # readout window. Takes precedence over anchor_ce_weight; needs an online
-    # teacher (frozen_teacher_copy or LoRA online) for base logits.
+    # anchor-KL: KL(teacher/base || student) on anchor fragments through the
+    # top readout window. Needs an online teacher for base logits.
     anchor_kl_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"
     grad_checkpointing: bool = True
@@ -201,6 +188,10 @@ class ExperimentConfig:
 
 
 def _from_dict(cls, d: dict):
+    known = {f.name for f in dataclasses.fields(cls)}
+    extra = sorted(set(d) - known)
+    if extra:
+        raise ValueError(f"unknown {cls.__name__} key(s): {', '.join(extra)}")
     kwargs = {}
     for f in dataclasses.fields(cls):
         if f.name not in d:

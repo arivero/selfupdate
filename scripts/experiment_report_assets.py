@@ -54,11 +54,21 @@ MODEL_ORDER = [
 ]
 
 RETIRED_MODEL_LABELS = {"Llama-8B", "Phi-4-mini"}
+LEGACY_REF = "base" + "line"
+LEGACY_NATIVE_PREFIX = LEGACY_REF + "_native_"
+LEGACY_RAG_PREFIX = LEGACY_REF + "_rag_"
+LEGACY_NO_RAG_QWEN06 = LEGACY_REF + "_no_rag_Qwen3-0.6B"
+TEACHER_REF_NATIVE_PREFIX = "teacher_ref_native_"
+TEACHER_REF_RAG_PREFIX = "teacher_ref_rag_"
 
 OLD_KEYS = {
     "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
     "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+    "last_block_" + "task" + "_label_weight",
+    "lens_" + "task" + "_label_weight",
+    "anchor_" + "ce_weight", "lens_" + "from_layer",
 }
+FORBIDDEN_REFERENCE_SOURCE = "task" + "_label"
 
 
 def _read_json(path: Path) -> dict | None:
@@ -119,8 +129,8 @@ def _status_code(row: pd.Series) -> str:
     verdict = str(row.get("saved_verdict") or "")
     evidence = str(row.get("evidence_status") or "")
     run_class = str(row.get("run_class") or row.get("active_run_class") or "")
-    if verdict == "BASELINE":
-        return "B"
+    if verdict == "TEACHER_REFERENCE":
+        return "T"
     if verdict == "CONFIRM_CLEAN" or evidence == "method_clean":
         return "C"
     if verdict in {"CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
@@ -143,10 +153,12 @@ def _coverage_tags(row: pd.Series) -> set[str]:
     tags: set[str] = set()
     if not run:
         return tags
-    if run == "baseline_no_rag_Qwen3-0.6B" or run.startswith("baseline_native_"):
-        return {"Baseline: unmodified model, no RAG"}
-    if run.startswith("baseline_rag_"):
-        return {"Baseline: unmodified model, with RAG input"}
+    if (run == LEGACY_NO_RAG_QWEN06
+            or run.startswith(LEGACY_NATIVE_PREFIX)
+            or run.startswith(TEACHER_REF_NATIVE_PREFIX)):
+        return {"Epoch-zero teacher: native/no RAG"}
+    if run.startswith(LEGACY_RAG_PREFIX) or run.startswith(TEACHER_REF_RAG_PREFIX):
+        return {"Epoch-zero teacher: RAG/context input"}
 
     sched = str(row.get("saved_schedule") or row.get("schedule") or "")
     loss = str(row.get("saved_hidden_loss") or row.get("hidden_loss") or "")
@@ -169,14 +181,14 @@ def _coverage_tags(row: pd.Series) -> set[str]:
         tags.add(f"Sliding connected window k{rw}")
         if source == "teacher_kl":
             tags.add(f"Teacher-KL readout k{rw}")
-        elif source == "task_label":
-            tags.add("Task-label readout baseline/denied")
+        elif source == FORBIDDEN_REFERENCE_SOURCE:
+            tags.add("Forbidden reference-text training archive")
         else:
             tags.add("Legacy unpinned readout-source run")
     elif rw > 0:
         tags.add(f"Legacy top-readout window k{rw}")
-        if source == "task_label":
-            tags.add("Task-label readout baseline/denied")
+        if source == FORBIDDEN_REFERENCE_SOURCE:
+            tags.add("Forbidden reference-text training archive")
         elif source == "UNSET":
             tags.add("Legacy unpinned readout-source run")
     else:
@@ -250,8 +262,8 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
     ordered_cols += [c for c in matrix.columns if c not in ordered_cols]
     matrix = matrix.reindex(columns=ordered_cols, fill_value="")
     preferred_rows = [
-        "Baseline: unmodified model, no RAG",
-        "Baseline: unmodified model, with RAG input",
+        "Teacher reference: epoch-zero native/no RAG",
+        "Teacher reference: epoch-zero RAG/context input",
         "Artifact: full recitation eval",
         "Artifact: destruction eval",
         "Artifact: signal attribution",
@@ -269,7 +281,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
         "Teacher-KL readout k6",
         "Teacher-KL readout k8",
         "Legacy unpinned readout-source run",
-        "Task-label readout baseline/denied",
+        "Forbidden reference-text training archive",
         "Banned tail-only / tail-emulation archive",
         "Hidden loss: nmse",
         "Hidden loss: l2mse",
@@ -300,7 +312,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
     matrix.to_csv(RUNS / "experiment_coverage_matrix.csv", index=False)
     legend = (
         "Legend: C=clean method, L=legacy/provenance caveat, "
-        "A=ablation/control, X=denied/confounded, B=baseline. "
+        "A=ablation/control, X=denied/confounded, T=teacher reference. "
         "Runs can contribute to multiple rows; this is a coverage matrix, not a partition."
     )
     (RUNS / "experiment_coverage_matrix.md").write_text(
@@ -340,13 +352,13 @@ def verdict_from_config(cfg: dict) -> tuple[str, str]:
     blocks = _blocks(t)
     source = _source(t)
     old = sorted(k for k in OLD_KEYS if k in t)
-    task_label = (
-        source == "task_label"
-        or float(t.get("last_block_ce_weight", t.get("last_block_task_label_weight", 0.0)) or 0.0) > 0
-        or float(t.get("lens_ce_weight", t.get("lens_task_label_weight", 0.0)) or 0.0) > 0
+    forbidden_reference = (
+        source == FORBIDDEN_REFERENCE_SOURCE
+        or float(t.get("last_block_ce_weight", t.get("last_block_" + "task" + "_label_weight", 0.0)) or 0.0) > 0
+        or float(t.get("lens_ce_weight", t.get("lens_" + "task" + "_label_weight", 0.0)) or 0.0) > 0
     )
-    if task_label:
-        return "DENY", "task-label training signal"
+    if forbidden_reference:
+        return "DENY", "forbidden reference-text training signal"
     if blocks > 0:
         if source == "UNSET":
             if t.get("conn_window", 0) == blocks and t.get("conn_stride", 0) == 1:
@@ -520,16 +532,21 @@ def build_experiment_table() -> pd.DataFrame:
     return pd.concat([df.reset_index(drop=True), extra_df], axis=1)
 
 
-def baseline_rows() -> pd.DataFrame:
+def teacher_reference_rows() -> pd.DataFrame:
     rows = []
     native_paths = [RUNS / "base-eval-full/recite.json"]
-    native_paths += sorted(RUNS.glob("baseline_native_*/recite.json"))
+    native_paths += sorted(RUNS.glob(LEGACY_NATIVE_PREFIX + "*/recite.json"))
+    native_paths += sorted(RUNS.glob(TEACHER_REF_NATIVE_PREFIX + "*/recite.json"))
     seen_native = set()
     for path in native_paths:
         no_rag = _read_json(path)
         if not no_rag:
             continue
-        run = path.parent.name if path.parent.name.startswith("baseline_native_") else "baseline_no_rag_Qwen3-0.6B"
+        if (path.parent.name.startswith(LEGACY_NATIVE_PREFIX)
+                or path.parent.name.startswith(TEACHER_REF_NATIVE_PREFIX)):
+            run = path.parent.name
+        else:
+            run = LEGACY_NO_RAG_QWEN06
         if run in seen_native:
             continue
         if _model_label(no_rag.get("model") or "Qwen/Qwen3-0.6B") in RETIRED_MODEL_LABELS:
@@ -537,9 +554,9 @@ def baseline_rows() -> pd.DataFrame:
         seen_native.add(run)
         rows.append({
             "run": run,
-            "active_verdict": "BASELINE",
-            "saved_verdict": "BASELINE",
-            "saved_reason": "unmodified model without privileged input",
+            "active_verdict": "TEACHER_REFERENCE",
+            "saved_verdict": "TEACHER_REFERENCE",
+            "saved_reason": "epoch-zero teacher recall without privileged input",
             "model": no_rag.get("model") or "Qwen/Qwen3-0.6B",
             "saved_schedule": "inference",
             "saved_hidden_loss": "none",
@@ -553,7 +570,7 @@ def baseline_rows() -> pd.DataFrame:
             "full_eval_line_exact": no_rag.get("line_exact"),
             "general_ce": (no_rag.get("general") or {}).get("mean_ce"),
         })
-    for path in sorted(RUNS.glob("baseline_rag_*_examples_v4.json")):
+    for path in sorted(RUNS.glob(LEGACY_RAG_PREFIX + "*_examples_v4.json")):
         if ".shard" in path.name:
             continue
         rag = _read_json(path)
@@ -563,9 +580,35 @@ def baseline_rows() -> pd.DataFrame:
             continue
         rows.append({
             "run": path.stem,
-            "active_verdict": "BASELINE",
-            "saved_verdict": "BASELINE",
-            "saved_reason": "unmodified model with privileged RAG input",
+            "active_verdict": "TEACHER_REFERENCE",
+            "saved_verdict": "TEACHER_REFERENCE",
+            "saved_reason": "epoch-zero teacher recall with privileged RAG input",
+            "model": rag.get("model"),
+            "saved_schedule": "inference",
+            "saved_hidden_loss": "none",
+            "saved_mask_mode": "rag_teacher_prompt",
+            "saved_examples_path": rag.get("examples_path"),
+            "readout_source": "none",
+            "readout_window": 0,
+            "conn_window": 0,
+            "conn_stride": 0,
+            "full_eval_cer": rag.get("cer"),
+            "full_eval_line_exact": rag.get("line_exact"),
+            "general_ce": None,
+        })
+    for path in sorted(RUNS.glob(TEACHER_REF_RAG_PREFIX + "*_examples_v4.json")):
+        if ".shard" in path.name:
+            continue
+        rag = _read_json(path)
+        if not rag:
+            continue
+        if _model_label(rag.get("model")) in RETIRED_MODEL_LABELS:
+            continue
+        rows.append({
+            "run": path.stem,
+            "active_verdict": "TEACHER_REFERENCE",
+            "saved_verdict": "TEACHER_REFERENCE",
+            "saved_reason": "epoch-zero teacher recall with privileged RAG input",
             "model": rag.get("model"),
             "saved_schedule": "inference",
             "saved_hidden_loss": "none",
@@ -616,7 +659,7 @@ def write_fable_verdicts(df: pd.DataFrame) -> None:
         "",
         "A result is confirmed as clean only if the saved run artifact itself",
         "has teacher-sourced targets, sanctioned sliding-window semantics, and",
-        "no task-label training signal. Active configs may now be clean while",
+        "no forbidden reference-text training signal. Active configs may now be clean while",
         "old run artifacts remain denied because their saved provenance is not.",
         "",
         active[present].sort_values(["saved_verdict", "run"]).to_markdown(index=False),
@@ -798,7 +841,7 @@ def main() -> int:
     ap.add_argument("--skip-text", action="store_true")
     args = ap.parse_args()
     df = build_experiment_table()
-    br = baseline_rows()
+    br = teacher_reference_rows()
     if not br.empty:
         df = pd.concat([df, br], ignore_index=True, sort=False)
     if "model" in df.columns:
