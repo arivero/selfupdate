@@ -16,6 +16,8 @@ path inside the attention layers.
 
 from __future__ import annotations
 
+import inspect
+
 import torch
 
 
@@ -40,6 +42,10 @@ class BlockStack:
         self.embed_tokens = inner.embed_tokens
         # MLA-style models compute rotary inside attention; rotary_emb is optional
         self.rotary_emb = getattr(inner, "rotary_emb", None)
+        self.rotary_needs_layer_type = (
+            self.rotary_emb is not None
+            and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+        )
         self.blocks = list(inner.layers)
         self.final_norm = inner.norm
         self.lm_head = model.lm_head
@@ -60,11 +66,20 @@ class BlockStack:
     def rope(self, hidden: torch.Tensor, position_ids: torch.Tensor):
         if self.rotary_emb is None:
             return None  # attention computes rotary internally (MLA-style)
+        if self.rotary_needs_layer_type:
+            return {"position_ids": position_ids}
         with torch.no_grad():
             return self.rotary_emb(hidden, position_ids)
 
     def run_block(self, L: int, hidden, position_embeddings, position_ids=None):
         """Forward decoder block L (1-based) on [B, n, H] hidden states."""
+        if self.rotary_needs_layer_type and isinstance(position_embeddings, dict):
+            position_ids = position_embeddings["position_ids"]
+            layer_type = getattr(getattr(self.blocks[L - 1], "self_attn", None),
+                                 "layer_type", None)
+            with torch.no_grad():
+                position_embeddings = self.rotary_emb(
+                    hidden, position_ids, layer_type=layer_type)
         return self.blocks[L - 1](
             hidden,
             attention_mask=None,
