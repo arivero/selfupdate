@@ -1,0 +1,4 @@
+# done_file	need_mb	after	command	n_gpus
+# One-card H100 boundary tests under the normal 75% memory cap.
+runs/speed_checks/qwen36_27b_single.json	60000	-	scripts/run_speed_check_monitored.sh qwen36_27b_single --model Qwen/Qwen3.6-27B --batches 1 --variants gpu --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1
+runs/speed_checks/gemma4_26b_a4b_single.json	60000	runs/speed_checks/qwen36_27b_single.json	scripts/run_speed_check_monitored.sh gemma4_26b_a4b_single --model google/gemma-4-26B-A4B --batches 1 --variants gpu --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1

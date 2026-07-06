@@ -1,0 +1,5 @@
+# done_file	need_mb	after	command	n_gpus
+# Two-card communication probes. Run with GPUS="0 1" and MAX_PER_GPU=1.
+runs/speed_checks/qwen36_27b_pp2.json	34000	-	scripts/run_speed_check_monitored.sh qwen36_27b_pp2 --model Qwen/Qwen3.6-27B --pipeline-split 32 --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	2
+runs/speed_checks/gemma4_26b_a4b_pp2.json	34000	-	scripts/run_speed_check_monitored.sh gemma4_26b_a4b_pp2 --model google/gemma-4-26B-A4B --pipeline-split 15 --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	2
+runs/speed_checks/gemma4_31b_pp2.json	38000	-	scripts/run_speed_check_monitored.sh gemma4_31b_pp2 --model google/gemma-4-31B --pipeline-split 30 --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	2
