@@ -1,0 +1,17 @@
+{
+ "kind": "standard_destruction_eval",
+ "model": "Qwen/Qwen3-8B",
+ "checkpoint": "runs/clean_machado_slide8_vocab_8b_lora/checkpoint",
+ "teacher_reference_kind": "checkpoint",
+ "tasks": {
+  "wikitext2_ppl": {
+   "task": "wikitext2_ppl",
+   "n_tokens": 57344,
+   "mean_ce": 2.5578338163239613,
+   "ppl": 12.907826287037752
+  }
+ },
+ "macro_accuracy": 0.0,
+ "limit": 100,
+ "batch_size": 4
+}

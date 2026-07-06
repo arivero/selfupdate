@@ -1,0 +1,17 @@
+{
+ "kind": "standard_destruction_eval",
+ "model": "Qwen/Qwen3-4B",
+ "checkpoint": null,
+ "teacher_reference_kind": "teacher_epoch0_native_no_rag",
+ "tasks": {
+  "wikitext2_ppl": {
+   "task": "wikitext2_ppl",
+   "n_tokens": 57344,
+   "mean_ce": 2.5175006219318936,
+   "ppl": 12.397571689380094
+  }
+ },
+ "macro_accuracy": 0.0,
+ "limit": 100,
+ "batch_size": 8
+}

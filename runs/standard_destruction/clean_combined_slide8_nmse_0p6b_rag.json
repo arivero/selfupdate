@@ -1,0 +1,17 @@
+{
+ "kind": "standard_destruction_eval",
+ "model": "Qwen/Qwen3-0.6B",
+ "checkpoint": "runs/clean_combined_slide8_nmse_0p6b_rag/checkpoint",
+ "teacher_reference_kind": "checkpoint",
+ "tasks": {
+  "wikitext2_ppl": {
+   "task": "wikitext2_ppl",
+   "n_tokens": 57344,
+   "mean_ce": 3.77067392213004,
+   "ppl": 43.40930947474489
+  }
+ },
+ "macro_accuracy": 0.0,
+ "limit": 100,
+ "batch_size": 16
+}
