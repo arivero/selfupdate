@@ -17,6 +17,7 @@ path inside the attention layers.
 from __future__ import annotations
 
 import inspect
+from collections import UserDict
 
 import torch
 
@@ -40,11 +41,17 @@ class BlockStack:
                     "(see docs/scaling.md)"
                 )
         self.embed_tokens = inner.embed_tokens
+        self.text_config = getattr(inner, "config", getattr(model.config, "text_config", model.config))
+        self.layer_types = list(getattr(self.text_config, "layer_types", []) or [])
         # MLA-style models compute rotary inside attention; rotary_emb is optional
         self.rotary_emb = getattr(inner, "rotary_emb", None)
         self.rotary_needs_layer_type = (
             self.rotary_emb is not None
             and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+        )
+        self.needs_gemma4_masks = (
+            getattr(self.text_config, "model_type", "") == "gemma4_text"
+            and bool(self.layer_types)
         )
         self.blocks = list(inner.layers)
         self.final_norm = inner.norm
@@ -67,26 +74,57 @@ class BlockStack:
         if self.rotary_emb is None:
             return None  # attention computes rotary internally (MLA-style)
         if self.rotary_needs_layer_type:
-            return {"position_ids": position_ids}
+            bundle = {"position_ids": position_ids}
+            if self.needs_gemma4_masks:
+                from transformers.masking_utils import (
+                    create_causal_mask,
+                    create_sliding_window_causal_mask,
+                )
+
+                mask_kwargs = {
+                    "config": self.text_config,
+                    "inputs_embeds": hidden,
+                    "attention_mask": None,
+                    "past_key_values": None,
+                    "position_ids": position_ids,
+                }
+                bundle["attention_masks"] = {
+                    "full_attention": create_causal_mask(**mask_kwargs),
+                    "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
+                }
+                bundle["shared_kv_states"] = UserDict()
+            return bundle
         with torch.no_grad():
             return self.rotary_emb(hidden, position_ids)
 
     def run_block(self, L: int, hidden, position_embeddings, position_ids=None):
         """Forward decoder block L (1-based) on [B, n, H] hidden states."""
+        attention_mask = None
+        shared_kv_states = None
         if self.rotary_needs_layer_type and isinstance(position_embeddings, dict):
-            position_ids = position_embeddings["position_ids"]
-            layer_type = getattr(getattr(self.blocks[L - 1], "self_attn", None),
-                                 "layer_type", None)
+            bundle = position_embeddings
+            position_ids = bundle["position_ids"]
+            layer_type = (
+                self.layer_types[L - 1] if L - 1 < len(self.layer_types)
+                else getattr(getattr(self.blocks[L - 1], "self_attn", None),
+                             "layer_type", None)
+            )
+            masks = bundle.get("attention_masks")
+            if masks is not None:
+                attention_mask = masks[layer_type]
+            shared_kv_states = bundle.get("shared_kv_states")
             with torch.no_grad():
                 position_embeddings = self.rotary_emb(
                     hidden, position_ids, layer_type=layer_type)
-        return self.blocks[L - 1](
-            hidden,
-            attention_mask=None,
-            position_ids=position_ids,
-            position_embeddings=position_embeddings,
-            use_cache=False,
-        )
+        kwargs = {
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "position_embeddings": position_embeddings,
+            "use_cache": False,
+        }
+        if shared_kv_states is not None:
+            kwargs["shared_kv_states"] = shared_kv_states
+        return self.blocks[L - 1](hidden, **kwargs)
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:
         return list(self.blocks[L - 1].parameters())
