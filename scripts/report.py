@@ -389,6 +389,48 @@ def coverage_matrix_page(pdf):
     plt.close(fig)
 
 
+def objective_candidate_page(pdf):
+    path = RUNS / "objective_candidate_matrix.csv"
+    if not path.exists():
+        _text_page(pdf, "Objective Candidate Matrix",
+                   "runs/objective_candidate_matrix.csv is missing.\n"
+                   "Run scripts/experiment_report_assets.py before report generation.")
+        return
+    df = pd.read_csv(path).fillna("")
+    if df.empty:
+        _text_page(pdf, "Objective Candidate Matrix", "No objective candidate rows are available.")
+        return
+    fig = plt.figure(figsize=(11.69, 8.27))
+    fig.text(0.02, 0.96, "Objective Candidate Matrix", fontsize=14, weight="bold")
+    fig.text(
+        0.02, 0.925,
+        "For each model/corpus cell: completed method evidence, historical audit evidence, "
+        "and queued clean candidates.",
+        fontsize=7,
+    )
+    ax = fig.add_axes([0.01, 0.02, 0.98, 0.88])
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=df.values.tolist(),
+        colLabels=df.columns.tolist(),
+        loc="upper center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(4.8)
+    tbl.auto_set_column_width(range(len(df.columns)))
+    tbl.scale(1.0, 1.05)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#dddddd")
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#eeeeee")
+        if c in (0, 1, 2, 3, 4) and r > 0:
+            cell.set_text_props(ha="left")
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
 def loss_by_model_page(pdf):
     path = RUNS / "loss_by_model_size.csv"
     if not path.exists():
@@ -617,6 +659,7 @@ def main() -> None:
 
     with PdfPages(args.out) as pdf:
         coverage_matrix_page(pdf)
+        objective_candidate_page(pdf)
         loss_by_model_page(pdf)
         best_loss_window_by_corpus_page(pdf)
         _text_page(pdf, "Self-distillation of context — experiment report",

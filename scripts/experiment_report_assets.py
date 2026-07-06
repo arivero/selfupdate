@@ -10,6 +10,8 @@ This is an artifact pass only: no training and no model loading. It reads
   - runs/loss_by_model_size.md
   - runs/best_loss_window_by_corpus.csv
   - runs/best_loss_window_by_corpus.md
+  - runs/objective_candidate_matrix.csv
+  - runs/objective_candidate_matrix.md
   - runs/accuracy_aspects.png
   - runs/destruction_aspects.csv
   - runs/destruction_aspects.png
@@ -1029,6 +1031,7 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     planned = work[work["is_active_clean_plan"]].sort_values(
         ["model_label", "corpus_family", "loss", "window"]
     )
+    write_objective_candidate_matrix(completed_method, completed_audit, planned)
 
     cols_best = [
         "model_label", "corpus_family", "loss", "window_label",
@@ -1083,6 +1086,75 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
         "- Combined Machado+Quijote completed evidence is audit/confounded; clean Qwen3 0.6B/1.7B/4B/8B/14B plans are now queued as method work.",
     ]
     (RUNS / "best_loss_window_by_corpus.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _candidate_label(row: pd.Series, include_run: bool = True) -> str:
+    if row is None or row.empty:
+        return ""
+    cer = row.get("comparison_cer")
+    cer_s = ""
+    try:
+        if not pd.isna(cer):
+            cer_s = f" CER={float(cer):.4f}"
+    except Exception:
+        pass
+    run_s = f" {row.get('run')}" if include_run and row.get("run") else ""
+    return f"{row.get('loss')} {row.get('window_label')}{cer_s}{run_s}".strip()
+
+
+def write_objective_candidate_matrix(
+    completed_method: pd.DataFrame,
+    completed_audit: pd.DataFrame,
+    planned: pd.DataFrame,
+) -> None:
+    seen_models = set()
+    for table in (completed_method, completed_audit, planned):
+        if not table.empty and "model_label" in table:
+            seen_models.update(table["model_label"].dropna().astype(str))
+    models = [m for m in MODEL_ORDER if m not in RETIRED_MODEL_LABELS]
+    models += sorted(m for m in seen_models if m not in models and m not in RETIRED_MODEL_LABELS)
+    rows = []
+    for model in models:
+        for corpus in ("Machado", "Quijote", "Machado+Quijote"):
+            cm = completed_method[
+                (completed_method.get("model_label") == model)
+                & (completed_method.get("corpus_family") == corpus)
+            ] if not completed_method.empty else pd.DataFrame()
+            ca = completed_audit[
+                (completed_audit.get("model_label") == model)
+                & (completed_audit.get("corpus_family") == corpus)
+            ] if not completed_audit.empty else pd.DataFrame()
+            pl = planned[
+                (planned.get("model_label") == model)
+                & (planned.get("corpus_family") == corpus)
+            ] if not planned.empty else pd.DataFrame()
+            planned_labels = []
+            if not pl.empty:
+                for _, row in pl.iterrows():
+                    label = f"{row.get('loss')} {row.get('window_label')}"
+                    if label not in planned_labels:
+                        planned_labels.append(label)
+            rows.append({
+                "model": model,
+                "corpus_family": corpus,
+                "completed_method_best": _candidate_label(cm.iloc[0]) if not cm.empty else "",
+                "completed_audit_best": _candidate_label(ca.iloc[0]) if not ca.empty else "",
+                "planned_clean_candidates": "; ".join(planned_labels),
+            })
+    out = pd.DataFrame(rows)
+    out.to_csv(RUNS / "objective_candidate_matrix.csv", index=False)
+    lines = [
+        "# Objective Candidate Matrix",
+        "",
+        "For the active objective, each row is one model/corpus cell. Completed method",
+        "evidence is separated from historical audit evidence and queued clean candidates.",
+        "",
+    ]
+    if out.empty:
+        lines.append("No objective candidates are available.")
+    else:
+        lines.append(out.to_markdown(index=False))
+    (RUNS / "objective_candidate_matrix.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def plot_accuracy(df: pd.DataFrame) -> None:
