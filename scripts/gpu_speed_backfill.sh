@@ -42,6 +42,9 @@ while true; do
     if [ "${util:-0}" -lt "$THRESHOLD" ] && [ "${free:-0}" -ge "$MIN_FREE_MB" ]; then
       stamp="$(date '+%Y%m%d_%H%M%S')"
       name="backfill_g${gpu}_${stamp}"
+      if ! (set -o noclobber; echo "$$" > "$lock") 2>/dev/null; then
+        continue
+      fi
       log "GPU[$gpu] util=${util}% free=${free}MB -> $name"
       (
         echo "$BASHPID" > "$lock"
