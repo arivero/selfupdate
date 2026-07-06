@@ -83,7 +83,13 @@ class DistillDataset(Dataset):
         # the one examples.jsonl was built with (identity for Qwen)
         self.records = adapt_records(load_jsonl(examples_path), tokenizer)
         self.cache = cache
-        self.need_layers = need_layers or []
+        # items are memoized after first build: the teacher-cache reads
+        # (Lustre I/O on the training thread, num_workers=0) and tensor
+        # conversions would otherwise repeat every epoch. Cost is host RAM
+        # (~needed cache size, fp16), not VRAM. Consumers treat Items as
+        # read-only — collate and .to(device) both copy.
+        self._item_cache: dict[int, Item] = {}
+        self._need_layers = need_layers or []
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
         masker = ContextMasker(tokenizer)
@@ -97,14 +103,28 @@ class DistillDataset(Dataset):
                 )
             self.pairs.append(pair)
 
+    @property
+    def need_layers(self) -> list[int]:
+        return self._need_layers
+
+    @need_layers.setter
+    def need_layers(self, layers) -> None:
+        # the sequential schedule swaps layers per stage: drop memoized
+        # items so stale hidden targets are neither served nor retained
+        self._need_layers = layers or []
+        self._item_cache.clear()
+
     def __len__(self) -> int:
         return len(self.pairs)
 
     def __getitem__(self, idx: int) -> Item:
+        cached = self._item_cache.get(idx)
+        if cached is not None:
+            return cached
         pair = self.pairs[idx]
         ex_id = pair.example_id
         hidden = {L: self.cache.hidden(ex_id, L) for L in self.need_layers}
-        return Item(
+        item = Item(
             example_id=ex_id,
             student_ids=torch.tensor(pair.student_ids),
             position_ids=torch.tensor(pair.student_position_ids(self.rebase_gap)),
@@ -116,6 +136,8 @@ class DistillDataset(Dataset):
             t0=pair.t_aligned.start,
             t_priv=pair.t_privileged or None,
         )
+        self._item_cache[idx] = item
+        return item
 
 
 def collate_items(items: list[Item]) -> list[Item]:
