@@ -17,6 +17,13 @@ import torch
 from ..chatfmt import adapt_records, stop_token_id
 
 
+def _is_cuda_oom(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return isinstance(exc, torch.cuda.OutOfMemoryError) or (
+        "cuda" in msg and "out of memory" in msg
+    )
+
+
 def student_prompt(record: dict) -> str:
     if record.get("interleaved"):
         # thinking_selective: the student sees the kept think runs
@@ -212,31 +219,48 @@ def recite_eval_batched(model, tokenizer, records: list[dict], batch_size: int,
     results: list[dict | None] = [None] * len(records)
     workers = score_workers if score_workers is not None else min(32, os.cpu_count() or 1)
     executor = ThreadPoolExecutor(max_workers=max(1, workers))
-    futures: list[tuple[int, Future[dict]]] = []
+    futures: list[tuple[int, Future[dict], int]] = []
     try:
         try:
-            for start in range(0, len(work), batch_size):
-                batch = work[start:start + batch_size]
+            start = 0
+            cur_batch_size = batch_size
+            while start < len(work):
+                batch = work[start:start + cur_batch_size]
                 print(f"recite eval batch {start + len(batch)}/{len(work)} "
-                      f"(batch_size={len(batch)})", flush=True)
+                      f"(batch_size={len(batch)}, requested={batch_size})", flush=True)
                 prompts = [x[3] for x in batch]
                 max_new = max(x[0] for x in batch) + max_extra_tokens
                 enc = tokenizer(prompts, return_tensors="pt", padding=True,
                                 add_special_tokens=False)
                 enc = {k: v.to(model.device) for k, v in enc.items()}
-                out = model.generate(
-                    **enc,
-                    max_new_tokens=max_new,
-                    do_sample=False,
-                    eos_token_id=eos_id,
-                    pad_token_id=tokenizer.pad_token_id,
-                )
+                try:
+                    out = model.generate(
+                        **enc,
+                        max_new_tokens=max_new,
+                        do_sample=False,
+                        eos_token_id=eos_id,
+                        pad_token_id=tokenizer.pad_token_id,
+                    )
+                except RuntimeError as e:
+                    if not _is_cuda_oom(e) or cur_batch_size <= 1:
+                        raise
+                    cur_batch_size = max(1, cur_batch_size // 2)
+                    torch.cuda.empty_cache()
+                    print(f"recite eval OOM; retrying with batch_size={cur_batch_size}",
+                          flush=True)
+                    continue
                 gen_start = enc["input_ids"].shape[1]
                 for row, (_, idx, rec, _prompt) in enumerate(batch):
                     raw = tokenizer.decode(out[row, gen_start:], skip_special_tokens=True)
-                    futures.append((idx, executor.submit(score_recitation, rec, raw)))
-            for idx, fut in futures:
-                results[idx] = fut.result()
+                    futures.append(
+                        (idx, executor.submit(score_recitation, rec, raw), len(batch))
+                    )
+                start += len(batch)
+            for idx, fut, used_batch_size in futures:
+                scored = fut.result()
+                scored["generation_batch_size"] = used_batch_size
+                scored["requested_batch_size"] = batch_size
+                results[idx] = scored
         finally:
             executor.shutdown(wait=True)
     finally:
