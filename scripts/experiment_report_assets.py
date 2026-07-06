@@ -66,6 +66,7 @@ LEGACY_RAG_PREFIX = LEGACY_REF + "_rag_"
 LEGACY_NO_RAG_QWEN06 = LEGACY_REF + "_no_rag_Qwen3-0.6B"
 TEACHER_REF_NATIVE_PREFIX = "teacher_ref_native_"
 TEACHER_REF_RAG_PREFIX = "teacher_ref_rag_"
+MIN_METHOD_TRAIN_ITEMS = 12_000
 
 OLD_KEYS = {
     "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
@@ -91,6 +92,19 @@ def _read_yaml(path: Path) -> dict:
         return yaml.safe_load(path.read_text()) or {}
     except Exception as e:  # noqa: BLE001
         return {"_parse_error": f"{type(e).__name__}: {e}"}
+
+
+def _jsonl_len(path: object) -> int | None:
+    if not path:
+        return None
+    p = ROOT / str(path)
+    if not p.exists():
+        return None
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return None
 
 
 def _to_int(v, default: int = 0) -> int:
@@ -130,6 +144,17 @@ def _is_true(v) -> bool:
     if isinstance(v, str):
         return v.strip().lower() in {"1", "true", "yes"}
     return False
+
+
+def _train_item_budget(row: pd.Series) -> float:
+    for col in ("saved_train_items", "active_train_items"):
+        v = row.get(col)
+        try:
+            if not pd.isna(v):
+                return float(v)
+        except Exception:
+            pass
+    return 0.0
 
 
 def _model_label(model: object) -> str:
@@ -176,12 +201,20 @@ def _status_code(row: pd.Series) -> str:
     verdict = str(row.get("saved_verdict") or "")
     active_verdict = str(row.get("active_verdict") or "")
     active_has_train = _is_true(row.get("active_has_train_section"))
+    active_budget_ok = _train_item_budget(row) >= MIN_METHOD_TRAIN_ITEMS
     evidence = str(row.get("evidence_status") or "")
     run_class = str(row.get("run_class") or row.get("active_run_class") or "")
     if verdict == "TEACHER_REFERENCE":
         return "T"
-    if verdict == "NOT_RUN" and active_verdict == "CONFIRM_CLEAN" and active_has_train:
+    if verdict == "NOT_RUN" and active_verdict == "CONFIRM_CLEAN" and active_has_train and active_budget_ok:
         return "P"
+    if verdict in {"CONFIRM_CLEAN", "CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
+        saved_budget = row.get("saved_train_items")
+        try:
+            if not pd.isna(saved_budget) and float(saved_budget) < MIN_METHOD_TRAIN_ITEMS:
+                return "B"
+        except Exception:
+            pass
     if verdict == "CONFIRM_CLEAN" or evidence == "method_clean":
         return "C"
     if verdict in {"CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
@@ -376,7 +409,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
     matrix.to_csv(RUNS / "experiment_coverage_matrix.csv", index=False)
     legend = (
         "Legend: C=completed clean method, P=planned clean method, L=legacy/provenance caveat, "
-        "A=ablation/control, X=denied/confounded, T=teacher reference. "
+        "A=ablation/control, B=underbudget method-shaped run, X=denied/confounded, T=teacher reference. "
         "Runs can contribute to multiple rows; this is a coverage matrix, not a partition."
     )
     (RUNS / "experiment_coverage_matrix.md").write_text(
@@ -455,6 +488,10 @@ def active_config_rows() -> list[dict]:
         d = cfg.get("data", {}) or {}
         m = cfg.get("mask", {}) or {}
         model = cfg.get("model", {}) or {}
+        examples_n = _jsonl_len(d.get("examples_path"))
+        active_train_items = None
+        if examples_n is not None and t.get("epochs") is not None:
+            active_train_items = examples_n * int(t.get("epochs"))
         if t.get("method") != "layerwise":
             continue
         verdict, reason = verdict_from_config(cfg)
@@ -467,6 +504,8 @@ def active_config_rows() -> list[dict]:
             "active_verdict": verdict,
             "active_reason": reason,
             "active_epochs": t.get("epochs"),
+            "active_examples_n": examples_n,
+            "active_train_items": active_train_items,
             "active_schedule": t.get("schedule"),
             "active_hidden_loss": t.get("hidden_loss"),
             "active_conn_window": t.get("conn_window"),
@@ -597,6 +636,11 @@ def build_experiment_table() -> pd.DataFrame:
             "saved_corpus_style": saved_data.get("corpus_style"),
             "signal_hidden_share": sig.get("hidden_share"),
         }
+        saved_examples_n = _jsonl_len(saved_data.get("examples_path"))
+        if saved_examples_n is not None and saved_train.get("epochs") is not None:
+            extra["saved_train_items"] = saved_examples_n * int(saved_train.get("epochs"))
+        else:
+            extra["saved_train_items"] = None
         extra.update(dest)
         extra_rows.append(extra)
     extra_df = pd.DataFrame(extra_rows)
@@ -995,11 +1039,16 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     )
     work["is_method_eligible"] = (
         work.get("saved_verdict", empty).fillna("").astype(str).isin(eligible_statuses)
+        & (pd.to_numeric(work.get("saved_train_items", pd.Series(MIN_METHOD_TRAIN_ITEMS, index=work.index)),
+                         errors="coerce").fillna(MIN_METHOD_TRAIN_ITEMS)
+           >= MIN_METHOD_TRAIN_ITEMS)
     )
     work["is_active_clean_plan"] = (
         work.get("active_verdict", empty).fillna("").astype(str).eq("CONFIRM_CLEAN")
         & work.get("saved_verdict", empty).fillna("").astype(str).eq("NOT_RUN")
-        & work.get("active_has_train_section", pd.Series(False, index=work.index)).fillna(False).astype(bool)
+        & work.get("active_has_train_section", pd.Series(False, index=work.index)).map(_is_true)
+        & (pd.to_numeric(work.get("active_train_items", pd.Series(0, index=work.index)), errors="coerce").fillna(0)
+           >= MIN_METHOD_TRAIN_ITEMS)
     )
 
     keep = [
@@ -1008,6 +1057,7 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
         "readout_source_effective", "run", "saved_verdict", "active_verdict",
         "active_config", "examples", "comparison_cer", "comparison_forgetting_ce",
         "intrusion_hit_rate", "best_epoch", "full_eval_cer", "general_ce",
+        "active_train_items", "saved_train_items",
         "is_completed", "is_method_eligible", "is_active_clean_plan",
     ]
     audit = work[[c for c in keep if c in work.columns]].sort_values(
@@ -1041,6 +1091,7 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     cols_plan = [
         "model_label", "corpus_family", "loss", "window_label",
         "active_config", "active_verdict", "examples",
+        "active_train_items",
     ]
     lines = [
         "# Best Loss And Window By Corpus",

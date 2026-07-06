@@ -362,7 +362,7 @@ def coverage_matrix_page(pdf):
     fig.text(
         0.02, 0.925,
         "Cells are counts by status: C=completed clean, P=planned clean, L=legacy/provenance caveat, "
-        "A=ablation/control, X=denied/confounded, T=epoch-zero teacher reference. "
+        "A=ablation/control, B=underbudget, X=denied/confounded, T=epoch-zero teacher reference. "
         "A run can count in multiple rows.",
         fontsize=7,
     )
