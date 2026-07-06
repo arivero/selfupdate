@@ -57,6 +57,7 @@ MODEL_ORDER = [
     "Gemma-4-26B-A4B",
     "Gemma-4-31B",
     "gpt-oss-20B",
+    "gpt-oss-120B",
 ]
 
 RETIRED_MODEL_LABELS = {"Llama-8B", "Phi-4-mini"}
@@ -192,6 +193,8 @@ def _model_label(model: object) -> str:
         return "Mistral-7B"
     if "Phi-4-mini" in m:
         return "Phi-4-mini"
+    if "gpt-oss-120b" in m or "gpt-oss-120B" in m:
+        return "gpt-oss-120B"
     if "gpt-oss-20b" in m:
         return "gpt-oss-20B"
     return m.rsplit("/", 1)[-1] if m else "unknown"

@@ -1,0 +1,8 @@
+run_name: teacher_ref_gptoss120b_v4
+model:
+  name: openai/gpt-oss-120b
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  corpus_style: verse
+train:
+  run_class: teacher_reference

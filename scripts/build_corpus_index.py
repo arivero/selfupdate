@@ -119,6 +119,8 @@ def _model_label(model: object) -> str:
         return "Gemma-4-31B"
     if "Mistral-7B" in m:
         return "Mistral-7B"
+    if "gpt-oss-120b" in m or "gpt-oss-120B" in m:
+        return "gpt-oss-120B"
     if "gpt-oss-20b" in m or "gpt-oss-20B" in m:
         return "gpt-oss-20B"
     if "Llama-3.1-8B" in m:
