@@ -122,8 +122,7 @@ def _bench_variant(stack: BlockStack, batch: int, seq_len: int, answer_len: int,
                    sync_each_block: bool, optimizer_enabled: bool,
                    dtype: torch.dtype, seed: int) -> dict:
     device = stack.embed_tokens.weight.device
-    hidden = stack.model.config.hidden_size
-    vocab = stack.model.config.vocab_size
+    vocab, hidden = stack.embed_tokens.weight.shape
     torch.manual_seed(seed + batch + int(cpu_targets) * 100 + int(sync_each_block) * 200)
     ids = torch.randint(8, min(vocab, 30000), (batch, seq_len), device=device)
     pos = torch.arange(seq_len, device=device)[None].expand(batch, -1)
