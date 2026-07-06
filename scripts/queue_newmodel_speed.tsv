@@ -3,9 +3,9 @@
 #   QUEUE=scripts/queue_newmodel_speed.tsv GPUS="0" MAX_PER_GPU=1 MAX_MEM_FRACTION=0.75 ...
 # Run PP2 rows with two visible cards:
 #   QUEUE=scripts/queue_newmodel_speed.tsv GPUS="0 1" MAX_PER_GPU=1 MAX_MEM_FRACTION=0.75 ...
-runs/speed_checks/qwen36_27b_single.json	60000	-	scripts/run_speed_check_monitored.sh qwen36_27b_single --model Qwen/Qwen3.6-27B --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1
+runs/speed_checks/qwen36_27b_single.json	60000	-	scripts/run_speed_check_monitored.sh qwen36_27b_single --model Qwen/Qwen3.6-27B --batches 1 --variants gpu --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1
 runs/speed_checks/qwen36_27b_pp2.json	34000	-	scripts/run_speed_check_monitored.sh qwen36_27b_pp2 --model Qwen/Qwen3.6-27B --pipeline-split 32 --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	2
-runs/speed_checks/gemma4_26b_a4b_single.json	60000	-	scripts/run_speed_check_monitored.sh gemma4_26b_a4b_single --model google/gemma-4-26B-A4B --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1
+runs/speed_checks/gemma4_26b_a4b_single.json	60000	-	scripts/run_speed_check_monitored.sh gemma4_26b_a4b_single --model google/gemma-4-26B-A4B --batches 1 --variants gpu --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	1
 runs/speed_checks/gemma4_26b_a4b_pp2.json	34000	-	scripts/run_speed_check_monitored.sh gemma4_26b_a4b_pp2 --model google/gemma-4-26B-A4B --pipeline-split 15 --batches 1,2 --seq-len 512 --answer-len 160 --iters 1 --warmup 0 --no-optimizer	2
 # Single-card 31B is intentionally not in the 75%-cap queue. Use an exclusive
 # high-memory lane only when we explicitly test the one-H100 boundary:

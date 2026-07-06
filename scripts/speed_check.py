@@ -179,6 +179,8 @@ def main() -> int:
     ap.add_argument("--seq-len", type=int, default=192)
     ap.add_argument("--answer-len", type=int, default=64)
     ap.add_argument("--batches", default="1,2,4")
+    ap.add_argument("--variants", default="gpu,cpu,sync",
+                    help="comma list: gpu,cpu,sync")
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--no-optimizer", action="store_true")
@@ -194,25 +196,65 @@ def main() -> int:
     stack.freeze_non_blocks()
 
     results = []
+    variant_specs = {
+        "gpu": (False, False),
+        "cpu": (True, False),
+        "sync": (False, True),
+    }
+    requested_variants = [x.strip() for x in args.variants.split(",") if x.strip()]
+    for v in requested_variants:
+        if v not in variant_specs:
+            raise ValueError(f"unknown --variants entry {v!r}")
+
     for batch in [int(x) for x in args.batches.split(",") if x.strip()]:
-        for cpu_targets, sync_each_block in ((False, False), (True, False), (False, True)):
+        for variant_key in requested_variants:
+            cpu_targets, sync_each_block = variant_specs[variant_key]
             if device.type == "cuda":
                 torch.cuda.empty_cache()
-            row = _bench_variant(
-                stack, batch, args.seq_len, args.answer_len, args.iters,
-                args.warmup, cpu_targets, sync_each_block,
-                optimizer_enabled=not args.no_optimizer,
-                dtype=dtype, seed=args.seed,
-            )
+            try:
+                row = _bench_variant(
+                    stack, batch, args.seq_len, args.answer_len, args.iters,
+                    args.warmup, cpu_targets, sync_each_block,
+                    optimizer_enabled=not args.no_optimizer,
+                    dtype=dtype, seed=args.seed,
+                )
+            except torch.cuda.OutOfMemoryError as e:
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                row = {
+                    "batch": batch,
+                    "variant": variant_key,
+                    "iters": args.iters,
+                    "error": "cuda_oom",
+                    "message": str(e).split("\n", 1)[0],
+                }
+                if device.type == "cuda":
+                    row["vram_reserved_gb"] = torch.cuda.max_memory_reserved(device) / 2**30
+                    row["vram_allocated_gb"] = torch.cuda.max_memory_allocated(device) / 2**30
+            except Exception as e:  # noqa: BLE001 - failure is a benchmark result
+                row = {
+                    "batch": batch,
+                    "variant": variant_key,
+                    "iters": args.iters,
+                    "error": type(e).__name__,
+                    "message": str(e).split("\n", 1)[0],
+                }
             results.append(row)
-            print(
-                f"batch={row['batch']:>2} {row['variant']:>15} "
-                f"{row['item_ms']:8.1f} ms/item "
-                f"{row['items_per_s']:6.2f} items/s "
-                f"{row['tokens_per_s']:8.0f} tok/s "
-                f"vram={row.get('vram_reserved_gb', 0):.2f} GB",
-                flush=True,
-            )
+            if "error" in row:
+                print(
+                    f"batch={row['batch']:>2} {row['variant']:>15} "
+                    f"ERROR {row['error']} vram={row.get('vram_reserved_gb', 0):.2f} GB",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"batch={row['batch']:>2} {row['variant']:>15} "
+                    f"{row['item_ms']:8.1f} ms/item "
+                    f"{row['items_per_s']:6.2f} items/s "
+                    f"{row['tokens_per_s']:8.0f} tok/s "
+                    f"vram={row.get('vram_reserved_gb', 0):.2f} GB",
+                    flush=True,
+                )
 
     payload = {
         "model": args.model,
