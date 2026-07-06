@@ -70,8 +70,14 @@ def _vocab_signature(stack) -> tuple:
     save: NO learning of any kind may modify these — they are the fixed
     basis of every lens and every cached teacher target."""
     sig = []
+    seen: set[int] = set()
     for m in (stack.embed_tokens, stack.final_norm, stack.lm_head):
         for p in m.parameters():
+            # tied-embedding models (Qwen3 <=1.7B): embed IS lm_head — one
+            # pass over the shared tensor, not two (only compared within-run)
+            if id(p) in seen:
+                continue
+            seen.add(id(p))
             # chunked fp64 sums: a full p.double() copy of a 200k-vocab
             # embedding is ~4 GB — enough to OOM a 20B-resident card
             s = a = 0.0
