@@ -51,6 +51,63 @@ columns per run.
 | 4B full-FT tail window k=8 (frozen copy) | ~0.9B | [expunged] | ~30 GB (nvidia-smi, run in flight) | bf16 student 8 + bf16 teacher 8 + window fp32 3.6 + Adam 7.2 + grads 3.6 |
 | gpt-oss-20B LoRA (MXFP4→bf16) | ~60M | summed | 40.7 GB | dequantized base ~40 |
 
+## Speed/Memory Ledger — 2026-07-06 Hot-Loop Fixes
+
+The low-memory claim is the research goal; throughput work must never buy
+speed by silently re-inflating the activation or optimizer footprint. Every
+acceleration landed on 2026-07-06 is itemized here with its exact memory
+price, split by WHICH memory it spends — device VRAM (the scarce, claim-
+bearing resource) vs host RAM (abundant, invisible to the memory claim).
+
+| fix (commit) | speed effect | VRAM cost | host RAM cost |
+|---|---|---|---|
+| prefix-slice per-example losses (`abfe6d6`) | removes ~n_layers x B host syncs per micro-batch | 0 | 0 |
+| stacked log-flush transfer (`27a4943`) | n_layers -> 1 syncs per accum boundary | 0 | 0 |
+| dataset item memoization (`1874e8b`) | teacher-cache Lustre reads once instead of every epoch | 0 | = needed cache, fp16 (see below) |
+| streamed batched teacher targets (`83cb0ef`) | none (same math) | **saving**: n+1 -> 1 full-sequence teacher states | 0 |
+| `train.window_dedup` (`b466a3e`) | 1.15-1.22x measured on slide8 W=8 | 0 (peak graph stays W blocks; measured parity within 10 MB) | 0 |
+| padded/bucketed batching (pre-existing, benched together) | ~2.3x tokens/s at micro_batch 4 | +3.9 GB measured at 0.6B/W=8/B=4 (scales ~B x T x window graph) | negligible |
+
+Measured on the slide8 reference arm (Qwen3-0.6B, W=8, vocab_mse, GPU
+shared with a campaign job, `scripts/train_batch_bench.py`):
+
+| batching | variant | tokens/s | peak alloc |
+|---|---|---|---|
+| item | replay | 136.5 | 8.66 GB |
+| item | window_dedup | 165.9 | 8.65 GB |
+| bucketed B=4 | replay | 465.2 | 12.57 GB |
+| bucketed B=4 | window_dedup | 533.9 | 12.56 GB |
+
+What each entry means for the memory claim:
+
+- **window_dedup does not touch the claim.** The replay path holds one
+  W-block connected graph during each `window_step`; dedup holds W
+  single-block graphs (freed after each block's last covering window,
+  ascending-endpoint order). Same peak by construction, confirmed
+  empirically above. Backward extent per loss is W blocks in both — the
+  "activations = k blocks" row of the Resident Terms table is unchanged.
+- **Batching is the only speed knob that spends VRAM**, and it is a
+  dial, not a default: `train.batching: item` remains the low-memory
+  setting, and the +3.9 GB at B=4 is the padded working set
+  (B x T activations inside the window graph plus padded targets). At the
+  memory-critical scale rungs (streamed sequential, 120B plan), keep
+  batching at `item` or budget B against the table above.
+- **Memoization spends HOST RAM only**: after epoch 1 the needed teacher
+  targets stay resident — the whole needed cache, fp16. Concretely
+  3.85 GiB for the 0.6B rag-remove poem cache (measured); it scales as
+  n_examples x n_layers x A x H x 2 bytes, so ~18 GB at 8B scale. This
+  is never GPU memory, and the schedules that carry the scaling story
+  are exempt by construction: `sequential` memoizes one layer at a time
+  (the `need_layers` setter drops the previous stage), and online-teacher
+  runs (LoRA, frozen copy, 120B streaming plan) have no disk cache at
+  all. If host RAM ever becomes the binding constraint, the memo — not
+  the VRAM plan — is what to revisit.
+- **The rejected alternative is part of the record**: vectorizing the
+  per-example readout KL as one [B, Rmax, V] softmax would have cost
+  ~0.5 GB fp32 per side at V=151k — speed bought with exactly the memory
+  the claim protects. The prefix-slice fix gets the sync win at zero
+  memory; keep it that way when touching these loops.
+
 ## The Fits-Where-Traditional-Cannot Argument
 
 Traditional full-backprop AdamW fine-tuning (mixed precision) needs

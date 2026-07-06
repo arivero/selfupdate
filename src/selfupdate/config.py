@@ -151,6 +151,8 @@ class TrainConfig:
     # same peak graph memory). Gradients agree up to autocast replay rounding
     # (exact in fp32; see tests/test_window_dedup.py), so this is a PINNED
     # knob, default off: flipping it mid-campaign would fork queued arms.
+    # Memory price of this and every 2026-07-06 speed fix: docs/memory.md
+    # "Speed/Memory Ledger" (this one is zero; batching is the VRAM dial).
     window_dedup: bool = False
     # anchor-KL: KL(teacher/base || student) on anchor fragments through the
     # top readout window. Needs an online teacher for base logits.
