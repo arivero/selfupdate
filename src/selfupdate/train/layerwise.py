@@ -277,6 +277,68 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
     return [l.detach() for l in losses], h.detach()
 
 
+def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
+                           compute_loss, autocast=True):
+    """Forward-deduplicated FAITHFUL sliding windows (train.window_dedup).
+
+    Same semantics as the per-endpoint ``window_step`` replay: every body
+    layer L1 is the ENDPOINT of a window [L1-W+1 .. L1] rooted at the
+    detached trajectory state h_traj[L0-1], and its backward updates ALL
+    covered blocks — uniform k-deep credit (docs/windows.md). The backward
+    count per block is untouched (that IS the credit assignment); what goes
+    away is the forward duplication: instead of re-forwarding W blocks per
+    endpoint, each block is grad-forwarded ONCE from its detached trajectory
+    root, and every window chains its backward through the stored per-block
+    graphs via ``torch.autograd.grad`` grad_outputs injection. This is valid
+    because all windows follow the same trajectory: the value of window
+    [L0..L1]'s intermediate state at depth b equals h_traj[b], the root of
+    block b+1's stored graph (exactly in fp32; up to autocast replay rounding
+    in bf16). Gradient isolation is preserved — each chain stops at the
+    detached root x_{L0-1}, and no graph connects two blocks.
+
+    Peak graph memory stays at W blocks: a block's graph is freed right
+    after its last covering window (endpoint min(last_body, b+W-1)).
+
+    ``compute_loss(L1, y)`` returns (backward scalar, detached report value)
+    for the endpoint loss on block output ``y``; it runs under the same
+    autocast as the forward. Returns the report values in endpoint order.
+    """
+    dev_type = h_traj[L_start - 1].device.type
+    xs, ys, params = {}, {}, {}
+    reports = []
+    for L1 in range(L_start, last_body + 1):
+        # .detach() gives x its own autograd identity; h_traj stays a plain
+        # detached trajectory shared with the caller
+        x = h_traj[L1 - 1].detach().requires_grad_(True)
+        with torch.autocast(dev_type, dtype=torch.bfloat16, enabled=autocast):
+            y = stack.run_block(L1, x, pos_emb)
+            loss, report = compute_loss(L1, y)
+        xs[L1], ys[L1] = x, y
+        params[L1] = [p for p in stack.block_params(L1) if p.requires_grad]
+        L0 = max(L_start, L1 - W + 1)
+        g = None
+        for b in range(L1, L0 - 1, -1):
+            last_use = L1 == min(last_body, b + W - 1)
+            inputs = [xs[b]] + params[b]
+            if b == L1:
+                grads = torch.autograd.grad(
+                    loss, inputs, retain_graph=not last_use, allow_unused=True)
+            else:
+                g = g.to(device=ys[b].device, dtype=ys[b].dtype)
+                grads = torch.autograd.grad(
+                    ys[b], inputs, grad_outputs=g,
+                    retain_graph=not last_use, allow_unused=True)
+            g = grads[0]
+            for p, gp in zip(params[b], grads[1:]):
+                if gp is None:
+                    continue
+                p.grad = gp.detach() if p.grad is None else p.grad.add_(gp)
+            if last_use:
+                del xs[b], ys[b], params[b]
+        reports.append(report)
+    return reports
+
+
 def _pp_device_map(cfg) -> dict:
     """Two-card pipeline map: embedding + blocks 1..split on cuda:0; the
     rest, final norm and lm_head on cuda:1 — the top readout window (and with
@@ -339,6 +401,10 @@ def _validate_knob_schedule(cfg) -> None:
         bad.append("conn_window")
     if cfg.train.scramble_targets and sched != "summed":
         bad.append("scramble_targets")
+    if cfg.train.window_dedup and (cfg.train.conn_window <= 1
+                                   or cfg.train.conn_stride != 1):
+        bad.append("window_dedup (needs faithful sliding windows: "
+                   "conn_window > 1, conn_stride == 1)")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
     if cfg.train.readout_window_blocks > 0 and cfg.train.readout_source == "UNSET":
@@ -794,14 +860,22 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                 for LL in range(L, last_body + 1):
                     t = stack.run_block(LL, t, pos_emb)
                     h_traj[LL] = t.detach()
-            for L1 in range(L, last_body + 1):
-                L0 = max(1, L1 - W + 1)
-                win_losses, _ = window_step(
-                    stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                    it.s0, it.A, it.ans0 - it.s0, loss_fn,
-                    readout_w=0.0, L1=L1,
-                )
-                layer_losses.extend(win_losses)
+            if cfg.train.window_dedup:
+                def _endpoint_loss(L1, y):
+                    loss = loss_fn(stack.loss_view(L1, y)[0, it.s0: it.s0 + it.A],
+                                   targets[L1], normed=(L1 == n))
+                    return loss, loss.detach()
+                layer_losses.extend(_sliding_windows_dedup(
+                    stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
+            else:
+                for L1 in range(L, last_body + 1):
+                    L0 = max(1, L1 - W + 1)
+                    win_losses, _ = window_step(
+                        stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
+                        it.s0, it.A, it.ans0 - it.s0, loss_fn,
+                        readout_w=0.0, L1=L1,
+                    )
+                    layer_losses.extend(win_losses)
             h = h_traj[last_body]
             L = last_body + 1
             continue
@@ -867,13 +941,24 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                 for LL in range(L, last_body + 1):
                     t = stack.run_block(LL, t, pos_emb)
                     h_traj[LL] = t.detach()
-            for L1 in range(L, last_body + 1):
-                L0 = max(1, L1 - W + 1)
-                win_losses, _ = window_step_batch(
-                    stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                    batch, loss_fn, readout_w=0.0, L1=L1,
-                )
-                layer_losses.extend(win_losses)
+            if cfg.train.window_dedup:
+                def _endpoint_loss(L1, y):
+                    aligned = _gather_batch_rows(stack.loss_view(L1, y),
+                                                 batch.aligned_index)
+                    per_ex = _hidden_loss_per_example(
+                        loss_fn, aligned, targets[L1], batch.A.tolist(),
+                        normed=(L1 == n))
+                    return per_ex.sum(), per_ex.detach()
+                layer_losses.extend(_sliding_windows_dedup(
+                    stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
+            else:
+                for L1 in range(L, last_body + 1):
+                    L0 = max(1, L1 - W + 1)
+                    win_losses, _ = window_step_batch(
+                        stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
+                        batch, loss_fn, readout_w=0.0, L1=L1,
+                    )
+                    layer_losses.extend(win_losses)
             h = h_traj[last_body]
             L = last_body + 1
             continue

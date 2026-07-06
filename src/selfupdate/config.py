@@ -143,6 +143,15 @@ class TrainConfig:
     # of a k-deep window that updates ALL covered blocks — uniform k-deep
     # credit everywhere, at ~k x body compute.
     conn_stride: int = 0
+    # forward-deduplicated faithful sliding windows: identical window/credit
+    # semantics (every block still receives W backward passes), but each block
+    # is grad-forwarded ONCE from its detached trajectory root and windows
+    # chain backward through the stored per-block graphs, instead of
+    # re-forwarding the whole window per endpoint (~1.3-1.5x on window arms,
+    # same peak graph memory). Gradients agree up to autocast replay rounding
+    # (exact in fp32; see tests/test_window_dedup.py), so this is a PINNED
+    # knob, default off: flipping it mid-campaign would fork queued arms.
+    window_dedup: bool = False
     # anchor-KL: KL(teacher/base || student) on anchor fragments through the
     # top readout window. Needs an online teacher for base logits.
     anchor_kl_weight: float = 0.0
