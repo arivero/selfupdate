@@ -4,6 +4,32 @@ Review date: 2026-07-05. Scope: current `selfupdate_lw` branch contents, includi
 `README.md`, `CLAUDE.md` / `AGENTS.md`, `EXPERIMENTS.md`, `docs/`, `src/`,
 `configs/`, `tests/`, and available `runs/results.md`.
 
+## Post-Cleanup Status
+
+Implementation pass later on 2026-07-05 addressed the highest-priority
+branch-law findings recorded below:
+
+- `tail_step` was replaced by the generic connected-window primitive
+  `window_step`.
+- Active train config knobs were renamed from `tail_ce_*` / `tail_hidden_*`
+  to `readout_*` / `window_hidden_weight`; old keys are rejected by
+  `scripts/audit_configs.py`.
+- `configs/base.yaml` no longer sets a readout source. Readout experiments
+  must pin `readout_source` explicitly.
+- Active task-label readout/lens/last-block configs and tail-only configs were
+  removed from `configs/experiments`; surviving readout configs are sliding
+  `conn_window` / `conn_stride: 1` configs with explicit `teacher_kl`.
+- `teacher_censored` was made pure by construction and validation rejects
+  readout/task-label knobs for that schedule.
+- Hot-loop train logging now keeps loss tensors on device and flushes Python
+  floats at accumulation/epoch boundaries.
+- `scripts/build_corpus_index.py`, gate-aware `scripts/report.py`, and
+  `scripts/speed_check.py` were added for corpus/report/speed follow-up.
+
+The detailed review below is preserved as the finding record that motivated
+the cleanup. Any statement saying an old active surface "still" exists should
+be read as the pre-cleanup finding unless it remains true in current code.
+
 ## Executive Judgment
 
 This branch contains a serious and productive research codebase: the core
@@ -164,8 +190,10 @@ Coverage is a strength of this branch:
   multiple CE/KL readout variants.
 - Schedules: `summed`, `sequential`, `teacher_censored`, `mixed`, sliding
   connected windows, disjoint-window attempts, and online-teacher LoRA.
-- Scales/families: Qwen3 0.6B/1.7B/4B/8B/14B, Mistral, Llama, Phi, gpt-oss
-  smoke, and Quijote rungs.
+- Scales/families: Qwen3 0.6B/1.7B/4B/8B/14B plus the updated 2026 ladder:
+  Qwen3.6-27B, Gemma-4-26B-A4B, Gemma-4-31B, Mistral, gpt-oss smoke, and
+  Quijote rungs. Llama-8B and Phi-4-mini are no longer active coverage
+  requirements for this branch.
 - Evaluation axes: full-corpus recitation, dialogue framing, long self-chained
   recitation, general CE, destruction/intrusion probes, anchors, layer swaps,
   delta profiles, signal attribution, teacher ceilings, and memory accounting.

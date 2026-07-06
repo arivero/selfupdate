@@ -1,6 +1,5 @@
 """Signal attribution: what fraction of the training gradient comes from
-the per-layer hidden losses vs the behavioral auxiliaries (lens-CE /
-tail-CE)?
+the per-layer hidden losses vs behavioral readout/task-label baselines?
 
 The naming contract (CLAUDE.md) requires this number: a project called
 "layerwise distillation" must show the hidden matching is the primary
@@ -28,12 +27,38 @@ from selfupdate.config import load_config
 from selfupdate.data.dataset import DistillDataset
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import OnlineTeacherSource
-from selfupdate.train.losses import HiddenLoss, answer_ce
+from selfupdate.train.losses import HiddenLoss, task_label_ce_baseline
+
+
+def load_student(cfg, checkpoint: str, dev: str):
+    ckpt = Path(checkpoint)
+    if (ckpt / "adapter_config.json").exists():
+        from peft import PeftModel
+
+        tok = AutoTokenizer.from_pretrained(checkpoint)
+        base = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=torch.bfloat16).to(dev)
+        peft_model = PeftModel.from_pretrained(
+            base, checkpoint, is_trainable=True)
+        model = peft_model.get_base_model()
+        model.to(dev)
+        return model, tok, peft_model
+    tok = AutoTokenizer.from_pretrained(checkpoint)
+    model = AutoModelForCausalLM.from_pretrained(
+        checkpoint, dtype=torch.bfloat16).to(dev)
+    return model, tok, None
 
 
 def grad_norm2(stack, L):
     return sum(float((p.grad ** 2).sum()) for p in stack.block_params(L)
                if p.grad is not None)
+
+
+def backward_if_grad(loss, *, retain_graph=False):
+    if loss is None or not loss.requires_grad:
+        return False
+    loss.backward(retain_graph=retain_graph)
+    return True
 
 
 def main():
@@ -47,22 +72,24 @@ def main():
     cfg = load_config(args.config, args.experiment)
     dev = args.device
 
-    tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    model = AutoModelForCausalLM.from_pretrained(args.checkpoint,
-                                                 dtype=torch.bfloat16).to(dev)
+    model, tok, peft_model = load_student(cfg, args.checkpoint, dev)
     stack = BlockStack(model)
     stack.freeze_non_blocks()
-    t_model = AutoModelForCausalLM.from_pretrained(cfg.model.name,
-                                                   dtype=torch.bfloat16).to(dev)
-    t_model.eval().requires_grad_(False)
-    teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
+    model.eval()
+    if peft_model is not None:
+        teacher = OnlineTeacherSource(stack, peft_model=peft_model)
+    else:
+        t_model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=torch.bfloat16).to(dev)
+        t_model.eval().requires_grad_(False)
+        teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
 
     ds = DistillDataset(cfg.data.examples_path, None, tok, [],
                         with_teacher_ids=True)
     n = stack.n_layers
-    tail0 = (n - cfg.train.tail_ce_blocks + 1
-             if cfg.train.tail_ce_blocks > 0 else n + 1)
+    readout0 = (n - cfg.train.readout_window_blocks + 1
+                if cfg.train.readout_window_blocks > 0 else n + 1)
     hid2 = {L: 0.0 for L in range(1, n + 1)}
     aux2 = {L: 0.0 for L in range(1, n + 1)}
 
@@ -75,31 +102,46 @@ def main():
         pos_emb = stack.rope(h, pos)
         L = 1
         while L <= n:
-            if L == tail0:
-                # connected window: attribute hidden-sum vs CE jointly
+            if L == readout0:
+                # connected window: attribute hidden-sum vs readout jointly
                 with torch.autocast(dev, dtype=torch.bfloat16):
                     hh = h.detach()
                     losses = []
-                    for LL in range(tail0, n + 1):
+                    for LL in range(readout0, n + 1):
                         hh = stack.run_block(LL, hh, pos_emb)
                         losses.append(loss_fn(
                             stack.loss_view(LL, hh)[0, it.s0: it.s0 + it.A],
                             targets[LL], normed=(LL == n)))
                     logits = stack.lm_head(stack.final_norm(hh)[
                         0, it.ans0 - 1: it.s0 + it.A - 1])
-                    ce = cfg.train.tail_ce_weight * answer_ce(logits, label_ids)
-                    hid = cfg.train.tail_hidden_weight * sum(losses)
+                    if cfg.train.readout_source == "teacher_kl":
+                        with torch.no_grad():
+                            t_logits = stack.lm_head(
+                                targets[n][it.ans0 - it.s0 - 1: it.A - 1]
+                                .to(logits.dtype)
+                            )
+                        readout = cfg.train.readout_weight * torch.nn.functional.kl_div(
+                            torch.nn.functional.log_softmax(logits.float(), dim=-1),
+                            torch.nn.functional.log_softmax(t_logits.float(), dim=-1),
+                            log_target=True, reduction="batchmean",
+                        )
+                    elif cfg.train.readout_source == "task_label":
+                        readout = cfg.train.readout_weight * task_label_ce_baseline(
+                            logits, label_ids)
+                    else:
+                        raise ValueError(f"unknown readout_source {cfg.train.readout_source!r}")
+                    hid = cfg.train.window_hidden_weight * sum(losses)
                 model.zero_grad(set_to_none=True)
-                hid.backward(retain_graph=True)
-                for LL in range(tail0, n + 1):
-                    hid2[LL] += grad_norm2(stack, LL)
+                if backward_if_grad(hid, retain_graph=True):
+                    for LL in range(readout0, n + 1):
+                        hid2[LL] += grad_norm2(stack, LL)
                 model.zero_grad(set_to_none=True)
-                ce.backward()
-                for LL in range(tail0, n + 1):
-                    aux2[LL] += grad_norm2(stack, LL)
+                if backward_if_grad(readout):
+                    for LL in range(readout0, n + 1):
+                        aux2[LL] += grad_norm2(stack, LL)
                 break
-            lens_w = (cfg.train.lens_ce_weight
-                      if L >= cfg.train.lens_ce_from else 0.0)
+            lens_w = (cfg.train.lens_task_label_weight
+                      if L >= cfg.train.lens_from_layer else 0.0)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 h_out = stack.run_block(L, h.detach(), pos_emb)
                 hid = loss_fn(stack.loss_view(L, h_out)[0, it.s0: it.s0 + it.A],
@@ -108,14 +150,14 @@ def main():
                 if lens_w > 0:
                     s_lens = stack.lm_head(stack.final_norm(h_out)[
                         0, it.ans0 - 1: it.s0 + it.A - 1])
-                    aux = lens_w * answer_ce(s_lens, label_ids)
+                    aux = lens_w * task_label_ce_baseline(s_lens, label_ids)
             model.zero_grad(set_to_none=True)
-            hid.backward(retain_graph=aux is not None)
-            hid2[L] += grad_norm2(stack, L)
+            if backward_if_grad(hid, retain_graph=aux is not None):
+                hid2[L] += grad_norm2(stack, L)
             if aux is not None:
                 model.zero_grad(set_to_none=True)
-                aux.backward()
-                aux2[L] += grad_norm2(stack, L)
+                if backward_if_grad(aux):
+                    aux2[L] += grad_norm2(stack, L)
             h = h_out.detach()
             L += 1
 
@@ -125,6 +167,11 @@ def main():
     per_block = {L: {"hidden_gn": hid2[L] ** 0.5, "aux_gn": aux2[L] ** 0.5}
                  for L in range(1, n + 1)}
     out = {"run": cfg.run_name, "items": args.items,
+           "run_class": cfg.train.run_class,
+           "readout_source": cfg.train.readout_source,
+           "readout_window_blocks": cfg.train.readout_window_blocks,
+           "readout_weight": cfg.train.readout_weight,
+           "window_hidden_weight": cfg.train.window_hidden_weight,
            "hidden_grad_norm": tot_h, "aux_grad_norm": tot_a,
            "hidden_share": share, "per_block": per_block}
     out_dir = Path(args.checkpoint).parent / "eval"

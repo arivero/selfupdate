@@ -1,6 +1,0 @@
-run_name: lw_summed_ce_e40_0p6b_rag
-train:
-  method: layerwise
-  schedule: summed
-  epochs: 40
-  last_block_ce_weight: 0.5

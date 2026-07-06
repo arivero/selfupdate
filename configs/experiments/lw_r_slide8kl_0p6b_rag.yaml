@@ -1,28 +1,27 @@
-# THE fully-teacher-sourced form (owner correction): uniform sliding
-# 8-deep credit + mimicry-free top window driven by TEACHER logits
-# (teacher_kl), zero reference anywhere in the gradient. If this matches
-# slide8pure, the method needs no task labels at all — lab==deployment.
 run_name: lw_r_slide8kl_0p6b_rag
 data:
   examples_path: data/poem/examples_v4.jsonl
   paraphrase: true
-  long_windows: [24, 48]
+  long_windows:
+  - 24
+  - 48
   part_chunk_lines: 48
   maieutic: true
 train:
   method: layerwise
   schedule: summed
   epochs: 40
-  lr: 1.0e-5
+  lr: 1.0e-05
   hidden_loss: vocab_mse
   conn_window: 8
   conn_stride: 1
-  tail_ce_blocks: 8
-  tail_ce_weight: 0.5
-  tail_hidden_weight: 0.0
-  tail_ce_kind: teacher_kl
   anchor_kl_weight: 0.5
   anchor_path: data/anchors_es_v2.txt
   frozen_teacher_copy: true
   lora:
     enabled: false
+  run_class: ablation
+  readout_window_blocks: 8
+  readout_weight: 0.5
+  window_hidden_weight: 0.0
+  readout_source: teacher_kl

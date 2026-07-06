@@ -1,8 +1,9 @@
-"""Verbose PDF report of all runs: runs/report.pdf.
+"""Gate-aware PDF report of all runs: runs/report.pdf.
 
-Assembles whatever artifacts exist (results table, training curves, delta
-profiles, graft/ablate curves, logit lens, convergence CSVs, per-run stats)
-into a multi-page PDF. Robust to missing pieces — reports what is there.
+Assembles whatever artifacts exist and classifies each run before it can be
+used as method evidence. Legacy task-label readout, old tail-only config
+keys, and missing readout provenance are reported as excluded/confounded,
+not silently mixed into the layerwise-distillation claim.
 
 Usage: python scripts/report.py [--out runs/report.pdf]
 """
@@ -25,9 +26,12 @@ import pandas as pd
 import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 
-from selfupdate.utils.runlog import read_metrics
-
 RUNS = Path("runs")
+
+OLD_KEYS = {
+    "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
+    "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+}
 
 
 def _text_page(pdf, title, body, fontsize=9):
@@ -51,15 +55,82 @@ def _image_page(pdf, title, png):
     plt.close(fig)
 
 
+def _image_grid_page(pdf, title, pngs, per_page=6):
+    pngs = [Path(p) for p in pngs if Path(p).exists()]
+    for i in range(0, len(pngs), per_page):
+        chunk = pngs[i:i + per_page]
+        rows = 3 if per_page >= 6 else 2
+        cols = 2
+        fig, axes = plt.subplots(rows, cols, figsize=(8.27, 11.69))
+        axes = list(axes.ravel())
+        fig.suptitle(f"{title} ({i + 1}-{i + len(chunk)} of {len(pngs)})",
+                     fontsize=14, weight="bold")
+        for ax, p in zip(axes, chunk):
+            ax.imshow(mpimg.imread(p))
+            ax.set_title(p.parent.parent.name, fontsize=7)
+            ax.axis("off")
+        for ax in axes[len(chunk):]:
+            ax.axis("off")
+        fig.tight_layout(rect=(0, 0, 1, 0.96))
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
+def _markdown_text(path: Path, max_chars: int = 9000) -> str:
+    if not path.exists():
+        return f"{path} is missing."
+    text = path.read_text(encoding="utf-8")
+    return text[:max_chars] + ("\n\n[truncated]" if len(text) > max_chars else "")
+
+
 def _read_json(p):
     p = Path(p)
     return json.loads(p.read_text()) if p.exists() else None
 
 
-def _best_run():
-    """(name, recite dict) of the best full-corpus recitation among all runs."""
+def _run_cfg(run_dir: Path) -> dict:
+    p = run_dir / "config.yaml"
+    if not p.exists():
+        return {}
+    try:
+        return yaml.safe_load(p.read_text()) or {}
+    except Exception as e:  # noqa: BLE001
+        return {"_parse_error": f"{type(e).__name__}: {e}"}
+
+
+def _evidence_status(cfg: dict) -> tuple[str, list[str]]:
+    """Return (status, warnings). Only status == method_clean is method evidence."""
+    warnings: list[str] = []
+    if cfg.get("_parse_error"):
+        return "unreadable", [cfg["_parse_error"]]
+    t = cfg.get("train", {}) or {}
+    run_class = t.get("run_class", "method")
+    old = sorted(k for k in OLD_KEYS if k in t)
+    if old:
+        warnings.append("legacy config keys: " + ", ".join(old))
+    if t.get("readout_source") == "task_label" or t.get("tail_ce_kind") == "task_label":
+        warnings.append("task-label training signal; excluded from method claims")
+    old_blocks = t.get("tail_ce_blocks", 0) or 0
+    new_blocks = t.get("readout_window_blocks", 0) or 0
+    blocks = new_blocks or old_blocks
+    if blocks > 0:
+        if t.get("readout_source", t.get("tail_ce_kind", "UNSET")) == "UNSET":
+            warnings.append("readout source not pinned")
+        if t.get("conn_window", 0) != blocks or t.get("conn_stride", 0) != 1:
+            warnings.append("readout not attached to sanctioned sliding window")
+    if run_class != "method":
+        return run_class, warnings
+    if warnings:
+        return "confounded", warnings
+    return "method_clean", warnings
+
+
+def _best_run(only_method_clean: bool = False):
+    """(name, recite dict) of the best full-corpus recitation among runs."""
     best = None
     for d in sorted(RUNS.iterdir()):
+        if only_method_clean and _evidence_status(_run_cfg(d))[0] != "method_clean":
+            continue
         r = _read_json(d / "eval/recite.json")
         if r and (best is None or r["cer"] < best[1]["cer"]):
             best = (d.name, r)
@@ -68,43 +139,45 @@ def _best_run():
 
 def summary_text() -> str:
     base = _read_json(RUNS / "base-eval-full/recite.json")
-    best = _best_run()
+    best_clean = _best_run(only_method_clean=True)
+    best_any = _best_run(only_method_clean=False)
     lines = [
         "Project: self-distillation of context (same model as teacher and student).",
         "Teacher sees privileged context (RAG passage / <think> trace); the student",
         "must reproduce its behavior without it. Corpus: 'La tierra de Alvargonzalez'",
-        "(A. Machado, 1912), 725 verses, 228 tasks (continuations, per-section",
-        "recitations, opening). Model: Qwen3-0.6B on a single RTX 3060 12 GB.",
+        "(A. Machado, 1912), 725 verses, with generated task variants.",
         "",
-        "Methods: layer-wise hidden matching with block-local backward",
-        "(summed / sequential / teacher_censored), plus local readout auxiliaries",
-        "such as lens-CE and bounded tail-CE. Online teacher uses adapters-off as",
-        "the frozen teacher, avoiding a disk cache.",
+        "Branch law enforced by this report: method evidence must be layerwise",
+        "forward distillation, must not train embedding/final norm/unembedding,",
+        "and any behavioral readout must be teacher-sourced and attached to a",
+        "stride-1 sliding connected window. Task-label cross-entropy (log loss)",
+        "against the original text is a baseline/sibling-branch signal, not a",
+        "method signal here.",
         "",
     ]
-    if base and best:
-        name, run = best
+    if base and best_clean:
+        name, run = best_clean
         lines += [
             f"Recitation (full corpus, n={base['n']}): base CER {base['cer']:.3f} ->",
-            f"best ({name}) CER {run['cer']:.3f}, {run['line_exact']:.0%} lines verbatim.",
+            f"best clean-method artifact ({name}) CER {run['cer']:.3f},",
+            f"{run['line_exact']:.0%} lines verbatim.",
             f"Forgetting probe (CE on held-out text): base {base['general']['mean_ce']:.3f},",
             f"best-run {run['general']['mean_ce']:.3f} (delta {run['general']['mean_ce']-base['general']['mean_ce']:+.2f}).",
             "  (computed from current artifacts)",
             "",
         ]
+    elif best_any:
+        lines += [
+            "No full-corpus artifact currently qualifies as clean method evidence.",
+            f"Best raw artifact is {best_any[0]} (reported later with evidence status).",
+            "",
+        ]
     lines += [
-        "Key findings (NARRATIVE SNAPSHOT written 2026-07-03 — tables and",
-        "figure pages are computed from current artifacts; re-read them if",
-        "this report was regenerated after new experiments):",
-        " 1. Strict hidden matching stores signal but does not reliably produce",
-        "    free-run behavior.",
-        " 2. Tail-CE is the current best lever: it keeps hidden matching as the",
-        "    storage signal and spends bounded top-window credit on readout.",
-        " 3. teacher_censored: per-layer increment targets are much smaller",
-        "    than student-stream targets, peak at layer ~7 (context integration site),",
-        "    ~0 at the last layer; layers train independently (parallelizable).",
-        " 4. Sequential and teacher_censored schedules preserve the one-block",
-        "    memory story needed for very large models.",
+        "Report gates:",
+        " 1. Old tail_* / task-label configs are excluded or flagged.",
+        " 2. Readout source must be explicit; no inherited source is evidence.",
+        " 3. Per-run appendix lists run_class, readout source/window, and warnings.",
+        " 4. Signal attribution JSON is expected next to every readout claim.",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M}. Details in the following pages;",
         "reproducibility: configs/experiments/*.yaml, runs/*/metrics.jsonl, git log.",
@@ -160,6 +233,117 @@ def results_page(pdf):
     plt.close(fig)
 
 
+def corpus_page(pdf):
+    corpus = RUNS / "corpus.csv"
+    if not corpus.exists():
+        _text_page(pdf, "Corpus index", "runs/corpus.csv is missing.\nRun scripts/build_corpus_index.py before report generation.")
+        return
+    df = pd.read_csv(corpus)
+    if df.empty:
+        _text_page(pdf, "Corpus index", "runs/corpus.csv has no rows.")
+        return
+    status = df["evidence_status"].value_counts(dropna=False).to_string()
+    missing_full = df[df["full_eval_cer"].isna()]["run"].tolist()
+    readout_window = pd.to_numeric(df["readout_window"], errors="coerce").fillna(0)
+    has_signal = df["signal_attribution_json"].fillna(False).astype(bool)
+    missing_signal = df[(readout_window > 0) & (~has_signal)]["run"].tolist()
+    clean = df[df["evidence_status"] == "method_clean"].copy()
+    clean = clean.sort_values("full_eval_cer", na_position="last").head(12)
+    lines = [
+        f"Rows: {len(df)}",
+        "",
+        "Evidence status counts:",
+        status,
+        "",
+        "Top clean-method rows by full_eval_cer:",
+    ]
+    if clean.empty:
+        lines.append("  (none)")
+    else:
+        for _, r in clean.iterrows():
+            lines.append(
+                f"  {r['run']}: cer={r['full_eval_cer']} exact={r['full_eval_line_exact']} "
+                f"source={r['readout_source']} window={r['readout_window']} "
+                f"hidden_share={r['hidden_share']}"
+            )
+    lines += [
+        "",
+        f"Missing full eval: {len(missing_full)}",
+        ", ".join(missing_full[:40]) + (" ..." if len(missing_full) > 40 else ""),
+        "",
+        f"Readout runs missing signal attribution: {len(missing_signal)}",
+        ", ".join(missing_signal[:40]) + (" ..." if len(missing_signal) > 40 else ""),
+    ]
+    _text_page(pdf, "Corpus Index And Artifact Completeness", "\n".join(lines), fontsize=7)
+
+
+def coverage_matrix_page(pdf):
+    path = RUNS / "experiment_coverage_matrix.csv"
+    if not path.exists():
+        _text_page(pdf, "Experiment Coverage Matrix",
+                   "runs/experiment_coverage_matrix.csv is missing.\n"
+                   "Run scripts/experiment_report_assets.py before report generation.")
+        return
+    df = pd.read_csv(path).fillna("")
+    fig = plt.figure(figsize=(11.69, 8.27))  # A4 landscape, first report page.
+    fig.text(0.02, 0.96, "Experiment Coverage Matrix", fontsize=14, weight="bold")
+    fig.text(
+        0.02, 0.925,
+        "Cells are counts by status: C=clean, L=legacy/provenance caveat, "
+        "A=ablation/control, X=denied/confounded, B=baseline. "
+        "A run can count in multiple rows.",
+        fontsize=7,
+    )
+    ax = fig.add_axes([0.01, 0.02, 0.98, 0.88])
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=df.values.tolist(),
+        colLabels=df.columns.tolist(),
+        loc="upper center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(4.9)
+    tbl.auto_set_column_width(range(len(df.columns)))
+    tbl.scale(1.0, 1.05)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#dddddd")
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#eeeeee")
+        if c == 0 and r > 0:
+            cell.set_text_props(ha="left")
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
+def layer_loss_pages(pdf):
+    manifest = RUNS / "layer_loss_manifest.csv"
+    if not manifest.exists():
+        _text_page(pdf, "Layer-Loss Artifacts",
+                   "runs/layer_loss_manifest.csv is missing.\n"
+                   "Run scripts/layer_loss_plots.py --force before report generation.")
+        return
+    df = pd.read_csv(manifest)
+    lines = [
+        f"Runs with per-layer loss artifacts: {len(df)}",
+        "",
+        "Each listed run has:",
+        "  - runs/<run>/eval/layer_losses.png",
+        "  - runs/<run>/eval/layer_losses_heatmap.png",
+        "  - runs/<run>/eval/layer_losses.csv",
+        "",
+        "Final-epoch loss summary:",
+        df[["run", "epochs", "layers", "final_mean_loss", "final_min_loss",
+            "final_max_loss"]].to_string(index=False, max_rows=80),
+    ]
+    _text_page(pdf, "Layer-Loss Artifact Index", "\n".join(lines), fontsize=6)
+    pngs = [RUNS.parent / p for p in df["line_plot"].dropna().tolist()]
+    heatmaps = [RUNS.parent / p for p in df["heatmap"].dropna().tolist()]
+    _image_grid_page(pdf, "Loss By Layer: Epoch Lines", pngs[:60], per_page=6)
+    _image_grid_page(pdf, "Loss By Layer: Heatmaps", heatmaps[:60], per_page=6)
+
+
 def layer_swap_pages(pdf):
     for csv in sorted(RUNS.glob("*/eval/layer_swap.csv")):
         run = csv.parent.parent.name
@@ -178,41 +362,40 @@ def layer_swap_pages(pdf):
 
 def per_run_appendix(pdf):
     blocks = []
-    for d in sorted(RUNS.iterdir()):
-        if not (d / "config.yaml").exists():
-            continue
-        cfg = yaml.safe_load((d / "config.yaml").read_text())
-        ms = read_metrics(d)
-        trains = [m for m in ms if m.get("kind") == "train"]
-        evals = [m for m in ms if m.get("kind") == "eval"]
-        stages = [m for m in ms if m.get("kind") == "stage"]
-        full = _read_json(d / "eval/recite.json")
-        b = [f"== {d.name} =="]
-        t = cfg.get("train", {})
-        b.append(f"  method={t.get('method')} schedule={t.get('schedule')} "
-                 f"lora={t.get('lora', {}).get('enabled')} lr={t.get('lr')} "
-                 f"epochs={t.get('epochs')} ce={t.get('answer_ce_weight', 0)}/"
-                 f"{t.get('last_block_ce_weight', 0)} online={t.get('online_teacher')}")
-        if trains:
-            n = max(1, len(trains[:20]))
-            b.append(f"  loss: first20 {sum(m['loss'] for m in trains[:20])/n:.4f} "
-                     f"-> last20 {sum(m['loss'] for m in trains[-20:])/len(trains[-20:]):.4f} "
-                     f"({len(trains)} items)")
-        if stages:
-            per = {}
-            for s in stages:
-                per[s["layer"]] = s["loss"]
-            ks = sorted(per)
-            b.append("  stage losses: " + " ".join(f"L{k}:{per[k]:.3f}" for k in ks[::7]))
-        for m in evals[-2:]:
-            b.append(f"  eval ep{m.get('epoch', m.get('layer'))}: CER {m['cer']:.3f} "
-                     f"exact {m['line_exact']:.2f} vram {m.get('vram_gb')}GB "
-                     f"{m.get('minutes')}min")
-        if full:
-            g = full.get("general", {}).get("mean_ce")
-            b.append(f"  FULL eval: CER {full['cer']:.4f} line-exact {full['line_exact']:.4f}"
-                     + (f" general-CE {g:.3f}" if g else ""))
-        blocks.append("\n".join(b))
+    corpus = RUNS / "corpus.csv"
+    if corpus.exists():
+        df = pd.read_csv(corpus)
+        for _, r in df.sort_values(["evidence_status", "run"]).iterrows():
+            b = [f"== {r['run']} =="]
+            b.append(f"  run_class={r['run_class']} evidence={r['evidence_status']} "
+                     f"model={r['model']} schedule={r['schedule']} hidden_loss={r['hidden_loss']}")
+            b.append(f"  readout_source={r['readout_source']} readout_window={r['readout_window']} "
+                     f"readout_weight={r['readout_weight']} window_hidden_weight={r['window_hidden_weight']} "
+                     f"conn={r['conn_window']}/{r['conn_stride']}")
+            if isinstance(r.get("warnings"), str) and r["warnings"]:
+                b.append(f"  WARN: {r['warnings']}")
+            b.append(f"  loss: first20 {r['loss_first']} -> last20 {r['loss_final']} "
+                     f"items_seen={r['items_seen']}")
+            b.append(f"  eval: last_CER={r['last_eval_cer']} full_CER={r['full_eval_cer']} "
+                     f"line_exact={r['full_eval_line_exact']} general_CE={r['general_ce']} "
+                     f"forget_dCE={r['forgetting_delta_ce']}")
+            b.append(f"  artifacts: destruction={r['destruction_json']} "
+                     f"signal={r['signal_attribution_json']} hidden_share={r['hidden_share']} "
+                     f"active_config={r['active_config']}")
+            blocks.append("\n".join(b))
+    else:
+        for d in sorted(RUNS.iterdir()):
+            if not (d / "config.yaml").exists():
+                continue
+            cfg = yaml.safe_load((d / "config.yaml").read_text())
+            status, warnings = _evidence_status(cfg)
+            b = [f"== {d.name} =="]
+            t = cfg.get("train", {})
+            b.append(f"  method={t.get('method')} schedule={t.get('schedule')} "
+                     f"run_class={t.get('run_class', 'method')} evidence={status}")
+            if warnings:
+                b.append("  WARN: " + "; ".join(warnings))
+            blocks.append("\n".join(b))
     for i in range(0, len(blocks), 6):
         _text_page(pdf, f"Per-run details ({i // 6 + 1})",
                    "\n\n".join(blocks[i:i + 6]), fontsize=7)
@@ -224,9 +407,17 @@ def main() -> None:
     args = ap.parse_args()
 
     with PdfPages(args.out) as pdf:
+        coverage_matrix_page(pdf)
         _text_page(pdf, "Self-distillation of context — experiment report",
                    summary_text())
         results_page(pdf)
+        corpus_page(pdf)
+        _image_page(pdf, "Accuracy Aspects", RUNS / "accuracy_aspects.png")
+        _image_page(pdf, "Destruction Aspects", RUNS / "destruction_aspects.png")
+        _image_page(pdf, "Layer Modification Heatmap", RUNS / "layer_modification_heatmap.png")
+        _text_page(pdf, "Qualitative Chat Summary",
+                   _markdown_text(RUNS / "qualitative_chat_summary.md"), fontsize=6)
+        layer_loss_pages(pdf)
         _image_page(pdf, "Training dynamics (loss / eval CER)", RUNS / "curves.png")
         _image_page(pdf, "Per-layer weight-delta profiles & heatmap",
                     RUNS / "delta_profiles.png")

@@ -1,7 +1,7 @@
 """Logit-lens depth profiles for base vs trained checkpoints (M4).
 
 Usage:
-    python scripts/logit_lens.py --run lw_tail_ce_e40_v2_0p6b_rag [--limit 24]
+    python scripts/logit_lens.py --run lw_r_slide8_0p6b_rag [--limit 24]
 
 Writes runs/<run>/eval/logit_lens.csv and a comparison plot
 runs/<run>/eval/logit_lens.png (base model in grey, trained in color).
@@ -23,7 +23,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
-from selfupdate.eval.logit_lens import gold_logprob_by_layer
+from selfupdate.eval.logit_lens import reference_logprob_by_layer
 from selfupdate.masking import ContextMasker, SegmentedExample
 
 
@@ -42,7 +42,7 @@ def profile(model_src, cfg, tok, pairs, limit, translators=None):
     else:
         model = AutoModelForCausalLM.from_pretrained(model_src, dtype=torch.bfloat16)
     model.to(cfg.model.device).eval()
-    prof = gold_logprob_by_layer(
+    prof = reference_logprob_by_layer(
         model, tok, pairs, device=cfg.model.device, limit=limit,
         rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
         translators=translators,

@@ -22,8 +22,8 @@ class ModelConfig:
     # blocks split+1..n plus final norm and lm_head on cuda:1 (embedding
     # stays on cuda:0). Implemented via an HF device_map, so accelerate's
     # alignment hooks move activations even through our direct block calls;
-    # block-local backprop means no gradient crosses cards outside the tail
-    # window (which lives whole on cuda:1). Queue such jobs with n_gpus=2.
+    # block-local backprop means no gradient crosses cards outside a connected
+    # readout window (which lives whole on cuda:1). Queue such jobs with n_gpus=2.
     pipeline_split: int = 0
 
 
@@ -85,6 +85,8 @@ class LoraConfig:
 @dataclass
 class TrainConfig:
     method: str = "layerwise"
+    # method | baseline | ablation | control | legacy_archive | confounded | open
+    run_class: str = "method"
     # summed | sequential | teacher_censored | mixed
     schedule: str = "summed"
     # mixed schedule: probability an item routes through the teacher-stream
@@ -100,45 +102,29 @@ class TrainConfig:
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
     # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
     hidden_loss: str = "nmse"
-    # BASELINE auxiliary: CE on task-label tokens (0 = pure distillation).
-    # Pins the student's argmax to the reference recitation (task supervision)
-    # caused by teacher formatting quirks at the trained positions.
-    answer_ce_weight: float = 0.0
-    # layerwise hybrid (BASELINE): task-label CE on the LAST block only, through the
-    # frozen final norm + lm_head. The graph is rooted at block n's detached
-    # input, so the backward stays confined to block n — output supervision
-    # without giving up block-locality.
-    last_block_ce_weight: float = 0.0
-    # tail-CE hybrid (summed schedule): the last `tail_ce_blocks` blocks train
-    # JOINTLY — gradient flows within that window so the answer-CE at the top
-    # can do multi-block credit assignment — while everything below stays
-    # block-local. Motivated by the logit-lens finding (2026-07-03): strict
-    # hidden matching stores recall below the top window, while the deficit is
-    # confined to final-block readout. 0 = off (pure block-local, the default).
-    tail_ce_blocks: int = 0
-    tail_ce_weight: float = 0.0
-    # in-window hidden-loss weight for the connected tail. 1.0 = the hybrid
-    # (deep supervision inside the window); 0.0 = PURE truncated
-    # distillation — only the top CE drives the window (owner challenge
-    # 2026-07-04: in-window trajectory mimicry may fight readout assembly,
-    # since the teacher's window trajectory was computed WITH the context).
-    tail_hidden_weight: float = 1.0
+    # BASELINE auxiliary: task-label cross-entropy on the LAST block only,
+    # through the frozen final norm + lm_head. Method arms must keep this at 0.
+    last_block_task_label_weight: float = 0.0
+    # Top readout term attached ONLY to sanctioned sliding windows:
+    # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
+    # The connected graph is still a gradient-isolation unit rooted at a
+    # detached window input; nothing below the window receives gradient.
+    readout_window_blocks: int = 0
+    readout_weight: float = 0.0
+    # Hidden-loss weight inside a connected window. Method arms keep this 1.0;
+    # zero or reduced values are ablations/baselines only.
+    window_hidden_weight: float = 1.0
     # readout-term source (owner correction 2026-07-05): 'teacher_kl' =
     # KL(teacher || student) on the TEACHER'S context-conditioned logits
     # (derived from targets[n] through the frozen head — zero extra
-    # compute, 100% teacher-sourced; in deployment task labels do not exist,
-    # the answer IS the teacher's output, so this unifies lab and
-    # deployment). THE DEFAULT and the method. 'task_label' = CE on the
-    # dataset reference text = task supervision — BASELINE-ONLY:
-    # lives in code as a labeled control, never as the method. Every arm
-    # trained before 2026-07-05 ~04:30 used task-label CE de facto and is
-    # classified accordingly in EXPERIMENTS.md.
-    tail_ce_kind: str = 'UNSET'
+    # compute, 100% teacher-sourced. 'task_label' = CE on the dataset
+    # reference text = task supervision — BASELINE-ONLY.
+    # No base config default is allowed; readout runs must pin this explicitly.
+    readout_source: str = 'UNSET'
     # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
     # every layer gets k-deep credit assignment, peak activation graph
-    # stays k blocks. 0/1 = classic block-local. Composes with the tail
-    # window (which is just the last window position — the only one where
-    # logits exist, so the only one carrying the answer-CE).
+    # stays k blocks. 0/1 = classic block-local. The top readout is just
+    # the last sliding window position — the only one where logits exist.
     conn_window: int = 0
     # 0 = DISJOINT windows (detach every k blocks; walk compute unchanged;
     # credit depth depends on position inside the window). 1 = FAITHFUL
@@ -146,22 +132,16 @@ class TrainConfig:
     # of a k-deep window that updates ALL covered blocks — uniform k-deep
     # credit everywhere, at ~k x body compute.
     conn_stride: int = 0
-    # per-block lens-CE (summed schedule): every block >= lens_ce_from gets a
-    # behavioral auxiliary through the frozen logit lens — Belilovsky-style
-    # local heads. Strictly block-local (unlike tail_ce): the personalization
-    # / parallelism story is fully preserved. 0 = off.
-    lens_ce_weight: float = 0.0
-    lens_ce_from: int = 1
-    # anti-intrusion anchor (catastrophic-remembering mitigation): plain-LM
-    # CE on neighbor-genre Spanish fragments, applied once per optimizer
-    # step THROUGH THE TAIL WINDOW ONLY — it counters the readout trigger
-    # ("poetic Spanish -> recite the poem") where it is installed. Requires
-    # tail_ce_blocks > 0. Anchor texts must never overlap the eval probes
-    # or the poem (enforced by tests/test_anchor.py).
+    # BASELINE auxiliary: per-block task-label CE through the frozen logit lens.
+    # Method arms must keep this at 0.
+    lens_task_label_weight: float = 0.0
+    lens_from_layer: int = 1
+    # anti-intrusion anchor (catastrophic-remembering mitigation): applied once
+    # per optimizer step through the sanctioned top readout window. Anchor
+    # texts must never overlap the eval probes or the poem.
     anchor_ce_weight: float = 0.0
-    # anchor-KL (the corrected anchor, Wave K): KL(base || student) on the
-    # anchor fragments through the tail window — "on neighbor input, behave
-    # like base". Takes precedence over anchor_ce_weight; needs an online
+    # anchor-KL: KL(base || student) on anchor fragments through the top
+    # readout window. Takes precedence over anchor_ce_weight; needs an online
     # teacher (frozen_teacher_copy or LoRA online) for base logits.
     anchor_kl_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"

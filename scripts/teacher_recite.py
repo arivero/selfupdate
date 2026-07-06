@@ -46,11 +46,11 @@ def main() -> None:
         prompt = r["shared_prefix"] + r["privileged"] + r["shared_mid"]
         ids = tok.encode(prompt, add_special_tokens=False)
         reference = r["answer_text"]
-        gold_len = len(tok.encode(reference, add_special_tokens=False))
+        reference_len = len(tok.encode(reference, add_special_tokens=False))
         with torch.no_grad():
             out = model.generate(
                 torch.tensor([ids], device=model.device),
-                max_new_tokens=gold_len + 48, do_sample=False,
+                max_new_tokens=reference_len + 48, do_sample=False,
                 eos_token_id=im_end, pad_token_id=tok.eos_token_id,
             )
         text = normalize_verse(tok.decode(out[0, len(ids):], skip_special_tokens=True))

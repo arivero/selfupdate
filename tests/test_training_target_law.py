@@ -15,23 +15,23 @@ from selfupdate.train import layerwise as lw
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs GPU")
 
 
-def test_default_readout_is_teacher_sourced():
+def test_base_readout_source_is_unset_sentinel():
     cfg = load_config("configs/base.yaml", None)
-    assert cfg.train.tail_ce_kind == "teacher_kl"
+    assert cfg.train.readout_source == "UNSET"
     import inspect
-    sig = inspect.signature(lw.tail_step)
-    assert sig.parameters["ce_kind"].default == "teacher_kl"
+    sig = inspect.signature(lw.window_step)
+    assert sig.parameters["readout_source"].default == "teacher_kl"
 
 
 def test_all_ce_call_sites_pass_cfg_kind():
     import inspect, re
     src = inspect.getsource(lw)
-    # every tail_step call that passes a CE weight from cfg must pass ce_kind
-    calls = re.findall(r"tail_step\((?:[^()]|\([^()]*\))*\)", src)
-    ce_calls = [c for c in calls if "tail_ce_weight" in c]
+    # every window_step call that passes a readout weight from cfg must pass source
+    calls = re.findall(r"window_step\((?:[^()]|\([^()]*\))*\)", src)
+    ce_calls = [c for c in calls if "readout_weight" in c]
     assert len(ce_calls) >= 1  # summed only: censored is pure, [expunged] is expunged
     for c in ce_calls:
-        assert "ce_kind=cfg.train.tail_ce_kind" in c, c[:120]
+        assert "readout_source=cfg.train.readout_source" in c, c[:120]
 
 
 @pytest.fixture(scope="module")
@@ -77,9 +77,11 @@ def test_teacher_kl_gradients_label_independent(stack):
     def run(kind, lab):
         stack.model.zero_grad(set_to_none=True)
         torch.manual_seed(0)
-        lw.tail_step(stack, L0, h.detach(), pe,
-                     {L: targets[L] for L in range(L0, n + 1)},
-                     s0, A, 1, lab, fn, ce_w=0.5, hidden_w=1.0, ce_kind=kind)
+        lw.window_step(stack, L0, h.detach(), pe,
+                       {L: targets[L] for L in range(L0, n + 1)},
+                       s0, A, 1, lab, fn,
+                       readout_w=0.5, hidden_w=1.0,
+                       readout_source=kind)
         return _grads(stack, L0)
 
     g1 = run("teacher_kl", labels)
@@ -96,7 +98,7 @@ def test_unknown_kind_refuses():
     with pytest.raises((ValueError, Exception)):
         # signature-level: unknown sentinel must not silently supervise
         import inspect
-        src = inspect.getsource(lw.tail_step)
+        src = inspect.getsource(lw.window_step)
         assert 'raise ValueError' in src and 'task_label' in src
         raise ValueError("guard present")
 
@@ -110,14 +112,14 @@ def test_knob_schedule_refusal():
     with pytest.raises(ValueError, match="expunged"):
         _validate_knob_schedule(cfg)
     cfg.train.schedule = "teacher_censored"
-    cfg.train.tail_ce_blocks = 8
-    cfg.train.tail_ce_kind = "UNSET"
+    cfg.train.readout_window_blocks = 8
+    cfg.train.readout_source = "UNSET"
     with pytest.raises(ValueError, match="EXPLICITLY"):
         _validate_knob_schedule(cfg)
-    cfg.train.tail_ce_kind = "task_label"
+    cfg.train.readout_source = "task_label"
     with pytest.raises(ValueError, match="pure by definition"):
         _validate_knob_schedule(cfg)
-    cfg.train.tail_ce_blocks = 0
+    cfg.train.readout_window_blocks = 0
     cfg.train.conn_window = 8
     with pytest.raises(ValueError, match="conn_window"):
         _validate_knob_schedule(cfg)
@@ -128,5 +130,23 @@ def test_knob_schedule_refusal():
     cfg.train.offload_adam = False
     cfg.train.schedule = "summed"
     cfg.train.conn_window = 8
+    cfg.train.readout_source = "UNSET"
     cfg.train.scramble_targets = True
     _validate_knob_schedule(cfg)  # legal combo passes
+
+    cfg.train.scramble_targets = False
+    cfg.train.readout_window_blocks = 8
+    cfg.train.readout_weight = 0.5
+    cfg.train.readout_source = "teacher_kl"
+    cfg.train.conn_window = 0
+    with pytest.raises(ValueError, match="sanctioned sliding"):
+        _validate_knob_schedule(cfg)
+    cfg.train.conn_window = 8
+    cfg.train.conn_stride = 0
+    with pytest.raises(ValueError, match="sanctioned sliding"):
+        _validate_knob_schedule(cfg)
+    cfg.train.conn_stride = 1
+    _validate_knob_schedule(cfg)
+    cfg.train.readout_source = "task_label"
+    with pytest.raises(ValueError, match="baseline only"):
+        _validate_knob_schedule(cfg)

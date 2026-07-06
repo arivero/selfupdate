@@ -15,8 +15,8 @@ import torch.nn.functional as F
 
 
 @torch.no_grad()
-def gold_logprob_by_layer(model, tokenizer, pairs, device="cuda", limit=32,
-                          rebase_gap: bool = False, translators=None) -> dict:
+def reference_logprob_by_layer(model, tokenizer, pairs, device="cuda", limit=32,
+                               rebase_gap: bool = False, translators=None) -> dict:
     """pairs: list[AlignedPair]. Returns {layer: mean reference-token logprob}.
     ``rebase_gap`` must match the training compaction (stub_gap trains at
     gap-shifted positions; probing at contiguous ones would measure an

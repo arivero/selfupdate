@@ -19,7 +19,6 @@ cache:
 train:
   method: layerwise
   schedule: summed
-  tail_ce_kind: teacher_kl  # explicit per training-target law; every experiment overrides consciously (silent-default confound struck twice 2026-07-05)
   lr: 1.0e-5
   epochs: 10
   micro_batch: 1

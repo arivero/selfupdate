@@ -23,8 +23,13 @@ class BlockStack:
     def __init__(self, model):
         self.model = model
         inner = model.model
+        if not all(hasattr(inner, attr) for attr in ("embed_tokens", "layers", "norm")):
+            wrapped = getattr(inner, "language_model", None)
+            if wrapped is not None:
+                inner = wrapped
         # this module layout is shared by the Qwen/Llama/DeepSeek/GLM HF
-        # ports; fail loudly for exotic architectures rather than mis-wiring
+        # ports. Gemma4 wraps the text stack under model.language_model.
+        # Fail loudly for exotic architectures rather than mis-wiring.
         for attr, owner in (("embed_tokens", inner), ("layers", inner),
                             ("norm", inner), ("lm_head", model)):
             if not hasattr(owner, attr):

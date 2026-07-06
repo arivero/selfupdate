@@ -1,9 +1,0 @@
-run_name: lw_tc_ce_0p6b_rag
-train:
-  method: layerwise
-  schedule: teacher_censored
-  epochs: 20
-  last_block_ce_weight: 0.5
-  online_teacher: true
-  lora:
-    enabled: true

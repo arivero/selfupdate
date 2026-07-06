@@ -110,8 +110,12 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
             pad_token_id=tokenizer.eos_token_id,
         )
         raw = tokenizer.decode(out[0, len(prompt_ids):], skip_special_tokens=True)
+    return score_recitation(record, raw)
+
+
+def score_recitation(record: dict, raw: str) -> dict:
     text = normalize_verse(strip_think(raw))
-    ref = normalize_verse(ref)
+    ref = normalize_verse(record["answer_text"])
 
     cer = jiwer.cer(ref, text) if text else 1.0
     # prose corpora: newline placement is arbitrary wrapping, not content —
@@ -132,19 +136,31 @@ def recite_one(model, tokenizer, record: dict, max_extra_tokens: int = 48,
         "cer_flat": cer_flat,
         "line_exact": exact / len(ref_lines),
         "prefix_lines": prefix,
-        "n_gold_lines": len(ref_lines),
+        "n_reference_lines": len(ref_lines),
         "text": text,
     }
 
 
 @torch.no_grad()
 def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
-                rebase_gap: bool = False) -> dict:
+                rebase_gap: bool = False, batch_size: int = 1,
+                max_extra_tokens: int = 48) -> dict:
     was_training = model.training
     model.eval()
     records = adapt_records(records, tokenizer)
     subset = records[:limit] if limit else records
-    results = [recite_one(model, tokenizer, r, rebase_gap=rebase_gap) for r in subset]
+    if rebase_gap or batch_size <= 1:
+        results = []
+        for i, r in enumerate(subset, 1):
+            print(f"recite eval item {i}/{len(subset)}", flush=True)
+            results.append(
+                recite_one(model, tokenizer, r, max_extra_tokens=max_extra_tokens,
+                           rebase_gap=rebase_gap)
+            )
+    else:
+        results = recite_eval_batched(
+            model, tokenizer, subset, batch_size=batch_size,
+            max_extra_tokens=max_extra_tokens)
     if was_training:
         model.train()
     mean = lambda k: sum(r[k] for r in results) / len(results)
@@ -156,3 +172,43 @@ def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
         "n": len(results),
         "per_example": results,
     }
+
+
+@torch.no_grad()
+def recite_eval_batched(model, tokenizer, records: list[dict], batch_size: int,
+                        max_extra_tokens: int = 48) -> list[dict]:
+    was_padding = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    eos_id = stop_token_id(tokenizer)
+
+    work = []
+    for i, r in enumerate(records):
+        prompt = student_prompt(r)
+        ref_len = len(tokenizer.encode(r["answer_text"], add_special_tokens=False))
+        work.append((ref_len, i, r, prompt))
+
+    results: list[dict | None] = [None] * len(records)
+    for start in range(0, len(work), batch_size):
+        batch = work[start:start + batch_size]
+        print(f"recite eval batch {start + len(batch)}/{len(work)} "
+              f"(batch_size={len(batch)})", flush=True)
+        prompts = [x[3] for x in batch]
+        max_new = max(x[0] for x in batch) + max_extra_tokens
+        enc = tokenizer(prompts, return_tensors="pt", padding=True,
+                        add_special_tokens=False)
+        enc = {k: v.to(model.device) for k, v in enc.items()}
+        out = model.generate(
+            **enc,
+            max_new_tokens=max_new,
+            do_sample=False,
+            eos_token_id=eos_id,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+        gen_start = enc["input_ids"].shape[1]
+        for row, (_, idx, rec, _prompt) in enumerate(batch):
+            raw = tokenizer.decode(out[row, gen_start:], skip_special_tokens=True)
+            results[idx] = score_recitation(rec, raw)
+    tokenizer.padding_side = was_padding
+    return [r for r in results if r is not None]

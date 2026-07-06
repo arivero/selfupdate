@@ -1,4 +1,5 @@
 # SCALE-TRANSFER (bad 3): teacher-stream null-readout at 1.7B (0.6B: 0.877).
+run_name: xs_tcmodern_1p7b_rag
 model:
   name: Qwen/Qwen3-1.7B
 data:

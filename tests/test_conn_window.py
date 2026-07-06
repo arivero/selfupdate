@@ -1,4 +1,4 @@
-"""Sliding connected windows + tail_hidden_weight: gradient extents."""
+"""Sliding connected windows + window_hidden_weight: gradient extents."""
 
 import pytest
 import torch
@@ -6,7 +6,7 @@ from transformers import AutoModelForCausalLM
 
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.losses import HiddenLoss
-from selfupdate.train.layerwise import tail_step
+from selfupdate.train.layerwise import window_step
 
 cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs GPU")
 
@@ -48,8 +48,9 @@ def test_body_window_grads_confined(stack):
     loss_fn = HiddenLoss("nmse")
     # connected body window [3..5], no CE
     win_targets = {L: targets[L] for L in (3, 4, 5)}
-    losses, h_out = tail_step(stack, 3, h.detach(), pe, win_targets,
-                              s0, A, 1, label_ids, loss_fn, ce_w=0.0, L1=5)
+    losses, h_out = window_step(stack, 3, h.detach(), pe, win_targets,
+                                s0, A, 1, label_ids, loss_fn,
+                                readout_w=0.0, L1=5)
     assert len(losses) == 3
     assert _grad_norm(stack, 3) > 0 and _grad_norm(stack, 5) > 0
     assert _grad_norm(stack, 2) == 0 and _grad_norm(stack, 6) == 0
@@ -57,18 +58,19 @@ def test_body_window_grads_confined(stack):
 
 
 @cuda
-def test_tail_hidden_weight_zero_is_pure_ce(stack):
+def test_window_hidden_weight_zero_is_readout_only(stack):
     h, pe, targets, label_ids, s0, A = _setup(stack)
     n = stack.n_layers
     loss_fn = HiddenLoss("nmse")
     L0 = n - 2
     stack.model.zero_grad(set_to_none=True)
-    tail_targets = {L: targets[L] for L in range(L0, n + 1)}
-    losses, _ = tail_step(stack, L0, h.detach(), pe, tail_targets,
-                          s0, A, 1, label_ids, loss_fn, ce_w=0.5, hidden_w=0.0)
+    readout_targets = {L: targets[L] for L in range(L0, n + 1)}
+    losses, _ = window_step(stack, L0, h.detach(), pe, readout_targets,
+                            s0, A, 1, label_ids, loss_fn,
+                            readout_w=0.5, hidden_w=0.0)
     # hidden losses still REPORTED (storage telemetry), but the only
-    # gradient source is the CE — window blocks get grads, frozen head none
-    assert all(v >= 0 for v in losses)
+    # gradient source is the readout — window blocks get grads, frozen head none
+    assert all(float(v.detach().cpu()) >= 0 for v in losses)
     assert _grad_norm(stack, L0) > 0 and _grad_norm(stack, n) > 0
     assert _grad_norm(stack, L0 - 1) == 0
     assert all(p.grad is None for p in stack.lm_head.parameters())
@@ -82,8 +84,9 @@ def test_endpoint_sliding_window_semantics(stack):
     stack.model.zero_grad(set_to_none=True)
     loss_fn = HiddenLoss("nmse")
     # endpoint L1=6, window [3..6]: sparse targets dict
-    losses, _ = tail_step(stack, 3, h.detach(), pe, {6: targets[6]},
-                          s0, A, 1, label_ids, loss_fn, ce_w=0.0, L1=6)
+    losses, _ = window_step(stack, 3, h.detach(), pe, {6: targets[6]},
+                            s0, A, 1, label_ids, loss_fn,
+                            readout_w=0.0, L1=6)
     assert len(losses) == 1  # only the endpoint is matched
     for L in (3, 4, 5, 6):
         assert _grad_norm(stack, L) > 0, L  # all covered blocks updated
@@ -100,10 +103,11 @@ def test_teacher_kl_readout(stack):
     n = stack.n_layers
     stack.model.zero_grad(set_to_none=True)
     loss_fn = HiddenLoss("nmse")
-    tail_targets = {L: targets[L] for L in range(n - 2, n + 1)}
-    losses, _ = tail_step(stack, n - 2, h.detach(), pe, tail_targets,
-                          s0, A, 1, None, loss_fn, ce_w=0.5, hidden_w=0.0,
-                          ce_kind="teacher_kl")
+    readout_targets = {L: targets[L] for L in range(n - 2, n + 1)}
+    losses, _ = window_step(stack, n - 2, h.detach(), pe, readout_targets,
+                            s0, A, 1, None, loss_fn,
+                            readout_w=0.5, hidden_w=0.0,
+                            readout_source="teacher_kl")
     assert _grad_norm(stack, n) > 0 and _grad_norm(stack, n - 2) > 0
     assert _grad_norm(stack, n - 3) == 0
     assert all(p.grad is None for p in stack.lm_head.parameters())

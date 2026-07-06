@@ -1,11 +1,3 @@
-# TARGET (owner criterion, 2026-07-05): CHANNEL SEPARATION — is surplus
-# memorization flowing from the RAG (passage->states) or from the OUTPUT
-# (labels->CE)? Verses 300-324 are held out of every LABEL position
-# (32 examples dropped -> they become the eval set) but survive in 5
-# passages as pad-only. Recipe = slide8pure (doctrine-clean). If the
-# student recites never-labeled verses, the state channel teaches;
-# caveat: channel is THIN (5 passages) — positive decisive, negative
-# only suggestive.
 run_name: lw_t_ragchannel_0p6b_rag
 data:
   examples_path: data/poem/examples_v4_ragchannel_train.jsonl
@@ -13,15 +5,17 @@ train:
   method: layerwise
   schedule: summed
   epochs: 40
-  lr: 1.0e-5
+  lr: 1.0e-05
   hidden_loss: vocab_mse
   conn_window: 8
   conn_stride: 1
-  tail_ce_blocks: 8
-  tail_ce_weight: 0.5
-  tail_hidden_weight: 0.0
   anchor_kl_weight: 0.5
   anchor_path: data/anchors_es_v2.txt
   frozen_teacher_copy: true
   lora:
     enabled: false
+  run_class: ablation
+  readout_window_blocks: 8
+  readout_weight: 0.5
+  window_hidden_weight: 0.0
+  readout_source: teacher_kl

@@ -77,7 +77,7 @@ def test_kl_decreases_and_vocab_frozen(model_and_tok):
 def test_zero_translators_reproduce_raw_lens_on_model(model_and_tok):
     model, tok = model_and_tok
     from selfupdate.data.dataset import load_jsonl
-    from selfupdate.eval.logit_lens import gold_logprob_by_layer
+    from selfupdate.eval.logit_lens import reference_logprob_by_layer
     from selfupdate.masking import ContextMasker, SegmentedExample
 
     masker = ContextMasker(tok)
@@ -85,6 +85,6 @@ def test_zero_translators_reproduce_raw_lens_on_model(model_and_tok):
              for r in load_jsonl("data/poem/examples_v4.jsonl")[:2]]
     tr = make_translators(model.config.hidden_size,
                           model.config.num_hidden_layers, device="cuda")
-    raw = gold_logprob_by_layer(model, tok, pairs, limit=2)
-    tuned = gold_logprob_by_layer(model, tok, pairs, limit=2, translators=tr)
+    raw = reference_logprob_by_layer(model, tok, pairs, limit=2)
+    tuned = reference_logprob_by_layer(model, tok, pairs, limit=2, translators=tr)
     assert raw == tuned

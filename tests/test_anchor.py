@@ -54,13 +54,13 @@ def test_anchor_grads_confined_to_window():
     L0 = n - 4 + 1
     model.zero_grad(set_to_none=True)
     a_ids, _ = bank.next()
-    ce = anchor_step(stack, L0, a_ids, w=0.5, autocast=False)
+    ce = float(anchor_step(stack, L0, a_ids, w=0.5, autocast=False).detach().cpu())
     assert ce > 0
     for L in range(1, L0):
         assert all(p.grad is None for p in stack.block_params(L)), f"L{L} leaked"
     for L in range(L0, n + 1):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
-                   for p in stack.block_params(L)), f"tail L{L} no grads"
+                   for p in stack.block_params(L)), f"window L{L} no grads"
     for pname, p in stack.model.named_parameters():
         if any(k in pname for k in ("embed_tokens", "model.norm", "lm_head")):
             assert p.grad is None, f"{pname} got a gradient"

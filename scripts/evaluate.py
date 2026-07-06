@@ -31,6 +31,9 @@ def main() -> None:
                     help="output dir override (multi-node: concurrent --base "
                          "evals must not share runs/base-eval-full)")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--batch-size", type=int, default=1,
+                    help="batched generation for standard recitation evals")
+    ap.add_argument("--max-extra-tokens", type=int, default=48)
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
@@ -57,7 +60,14 @@ def main() -> None:
 
     records = load_jsonl(cfg.data.examples_path)
     r = recite_eval(model, tok, records, limit=args.limit,
-                    rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
+                    rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
+                    batch_size=args.batch_size,
+                    max_extra_tokens=args.max_extra_tokens)
+    r["batch_size"] = args.batch_size
+    r["max_extra_tokens"] = args.max_extra_tokens
+    r["baseline_kind"] = "unmodified_model_without_rag_input" if args.base else "checkpoint"
+    r["model"] = cfg.model.name
+    r["examples_path"] = cfg.data.examples_path
     r["general"] = general_ce(model, tok, device=cfg.model.device)
     print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
           f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")

@@ -34,7 +34,7 @@ def load_examples(path: str, tokenizer) -> list[SegmentedExample]:
             for r in adapt_records(records, tokenizer)]
 
 
-def answer_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
+def reference_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
     """Mean CE of the answer tokens given the full sequence logits."""
     tgt = torch.tensor(ids[ans.start:ans.stop], device=logits.device)
     pred = logits[ans.start - 1: ans.stop - 1]
@@ -82,11 +82,11 @@ def main() -> None:
             },
         )
 
-        ce_with.append(answer_ce(out.logits[0], pair.teacher_ids, pair.t_answer))
+        ce_with.append(reference_ce(out.logits[0], pair.teacher_ids, pair.t_answer))
         s_ids = torch.tensor([pair.student_ids], device=model.device)
         with torch.no_grad():
             s_out = model(s_ids, use_cache=False)
-        ce_without.append(answer_ce(s_out.logits[0], pair.student_ids, pair.s_answer))
+        ce_without.append(reference_ce(s_out.logits[0], pair.student_ids, pair.s_answer))
 
     writer.finalize()
     mean = lambda xs: sum(xs) / len(xs)

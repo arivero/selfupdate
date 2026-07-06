@@ -1,4 +1,5 @@
 # v4 = v2 + maieutic dialogue frames (additive elicitation-diversity data)
+run_name: data_v4_build
 data:
   examples_path: data/poem/examples_v4.jsonl
   paraphrase: true

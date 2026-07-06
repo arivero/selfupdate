@@ -1,8 +1,7 @@
 """Mixed schedule: annealed teacher/student routing.
 
 CPU tests cover the p-schedule and branch-draw determinism; the GPU test
-mirrors the tail-CE confinement contract on CENSORED teacher-stream inputs
-(the new tail-in-censored-path support)."""
+guards the restored pure teacher-censored path."""
 
 import pytest
 import torch
@@ -20,7 +19,7 @@ EXAMPLES = "data/poem/examples.jsonl"
 class _Cfg:
     """Minimal stand-in for ExperimentConfig.train fields mix_teacher_p reads."""
 
-    def __init__(self, epochs, start=1.0, end=0.0, tail=0, tail_w=0.0, lbce=0.0):
+    def __init__(self, epochs, start=1.0, end=0.0):
         class T:
             pass
 
@@ -28,9 +27,6 @@ class _Cfg:
         self.train.epochs = epochs
         self.train.mix_teacher_start = start
         self.train.mix_teacher_end = end
-        self.train.tail_ce_blocks = tail
-        self.train.tail_ce_weight = tail_w
-        self.train.last_block_ce_weight = lbce
 
 
 def test_mix_teacher_p_linear():
@@ -65,9 +61,11 @@ def _cache_dir():
 
 
 @pytest.mark.skipif(_cache_dir() is None, reason="no built cache")
-def test_censored_tail_grads_confined():
-    """Tail-CE on the censored teacher-stream path: window blocks get
-    gradients, blocks below and frozen vocab get none."""
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs GPU")
+def test_censored_schedule_is_pure_per_block():
+    """Teacher-censored path is per-block hidden matching only: every block
+    may get its own local gradient, but no readout or frozen vocabulary
+    parameter receives one."""
     tok = AutoTokenizer.from_pretrained(MODEL)
     model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32)
     model.to("cuda").train()
@@ -91,16 +89,13 @@ def test_censored_tail_grads_confined():
             h = stack.run_block(L, h, pos_emb)
             t_states.append(h)
 
-    cfg = _Cfg(epochs=1, tail=4, tail_w=1.0)
+    cfg = _Cfg(epochs=1)
     model.zero_grad(set_to_none=True)
     losses = _censored_item(cfg, stack, "nmse", it, t_states, device)
-    assert len(losses) == n - 4 + 4  # per-block below + window blocks
-    L0 = n - 4 + 1
-    for L in range(1, L0):
-        assert any(p.grad is not None for p in stack.block_params(L))  # strict steps ran
-    for L in range(L0, n + 1):
+    assert len(losses) == n
+    for L in range(1, n + 1):
         assert any(p.grad is not None and p.grad.abs().sum() > 0
-                   for p in stack.block_params(L)), f"tail block {L} no grads"
+                   for p in stack.block_params(L)), f"block {L} no grads"
     for pname, p in stack.model.named_parameters():
         if any(k in pname for k in ("embed_tokens", "model.norm", "lm_head")):
             assert p.grad is None, f"{pname} got a gradient"

@@ -10,6 +10,23 @@ is for layerwise forward distillation. Tail-only and `tail_*` work is not an
 active method surface here. Preserve historical evidence only as archived
 context, or move it to `../selfupdate_kd`.
 
+## Implemented Baseline Tooling
+
+The first cleanup pass on 2026-07-05 added the following foundations:
+
+- `scripts/audit_configs.py`: raw-YAML branch-law audit for active configs.
+- `scripts/build_corpus_index.py`: writes `runs/corpus.csv` with run class,
+  evidence status, readout source/window, metrics, eval coverage, and signal
+  attribution coverage.
+- `scripts/report.py`: now reads evidence status and flags legacy/task-label
+  artifacts instead of mixing them into method claims.
+- `scripts/layer_loss_plots.py`: now emits per-run loss PNG, heatmap, and CSV.
+- `scripts/forget_curves.py`: now defaults to all runs and emits per-run
+  recall/forgetting plots as well as global CSV/PNG.
+- `scripts/speed_check.py`: GPU minibatch benchmark for the real BlockStack
+  backward walk, comparing GPU-resident targets, CPU target copies, and
+  per-block scalar sync.
+
 ## Outcome Wanted
 
 Every major conclusion should be backed by a reproducible evidence bundle:
@@ -202,8 +219,12 @@ Do not report a conclusion as cross-model unless it includes at least:
 - Qwen3-4B or Qwen3-4B LoRA where full fine-tune is unavailable
 - Qwen3-8B or Qwen3-8B LoRA
 - Qwen3-14B or larger LoRA
-- one non-Qwen dense family, currently Mistral or Llama
-- one reasoning-channel family, currently Phi or gpt-oss, even if negative
+- Qwen3.6-27B as the H100 dense bridge
+- Gemma-4-26B-A4B as the 2026 MoE bridge
+- Gemma-4-31B as the dense high-context scale point
+- one non-Qwen older dense family only as a secondary comparison, currently
+  Mistral-7B
+- gpt-oss as the reasoning/MoE control if it remains load-compatible
 
 For H100 or bridge work, add:
 
@@ -211,6 +232,13 @@ For H100 or bridge work, add:
 - Qwen3.6-27B PP2 or TP2 repro
 - Qwen3.6-27B H100 versus L40S comparison if quantized or sharded lanes are
   used
+- Gemma-4-26B-A4B single-H100 and PP2 speed certification
+- Gemma-4-31B PP2 baseline plus an explicit single-H100 boundary test
+
+Every new 2026 model must have a training-speed certificate before any long
+run is interpreted: batch-size sweep, peak memory, GPU utilization trace,
+and PP2 communication comparison where the model is not comfortably inside
+the one-card memory budget.
 
 Each model must have its own base general-CE reference:
 

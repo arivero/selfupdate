@@ -1,0 +1,827 @@
+"""Build experiment tables and auxiliary graphs from existing artifacts.
+
+This is an artifact pass only: no training and no model loading. It reads
+``runs/*`` JSON/CSV files plus active configs and writes:
+
+  - runs/experiment_table.csv
+  - runs/experiment_table.md
+  - runs/fable_survivor_verdicts.md
+  - runs/accuracy_aspects.png
+  - runs/destruction_aspects.csv
+  - runs/destruction_aspects.png
+  - runs/layer_modification_heatmap.png
+  - runs/layer_modification_profiles.csv
+  - runs/text_examples.md
+  - runs/<run>/eval/text_examples.md where recite.json exists
+  - runs/<run>/eval/weight_delta_profile.png where weight_deltas.csv exists
+"""
+
+from __future__ import annotations
+
+import argparse
+import dataclasses
+import json
+import math
+import sys
+from pathlib import Path
+
+import pandas as pd
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+from selfupdate.config import load_config
+
+ROOT = Path(__file__).resolve().parent.parent
+RUNS = ROOT / "runs"
+CONFIGS = ROOT / "configs/experiments"
+MODEL_ORDER = [
+    "Qwen3-0.6B",
+    "Qwen3-1.7B",
+    "Qwen3-4B",
+    "Qwen3-8B",
+    "Qwen3-14B",
+    "Mistral-7B",
+    "Qwen3.6-27B",
+    "Gemma-4-26B-A4B",
+    "Gemma-4-31B",
+    "gpt-oss-20B",
+]
+
+RETIRED_MODEL_LABELS = {"Llama-8B", "Phi-4-mini"}
+
+OLD_KEYS = {
+    "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
+    "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+}
+
+
+def _read_json(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return None
+
+
+def _read_yaml(path: Path) -> dict:
+    try:
+        return yaml.safe_load(path.read_text()) or {}
+    except Exception as e:  # noqa: BLE001
+        return {"_parse_error": f"{type(e).__name__}: {e}"}
+
+
+def _to_int(v, default: int = 0) -> int:
+    try:
+        if pd.isna(v):
+            return default
+        return int(float(v))
+    except Exception:
+        return default
+
+
+def _model_label(model: object) -> str:
+    m = str(model or "")
+    if "Qwen3-0.6B" in m:
+        return "Qwen3-0.6B"
+    if "Qwen3-1.7B" in m:
+        return "Qwen3-1.7B"
+    if "Qwen3-4B" in m:
+        return "Qwen3-4B"
+    if "Qwen3-8B" in m:
+        return "Qwen3-8B"
+    if "Qwen3-14B" in m:
+        return "Qwen3-14B"
+    if "Qwen3.6-27B" in m:
+        return "Qwen3.6-27B"
+    if "gemma-4-26B-A4B" in m or "Gemma-4-26B-A4B" in m:
+        return "Gemma-4-26B-A4B"
+    if "gemma-4-31B" in m or "Gemma-4-31B" in m:
+        return "Gemma-4-31B"
+    if "Llama-3.1-8B" in m:
+        return "Llama-8B"
+    if "Mistral-7B" in m:
+        return "Mistral-7B"
+    if "Phi-4-mini" in m:
+        return "Phi-4-mini"
+    if "gpt-oss-20b" in m:
+        return "gpt-oss-20B"
+    return m.rsplit("/", 1)[-1] if m else "unknown"
+
+
+def _status_code(row: pd.Series) -> str:
+    verdict = str(row.get("saved_verdict") or "")
+    evidence = str(row.get("evidence_status") or "")
+    run_class = str(row.get("run_class") or row.get("active_run_class") or "")
+    if verdict == "BASELINE":
+        return "B"
+    if verdict == "CONFIRM_CLEAN" or evidence == "method_clean":
+        return "C"
+    if verdict in {"CONFIRM_LEGACY_NAMED", "UNRESOLVED_PROVENANCE"}:
+        return "L"
+    if verdict == "CONFIRM_ABLATION_ONLY" or run_class in {"ablation", "control"}:
+        return "A"
+    if verdict == "DENY" or evidence == "confounded":
+        return "X"
+    if verdict == "NOT_RUN":
+        return ""
+    return "?"
+
+
+def _has_artifact(run: str, rel: str) -> bool:
+    return (RUNS / str(run) / rel).exists()
+
+
+def _coverage_tags(row: pd.Series) -> set[str]:
+    run = str(row.get("run") or "")
+    tags: set[str] = set()
+    if not run:
+        return tags
+    if run == "baseline_no_rag_Qwen3-0.6B" or run.startswith("baseline_native_"):
+        return {"Baseline: unmodified model, no RAG"}
+    if run.startswith("baseline_rag_"):
+        return {"Baseline: unmodified model, with RAG input"}
+
+    sched = str(row.get("saved_schedule") or row.get("schedule") or "")
+    loss = str(row.get("saved_hidden_loss") or row.get("hidden_loss") or "")
+    source = str(row.get("readout_source") or "UNSET")
+    rw = _to_int(row.get("readout_window"), 0)
+    conn = _to_int(row.get("conn_window"), 0)
+    stride = _to_int(row.get("conn_stride"), 0)
+    examples = str(row.get("saved_examples_path") or row.get("examples_path") or "")
+    lora = str(row.get("lora") or "").lower() == "true" or "lora" in run
+
+    if sched:
+        tags.add(f"Schedule: {sched}")
+    if loss:
+        tags.add(f"Hidden loss: {loss}")
+    tags.add("LoRA/adapters" if lora else "Full fine-tune")
+
+    if sched == "tail_only" or "tailonly" in run or "tailpure" in run:
+        tags.add("Banned tail-only / tail-emulation archive")
+    elif rw > 0 and conn == rw and stride == 1:
+        tags.add(f"Sliding connected window k{rw}")
+        if source == "teacher_kl":
+            tags.add(f"Teacher-KL readout k{rw}")
+        elif source == "task_label":
+            tags.add("Task-label readout baseline/denied")
+        else:
+            tags.add("Legacy unpinned readout-source run")
+    elif rw > 0:
+        tags.add(f"Legacy top-readout window k{rw}")
+        if source == "task_label":
+            tags.add("Task-label readout baseline/denied")
+        elif source == "UNSET":
+            tags.add("Legacy unpinned readout-source run")
+    else:
+        tags.add("No readout: strict local hidden")
+
+    if "examples_v2" in examples:
+        tags.add("Data: v2 paraphrase + long windows")
+    if "examples_v3" in examples:
+        tags.add("Data: v3 catechism")
+    if "examples_v4" in examples and "quijote" not in examples and "combined" not in examples:
+        tags.add("Data: v4 maieutic/long-window poem")
+    if "think_sel" in examples:
+        tags.add("Data: selective thinking")
+    elif "think" in examples:
+        tags.add("Data: full thinking traces")
+    if "combined" in examples:
+        tags.add("Data: poem + Quijote combined")
+    if "quijote" in examples:
+        tags.add("Data: Quijote chapters")
+    if "ragchannel" in examples:
+        tags.add("Data: RAG-channel variant")
+
+    if "anchor" in run:
+        tags.add("Anchor / anchor-KL ablations")
+    if "s43" in run:
+        tags.add("Seed replicate s43")
+    if "pp2" in run:
+        tags.add("Parallelism / PP2 diagnostics")
+    if _model_label(row.get("model")) not in {
+        "Qwen3-0.6B", "Qwen3-1.7B", "Qwen3-4B", "Qwen3-8B",
+        "Qwen3-14B", "Qwen3.6-27B", "unknown"
+    }:
+        tags.add("Cross-family adapter smoke")
+    if _has_artifact(run, "eval/recite.json"):
+        tags.add("Artifact: full recitation eval")
+    if _has_artifact(run, "eval/destruction.json"):
+        tags.add("Artifact: destruction eval")
+    if _has_artifact(run, "eval/signal_attribution.json"):
+        tags.add("Artifact: signal attribution")
+    if _has_artifact(run, "eval/qualitative_chat.json"):
+        tags.add("Artifact: qualitative chat review")
+    if _has_artifact(run, "eval/layer_losses.csv"):
+        tags.add("Artifact: loss by layer")
+    return tags
+
+
+def write_coverage_matrix(df: pd.DataFrame) -> None:
+    rows = []
+    for _, row in df.iterrows():
+        code = _status_code(row)
+        if not code:
+            continue
+        model = _model_label(row.get("model"))
+        if model in RETIRED_MODEL_LABELS:
+            continue
+        for tag in _coverage_tags(row):
+            rows.append({"experiment_type": tag, "model": model, "status": code})
+    if not rows:
+        return
+    raw = pd.DataFrame(rows)
+    raw.to_csv(RUNS / "experiment_coverage_long.csv", index=False)
+
+    def cell(g: pd.Series) -> str:
+        counts = g.value_counts().to_dict()
+        order = ["C", "L", "A", "X", "B", "?"]
+        return " ".join(f"{k}{counts[k]}" for k in order if counts.get(k))
+
+    matrix = (raw.groupby(["experiment_type", "model"])["status"]
+              .apply(cell).unstack(fill_value=""))
+    ordered_cols = list(MODEL_ORDER)
+    ordered_cols += [c for c in matrix.columns if c not in ordered_cols]
+    matrix = matrix.reindex(columns=ordered_cols, fill_value="")
+    preferred_rows = [
+        "Baseline: unmodified model, no RAG",
+        "Baseline: unmodified model, with RAG input",
+        "Artifact: full recitation eval",
+        "Artifact: destruction eval",
+        "Artifact: signal attribution",
+        "Artifact: qualitative chat review",
+        "Artifact: loss by layer",
+        "No readout: strict local hidden",
+        "Schedule: sequential",
+        "Schedule: teacher_censored",
+        "Schedule: mixed",
+        "Sliding connected window k2",
+        "Sliding connected window k4",
+        "Sliding connected window k6",
+        "Sliding connected window k8",
+        "Teacher-KL readout k4",
+        "Teacher-KL readout k6",
+        "Teacher-KL readout k8",
+        "Legacy unpinned readout-source run",
+        "Task-label readout baseline/denied",
+        "Banned tail-only / tail-emulation archive",
+        "Hidden loss: nmse",
+        "Hidden loss: l2mse",
+        "Hidden loss: vocab_mse",
+        "Hidden loss: vocab_fisher",
+        "Hidden loss: lens_kl",
+        "Hidden loss: cosine",
+        "Hidden loss: huber",
+        "Hidden loss: zero",
+        "Data: v2 paraphrase + long windows",
+        "Data: v3 catechism",
+        "Data: v4 maieutic/long-window poem",
+        "Data: full thinking traces",
+        "Data: selective thinking",
+        "Data: poem + Quijote combined",
+        "Data: Quijote chapters",
+        "Data: RAG-channel variant",
+        "Anchor / anchor-KL ablations",
+        "Seed replicate s43",
+        "Parallelism / PP2 diagnostics",
+        "LoRA/adapters",
+        "Full fine-tune",
+        "Cross-family adapter smoke",
+    ]
+    ordered_rows = [r for r in preferred_rows if r in matrix.index]
+    ordered_rows += [r for r in matrix.index if r not in ordered_rows]
+    matrix = matrix.loc[ordered_rows, ordered_cols].reset_index()
+    matrix.to_csv(RUNS / "experiment_coverage_matrix.csv", index=False)
+    legend = (
+        "Legend: C=clean method, L=legacy/provenance caveat, "
+        "A=ablation/control, X=denied/confounded, B=baseline. "
+        "Runs can contribute to multiple rows; this is a coverage matrix, not a partition."
+    )
+    (RUNS / "experiment_coverage_matrix.md").write_text(
+        "# Experiment Coverage Matrix\n\n"
+        + legend
+        + "\n\n"
+        + matrix.to_markdown(index=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _train(cfg: dict) -> dict:
+    return cfg.get("train", {}) or {}
+
+
+def _source(t: dict) -> str:
+    return t.get("readout_source", t.get("tail_ce_kind", "UNSET"))
+
+
+def _blocks(t: dict) -> int:
+    return int(t.get("readout_window_blocks", t.get("tail_ce_blocks", 0)) or 0)
+
+
+def _readout_weight(t: dict) -> float:
+    return float(t.get("readout_weight", t.get("tail_ce_weight", 0.0)) or 0.0)
+
+
+def _hidden_w(t: dict) -> float:
+    return float(t.get("window_hidden_weight", t.get("tail_hidden_weight", 1.0)) or 0.0)
+
+
+def verdict_from_config(cfg: dict) -> tuple[str, str]:
+    if cfg.get("_parse_error"):
+        return "DENY", cfg["_parse_error"]
+    t = _train(cfg)
+    blocks = _blocks(t)
+    source = _source(t)
+    old = sorted(k for k in OLD_KEYS if k in t)
+    task_label = (
+        source == "task_label"
+        or float(t.get("last_block_ce_weight", t.get("last_block_task_label_weight", 0.0)) or 0.0) > 0
+        or float(t.get("lens_ce_weight", t.get("lens_task_label_weight", 0.0)) or 0.0) > 0
+    )
+    if task_label:
+        return "DENY", "task-label training signal"
+    if blocks > 0:
+        if source == "UNSET":
+            if t.get("conn_window", 0) == blocks and t.get("conn_stride", 0) == 1:
+                return "UNRESOLVED_PROVENANCE", "sanctioned sliding shape, but readout source was not pinned in saved config"
+            return "DENY", "readout source was not pinned and window shape is not sanctioned"
+        if t.get("conn_window", 0) != blocks or t.get("conn_stride", 0) != 1:
+            return "DENY", "readout not attached to stride-1 sliding window"
+    if _hidden_w(t) != 1.0:
+        return "CONFIRM_ABLATION_ONLY", "teacher-sourced but hidden weight is not method-uniform"
+    if old:
+        return "CONFIRM_LEGACY_NAMED", "semantics pass but saved config uses old names"
+    return "CONFIRM_CLEAN", "clean audited config"
+
+
+def active_config_rows() -> list[dict]:
+    rows = []
+    for path in sorted(CONFIGS.glob("*.yaml")):
+        raw = _read_yaml(path)
+        if raw.get("_parse_error"):
+            cfg = raw
+        else:
+            try:
+                cfg = dataclasses.asdict(load_config(ROOT / "configs/base.yaml", path))
+            except Exception:
+                cfg = raw
+        run = cfg.get("run_name")
+        if not run:
+            continue
+        t = _train(cfg)
+        d = cfg.get("data", {}) or {}
+        m = cfg.get("mask", {}) or {}
+        if t.get("method") != "layerwise":
+            continue
+        verdict, reason = verdict_from_config(cfg)
+        rows.append({
+            "run": run,
+            "active_config": str(path.relative_to(ROOT)),
+            "active_run_class": t.get("run_class", "method"),
+            "active_verdict": verdict,
+            "active_reason": reason,
+            "active_epochs": t.get("epochs"),
+            "active_schedule": t.get("schedule"),
+            "active_hidden_loss": t.get("hidden_loss"),
+            "active_mask_mode": m.get("mode"),
+            "active_compaction": m.get("compaction"),
+            "active_examples_path": d.get("examples_path"),
+            "active_paraphrase": d.get("paraphrase"),
+            "active_catechism": d.get("catechism"),
+            "active_maieutic": d.get("maieutic"),
+            "active_long_windows": ",".join(map(str, d.get("long_windows", []) or [])),
+            "active_part_chunk_lines": d.get("part_chunk_lines"),
+            "active_corpus_style": d.get("corpus_style"),
+        })
+    return rows
+
+
+def flatten_destruction(run_dir: Path) -> dict:
+    d = _read_json(run_dir / "eval/destruction.json")
+    if not d:
+        return {}
+    row = {
+        "probe_overall_ce": d.get("probe_battery", {}).get("overall_mean_ce"),
+        "probe_legacy_ce": d.get("probe_battery", {}).get("legacy_mean_ce"),
+        "intrusion_hit_rate": d.get("intrusion", {}).get("hit_rate"),
+        "intrusion_n": d.get("intrusion", {}).get("n"),
+        "deg_distinct2": d.get("degeneration", {}).get("distinct2_mean"),
+        "deg_rep4": d.get("degeneration", {}).get("max_rep4_run_mean"),
+        "destructive": d.get("verdict", {}).get("destructive"),
+    }
+    for name, b in (d.get("benchmarks") or {}).items():
+        row[f"bench_{name}"] = b.get("accuracy")
+    return row
+
+
+def text_examples(run_dir: Path, limit: int = 3) -> str | None:
+    rec = _read_json(run_dir / "eval/recite.json")
+    if not rec or not rec.get("per_example"):
+        return None
+    examples = rec["per_example"]
+    best = sorted(examples, key=lambda r: r.get("cer", math.inf))[:limit]
+    worst = sorted(examples, key=lambda r: r.get("cer", -1), reverse=True)[:limit]
+    lines = [f"# Text Examples: {run_dir.name}", "", "## Best CER"]
+    for r in best:
+        lines += [
+            f"### {r.get('example_id')}  CER={r.get('cer'):.4f}  line_exact={r.get('line_exact'):.3f}",
+            "```text",
+            (r.get("text") or "")[:1400],
+            "```",
+        ]
+    lines += ["", "## Worst CER"]
+    for r in worst:
+        lines += [
+            f"### {r.get('example_id')}  CER={r.get('cer'):.4f}  line_exact={r.get('line_exact'):.3f}",
+            "```text",
+            (r.get("text") or "")[:1400],
+            "```",
+        ]
+    out = run_dir / "eval/text_examples.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines), encoding="utf-8")
+    return "\n".join(lines[:80])
+
+
+def weight_profile(run_dir: Path) -> pd.DataFrame | None:
+    path = run_dir / "eval/weight_deltas.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    if "layer" not in df or "rel_delta" not in df:
+        return None
+    prof = (df.assign(rel_delta2=df["rel_delta"].astype(float) ** 2)
+              .groupby("layer")["rel_delta2"].mean().pow(0.5).reset_index())
+    prof["run"] = run_dir.name
+    fig, ax = plt.subplots(figsize=(6.4, 3.4))
+    ax.plot(prof["layer"], prof["rel_delta2"], marker="o", lw=1)
+    ax.set_xlabel("layer")
+    ax.set_ylabel("RMS relative weight delta")
+    ax.set_title(run_dir.name, fontsize=9)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    out = run_dir / "eval/weight_delta_profile.png"
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return prof.rename(columns={"rel_delta2": "rms_rel_delta"})
+
+
+def build_experiment_table() -> pd.DataFrame:
+    corpus = pd.read_csv(RUNS / "corpus.csv") if (RUNS / "corpus.csv").exists() else pd.DataFrame()
+    active = pd.DataFrame(active_config_rows())
+    if corpus.empty:
+        df = active
+    else:
+        df = corpus.merge(active, how="outer", on="run")
+        if "active_config_x" in df.columns or "active_config_y" in df.columns:
+            left = df.get("active_config_x", pd.Series(index=df.index, dtype=object))
+            right = df.get("active_config_y", pd.Series(index=df.index, dtype=object))
+            df["active_config"] = right.combine_first(left)
+            df = df.drop(columns=[c for c in ("active_config_x", "active_config_y")
+                                  if c in df.columns])
+    extra_rows = []
+    for _, row in df.iterrows():
+        run = row["run"]
+        run_dir = RUNS / run
+        cfg = _read_yaml(run_dir / "config.yaml") if (run_dir / "config.yaml").exists() else {}
+        saved_verdict, saved_reason = verdict_from_config(cfg) if cfg else ("NOT_RUN", "no run artifact")
+        saved_train = _train(cfg) if cfg else {}
+        saved_data = (cfg.get("data", {}) or {}) if cfg else {}
+        saved_mask = (cfg.get("mask", {}) or {}) if cfg else {}
+        dest = flatten_destruction(run_dir)
+        sig = _read_json(run_dir / "eval/signal_attribution.json") or {}
+        extra = {
+            "saved_verdict": saved_verdict,
+            "saved_reason": saved_reason,
+            "saved_epochs": saved_train.get("epochs"),
+            "saved_schedule": saved_train.get("schedule"),
+            "saved_hidden_loss": saved_train.get("hidden_loss"),
+            "saved_mask_mode": saved_mask.get("mode"),
+            "saved_compaction": saved_mask.get("compaction"),
+            "saved_examples_path": saved_data.get("examples_path"),
+            "saved_paraphrase": saved_data.get("paraphrase"),
+            "saved_catechism": saved_data.get("catechism"),
+            "saved_maieutic": saved_data.get("maieutic"),
+            "saved_long_windows": ",".join(map(str, saved_data.get("long_windows", []) or [])),
+            "saved_part_chunk_lines": saved_data.get("part_chunk_lines"),
+            "saved_corpus_style": saved_data.get("corpus_style"),
+            "signal_hidden_share": sig.get("hidden_share"),
+        }
+        extra.update(dest)
+        extra_rows.append(extra)
+    extra_df = pd.DataFrame(extra_rows)
+    return pd.concat([df.reset_index(drop=True), extra_df], axis=1)
+
+
+def baseline_rows() -> pd.DataFrame:
+    rows = []
+    native_paths = [RUNS / "base-eval-full/recite.json"]
+    native_paths += sorted(RUNS.glob("baseline_native_*/recite.json"))
+    seen_native = set()
+    for path in native_paths:
+        no_rag = _read_json(path)
+        if not no_rag:
+            continue
+        run = path.parent.name if path.parent.name.startswith("baseline_native_") else "baseline_no_rag_Qwen3-0.6B"
+        if run in seen_native:
+            continue
+        if _model_label(no_rag.get("model") or "Qwen/Qwen3-0.6B") in RETIRED_MODEL_LABELS:
+            continue
+        seen_native.add(run)
+        rows.append({
+            "run": run,
+            "active_verdict": "BASELINE",
+            "saved_verdict": "BASELINE",
+            "saved_reason": "unmodified model without privileged input",
+            "model": no_rag.get("model") or "Qwen/Qwen3-0.6B",
+            "saved_schedule": "inference",
+            "saved_hidden_loss": "none",
+            "saved_mask_mode": "student_prompt",
+            "saved_examples_path": no_rag.get("examples_path"),
+            "readout_source": "none",
+            "readout_window": 0,
+            "conn_window": 0,
+            "conn_stride": 0,
+            "full_eval_cer": no_rag.get("cer"),
+            "full_eval_line_exact": no_rag.get("line_exact"),
+            "general_ce": (no_rag.get("general") or {}).get("mean_ce"),
+        })
+    for path in sorted(RUNS.glob("baseline_rag_*_examples_v4.json")):
+        if ".shard" in path.name:
+            continue
+        rag = _read_json(path)
+        if not rag:
+            continue
+        if _model_label(rag.get("model")) in RETIRED_MODEL_LABELS:
+            continue
+        rows.append({
+            "run": path.stem,
+            "active_verdict": "BASELINE",
+            "saved_verdict": "BASELINE",
+            "saved_reason": "unmodified model with privileged RAG input",
+            "model": rag.get("model"),
+            "saved_schedule": "inference",
+            "saved_hidden_loss": "none",
+            "saved_mask_mode": "rag_teacher_prompt",
+            "saved_examples_path": rag.get("examples_path"),
+            "readout_source": "none",
+            "readout_window": 0,
+            "conn_window": 0,
+            "conn_stride": 0,
+            "full_eval_cer": rag.get("cer"),
+            "full_eval_line_exact": rag.get("line_exact"),
+            "general_ce": None,
+        })
+    return pd.DataFrame(rows)
+
+
+def write_markdown_table(df: pd.DataFrame, path: Path) -> None:
+    cols = [
+        "run", "active_run_class", "active_verdict", "saved_verdict",
+        "saved_reason", "model", "saved_epochs", "saved_schedule",
+        "saved_hidden_loss", "saved_mask_mode", "saved_paraphrase",
+        "saved_catechism", "saved_maieutic", "saved_long_windows",
+        "saved_part_chunk_lines", "readout_source",
+        "readout_window", "conn_window", "conn_stride", "full_eval_cer",
+        "full_eval_line_exact", "general_ce", "intrusion_hit_rate",
+        "destructive", "signal_hidden_share",
+    ]
+    present = [c for c in cols if c in df.columns]
+    path.write_text(df[present].to_markdown(index=False), encoding="utf-8")
+
+
+def write_fable_verdicts(df: pd.DataFrame) -> None:
+    active = df[df.get("active_config", pd.Series(dtype=object)).notna()].copy()
+    cols = [
+        "run", "active_run_class", "active_verdict", "active_reason",
+        "active_epochs", "active_schedule", "active_hidden_loss",
+        "active_mask_mode", "active_paraphrase", "active_catechism",
+        "active_maieutic", "active_long_windows", "active_part_chunk_lines",
+        "saved_verdict", "saved_reason", "saved_epochs", "saved_schedule",
+        "saved_hidden_loss", "saved_mask_mode", "saved_paraphrase",
+        "saved_catechism", "saved_maieutic", "saved_long_windows",
+        "saved_part_chunk_lines", "full_eval_cer",
+        "full_eval_line_exact", "intrusion_hit_rate", "signal_hidden_share",
+    ]
+    present = [c for c in cols if c in active.columns]
+    lines = [
+        "# Fable Survivor Verdicts",
+        "",
+        "A result is confirmed as clean only if the saved run artifact itself",
+        "has teacher-sourced targets, sanctioned sliding-window semantics, and",
+        "no task-label training signal. Active configs may now be clean while",
+        "old run artifacts remain denied because their saved provenance is not.",
+        "",
+        active[present].sort_values(["saved_verdict", "run"]).to_markdown(index=False),
+        "",
+        "Interpretation:",
+        "- `CONFIRM_CLEAN`: usable as clean method evidence.",
+        "- `CONFIRM_LEGACY_NAMED`: semantically passes but still old saved names; cite only with provenance caveat.",
+        "- `CONFIRM_ABLATION_ONLY`: teacher-sourced but violates a method invariant intentionally.",
+        "- `UNRESOLVED_PROVENANCE`: result may be good, but saved target source is not pinned.",
+        "- `DENY`: do not use as method evidence.",
+        "- `NOT_RUN`: active config exists, but no completed run artifact exists.",
+    ]
+    (RUNS / "fable_survivor_verdicts.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def plot_accuracy(df: pd.DataFrame) -> None:
+    plot = df[df["full_eval_cer"].notna()].copy()
+    if plot.empty:
+        return
+    plot = plot.sort_values("full_eval_cer").head(80)
+    fig, ax = plt.subplots(figsize=(max(10, 0.22 * len(plot)), 5.2))
+    colors = ["tab:green" if v == "CONFIRM_CLEAN" else
+              "tab:orange" if str(v).startswith("CONFIRM") else "tab:red"
+              for v in plot["saved_verdict"]]
+    ax.bar(range(len(plot)), plot["full_eval_cer"], color=colors, alpha=0.82, label="CER")
+    ax.set_xticks(range(len(plot)), plot["run"], rotation=90, fontsize=6)
+    ax.set_ylabel("full-corpus recitation CER")
+    ax.set_title("Accuracy Aspect: Full Recitation CER (lower is better)")
+    ax.grid(axis="y", alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(RUNS / "accuracy_aspects.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_destruction(df: pd.DataFrame) -> None:
+    cols = [c for c in df.columns if c.startswith("bench_")]
+    keep = ["run", "saved_verdict", "probe_overall_ce", "probe_legacy_ce",
+            "intrusion_hit_rate", "deg_distinct2", "deg_rep4", "destructive"] + cols
+    dest = df[[c for c in keep if c in df.columns]].dropna(
+        subset=["probe_overall_ce", "intrusion_hit_rate"], how="all")
+    if dest.empty:
+        return
+    dest.to_csv(RUNS / "destruction_aspects.csv", index=False)
+    plot = dest.sort_values("intrusion_hit_rate", na_position="last").head(80)
+    fig, axes = plt.subplots(2, 1, figsize=(max(10, 0.22 * len(plot)), 7.2), sharex=True)
+    axes[0].bar(range(len(plot)), plot["intrusion_hit_rate"].fillna(0), color="tab:red", alpha=0.75)
+    axes[0].set_ylabel("intrusion hit rate")
+    axes[0].grid(axis="y", alpha=0.25)
+    axes[1].bar(range(len(plot)), plot["probe_overall_ce"].fillna(0), color="tab:blue", alpha=0.75)
+    axes[1].set_ylabel("probe CE")
+    axes[1].set_xticks(range(len(plot)), plot["run"], rotation=90, fontsize=6)
+    axes[1].grid(axis="y", alpha=0.25)
+    fig.suptitle("Destruction Aspects")
+    fig.tight_layout()
+    fig.savefig(RUNS / "destruction_aspects.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_weight_profiles(profiles: list[pd.DataFrame]) -> None:
+    if not profiles:
+        return
+    prof = pd.concat(profiles, ignore_index=True)
+    prof.to_csv(RUNS / "layer_modification_profiles.csv", index=False)
+    mat = prof.pivot(index="run", columns="layer", values="rms_rel_delta").fillna(0)
+    # Normalize rows so the heatmap answers "which layers moved most in this run".
+    norm = mat.div(mat.max(axis=1).replace(0, 1), axis=0)
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.16 * len(norm))))
+    im = ax.imshow(norm.values, aspect="auto", cmap="viridis")
+    ax.set_yticks(range(len(norm)), norm.index, fontsize=5)
+    ax.set_xticks(range(norm.shape[1]), [str(c) for c in norm.columns], fontsize=6)
+    ax.set_xlabel("layer")
+    ax.set_title("Layer Modification Heatmap (row-normalized final weight deltas)")
+    fig.colorbar(im, ax=ax, label="relative to run maximum")
+    fig.tight_layout()
+    fig.savefig(RUNS / "layer_modification_heatmap.png", dpi=160)
+    plt.close(fig)
+
+
+def write_text_examples() -> None:
+    chunks = ["# Text Examples", ""]
+    count = 0
+    for run_dir in sorted(RUNS.iterdir()):
+        if not run_dir.is_dir():
+            continue
+        chunk = text_examples(run_dir, limit=2)
+        if chunk:
+            chunks += [f"## {run_dir.name}", "", chunk, ""]
+            count += 1
+    chunks.insert(2, f"Runs with examples: {count}\n")
+    (RUNS / "text_examples.md").write_text("\n".join(chunks), encoding="utf-8")
+
+
+def _answer_for(turns: list[dict], *needles: str) -> str:
+    for t in turns:
+        tid = str(t.get("id", "")).lower()
+        aspect = str(t.get("aspect", "")).lower()
+        if any(n in tid or n in aspect for n in needles):
+            return str(t.get("answer", ""))
+    return ""
+
+
+def _clip(text: str, n: int = 260) -> str:
+    return " ".join(text.split())[:n]
+
+
+def qualitative_summary() -> None:
+    rows = []
+    forbidden = ("alvargonz", "machado", "cervantes", "laguna negra", "caín", "cain")
+    for path in sorted(RUNS.glob("*/eval/qualitative_chat.json")):
+        q = _read_json(path)
+        if not q:
+            continue
+        turns = q.get("turns") or []
+        answers = "\n".join(str(t.get("answer", "")) for t in turns).lower()
+        false_claim = _answer_for(turns, "false_claim")
+        intrusion = _answer_for(turns, "intrusion", "anti_trigger")
+        recall = _answer_for(turns, "recall", "continuation")
+        general = _answer_for(turns, "general")
+        false_claim_failed = bool(false_claim) and (
+            false_claim.lstrip().lower().startswith("yes")
+            or "supported by the text" in false_claim.lower()
+            or "naval battle" in false_claim.lower() and "not" not in false_claim.lower()[:80]
+        )
+        intrusion_source_leak = any(w in intrusion.lower() for w in forbidden)
+        source_mentions = {
+            "alvargonzalez": "alvargonz" in answers,
+            "laguna": "laguna" in answers,
+            "cain": "caín" in answers or "cain" in answers,
+            "quijote": "quijote" in answers or "quijote" in str(q.get("source_kind", "")).lower(),
+        }
+        flags = []
+        if false_claim_failed:
+            flags.append("false_claim_failed")
+        if intrusion_source_leak:
+            flags.append("intrusion_trigger_source_leak")
+        if not general:
+            flags.append("missing_general_chat")
+        if not flags:
+            flags.append("generated_chat_ok")
+        rows.append({
+            "run": q.get("run") or path.parent.parent.name,
+            "model": q.get("model"),
+            "source_kind": q.get("source_kind"),
+            "source_tokens_used": q.get("source_tokens_used"),
+            "turns": len(turns),
+            "flags": ";".join(flags),
+            "mentions_alvargonzalez": source_mentions["alvargonzalez"],
+            "mentions_laguna": source_mentions["laguna"],
+            "mentions_cain": source_mentions["cain"],
+            "mentions_quijote": source_mentions["quijote"],
+            "recall_excerpt": _clip(recall),
+            "intrusion_excerpt": _clip(intrusion),
+            "false_claim_excerpt": _clip(false_claim),
+            "general_excerpt": _clip(general),
+        })
+    if not rows:
+        return
+    qdf = pd.DataFrame(rows)
+    qdf.to_csv(RUNS / "qualitative_chat_summary.csv", index=False)
+    lines = [
+        "# Qualitative Chat Summary",
+        "",
+        "These are local checkpoint conversations, not an AI-judge score. The point is",
+        "to verify that each checkpoint loads through a chat-template path and to",
+        "surface obvious source-grounding or intrusion failures next to the metrics.",
+        "",
+        qdf[[
+            "run", "source_kind", "turns", "flags", "recall_excerpt",
+            "intrusion_excerpt", "false_claim_excerpt", "general_excerpt",
+        ]].to_markdown(index=False),
+        "",
+        "Raw transcripts are in `runs/<run>/eval/qualitative_chat.md`.",
+    ]
+    (RUNS / "qualitative_chat_summary.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--skip-text", action="store_true")
+    args = ap.parse_args()
+    df = build_experiment_table()
+    br = baseline_rows()
+    if not br.empty:
+        df = pd.concat([df, br], ignore_index=True, sort=False)
+    if "model" in df.columns:
+        df = df[~df["model"].map(_model_label).isin(RETIRED_MODEL_LABELS)].copy()
+    df.to_csv(RUNS / "experiment_table.csv", index=False)
+    write_coverage_matrix(df)
+    write_markdown_table(df, RUNS / "experiment_table.md")
+    write_fable_verdicts(df)
+    plot_accuracy(df)
+    plot_destruction(df)
+    profiles = []
+    for run_dir in sorted(RUNS.iterdir()):
+        if run_dir.is_dir():
+            prof = weight_profile(run_dir)
+            if prof is not None:
+                profiles.append(prof)
+    plot_weight_profiles(profiles)
+    qualitative_summary()
+    if not args.skip_text:
+        write_text_examples()
+    print(f"wrote experiment assets for {len(df)} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

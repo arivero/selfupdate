@@ -13,8 +13,9 @@ Base references: runs/base-general-<short>.json (base_general.py) or the
 legacy runs/base-eval-full/recite.json ("general" block) / runs/
 base-1p7b-general.json names that analyze.py already knows.
 
-Outputs: runs/forget_curves.png + runs/forget_curves.csv.
-Usage: python scripts/forget_curves.py [--runs 'lw_*']
+Outputs: runs/forget_curves.png + runs/forget_curves.csv plus
+runs/<run>/eval/forget_curve.png.
+Usage: python scripts/forget_curves.py [--runs '*']
 """
 
 import argparse
@@ -32,9 +33,23 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
-from selfupdate.utils.runlog import read_metrics
-
 RUNS = Path("runs")
+
+
+def eval_metrics(run_dir: Path) -> list[dict]:
+    path = run_dir / "metrics.jsonl"
+    if not path.exists():
+        return []
+    out = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            if '"kind": "eval"' not in line or '"gen_ce"' not in line:
+                continue
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out
 
 
 def base_ce_lookup() -> dict[str, float]:
@@ -58,7 +73,7 @@ def classify(dce: float) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs", default="lw_*")
+    ap.add_argument("--runs", default="*")
     args = ap.parse_args()
     refs = base_ce_lookup()
 
@@ -72,8 +87,7 @@ def main():
             continue
         model = (yaml.safe_load(cfg_p.read_text()).get("model") or {}).get(
             "name", "Qwen/Qwen3-0.6B")
-        evals = [m for m in read_metrics(run_dir)
-                 if m.get("kind") == "eval" and "gen_ce" in m]
+        evals = eval_metrics(run_dir)
         if not evals:
             continue
         base = refs.get(model)
@@ -87,6 +101,25 @@ def main():
         end = dce[-1]
         print(f"{run_dir.name:34s} final CER {cer[-1]:.3f} | dCE "
               f"{'n/a' if end is None else f'{end:+.3f} ({classify(end)})'}")
+        out_dir = run_dir / "eval"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        fig, ax = plt.subplots(figsize=(5.2, 3.2))
+        ax.plot(ep, cer, color="tab:blue", marker="o", label="recall CER")
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("recitation CER", color="tab:blue")
+        ax.tick_params(axis="y", colors="tab:blue")
+        if dce[0] is not None:
+            ax2 = ax.twinx()
+            ax2.plot(ep, dce, color="tab:red", marker="s", label="forgetting ΔCE")
+            ax2.axhline(0.05, color="tab:red", lw=0.5, ls=":")
+            ax2.axhline(0.30, color="tab:red", lw=0.5, ls="--")
+            ax2.set_ylabel("general CE delta", color="tab:red")
+            ax2.tick_params(axis="y", colors="tab:red")
+        ax.set_title(run_dir.name, fontsize=9)
+        fig.tight_layout()
+        fig.savefig(out_dir / "forget_curve.png", dpi=140)
+        plt.close(fig)
 
     if not curves:
         print("no runs with per-epoch eval records matched")

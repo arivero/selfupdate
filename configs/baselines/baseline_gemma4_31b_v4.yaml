@@ -1,0 +1,8 @@
+run_name: baseline_gemma4_31b_v4
+model:
+  name: google/gemma-4-31B
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  corpus_style: verse
+train:
+  run_class: baseline

@@ -18,6 +18,11 @@ import yaml
 
 from selfupdate.utils.runlog import read_metrics
 
+OLD_KEYS = {
+    "tail_ce_blocks", "tail_ce_weight", "tail_ce_kind", "tail_hidden_weight",
+    "last_block_ce_weight", "lens_ce_weight", "lens_ce_from", "answer_ce_weight",
+}
+
 
 def results_table() -> pd.DataFrame:
     base_ce = {}  # per-model forgetting baselines
@@ -33,6 +38,7 @@ def results_table() -> pd.DataFrame:
         if not cfg_p.exists():
             continue
         cfg = yaml.safe_load(cfg_p.read_text())
+        train_cfg = cfg.get("train", {})
         metrics = read_metrics(run_dir)
         trains = [m for m in metrics if m.get("kind") == "train"]
         if not trains:  # sequential schedule logs per-stage lines instead
@@ -51,10 +57,18 @@ def results_table() -> pd.DataFrame:
                 forget = round(r["general"]["mean_ce"] - model_base, 3)
         rows.append({
             "run": run_dir.name,
-            "method": cfg["train"]["method"],
-            "schedule": (cfg["train"].get("schedule", "")
-                         if cfg["train"]["method"] == "layerwise" else ""),
-            "lora": cfg["train"]["lora"]["enabled"],
+            "method": train_cfg["method"],
+            "run_class": train_cfg.get("run_class", "method"),
+            "legacy_keys": ",".join(k for k in sorted(OLD_KEYS) if k in train_cfg),
+            "schedule": (train_cfg.get("schedule", "")
+                         if train_cfg["method"] == "layerwise" else ""),
+            "readout_source": train_cfg.get("readout_source", train_cfg.get("tail_ce_kind", "UNSET")),
+            "readout_window": train_cfg.get("readout_window_blocks", train_cfg.get("tail_ce_blocks", 0)),
+            "readout_weight": train_cfg.get("readout_weight", train_cfg.get("tail_ce_weight", 0.0)),
+            "window_hidden_weight": train_cfg.get("window_hidden_weight", train_cfg.get("tail_hidden_weight", 1.0)),
+            "conn_window": train_cfg.get("conn_window", 0),
+            "conn_stride": train_cfg.get("conn_stride", 0),
+            "lora": train_cfg["lora"]["enabled"],
             "mode": cfg["mask"]["mode"],
             "compaction": cfg["mask"]["compaction"],
             "last_train_cer": evals[-1]["cer"] if evals else None,
@@ -64,7 +78,8 @@ def results_table() -> pd.DataFrame:
             "loss_first": round(sum(m["loss"] for m in trains[:20]) / len(trains[:20]), 4) if trains else None,
             "loss_final": round(sum(m["loss"] for m in trains[-20:]) / len(trains[-20:]), 4) if trains else None,
             "steps": trains[-1]["step"] if trains else None,
-            "items": len(trains),
+            "items": max((m.get("items_seen", 0) for m in trains), default=len(trains)),
+            "train_logs": len(trains),
             "vram_gb": done[-1]["vram_gb"] if done else None,
             "vram_resv_gb": done[-1].get("vram_reserved_gb") if done else None,
             "train_min": (evals[-1].get("minutes") if evals else None)
@@ -152,14 +167,18 @@ def training_curves() -> None:
     # one row per method family — the single panel got too crowded once the
     # e40 wave landed. Axes are SHARED across rows (sharex/sharey per column)
     # so curves stay directly comparable between families.
-    def family(name: str) -> int:
-        if "tail_ce" in name:
+    def family(cfg: dict) -> int:
+        t = cfg.get("train", {})
+        if any(k in t for k in OLD_KEYS):
+            return 2
+        rc = t.get("run_class", "method")
+        if rc == "method":
             return 0
-        if "lens" in name or "tc" in name:
+        if rc in ("ablation", "control"):
             return 1
         return 2
 
-    row_titles = ["tail-CE", "lens / teacher-censored", "other layerwise"]
+    row_titles = ["clean method", "ablation / control", "legacy / confounded"]
     fig, axes = plt.subplots(3, 3, figsize=(18, 12), sharex="col", sharey="col")
     # >10 lines per panel: the default 10-color cycle repeats and unrelated
     # runs become indistinguishable (bit us 2026-07-03). 20 colors x 2 line
@@ -170,15 +189,17 @@ def training_curves() -> None:
         i = counters[row]; counters[row] += 1
         return {"color": cm.tab20(i % 20), "linestyle": ["-", "--"][(i // 20) % 2]}
     for d in runs:
-        row = family(d.name)
+        cfg = yaml.safe_load((d / "config.yaml").read_text()) or {}
+        row = family(cfg)
         st = style(row)
         ms = read_metrics(d)
         trains = [m for m in ms if m.get("kind") == "train"]
         evals = [m for m in ms if m.get("kind") == "eval" and "epoch" in m]
         if trains:
-            xs = list(range(len(trains)))
+            xs = [m.get("items_seen", i) for i, m in enumerate(trains)]
             step = max(1, len(xs) // 400)  # thin for plotting
-            axes[row][0].plot(xs[::step], [trains[i]["loss"] for i in xs[::step]],
+            ii = list(range(0, len(xs), step))
+            axes[row][0].plot([xs[i] for i in ii], [trains[i]["loss"] for i in ii],
                               label=d.name, alpha=0.8, linewidth=1, **st)
         if evals:
             axes[row][1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],

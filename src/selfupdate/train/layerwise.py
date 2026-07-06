@@ -15,7 +15,7 @@ Schedules (registry; new variants = one new class):
                  their outputs precomputed into an activation cache; blocks
                  <= L never run again in later stages. This is the contract
                  that streams one 120B block at a time.
-- Connected WINDOWS (conn_window / tail_ce_blocks) are gradient-isolation
+- Connected WINDOWS (conn_window / readout_window_blocks) are gradient-isolation
   units, NOT memory management: backward exists only inside [L0..L1] and
   stops at the detached input of L0 — see docs/windows.md for the precise
   2x2 semantics (loss placement x window-input stream) before editing.
@@ -49,7 +49,13 @@ from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .blocks import BlockStack
-from .losses import HiddenLoss, answer_ce
+from .losses import HiddenLoss, task_label_ce_baseline
+
+RUN_CLASSES = {
+    "method", "baseline", "ablation", "control",
+    "legacy_archive", "confounded", "open",
+}
+NON_METHOD_CLASSES = RUN_CLASSES - {"method"}
 
 
 def _vocab_signature(stack) -> tuple:
@@ -72,14 +78,14 @@ def _vocab_signature(stack) -> tuple:
 
 
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
-                     lens_ce_w=0.0, label_ids=None, ans_off=None):
+                     lens_task_label_w=0.0, label_ids=None, ans_off=None):
     """One local forward+backward for block L. ``h_in`` must be detached, so
     the recorded graph — and therefore the backward — is confined to block L:
     no gradient from this loss can reach any other block, the lm_head, or the
     logits. Returns (loss value, detached block output). Autocast wraps only
     the forward+loss; backward runs outside it.
 
-    ``lens_ce_w > 0`` adds a per-block behavioral auxiliary: block L's output
+    ``lens_task_label_w > 0`` adds a per-block behavioral baseline: block L's output
     is decoded through the frozen final norm + lm_head (the logit lens) and
     CE'd against the task labels (BASELINE-only signal) — Belilovsky-style local heads,
     for free. The head is frozen and ``h_in`` detached, so locality is
@@ -92,12 +98,12 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
                        normed=(L == stack.n_layers))
-        if lens_ce_w > 0:
+        if lens_task_label_w > 0:
             s_lens = stack.lm_head(
                 stack.final_norm(h_out)[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + lens_ce_w * answer_ce(s_lens, label_ids)
+            loss = loss + lens_task_label_w * task_label_ce_baseline(s_lens, label_ids)
     loss.backward()
-    return loss.item(), h_out.detach()
+    return loss.detach(), h_out.detach()
 
 
 def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kind,
@@ -113,23 +119,21 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kin
         loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
         if ce_w > 0:
             logits = stack.lm_head(normed[0, s0 + ans_off - 1: s0 + A - 1])
-            loss = loss + ce_w * answer_ce(logits, label_ids)
+            loss = loss + ce_w * task_label_ce_baseline(logits, label_ids)
     loss.backward()
-    return loss.item(), h_out.detach()
+    return loss.detach(), h_out.detach()
 
 
-def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
-              ce_w, hidden_w=1.0, L1=None, ce_kind="teacher_kl", autocast=True):
+def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
+                readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
+                autocast=True):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
-    classic tail): gradient flows within the window so a loss anywhere in
-    it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
-    hidden losses are scaled by ``hidden_w`` (1.0 = hybrid deep
-    supervision; 0.0 = pure truncated distillation — CE only). The
-    answer-CE applies only when the window ends at the top (L1 == n,
-    where logits exist). The window is rooted at a detached ``h_in``: no
-    gradient reaches blocks < L0, and the frozen norm/head receive none.
-    Peak graph = window width. Sliding body windows (conn_window) reuse
-    this with ce_w=0."""
+    top readout window): gradient flows within the window so a loss anywhere
+    in it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
+    hidden losses are scaled by ``hidden_w``. A readout applies only when the
+    window ends at the top (L1 == n), where logits exist. The window is rooted
+    at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
+    norm/head receive none. Peak graph = window width."""
     n = stack.n_layers
     L1 = n if L1 is None else L1
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
@@ -143,52 +147,59 @@ def tail_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind
                     stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
                     normed=(L == n)))
         total = hidden_w * sum(losses)
-        if ce_w > 0 and L1 == n:
+        if readout_w > 0 and L1 == n:
             logits = stack.lm_head(
                 stack.final_norm(h)[0, s0 + ans_off - 1: s0 + A - 1])
-            if ce_kind == "teacher_kl":
+            if readout_source == "teacher_kl":
                 # 100% teacher-sourced readout: targets[n] is the teacher's
                 # post-norm state at the aligned span — its logits through
                 # the frozen head ARE the context-conditioned distribution
                 with torch.no_grad():
                     t_logits = stack.lm_head(
                         targets[n][ans_off - 1: A - 1].to(logits.dtype))
-                total = total + ce_w * F.kl_div(
+                total = total + readout_w * F.kl_div(
                     F.log_softmax(logits.float(), dim=-1),
                     F.log_softmax(t_logits.float(), dim=-1),
                     log_target=True, reduction="batchmean")
-            elif ce_kind == "task_label":
+            elif readout_source == "task_label":
                 # BASELINE-ONLY branch (training-target law): logits toward
                 # the original text = task supervision, kd-branch territory
-                total = total + ce_w * answer_ce(logits, label_ids)
+                total = total + readout_w * task_label_ce_baseline(logits, label_ids)
             else:
-                raise ValueError(f"unknown tail_ce_kind {ce_kind!r}")
+                raise ValueError(f"unknown readout_source {readout_source!r}")
     total.backward()
-    return [l.item() for l in losses], h.detach()
+    return [l.detach() for l in losses], h.detach()
 
 
 def _pp_device_map(cfg) -> dict:
     """Two-card pipeline map: embedding + blocks 1..split on cuda:0; the
-    rest, final norm and lm_head on cuda:1 — the tail window (and with it
-    every cross-block gradient) lives whole on the second card."""
+    rest, final norm and lm_head on cuda:1 — the top readout window (and with
+    it every cross-block gradient) lives whole on the second card."""
     if torch.cuda.device_count() < 2:
         raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
     from transformers import AutoConfig
 
     mc = AutoConfig.from_pretrained(cfg.model.name)
-    n = mc.num_hidden_layers
+    text_cfg = getattr(mc, "text_config", mc)
+    n = text_cfg.num_hidden_layers
     split = cfg.model.pipeline_split
     if not 0 < split < n:
         raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
     # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
     # live on two cards, so the whole vocabulary stack stays on cuda:0 and
-    # tail-window loss calls hop back (an [A,H] transfer per call). Untied
-    # models put norm+head on cuda:1 with the tail.
-    vocab_dev = 0 if getattr(mc, "tie_word_embeddings", False) else 1
-    dm = {"model.embed_tokens": 0, "model.rotary_emb": 0,
-          "model.norm": vocab_dev, "lm_head": vocab_dev}
+    # readout-window loss calls hop back (an [A,H] transfer per call). Untied
+    # models put norm+head on cuda:1 with the readout window.
+    tied = getattr(mc, "tie_word_embeddings",
+                   getattr(text_cfg, "tie_word_embeddings", False))
+    vocab_dev = 0 if tied else 1
+    prefix = "model.language_model" if getattr(mc, "model_type", "") == "gemma4" else "model"
+    dm = {f"{prefix}.embed_tokens": 0, f"{prefix}.rotary_emb": 0,
+          f"{prefix}.norm": vocab_dev, "lm_head": vocab_dev}
+    if prefix != "model":
+        dm["model.vision_tower"] = 0
+        dm["model.embed_vision"] = 0
     for i in range(n):
-        dm[f"model.layers.{i}"] = 0 if i < split else 1
+        dm[f"{prefix}.layers.{i}"] = 0 if i < split else 1
     return dm
 
 
@@ -198,6 +209,10 @@ def _validate_knob_schedule(cfg) -> None:
     class that produced the unwired-ce_kind incident. Keep this in sync
     with the knob-flow audit table in tests/test_training_target_law.py."""
     sched = cfg.train.schedule
+    run_class = cfg.train.run_class
+    if run_class not in RUN_CLASSES:
+        raise ValueError(f"unknown train.run_class {run_class!r}")
+    is_method = run_class == "method"
     bad = []
     if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
         bad.append("conn_window")
@@ -205,13 +220,32 @@ def _validate_knob_schedule(cfg) -> None:
         bad.append("scramble_targets")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
-    if cfg.train.tail_ce_blocks > 0 and cfg.train.tail_ce_kind == "UNSET":
+    if cfg.train.readout_window_blocks > 0 and cfg.train.readout_source == "UNSET":
         raise ValueError(
-            "tail_ce_kind must be set EXPLICITLY (task_label|teacher_kl) when "
-            "tail_ce_blocks > 0 — the silent-default confound struck twice on "
+            "readout_source must be set EXPLICITLY (task_label|teacher_kl) when "
+            "readout_window_blocks > 0 — the silent-default confound struck twice on "
             "2026-07-05; defaults are experiment variables (CLAUDE.md)")
-    if cfg.train.tail_ce_blocks > 0 and sched == "teacher_censored":
-        bad.append("tail_ce_blocks (teacher_censored is pure by definition)")
+    if cfg.train.readout_window_blocks > 0:
+        if sched == "teacher_censored":
+            bad.append("readout_window_blocks (teacher_censored is pure by definition)")
+        if is_method:
+            if cfg.train.conn_window <= 0 or cfg.train.conn_stride != 1:
+                bad.append("readout_window_blocks without sanctioned sliding conn_window/conn_stride")
+            if cfg.train.readout_window_blocks != cfg.train.conn_window:
+                bad.append("readout_window_blocks must equal conn_window for method arms")
+    if is_method and cfg.train.readout_source == "task_label":
+        bad.append("readout_source=task_label (baseline only)")
+    if is_method and cfg.train.last_block_task_label_weight > 0:
+        bad.append("last_block_task_label_weight (baseline only)")
+    if is_method and cfg.train.lens_task_label_weight > 0:
+        bad.append("lens_task_label_weight (baseline only)")
+    if is_method and cfg.train.window_hidden_weight != 1.0:
+        bad.append("window_hidden_weight != 1.0 (ablation/baseline only)")
+    if sched == "teacher_censored":
+        if cfg.train.last_block_task_label_weight > 0:
+            bad.append("last_block_task_label_weight (teacher_censored is pure by definition)")
+        if cfg.train.lens_task_label_weight > 0:
+            bad.append("lens_task_label_weight (teacher_censored is pure by definition)")
     if sched == "tail_only":
         raise ValueError("schedule 'tail_only' was expunged 2026-07-05 "
                          "(damnatio memoriae — owner directive); its CE "
@@ -229,7 +263,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     device = cfg.model.device
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    # bf16 base for LoRA (frozen weights) AND for the sequential/tail_only
+    # bf16 base for LoRA (frozen weights) AND for the sequential
     # schedules: only actively-training blocks need fp32 master weights
     # (cast per stage / per window); summed full-FT trains all blocks every
     # step and keeps fp32 masters throughout.
@@ -357,6 +391,39 @@ def _loader(cfg, ds):
     )
 
 
+def _loss_float(v) -> float:
+    if torch.is_tensor(v):
+        return float(v.detach().float().cpu())
+    return float(v)
+
+
+def _summarize_pending_losses(pending: list[list[torch.Tensor]], n_layers: int) -> tuple[float, list[float]]:
+    sums: list[torch.Tensor | None] = [None] * n_layers
+    counts = [0] * n_layers
+    for losses in pending:
+        for i, loss in enumerate(losses[:n_layers]):
+            t = loss.detach().float() if torch.is_tensor(loss) else torch.tensor(float(loss))
+            sums[i] = t if sums[i] is None else sums[i] + t
+            counts[i] += 1
+    per_layer = [
+        _loss_float(sums[i] / counts[i]) if counts[i] else float("nan")
+        for i in range(n_layers)
+    ]
+    valid = [v for v in per_layer if v == v]
+    mean = sum(valid) / len(valid) if valid else float("nan")
+    return mean, per_layer
+
+
+def _flush_train_log(log, *, epoch: int, step: int, accum: int,
+                     pending: list[list[torch.Tensor]], n_layers: int, **extra) -> None:
+    if not pending:
+        return
+    loss, per_layer = _summarize_pending_losses(pending, n_layers)
+    log.log(kind="train", epoch=epoch, step=step, items_seen=accum,
+            accum_items=len(pending), loss=loss, per_layer=per_layer, **extra)
+    pending.clear()
+
+
 class OnlineTeacherSource:
     """Frozen-teacher forwards for schedules that need per-step teacher
     states. Two backends, exactly one active:
@@ -432,6 +499,7 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     }
 
     step = accum = 0
+    pending_losses: list[list[torch.Tensor]] = []
     t0 = time.time()
     for epoch in range(cfg.train.epochs):
         for items in loader:
@@ -441,14 +509,18 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
                 layer_losses = _censored_item(cfg, stack, loss_fn, it,
                                               t_states, device)
                 accum += 1
-                log.log(kind="train", epoch=epoch, step=step,
-                        loss=sum(layer_losses) / n, per_layer=layer_losses)
+                pending_losses.append(layer_losses)
                 if accum % cfg.train.grad_accum == 0:
+                    _flush_train_log(log, epoch=epoch, step=step,
+                                     accum=accum, pending=pending_losses,
+                                     n_layers=n)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()
                         opt.zero_grad(set_to_none=True)
                     step += 1
+        _flush_train_log(log, epoch=epoch, step=step, accum=accum,
+                         pending=pending_losses, n_layers=n, partial=True)
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8)
             log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
@@ -501,8 +573,6 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
     pos_c = rows[None]  # teacher absolute positions == row indices
     pos_emb_c = stack.rope(t_states[0][:, :1], pos_c)
-    label_ids = it.student_ids.to(device)[it.ans0: it.s0 + it.A]
-
     def _target(L):
         t = t_states[L][0, tA0: tA0 + it.A]
         return (stack.final_norm(t) if L == n else t).detach()
@@ -513,8 +583,7 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
         if L == n:
             loss_val, _ = last_block_step(
                 stack, inp, pos_emb_c, _target(L), it.s0, it.A,
-                it.ans0 - it.s0, label_ids, loss_fn,
-                cfg.train.last_block_ce_weight,
+                it.ans0 - it.s0, None, loss_fn, 0.0,
             )
         else:
             loss_val, _ = local_block_step(
@@ -526,8 +595,8 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
 
 def _summed_item(cfg, stack, loss_fn, it, targets, device):
     """One item's pass on the student's own stream: block-local steps (or
-    sliding conn_window-connected windows) below, lens-CE where configured,
-    the connected tail window at the top. ``targets`` is {L: [A, H]}
+    sliding conn_window-connected windows) below, task-label lens baselines
+    where configured, and the connected readout window at the top. ``targets`` is {L: [A, H]}
     regardless of source (disk cache or online teacher)."""
     n = stack.n_layers
     ids = it.student_ids.to(device)[None]
@@ -535,28 +604,28 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
     h = stack.embed(ids)
     pos_emb = stack.rope(h, pos)
     label_ids = ids[0, it.ans0: it.s0 + it.A]
-    tail0 = n - cfg.train.tail_ce_blocks + 1 if cfg.train.tail_ce_blocks > 0 else n + 1
+    readout0 = n - cfg.train.readout_window_blocks + 1 if cfg.train.readout_window_blocks > 0 else n + 1
     W = max(cfg.train.conn_window, 1)
     layer_losses = []
     L = 1
     while L <= n:
-        if L == tail0:
-            tail_targets = {LL: targets[LL] for LL in range(tail0, n + 1)}
-            tail_losses, h = tail_step(
-                stack, tail0, h.detach(), pos_emb, tail_targets,
+        if L == readout0:
+            readout_targets = {LL: targets[LL] for LL in range(readout0, n + 1)}
+            readout_losses, h = window_step(
+                stack, readout0, h.detach(), pos_emb, readout_targets,
                 it.s0, it.A, it.ans0 - it.s0, label_ids,
-                loss_fn, cfg.train.tail_ce_weight,
-                hidden_w=cfg.train.tail_hidden_weight,
-                ce_kind=cfg.train.tail_ce_kind,
+                loss_fn, cfg.train.readout_weight,
+                hidden_w=cfg.train.window_hidden_weight,
+                readout_source=cfg.train.readout_source,
             )
-            layer_losses.extend(tail_losses)
+            layer_losses.extend(readout_losses)
             break
         if W > 1 and cfg.train.conn_stride == 1:
             # FAITHFUL sliding windows: one clean no-grad trajectory, then
             # every body layer L1 is matched as the ENDPOINT of a window
             # [L1-W+1 .. L1] whose backward updates ALL covered blocks —
             # uniform k-deep credit for every layer (owner's design).
-            last_body = min(tail0 - 1, n)
+            last_body = min(readout0 - 1, n)
             with torch.no_grad():
                 h_traj = {L - 1: h.detach()}
                 t = h
@@ -565,10 +634,10 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
                     h_traj[LL] = t.detach()
             for L1 in range(L, last_body + 1):
                 L0 = max(1, L1 - W + 1)
-                win_losses, _ = tail_step(
+                win_losses, _ = window_step(
                     stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
                     it.s0, it.A, it.ans0 - it.s0, label_ids,
-                    loss_fn, ce_w=0.0, L1=L1,
+                    loss_fn, readout_w=0.0, L1=L1,
                 )
                 layer_losses.extend(win_losses)
             h = h_traj[last_body]
@@ -577,12 +646,12 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
         if W > 1:
             # DISJOINT windows (conn_stride 0): detach every W blocks —
             # cheap approximation; credit depth varies inside the window
-            L1 = min(L + W - 1, tail0 - 1, n)
+            L1 = min(L + W - 1, readout0 - 1, n)
             win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
-            win_losses, h = tail_step(
+            win_losses, h = window_step(
                 stack, L, h.detach(), pos_emb, win_targets,
                 it.s0, it.A, it.ans0 - it.s0, label_ids,
-                loss_fn, ce_w=0.0, L1=L1,
+                loss_fn, readout_w=0.0, L1=L1,
             )
             layer_losses.extend(win_losses)
             L = L1 + 1
@@ -591,17 +660,17 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
             loss_val, h = last_block_step(
                 stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
                 it.ans0 - it.s0, label_ids, loss_fn,
-                max(cfg.train.last_block_ce_weight,
-                    cfg.train.lens_ce_weight
-                    if L >= cfg.train.lens_ce_from else 0.0),
+                max(cfg.train.last_block_task_label_weight,
+                    cfg.train.lens_task_label_weight
+                    if L >= cfg.train.lens_from_layer else 0.0),
             )
         else:
-            lens_w = (cfg.train.lens_ce_weight
-                      if L >= cfg.train.lens_ce_from else 0.0)
+            lens_w = (cfg.train.lens_task_label_weight
+                      if L >= cfg.train.lens_from_layer else 0.0)
             loss_val, h = local_block_step(
                 stack, L, h.detach(), pos_emb, targets[L],
                 it.s0, it.A, loss_fn,
-                lens_ce_w=lens_w, label_ids=label_ids,
+                lens_task_label_w=lens_w, label_ids=label_ids,
                 ans_off=it.ans0 - it.s0,
             )
         layer_losses.append(loss_val)
@@ -647,6 +716,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     offload = cfg.train.offload_adam
 
     step = accum = 0
+    pending_losses: list[list[torch.Tensor]] = []
     t0 = time.time()
     for epoch in range(cfg.train.epochs):
         for items in loader:
@@ -661,12 +731,14 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                     targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
                 layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, device)
                 accum += 1
-                log.log(kind="train", epoch=epoch, step=step,
-                        loss=sum(layer_losses) / n, per_layer=layer_losses)
+                pending_losses.append(layer_losses)
                 if accum % cfg.train.grad_accum == 0:
+                    _flush_train_log(log, epoch=epoch, step=step,
+                                     accum=accum, pending=pending_losses,
+                                     n_layers=n)
                     if anchor is not None:
                         a_ids, a_base = anchor[0].next()
-                        anchor_step(stack, n - cfg.train.tail_ce_blocks + 1,
+                        anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
                                     a_ids, anchor[1], base_logits=a_base)
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
@@ -677,6 +749,8 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                         if offload:
                             _move_opt_state(opt, "cpu")
                     step += 1
+        _flush_train_log(log, epoch=epoch, step=step, accum=accum,
+                         pending=pending_losses, n_layers=n, partial=True)
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8,
                             rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
@@ -731,7 +805,7 @@ class AnchorBank:
 
 def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
     """Anti-intrusion anchor on a neighbor-genre fragment, gradient
-    confined to the tail window [L0..n] (input detached below the window,
+    confined to the top readout window [L0..n] (input detached below the window,
     frozen norm/head): counters the readout trigger ("poetic Spanish ->
     recite the poem") exactly where catastrophic remembering showed it is
     installed. Returns the unweighted loss value.
@@ -755,7 +829,7 @@ def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
             h = stack.run_block(L, h, pos_emb)
         full_logits = stack.lm_head(stack.final_norm(h))[0]
         if base_logits is None:
-            loss = answer_ce(full_logits[:-1], ids[1:])
+            loss = task_label_ce_baseline(full_logits[:-1], ids[1:])
         else:
             loss = F.kl_div(
                 F.log_softmax(full_logits.float(), dim=-1),
@@ -763,7 +837,7 @@ def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
                 log_target=True, reduction="batchmean",
             )
     (w * loss).backward()
-    return loss.item()
+    return loss.detach()
 
 
 def _make_anchor(cfg, tok, teacher=None):
@@ -773,9 +847,9 @@ def _make_anchor(cfg, tok, teacher=None):
     w = cfg.train.anchor_kl_weight or cfg.train.anchor_ce_weight
     if w <= 0:
         return None
-    if cfg.train.tail_ce_blocks <= 0:
-        raise ValueError("anchor weights need tail_ce_blocks > 0 "
-                         "(the anchor regularizes the tail window)")
+    if cfg.train.readout_window_blocks <= 0:
+        raise ValueError("anchor weights need readout_window_blocks > 0 "
+                         "(the anchor regularizes the top readout window)")
     bank = AnchorBank(cfg.train.anchor_path, tok, cfg.model.device)
     if cfg.train.anchor_kl_weight > 0:
         if teacher is None:
@@ -818,6 +892,8 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     branch_gen = torch.Generator().manual_seed(cfg.train.seed + 1)
 
     step = accum = 0
+    pending_losses: list[list[torch.Tensor]] = []
+    branch_counts = {"teacher": 0, "student": 0}
     t0 = time.time()
     for epoch in range(cfg.train.epochs):
         p = mix_teacher_p(cfg, epoch)
@@ -837,16 +913,28 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                     layer_losses = _summed_item(cfg, stack, loss_fn, it,
                                                 targets, device)
                 accum += 1
-                log.log(kind="train", epoch=epoch, step=step,
-                        branch="teacher" if use_teacher else "student",
-                        p_teacher=round(p, 4),
-                        loss=sum(layer_losses) / n, per_layer=layer_losses)
+                branch = "teacher" if use_teacher else "student"
+                branch_counts[branch] += 1
+                pending_losses.append(layer_losses)
                 if accum % cfg.train.grad_accum == 0:
+                    _flush_train_log(log, epoch=epoch, step=step,
+                                     accum=accum, pending=pending_losses,
+                                     n_layers=n, p_teacher=round(p, 4),
+                                     teacher_items=branch_counts["teacher"],
+                                     student_items=branch_counts["student"])
+                    branch_counts = {"teacher": 0, "student": 0}
                     for L, opt in opts.items():
                         torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
                         opt.step()
                         opt.zero_grad(set_to_none=True)
                     step += 1
+        _flush_train_log(log, epoch=epoch, step=step, accum=accum,
+                         pending=pending_losses, n_layers=n,
+                         p_teacher=round(p, 4),
+                         teacher_items=branch_counts["teacher"],
+                         student_items=branch_counts["student"],
+                         partial=True)
+        branch_counts = {"teacher": 0, "student": 0}
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
             r = recite_eval(stack.model, tok, records, limit=8)
             log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
@@ -940,7 +1028,7 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         loss_val, _ = last_block_step(
                             stack, h_in.detach(), pos_emb, target, it.s0, it.A,
                             it.ans0 - it.s0, label_ids, loss_fn,
-                            cfg.train.last_block_ce_weight,
+                            cfg.train.last_block_task_label_weight,
                         )
                     else:
                         loss_val, _ = local_block_step(
@@ -957,7 +1045,8 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         if steps >= cfg.train.stage_max_steps:
                             done = True
                             break
-            mean_loss = sum(epoch_losses) / len(epoch_losses)
+            mean_loss = (sum(_loss_float(loss) for loss in epoch_losses)
+                         / max(1, len(epoch_losses)))
             log.log(kind="stage", layer=L, epoch=epoch, loss=mean_loss, steps=steps)
             if mean_loss < best * 0.99:
                 best, stall = mean_loss, 0
