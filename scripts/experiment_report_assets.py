@@ -569,6 +569,18 @@ def teacher_reference_rows() -> pd.DataFrame:
             "full_eval_cer": no_rag.get("cer"),
             "full_eval_line_exact": no_rag.get("line_exact"),
             "general_ce": (no_rag.get("general") or {}).get("mean_ce"),
+            "epoch0_cer": no_rag.get("cer"),
+            "epoch0_general_ce": (no_rag.get("general") or {}).get("mean_ce"),
+            "epoch0_source": run,
+            "last_epoch": 0,
+            "last_epoch_cer": no_rag.get("cer"),
+            "last_epoch_ce": (no_rag.get("general") or {}).get("mean_ce"),
+            "last_epoch_forgetting_ce": 0.0,
+            "best_epoch": 0,
+            "best_epoch_cer": no_rag.get("cer"),
+            "best_epoch_ce": (no_rag.get("general") or {}).get("mean_ce"),
+            "best_epoch_forgetting_ce": 0.0,
+            "final_forgetting_ce": 0.0,
         })
     for path in sorted(RUNS.glob(LEGACY_RAG_PREFIX + "*_examples_v4.json")):
         if ".shard" in path.name:
@@ -595,6 +607,18 @@ def teacher_reference_rows() -> pd.DataFrame:
             "full_eval_cer": rag.get("cer"),
             "full_eval_line_exact": rag.get("line_exact"),
             "general_ce": None,
+            "epoch0_cer": rag.get("cer"),
+            "epoch0_general_ce": None,
+            "epoch0_source": path.stem,
+            "last_epoch": 0,
+            "last_epoch_cer": rag.get("cer"),
+            "last_epoch_ce": None,
+            "last_epoch_forgetting_ce": None,
+            "best_epoch": 0,
+            "best_epoch_cer": rag.get("cer"),
+            "best_epoch_ce": None,
+            "best_epoch_forgetting_ce": None,
+            "final_forgetting_ce": None,
         })
     for path in sorted(RUNS.glob(TEACHER_REF_RAG_PREFIX + "*_examples_v4.json")):
         if ".shard" in path.name:
@@ -621,6 +645,18 @@ def teacher_reference_rows() -> pd.DataFrame:
             "full_eval_cer": rag.get("cer"),
             "full_eval_line_exact": rag.get("line_exact"),
             "general_ce": None,
+            "epoch0_cer": rag.get("cer"),
+            "epoch0_general_ce": None,
+            "epoch0_source": path.stem,
+            "last_epoch": 0,
+            "last_epoch_cer": rag.get("cer"),
+            "last_epoch_ce": None,
+            "last_epoch_forgetting_ce": None,
+            "best_epoch": 0,
+            "best_epoch_cer": rag.get("cer"),
+            "best_epoch_ce": None,
+            "best_epoch_forgetting_ce": None,
+            "final_forgetting_ce": None,
         })
     return pd.DataFrame(rows)
 
@@ -632,8 +668,12 @@ def write_markdown_table(df: pd.DataFrame, path: Path) -> None:
         "saved_hidden_loss", "saved_mask_mode", "saved_paraphrase",
         "saved_catechism", "saved_maieutic", "saved_long_windows",
         "saved_part_chunk_lines", "readout_source",
-        "readout_window", "conn_window", "conn_stride", "full_eval_cer",
-        "full_eval_line_exact", "general_ce", "intrusion_hit_rate",
+        "readout_window", "conn_window", "conn_stride",
+        "epoch0_cer", "epoch0_general_ce",
+        "last_epoch", "last_epoch_cer", "last_epoch_ce", "last_epoch_forgetting_ce",
+        "best_epoch", "best_epoch_cer", "best_epoch_ce", "best_epoch_forgetting_ce",
+        "full_eval_cer", "full_eval_line_exact", "general_ce", "final_forgetting_ce",
+        "intrusion_hit_rate",
         "destructive", "signal_hidden_share",
     ]
     present = [c for c in cols if c in df.columns]
@@ -650,7 +690,8 @@ def write_fable_verdicts(df: pd.DataFrame) -> None:
         "saved_verdict", "saved_reason", "saved_epochs", "saved_schedule",
         "saved_hidden_loss", "saved_mask_mode", "saved_paraphrase",
         "saved_catechism", "saved_maieutic", "saved_long_windows",
-        "saved_part_chunk_lines", "full_eval_cer",
+        "saved_part_chunk_lines", "epoch0_cer", "last_epoch_cer",
+        "best_epoch_cer", "full_eval_cer", "general_ce", "final_forgetting_ce",
         "full_eval_line_exact", "intrusion_hit_rate", "signal_hidden_share",
     ]
     present = [c for c in cols if c in active.columns]

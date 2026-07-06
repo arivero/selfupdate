@@ -142,8 +142,45 @@ def _best_run(only_method_clean: bool = False):
     return best
 
 
+def _best_corpus_row(clean_only: bool = True) -> pd.Series | None:
+    path = RUNS / "corpus.csv"
+    if not path.exists():
+        return None
+    df = pd.read_csv(path)
+    if df.empty or "evidence_status" not in df:
+        return None
+    rows = df[df["evidence_status"] == "method_clean"].copy() if clean_only else df.copy()
+    if rows.empty:
+        return None
+    for col in ("full_eval_cer", "best_epoch_cer", "last_epoch_cer"):
+        if col in rows and rows[col].notna().any():
+            return rows.sort_values(col, na_position="last").iloc[0]
+    return rows.iloc[0]
+
+
+def _fmt(v) -> str:
+    if v is None:
+        return "NA"
+    if isinstance(v, str):
+        if not v or v.lower() == "nan":
+            return "NA"
+    else:
+        try:
+            if pd.isna(v):
+                return "NA"
+        except Exception:
+            pass
+    try:
+        return f"{float(v):.3f}"
+    except Exception:
+        return str(v)
+
+
 def summary_text() -> str:
     base = _read_json(RUNS / "base-eval-full/recite.json")
+    best_row = _best_corpus_row(clean_only=True)
+    if best_row is None:
+        best_row = _best_corpus_row(clean_only=False)
     best_clean = _best_run(only_method_clean=True)
     best_any = _best_run(only_method_clean=False)
     lines = [
@@ -160,7 +197,34 @@ def summary_text() -> str:
         "evidence only.",
         "",
     ]
-    if base and best_clean:
+    if best_row is not None:
+        if best_row.get("evidence_status") != "method_clean":
+            lines += [
+                "No full-corpus artifact currently qualifies as clean method evidence.",
+                "The highlighted row below is raw evidence and must be read with its status.",
+                "",
+            ]
+        lines += [
+            "Honest metric layout for the highlighted row:",
+            f"  run={best_row.get('run')} model={best_row.get('model')} "
+            f"evidence={best_row.get('evidence_status')}",
+            f"  epoch 0: CER={_fmt(best_row.get('epoch0_cer'))} "
+            f"CE={_fmt(best_row.get('epoch0_general_ce'))} "
+            f"source={best_row.get('epoch0_source')}",
+            f"  last epoch {best_row.get('last_epoch')}: "
+            f"CER={_fmt(best_row.get('last_epoch_cer'))} "
+            f"CE={_fmt(best_row.get('last_epoch_ce'))} "
+            f"forgotten_dCE={_fmt(best_row.get('last_epoch_forgetting_ce'))}",
+            f"  best epoch {best_row.get('best_epoch')}: "
+            f"CER={_fmt(best_row.get('best_epoch_cer'))} "
+            f"CE={_fmt(best_row.get('best_epoch_ce'))} "
+            f"forgotten_dCE={_fmt(best_row.get('best_epoch_forgetting_ce'))}",
+            f"  final full eval: CER={_fmt(best_row.get('full_eval_cer'))} "
+            f"CE={_fmt(best_row.get('general_ce'))} "
+            f"forgotten_dCE={_fmt(best_row.get('final_forgetting_ce'))}",
+            "",
+        ]
+    elif base and best_clean:
         name, run = best_clean
         lines += [
             f"Recitation (full corpus, n={base['n']}): epoch-zero native teacher CER {base['cer']:.3f} ->",
@@ -267,7 +331,10 @@ def corpus_page(pdf):
     else:
         for _, r in clean.iterrows():
             lines.append(
-                f"  {r['run']}: cer={r['full_eval_cer']} exact={r['full_eval_line_exact']} "
+                f"  {r['run']}: e0_CER={r.get('epoch0_cer')} "
+                f"last{r.get('last_epoch')}_CER={r.get('last_epoch_cer')} "
+                f"best{r.get('best_epoch')}_CER={r.get('best_epoch_cer')} "
+                f"final_CER={r.get('full_eval_cer')} final_dCE={r.get('final_forgetting_ce')} "
                 f"source={r['readout_source']} window={r['readout_window']} "
                 f"hidden_share={r['hidden_share']}"
             )
@@ -381,9 +448,15 @@ def per_run_appendix(pdf):
                 b.append(f"  WARN: {r['warnings']}")
             b.append(f"  loss: first20 {r['loss_first']} -> last20 {r['loss_final']} "
                      f"items_seen={r['items_seen']}")
-            b.append(f"  eval: last_CER={r['last_eval_cer']} full_CER={r['full_eval_cer']} "
+            b.append(f"  epoch0: CER={r.get('epoch0_cer')} CE={r.get('epoch0_general_ce')} "
+                     f"source={r.get('epoch0_source')}")
+            b.append(f"  last epoch {r.get('last_epoch')}: CER={r.get('last_epoch_cer')} "
+                     f"CE={r.get('last_epoch_ce')} forgotten_dCE={r.get('last_epoch_forgetting_ce')}")
+            b.append(f"  best epoch {r.get('best_epoch')}: CER={r.get('best_epoch_cer')} "
+                     f"CE={r.get('best_epoch_ce')} forgotten_dCE={r.get('best_epoch_forgetting_ce')}")
+            b.append(f"  final full eval: CER={r['full_eval_cer']} "
                      f"line_exact={r['full_eval_line_exact']} general_CE={r['general_ce']} "
-                     f"forget_dCE={r['forgetting_delta_ce']}")
+                     f"forgotten_dCE={r.get('final_forgetting_ce', r['forgetting_delta_ce'])}")
             b.append(f"  artifacts: destruction={r['destruction_json']} "
                      f"signal={r['signal_attribution_json']} hidden_share={r['hidden_share']} "
                      f"active_config={r['active_config']}")
