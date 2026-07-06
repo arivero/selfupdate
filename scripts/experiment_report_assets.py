@@ -1149,9 +1149,9 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     lines += [
         "",
         "Immediate reading:",
-        "- Machado has historical and some legacy/provenance method rows, but clean scale coverage is sparse.",
-        "- Quijote completed evidence is currently audit/confounded; clean Qwen3 0.6B/1.7B/4B/8B/14B plans are now queued as method work.",
-        "- Combined Machado+Quijote completed evidence is audit/confounded; clean Qwen3 0.6B/1.7B/4B/8B/14B plans are now queued as method work.",
+        "- Completed method evidence uses only current clean, teacher-sourced runs.",
+        "- Historical tail/task-label rows remain visible only as audit evidence.",
+        "- A low best-epoch CER is not enough by itself; full-corpus CER is shown when available.",
     ]
     (RUNS / "best_loss_window_by_corpus.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -1159,13 +1159,15 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
 def _candidate_label(row: pd.Series, include_run: bool = True) -> str:
     if row is None or row.empty:
         return ""
-    cer = row.get("comparison_cer")
-    cer_s = ""
-    try:
-        if not pd.isna(cer):
-            cer_s = f" CER={float(cer):.4f}"
-    except Exception:
-        pass
+    parts = []
+    for label, key in (("bestCER", "comparison_cer"), ("fullCER", "full_eval_cer")):
+        val = row.get(key)
+        try:
+            if not pd.isna(val):
+                parts.append(f"{label}={float(val):.4f}")
+        except Exception:
+            pass
+    cer_s = " " + " ".join(parts) if parts else ""
     run_s = f" {row.get('run')}" if include_run and row.get("run") else ""
     return f"{row.get('loss')} {row.get('window_label')}{cer_s}{run_s}".strip()
 
