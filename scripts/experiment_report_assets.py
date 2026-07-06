@@ -156,9 +156,9 @@ def _coverage_tags(row: pd.Series) -> set[str]:
     if (run == LEGACY_NO_RAG_QWEN06
             or run.startswith(LEGACY_NATIVE_PREFIX)
             or run.startswith(TEACHER_REF_NATIVE_PREFIX)):
-        return {"Epoch-zero teacher: native/no RAG"}
+        return {"Teacher reference: epoch-zero native/no RAG"}
     if run.startswith(LEGACY_RAG_PREFIX) or run.startswith(TEACHER_REF_RAG_PREFIX):
-        return {"Epoch-zero teacher: RAG/context input"}
+        return {"Teacher reference: epoch-zero RAG/context input"}
 
     sched = str(row.get("saved_schedule") or row.get("schedule") or "")
     loss = str(row.get("saved_hidden_loss") or row.get("hidden_loss") or "")
@@ -253,7 +253,7 @@ def write_coverage_matrix(df: pd.DataFrame) -> None:
 
     def cell(g: pd.Series) -> str:
         counts = g.value_counts().to_dict()
-        order = ["C", "L", "A", "X", "B", "?"]
+        order = ["C", "L", "A", "X", "T", "B", "?"]
         return " ".join(f"{k}{counts[k]}" for k in order if counts.get(k))
 
     matrix = (raw.groupby(["experiment_type", "model"])["status"]
