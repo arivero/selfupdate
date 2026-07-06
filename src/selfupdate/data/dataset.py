@@ -274,7 +274,14 @@ class LengthBucketBatchSampler(Sampler[list[int]]):
             yield batches[j]
 
     def __len__(self) -> int:
-        n = len(self.lengths)
+        # batches form inside buckets, so the count is per-bucket, not a
+        # global n/batch_size (bucket membership is fixed by lengths, so
+        # this is exact for every epoch despite the shuffling)
+        sizes: dict[int, int] = {}
+        for length in self.lengths:
+            b = length // self.bucket_width
+            sizes[b] = sizes.get(b, 0) + 1
         if self.drop_last:
-            return n // self.batch_size
-        return (n + self.batch_size - 1) // self.batch_size
+            return sum(s // self.batch_size for s in sizes.values())
+        return sum((s + self.batch_size - 1) // self.batch_size
+                   for s in sizes.values())
