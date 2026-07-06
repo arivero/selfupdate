@@ -7,6 +7,10 @@ shared_mid — no privileged block), compared to the reference answer text with 
 
 from __future__ import annotations
 
+import os
+import random
+from concurrent.futures import Future, ThreadPoolExecutor
+
 import jiwer
 import torch
 
@@ -145,7 +149,10 @@ def score_recitation(record: dict, raw: str) -> dict:
 @torch.no_grad()
 def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
                 rebase_gap: bool = False, batch_size: int = 1,
-                max_extra_tokens: int = 48) -> dict:
+                max_extra_tokens: int = 48,
+                bucket_by_length: bool = False,
+                score_workers: int | None = None,
+                shuffle_seed: int | None = None) -> dict:
     was_training = model.training
     model.eval()
     records = adapt_records(records, tokenizer)
@@ -161,7 +168,10 @@ def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
     else:
         results = recite_eval_batched(
             model, tokenizer, subset, batch_size=batch_size,
-            max_extra_tokens=max_extra_tokens)
+            max_extra_tokens=max_extra_tokens,
+            bucket_by_length=bucket_by_length,
+            score_workers=score_workers,
+            shuffle_seed=shuffle_seed)
     if was_training:
         model.train()
     mean = lambda k: sum(r[k] for r in results) / len(results)
@@ -177,7 +187,10 @@ def recite_eval(model, tokenizer, records: list[dict], limit: int | None = None,
 
 @torch.no_grad()
 def recite_eval_batched(model, tokenizer, records: list[dict], batch_size: int,
-                        max_extra_tokens: int = 48) -> list[dict]:
+                        max_extra_tokens: int = 48,
+                        bucket_by_length: bool = False,
+                        score_workers: int | None = None,
+                        shuffle_seed: int | None = None) -> list[dict]:
     was_padding = tokenizer.padding_side
     tokenizer.padding_side = "left"
     if tokenizer.pad_token_id is None:
@@ -189,27 +202,43 @@ def recite_eval_batched(model, tokenizer, records: list[dict], batch_size: int,
         prompt = student_prompt(r)
         ref_len = len(tokenizer.encode(r["answer_text"], add_special_tokens=False))
         work.append((ref_len, i, r, prompt))
+    if bucket_by_length:
+        # Throughput mode: keeps per-batch max_new_tokens close to the examples
+        # being generated while restoring original order in the output.
+        work.sort(key=lambda x: x[0])
+    elif shuffle_seed is not None:
+        random.Random(shuffle_seed).shuffle(work)
 
     results: list[dict | None] = [None] * len(records)
-    for start in range(0, len(work), batch_size):
-        batch = work[start:start + batch_size]
-        print(f"recite eval batch {start + len(batch)}/{len(work)} "
-              f"(batch_size={len(batch)})", flush=True)
-        prompts = [x[3] for x in batch]
-        max_new = max(x[0] for x in batch) + max_extra_tokens
-        enc = tokenizer(prompts, return_tensors="pt", padding=True,
-                        add_special_tokens=False)
-        enc = {k: v.to(model.device) for k, v in enc.items()}
-        out = model.generate(
-            **enc,
-            max_new_tokens=max_new,
-            do_sample=False,
-            eos_token_id=eos_id,
-            pad_token_id=tokenizer.pad_token_id,
-        )
-        gen_start = enc["input_ids"].shape[1]
-        for row, (_, idx, rec, _prompt) in enumerate(batch):
-            raw = tokenizer.decode(out[row, gen_start:], skip_special_tokens=True)
-            results[idx] = score_recitation(rec, raw)
-    tokenizer.padding_side = was_padding
+    workers = score_workers if score_workers is not None else min(32, os.cpu_count() or 1)
+    executor = ThreadPoolExecutor(max_workers=max(1, workers))
+    futures: list[tuple[int, Future[dict]]] = []
+    try:
+        try:
+            for start in range(0, len(work), batch_size):
+                batch = work[start:start + batch_size]
+                print(f"recite eval batch {start + len(batch)}/{len(work)} "
+                      f"(batch_size={len(batch)})", flush=True)
+                prompts = [x[3] for x in batch]
+                max_new = max(x[0] for x in batch) + max_extra_tokens
+                enc = tokenizer(prompts, return_tensors="pt", padding=True,
+                                add_special_tokens=False)
+                enc = {k: v.to(model.device) for k, v in enc.items()}
+                out = model.generate(
+                    **enc,
+                    max_new_tokens=max_new,
+                    do_sample=False,
+                    eos_token_id=eos_id,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+                gen_start = enc["input_ids"].shape[1]
+                for row, (_, idx, rec, _prompt) in enumerate(batch):
+                    raw = tokenizer.decode(out[row, gen_start:], skip_special_tokens=True)
+                    futures.append((idx, executor.submit(score_recitation, rec, raw)))
+            for idx, fut in futures:
+                results[idx] = fut.result()
+        finally:
+            executor.shutdown(wait=True)
+    finally:
+        tokenizer.padding_side = was_padding
     return [r for r in results if r is not None]

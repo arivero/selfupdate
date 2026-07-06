@@ -6,6 +6,8 @@ This is an artifact pass only: no training and no model loading. It reads
   - runs/experiment_table.csv
   - runs/experiment_table.md
   - runs/fable_survivor_verdicts.md
+  - runs/loss_by_model_size.csv
+  - runs/loss_by_model_size.md
   - runs/accuracy_aspects.png
   - runs/destruction_aspects.csv
   - runs/destruction_aspects.png
@@ -716,6 +718,135 @@ def write_fable_verdicts(df: pd.DataFrame) -> None:
     (RUNS / "fable_survivor_verdicts.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def write_loss_by_model_size(df: pd.DataFrame) -> None:
+    if df.empty or "run" not in df.columns:
+        return
+    work = df.copy()
+    work["model_label"] = work.get("model", pd.Series(index=work.index, dtype=object)).map(_model_label)
+    work = work[~work["model_label"].isin(RETIRED_MODEL_LABELS)].copy()
+    work["loss"] = (
+        work.get("saved_hidden_loss", pd.Series(index=work.index, dtype=object))
+        .combine_first(work.get("hidden_loss", pd.Series(index=work.index, dtype=object)))
+        .fillna("unknown")
+        .astype(str)
+    )
+    work = work[
+        (work["loss"] != "none")
+        & (work.get("saved_verdict", pd.Series(index=work.index, dtype=object)) != "TEACHER_REFERENCE")
+    ].copy()
+    if work.empty:
+        return
+
+    for col in [
+        "best_epoch_cer", "full_eval_cer", "last_epoch_cer", "last_eval_cer",
+        "best_epoch_forgetting_ce", "final_forgetting_ce", "general_ce",
+    ]:
+        if col in work.columns:
+            work[col] = pd.to_numeric(work[col], errors="coerce")
+    work["comparison_cer"] = (
+        work.get("best_epoch_cer", pd.Series(index=work.index, dtype=float))
+        .combine_first(work.get("full_eval_cer", pd.Series(index=work.index, dtype=float)))
+        .combine_first(work.get("last_epoch_cer", pd.Series(index=work.index, dtype=float)))
+        .combine_first(work.get("last_eval_cer", pd.Series(index=work.index, dtype=float)))
+    )
+    work["comparison_forgetting_ce"] = (
+        work.get("best_epoch_forgetting_ce", pd.Series(index=work.index, dtype=float))
+        .combine_first(work.get("final_forgetting_ce", pd.Series(index=work.index, dtype=float)))
+    )
+    work = work[work["comparison_cer"].notna()].copy()
+    if work.empty:
+        return
+
+    summaries = []
+    eligible_statuses = {"CONFIRM_CLEAN", "CONFIRM_LEGACY_NAMED"}
+    for (model, loss), g in work.groupby(["model_label", "loss"], dropna=False):
+        verdicts = g.get("saved_verdict", pd.Series(dtype=object)).fillna("").astype(str)
+        method_g = g[verdicts.isin(eligible_statuses)].copy()
+        best_pool = method_g if not method_g.empty else g
+        best = best_pool.sort_values(["comparison_cer", "comparison_forgetting_ce"],
+                                     na_position="last").iloc[0]
+        audit_best = g.sort_values(["comparison_cer", "comparison_forgetting_ce"],
+                                   na_position="last").iloc[0]
+        summaries.append({
+            "model": model,
+            "loss": loss,
+            "n_runs": len(g),
+            "clean_or_legacy_runs": int(verdicts.isin(eligible_statuses).sum()),
+            "denied_runs": int((verdicts == "DENY").sum()),
+            "best_cer": best["comparison_cer"],
+            "median_cer": g["comparison_cer"].median(),
+            "best_forgetting_ce": best.get("comparison_forgetting_ce"),
+            "best_run": best.get("run"),
+            "best_verdict": best.get("saved_verdict"),
+            "best_epoch": best.get("best_epoch"),
+            "audit_best_cer": audit_best["comparison_cer"],
+            "audit_best_forgetting_ce": audit_best.get("comparison_forgetting_ce"),
+            "audit_best_run": audit_best.get("run"),
+            "audit_best_verdict": audit_best.get("saved_verdict"),
+            "audit_best_epoch": audit_best.get("best_epoch"),
+            "readout_window": best.get("readout_window"),
+            "conn_window": best.get("conn_window"),
+            "readout_source": best.get("readout_source"),
+        })
+    summary = pd.DataFrame(summaries)
+    if summary.empty:
+        return
+    summary["model_order"] = summary["model"].map(
+        {m: i for i, m in enumerate(MODEL_ORDER)}
+    ).fillna(len(MODEL_ORDER))
+    summary = summary.sort_values(["model_order", "best_cer", "loss"]).drop(columns=["model_order"])
+    summary["rank_in_model"] = summary.groupby("model")["best_cer"].rank(method="first")
+    summary["audit_rank_in_model"] = (
+        summary.groupby("model")["audit_best_cer"].rank(method="first")
+    )
+    summary.to_csv(RUNS / "loss_by_model_size.csv", index=False)
+
+    eligible = summary[summary["clean_or_legacy_runs"] > 0].copy()
+    lines = [
+        "# Loss By Model Size",
+        "",
+        "Metric: lowest available CER from best epoch, full eval, or last epoch, in that order.",
+        "Teacher-reference rows are excluded. `DENY` rows are retained in the audit CSV but",
+        "must not be used as method evidence.",
+        "",
+    ]
+    if eligible.empty:
+        lines += [
+            "## Method-Evidence Ranking",
+            "",
+            "No model/loss pair currently has a clean or legacy-named method-evidence run with a CER metric.",
+            "",
+        ]
+    else:
+        top = eligible.sort_values(["model", "rank_in_model"]).groupby("model").head(4)
+        lines += [
+            "## Method-Evidence Ranking",
+            "",
+            top[[
+                "model", "loss", "rank_in_model", "n_runs", "clean_or_legacy_runs",
+                "best_cer", "median_cer", "best_forgetting_ce",
+                "best_run", "best_verdict", "best_epoch",
+            ]].to_markdown(index=False),
+            "",
+        ]
+    audit_top = summary.sort_values(["model", "audit_rank_in_model"]).groupby("model").head(4)
+    lines += [
+        "## Audit Ranking Including Confounded Rows",
+        "",
+        audit_top[[
+            "model", "loss", "audit_rank_in_model", "n_runs", "clean_or_legacy_runs",
+            "denied_runs", "audit_best_cer", "median_cer", "audit_best_forgetting_ce",
+            "audit_best_run", "audit_best_verdict", "audit_best_epoch",
+            "best_cer", "best_run", "best_verdict", "best_epoch",
+            "readout_window", "conn_window", "readout_source",
+        ]].to_markdown(index=False),
+        "",
+        "Use this section to see coverage gaps and historical Fable claims. It is not",
+        "a substitute for the method-evidence ranking above.",
+    ]
+    (RUNS / "loss_by_model_size.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def plot_accuracy(df: pd.DataFrame) -> None:
     plot = df[df["full_eval_cer"].notna()].copy()
     if plot.empty:
@@ -891,6 +1022,7 @@ def main() -> int:
     write_coverage_matrix(df)
     write_markdown_table(df, RUNS / "experiment_table.md")
     write_fable_verdicts(df)
+    write_loss_by_model_size(df)
     plot_accuracy(df)
     plot_destruction(df)
     profiles = []

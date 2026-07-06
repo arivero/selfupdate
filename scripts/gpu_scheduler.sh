@@ -37,9 +37,25 @@ free_mb() { nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits -i 
 used_mb() { nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$1"; }
 total_mb() { nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits -i "$1"; }
 
+reserved_mb() {  # sum of need_mb held by live locks on device $1
+    local sum=0 d pid dev need
+    for d in "$SCHED"/*.lock; do
+        [ -e "$d" ] || continue
+        read -r pid dev need < "$d"
+        kill -0 "$pid" 2>/dev/null || continue
+        case ",$dev," in *",$1,"*) sum=$(( sum + ${need:-0} ));; esac
+    done
+    echo "$sum"
+}
+
 budget_free_mb() {
-    local dev="$1" used total budget
+    local dev="$1" used resv total budget
+    # a just-launched job allocates no VRAM while it downloads/loads, so
+    # nvidia-smi alone double-books the card; treat lock reservations as
+    # leases and charge whichever is larger.
     used="$(used_mb "$dev")"
+    resv="$(reserved_mb "$dev")"
+    [ "$resv" -gt "$used" ] && used="$resv"
     if [ -n "$MEMORY_BUDGET_MB" ]; then
         budget="$MEMORY_BUDGET_MB"
     else

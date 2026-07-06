@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import random
 import sys
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -63,7 +66,9 @@ def score_one(record: dict, text: str) -> dict:
 
 @torch.no_grad()
 def batched_ceiling(model, tok, records: list[dict], batch_size: int,
-                    max_extra_tokens: int, bucket_by_length: bool = False) -> dict:
+                    max_extra_tokens: int, bucket_by_length: bool = False,
+                    score_workers: int | None = None,
+                    shuffle_seed: int | None = None) -> dict:
     was_padding = tok.padding_side
     tok.padding_side = "left"
     if tok.pad_token_id is None:
@@ -79,28 +84,40 @@ def batched_ceiling(model, tok, records: list[dict], batch_size: int,
         # Optional throughput mode: keeps max_new_tokens tighter inside each
         # batch. Default evaluation preserves corpus order.
         work.sort(key=lambda x: x[0])
+    elif shuffle_seed is not None:
+        random.Random(shuffle_seed).shuffle(work)
     results: list[dict | None] = [None] * len(records)
-    for start in range(0, len(work), batch_size):
-        batch = work[start: start + batch_size]
-        print(f"teacher ceiling batch {start + len(batch)}/{len(work)} "
-              f"(batch_size={len(batch)})", flush=True)
-        prompts = [x[3] for x in batch]
-        max_new = max(x[0] for x in batch) + max_extra_tokens
-        enc = tok(prompts, return_tensors="pt", padding=True,
-                  add_special_tokens=False)
-        enc = {k: v.to(model.device) for k, v in enc.items()}
-        out = model.generate(
-            **enc,
-            max_new_tokens=max_new,
-            do_sample=False,
-            eos_token_id=eos,
-            pad_token_id=tok.pad_token_id,
-        )
-        gen_start = enc["input_ids"].shape[1]
-        for row, (_, idx, rec, _prompt) in enumerate(batch):
-            text = tok.decode(out[row, gen_start:], skip_special_tokens=True)
-            results[idx] = score_one(rec, text)
-    tok.padding_side = was_padding
+    workers = score_workers if score_workers is not None else min(32, os.cpu_count() or 1)
+    executor = ThreadPoolExecutor(max_workers=max(1, workers))
+    futures: list[tuple[int, Future[dict]]] = []
+    try:
+        try:
+            for start in range(0, len(work), batch_size):
+                batch = work[start: start + batch_size]
+                print(f"teacher ceiling batch {start + len(batch)}/{len(work)} "
+                      f"(batch_size={len(batch)})", flush=True)
+                prompts = [x[3] for x in batch]
+                max_new = max(x[0] for x in batch) + max_extra_tokens
+                enc = tok(prompts, return_tensors="pt", padding=True,
+                          add_special_tokens=False)
+                enc = {k: v.to(model.device) for k, v in enc.items()}
+                out = model.generate(
+                    **enc,
+                    max_new_tokens=max_new,
+                    do_sample=False,
+                    eos_token_id=eos,
+                    pad_token_id=tok.pad_token_id,
+                )
+                gen_start = enc["input_ids"].shape[1]
+                for row, (_, idx, rec, _prompt) in enumerate(batch):
+                    text = tok.decode(out[row, gen_start:], skip_special_tokens=True)
+                    futures.append((idx, executor.submit(score_one, rec, text)))
+            for idx, fut in futures:
+                results[idx] = fut.result()
+        finally:
+            executor.shutdown(wait=True)
+    finally:
+        tok.padding_side = was_padding
     final = [r for r in results if r is not None]
     mean = lambda k: sum(r[k] for r in final) / len(final)
     return {
@@ -126,6 +143,10 @@ def main() -> int:
                     help="load with device_map=auto for large two-card teacher references")
     ap.add_argument("--bucket-by-length", action="store_true",
                     help="throughput mode: sort examples by reference length inside each shard")
+    ap.add_argument("--score-workers", type=int, default=None,
+                    help="CPU workers for CER scoring in batched eval")
+    ap.add_argument("--shuffle-seed", type=int, default=None,
+                    help="fixed random order for batched eval; results are restored by example index")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
@@ -151,13 +172,18 @@ def main() -> int:
         # This avoids randomizing or length-sorting the default evaluation.
         records = records[args.shard_index::args.num_shards]
     r = batched_ceiling(model, tok, records, args.batch_size, args.max_extra_tokens,
-                        bucket_by_length=args.bucket_by_length)
+                        bucket_by_length=args.bucket_by_length,
+                        score_workers=args.score_workers,
+                        shuffle_seed=args.shuffle_seed)
     model_short = cfg.model.name.split("/")[-1]
     data_stem = Path(cfg.data.examples_path).stem
     r["teacher_reference_kind"] = "teacher_epoch0_rag_context"
     r["model"] = cfg.model.name
     r["examples_path"] = cfg.data.examples_path
     r["batch_size"] = args.batch_size
+    r["bucket_by_length"] = args.bucket_by_length
+    r["score_workers"] = args.score_workers
+    r["shuffle_seed"] = args.shuffle_seed
     r["num_shards"] = args.num_shards
     r["shard_index"] = args.shard_index
     print(f"TEACHER RAG REFERENCE {model_short} x {data_stem}: n={r['n']} "

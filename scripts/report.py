@@ -389,6 +389,73 @@ def coverage_matrix_page(pdf):
     plt.close(fig)
 
 
+def loss_by_model_page(pdf):
+    path = RUNS / "loss_by_model_size.csv"
+    if not path.exists():
+        _text_page(pdf, "Loss By Model Size",
+                   "runs/loss_by_model_size.csv is missing.\n"
+                   "Run scripts/experiment_report_assets.py before report generation.")
+        return
+    df = pd.read_csv(path).fillna("")
+    if df.empty:
+        _text_page(pdf, "Loss By Model Size", "No loss comparison rows are available.")
+        return
+    clean_counts = pd.to_numeric(df["clean_or_legacy_runs"], errors="coerce").fillna(0)
+    df = df[clean_counts > 0].copy()
+    if df.empty:
+        df = pd.read_csv(path).fillna("")
+        title_note = "No clean/legacy method-evidence rows yet; showing audit rows."
+    else:
+        title_note = "Clean or legacy-named method-evidence rows only."
+    if "rank_in_model" in df:
+        df["rank_in_model"] = pd.to_numeric(df["rank_in_model"], errors="coerce")
+        df = df.sort_values(["model", "rank_in_model"]).groupby("model").head(4)
+    keep = [
+        "model", "loss", "rank_in_model", "n_runs", "clean_or_legacy_runs",
+        "best_cer", "median_cer", "best_forgetting_ce", "best_run",
+        "best_verdict", "best_epoch",
+    ]
+    df = df[[c for c in keep if c in df.columns]].copy()
+    for col in ("best_cer", "median_cer", "best_forgetting_ce"):
+        if col in df:
+            df[col] = pd.to_numeric(df[col], errors="coerce").map(
+                lambda x: "" if pd.isna(x) else f"{x:.4f}"
+            )
+    if "rank_in_model" in df:
+        df["rank_in_model"] = pd.to_numeric(df["rank_in_model"], errors="coerce").map(
+            lambda x: "" if pd.isna(x) else f"{int(x)}"
+        )
+    fig = plt.figure(figsize=(11.69, 8.27))
+    fig.text(0.02, 0.96, "Loss By Model Size", fontsize=14, weight="bold")
+    fig.text(
+        0.02, 0.925,
+        "CER = character error rate. Forgetting is held-out cross-entropy/log-loss delta from epoch-zero teacher. "
+        + title_note,
+        fontsize=7,
+    )
+    ax = fig.add_axes([0.01, 0.02, 0.98, 0.88])
+    ax.axis("off")
+    tbl = ax.table(
+        cellText=df.values.tolist(),
+        colLabels=df.columns.tolist(),
+        loc="upper center",
+        cellLoc="center",
+    )
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(5.5)
+    tbl.auto_set_column_width(range(len(df.columns)))
+    tbl.scale(1.0, 1.15)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor("#dddddd")
+        if r == 0:
+            cell.set_text_props(weight="bold")
+            cell.set_facecolor("#eeeeee")
+        if c in (0, 1, 8, 9) and r > 0:
+            cell.set_text_props(ha="left")
+    pdf.savefig(fig)
+    plt.close(fig)
+
+
 def layer_loss_pages(pdf):
     manifest = RUNS / "layer_loss_manifest.csv"
     if not manifest.exists():
@@ -486,6 +553,7 @@ def main() -> None:
 
     with PdfPages(args.out) as pdf:
         coverage_matrix_page(pdf)
+        loss_by_model_page(pdf)
         _text_page(pdf, "Self-distillation of context — experiment report",
                    summary_text())
         results_page(pdf)

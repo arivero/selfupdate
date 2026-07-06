@@ -1,6 +1,6 @@
 run_name: teacher_ref_gemma4_31b_v4
 model:
-  name: google/gemma-4-31B
+  name: google/gemma-4-31B-it
 data:
   examples_path: data/poem/examples_v4.jsonl
   corpus_style: verse

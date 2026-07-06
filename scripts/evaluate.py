@@ -34,6 +34,12 @@ def main() -> None:
     ap.add_argument("--batch-size", type=int, default=1,
                     help="batched generation for standard recitation evals")
     ap.add_argument("--max-extra-tokens", type=int, default=48)
+    ap.add_argument("--bucket-by-length", action="store_true",
+                    help="throughput mode: group examples by reference length")
+    ap.add_argument("--score-workers", type=int, default=None,
+                    help="CPU workers for CER scoring in batched eval")
+    ap.add_argument("--shuffle-seed", type=int, default=None,
+                    help="fixed random order for batched eval; results are restored by example index")
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     args = ap.parse_args()
@@ -62,9 +68,15 @@ def main() -> None:
     r = recite_eval(model, tok, records, limit=args.limit,
                     rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
                     batch_size=args.batch_size,
-                    max_extra_tokens=args.max_extra_tokens)
+                    max_extra_tokens=args.max_extra_tokens,
+                    bucket_by_length=args.bucket_by_length,
+                    score_workers=args.score_workers,
+                    shuffle_seed=args.shuffle_seed)
     r["batch_size"] = args.batch_size
     r["max_extra_tokens"] = args.max_extra_tokens
+    r["bucket_by_length"] = args.bucket_by_length
+    r["score_workers"] = args.score_workers
+    r["shuffle_seed"] = args.shuffle_seed
     r["teacher_reference_kind"] = "teacher_epoch0_native_no_rag" if args.base else "checkpoint"
     r["model"] = cfg.model.name
     r["examples_path"] = cfg.data.examples_path
