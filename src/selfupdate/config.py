@@ -103,6 +103,15 @@ class TrainConfig:
     # pad waste without globally sorting the corpus.
     batching: str = "item"  # item | padded | bucketed
     length_bucket_width: int = 128
+    # MoE handling:
+    # dense_or_black_box = ordinary block-output layerwise distillation. For
+    # MoE, the router/expert mechanism is inside the block and remains valid
+    # method evidence; expert agreement remains an extra measured claim.
+    # teacher_forced = replay teacher-selected experts during training.
+    # router_aligned = train/regularize the student router toward teacher
+    # routing and report top-k overlap. The latter two are MoE-specific method
+    # innovations for sparse-expert families.
+    moe_mode: str = "dense_or_black_box"  # dense_or_black_box | teacher_forced | router_aligned
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl

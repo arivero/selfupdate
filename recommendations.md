@@ -235,6 +235,27 @@ For H100 or bridge work, add:
 - Gemma-4-26B-A4B single-H100 and PP2 speed certification
 - Gemma-4-31B PP2 teacher reference plus an explicit single-H100 boundary test
 
+## MoE Method Evidence
+
+MoE runs must state their routing mode. Black-box MoE is still method evidence
+for layerwise block-output distillation, because the router and experts are
+inside the block being trained. Claims about expert-mechanism matching require
+teacher/student router agreement evidence.
+
+Required MoE modes:
+
+- `dense_or_black_box`: match post-combine block outputs; method evidence with
+  router agreement unproven.
+- `teacher_forced`: train the student block while replaying teacher-selected
+  top-k experts.
+- `router_aligned`: add a router objective so the student router agrees with
+  the teacher router; report top-k overlap by layer/token.
+
+The MoE-specific artifact bundle should add `router_trace.json`,
+`router_overlap.csv`, per-layer router-overlap plots, and per-expert delta
+norms. The report should separate "block-output method evidence" from
+"expert-mechanism evidence".
+
 Every new 2026 model must have a training-speed certificate before any long
 run is interpreted: batch-size sweep, peak memory, GPU utilization trace,
 and PP2 communication comparison where the model is not comfortably inside

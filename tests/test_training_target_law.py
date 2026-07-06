@@ -145,3 +145,7 @@ def test_knob_schedule_refusal():
     cfg.train.readout_source = "reference_text"
     with pytest.raises(ValueError, match="teacher_kl"):
         _validate_knob_schedule(cfg)
+    cfg.train.readout_source = "teacher_kl"
+    cfg.train.moe_mode = "router_magic"
+    with pytest.raises(ValueError, match="moe_mode"):
+        _validate_knob_schedule(cfg)

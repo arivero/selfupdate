@@ -325,6 +325,10 @@ def _validate_knob_schedule(cfg) -> None:
             "recall belongs in evaluation artifacts, never in training")
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
+    if cfg.train.moe_mode not in (
+        "dense_or_black_box", "teacher_forced", "router_aligned",
+    ):
+        raise ValueError(f"unknown train.moe_mode {cfg.train.moe_mode!r}")
     if cfg.train.batching != "item":
         if sched != "summed":
             bad.append("batching (currently implemented for summed schedule only)")

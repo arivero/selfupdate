@@ -42,7 +42,22 @@ cache entirely when the teacher can be represented as adapters-off.
 
 ## MoE Notes
 
-Hidden matching stays post-MoE-combine at the block output. Router agreement
-can be logged as a metric, and per-expert delta norms can be reported by the
-existing weight-delta tooling. The first MoE extension should keep the same
-block-output contract before adding router-specific auxiliaries.
+Black-box MoE is valid method evidence for the block-output layerwise claim:
+the router and experts sit inside the decoder block, and the hidden loss
+matches the post-MoE-combine block output. Its limitation is narrower but
+important: expert-mechanism claims require router agreement evidence.
+
+For MoE-specific claims, report the mode explicitly:
+
+- `dense_or_black_box`: ordinary post-combine hidden matching. Valid method
+  evidence for layerwise block distillation; router agreement unproven.
+- `teacher_forced`: replay the teacher's top-k expert choices during training,
+  so hidden matching updates the same expert subnetwork the teacher used.
+- `router_aligned`: train or regularize the student router toward the teacher
+  router distribution/top-k set, and report top-k overlap by layer/token.
+
+The innovation path is teacher-forced expert replay plus a router-alignment
+training lane, because a student that routes to expert 7 while the teacher
+routed to expert 19 can otherwise train the wrong expert to imitate the right
+one. Router agreement and per-expert delta norms should sit next to recall,
+forgetting, and destruction metrics for MoE runs.
