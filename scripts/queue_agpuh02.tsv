@@ -1,0 +1,20 @@
+# agpuh02 node queue — 4x H100 80GB (multigpu branch: Machado -> Quijote chapters;
+# lanes: gpt-oss-120b / ALIA-40b-fc-2606 / Gemma 4 31B). Opened 2026-07-06.
+# Do NOT merge with queue_h100.tsv (frozen 2026-07-03) or the agpuh01 queues.
+#
+# Launch:
+#   QUEUE=scripts/queue_agpuh02.tsv GPUS="0 1 2 3" MAX_PER_GPU=1 SCHED=runs/.sched-agpuh02 nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_agpuh02.log 2>&1 &
+#
+# done_file	need_mb	after	command	n_gpus
+runs/mlt_gemma4_31b_slide2_lora/checkpoint	76000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_slide2_lora.yaml	2
+runs/mlt_gptoss120b_pp2_slide2_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide2_lora.yaml	2
+runs/mlt_gemma4_31b_slide3_lora/checkpoint	76000	runs/mlt_gemma4_31b_slide2_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_slide3_lora.yaml	2
+runs/mlt_gptoss120b_pp2_slide3_lora/checkpoint	79000	runs/mlt_gptoss120b_pp2_slide2_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide3_lora.yaml	2
+runs/mlt_gemma4_31b_k1local_lora/checkpoint	74000	runs/mlt_gemma4_31b_slide3_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_k1local_lora.yaml	2
+runs/mlt_gptoss120b_pp2_k1local_lora/checkpoint	79000	runs/mlt_gptoss120b_pp2_slide3_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_k1local_lora.yaml	2
+runs/mlt_gptoss120b_auto4_slide2_lora/checkpoint	76000	runs/mlt_gptoss120b_pp2_k1local_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_auto4_slide2_lora.yaml	4
+runs/mlt_gptoss120b_auto4_slide3_lora/checkpoint	76000	runs/mlt_gptoss120b_auto4_slide2_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_auto4_slide3_lora.yaml	4
+runs/mlt_gptoss120b_auto4_k1local_lora/checkpoint	76000	runs/mlt_gptoss120b_auto4_slide3_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_auto4_k1local_lora.yaml	4
+runs/mlt_alia40b_slide2_lora/checkpoint	78000	runs/mlt_gptoss120b_auto4_k1local_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_alia40b_slide2_lora.yaml	2
+runs/mlt_alia40b_slide3_lora/checkpoint	78000	runs/mlt_alia40b_slide2_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_alia40b_slide3_lora.yaml	2
+runs/mlt_alia40b_k1local_lora/checkpoint	76000	runs/mlt_alia40b_slide3_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_alia40b_k1local_lora.yaml	2

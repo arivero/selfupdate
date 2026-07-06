@@ -372,6 +372,10 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
     device = cfg.model.device
+    if cfg.model.pipeline_split > 0 and cfg.model.device_map:
+        raise ValueError("model.pipeline_split and model.device_map are mutually exclusive")
+    if cfg.model.device_map not in ("", "auto"):
+        raise ValueError("model.device_map must be empty or 'auto'")
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
     # bf16 base for LoRA (frozen weights) AND for the sequential
@@ -386,9 +390,13 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
                    if cfg.train.init_from else cfg.model.name)
     pp_map = _pp_device_map(cfg) if cfg.model.pipeline_split > 0 else None
+    auto_map = cfg.model.device_map == "auto"
     if pp_map is not None:
         model = AutoModelForCausalLM.from_pretrained(
             student_src, dtype=base_dtype, device_map=pp_map)
+    elif auto_map:
+        model = AutoModelForCausalLM.from_pretrained(
+            student_src, dtype=base_dtype, device_map="auto")
     else:
         model = AutoModelForCausalLM.from_pretrained(student_src, dtype=base_dtype)
         model.to(device)
@@ -413,6 +421,10 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         if pp_map is not None:
             t_model = AutoModelForCausalLM.from_pretrained(
                 cfg.model.name, dtype=torch.bfloat16, device_map=pp_map)
+            t_model.eval().requires_grad_(False)
+        elif auto_map:
+            t_model = AutoModelForCausalLM.from_pretrained(
+                cfg.model.name, dtype=torch.bfloat16, device_map="auto")
             t_model.eval().requires_grad_(False)
         else:
             t_model = AutoModelForCausalLM.from_pretrained(

@@ -50,6 +50,7 @@ class BlockStack:
         self.final_norm = inner.norm
         self.lm_head = model.lm_head
         self.n_layers = len(self.blocks)
+        self._shared_kv_states = None
 
     def freeze_non_blocks(self) -> None:
         """Embedding, final norm and lm_head stay at init: block-only training
@@ -60,6 +61,7 @@ class BlockStack:
         self.lm_head.requires_grad_(False)
 
     def embed(self, input_ids: torch.Tensor) -> torch.Tensor:
+        self._shared_kv_states = {}
         with torch.no_grad():
             return self.embed_tokens(input_ids)
 
@@ -80,12 +82,18 @@ class BlockStack:
             with torch.no_grad():
                 position_embeddings = self.rotary_emb(
                     hidden, position_ids, layer_type=layer_type)
+        kwargs = {}
+        if "shared_kv_states" in inspect.signature(self.blocks[L - 1].forward).parameters:
+            if self._shared_kv_states is None:
+                self._shared_kv_states = {}
+            kwargs["shared_kv_states"] = self._shared_kv_states
         return self.blocks[L - 1](
             hidden,
             attention_mask=None,
             position_ids=position_ids,
             position_embeddings=position_embeddings,
             use_cache=False,
+            **kwargs,
         )
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:

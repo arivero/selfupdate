@@ -25,6 +25,9 @@ class ModelConfig:
     # block-local backprop means no gradient crosses cards outside a connected
     # readout window (which lives whole on cuda:1). Queue such jobs with n_gpus=2.
     pipeline_split: int = 0
+    # Optional HF placement for large scale probes. "auto" shards across all
+    # visible devices; leave empty when using the manual two-card split.
+    device_map: str = ""
 
 
 @dataclass
