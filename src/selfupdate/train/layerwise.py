@@ -42,7 +42,13 @@ from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
-from ..data.dataset import DistillDataset, collate_items
+from ..data.dataset import (
+    Batch,
+    DistillDataset,
+    LengthBucketBatchSampler,
+    collate_items,
+    collate_padded_items,
+)
 from ..eval.general import general_ce
 from ..eval.recite import recite_eval
 from ..teacher.cache import TeacherCache, resolve_cache_dir
@@ -124,6 +130,97 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, ans_off, label_ids, kin
     return loss.detach(), h_out.detach()
 
 
+def _gather_batch_rows(h: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    idx = index.to(h.device).unsqueeze(-1).expand(-1, -1, h.shape[-1])
+    return h.gather(1, idx)
+
+
+def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.Tensor,
+                             mask: torch.Tensor, *, normed: bool) -> torch.Tensor:
+    mask = mask.to(student_h.device)
+    teacher_h = teacher_h.to(student_h.device)
+    losses = []
+    for i in range(student_h.shape[0]):
+        m = mask[i]
+        losses.append(loss_fn(student_h[i, m], teacher_h[i, m], normed=normed))
+    return torch.stack(losses)
+
+
+def _task_label_ce_per_example(logits: torch.Tensor, label_ids: torch.Tensor,
+                               mask: torch.Tensor) -> torch.Tensor:
+    mask = mask.to(logits.device)
+    labels = label_ids.to(logits.device)
+    losses = []
+    for i in range(logits.shape[0]):
+        m = mask[i]
+        losses.append(task_label_ce_baseline(logits[i, m], labels[i, m]))
+    return torch.stack(losses)
+
+
+def _teacher_kl_per_example(student_logits: torch.Tensor,
+                            teacher_logits: torch.Tensor,
+                            mask: torch.Tensor) -> torch.Tensor:
+    mask = mask.to(student_logits.device)
+    teacher_logits = teacher_logits.to(student_logits.device)
+    losses = []
+    for i in range(student_logits.shape[0]):
+        m = mask[i]
+        losses.append(F.kl_div(
+            F.log_softmax(student_logits[i, m].float(), dim=-1),
+            F.log_softmax(teacher_logits[i, m].float(), dim=-1),
+            log_target=True,
+            reduction="batchmean",
+        ))
+    return torch.stack(losses)
+
+
+def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
+                           autocast=True, lens_task_label_w=0.0):
+    """Batched counterpart of :func:`local_block_step`.
+
+    The total backward scalar is the sum of per-example losses, matching the
+    historical item loop's gradient scale while sharing the block forward.
+    """
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h_out = stack.run_block(L, h_in, pos_emb)
+        view = stack.loss_view(L, h_out)
+        aligned = _gather_batch_rows(view, batch.aligned_index)
+        losses = _hidden_loss_per_example(
+            loss_fn, aligned, target, batch.hidden_mask, normed=(L == stack.n_layers)
+        )
+        total = losses.sum()
+        if lens_task_label_w > 0:
+            shifted = _gather_batch_rows(h_out, batch.readout_index)
+            logits = stack.lm_head(stack.final_norm(shifted))
+            total = total + lens_task_label_w * _task_label_ce_per_example(
+                logits, batch.label_ids, batch.readout_mask
+            ).sum()
+    total.backward()
+    return losses.detach(), h_out.detach()
+
+
+def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
+                          ce_w, autocast=True):
+    n = stack.n_layers
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h_out = stack.run_block(n, h_in, pos_emb)
+        normed = stack.final_norm(h_out)
+        aligned = _gather_batch_rows(normed, batch.aligned_index)
+        losses = _hidden_loss_per_example(
+            loss_fn, aligned, target, batch.hidden_mask, normed=True
+        )
+        total = losses.sum()
+        if ce_w > 0:
+            logits = stack.lm_head(_gather_batch_rows(normed, batch.readout_index))
+            total = total + ce_w * _task_label_ce_per_example(
+                logits, batch.label_ids, batch.readout_mask
+            ).sum()
+    total.backward()
+    return losses.detach(), h_out.detach()
+
+
 def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, kind,
                 readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
                 autocast=True):
@@ -171,6 +268,58 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, label_ids, ki
     return [l.detach() for l in losses], h.detach()
 
 
+def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
+                      readout_w, hidden_w=1.0, L1=None,
+                      readout_source="teacher_kl", autocast=True):
+    """Batched connected-window step.
+
+    Returns a list of per-example loss vectors in the same layer order as
+    :func:`window_step`.
+    """
+    n = stack.n_layers
+    L1 = n if L1 is None else L1
+    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
+    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        h = h_in
+        losses = []
+        for L in range(L0, L1 + 1):
+            h = stack.run_block(L, h, pos_emb)
+            if L in targets:
+                aligned = _gather_batch_rows(stack.loss_view(L, h), batch.aligned_index)
+                losses.append(_hidden_loss_per_example(
+                    loss_fn, aligned, targets[L], batch.hidden_mask,
+                    normed=(L == n),
+                ))
+        if losses:
+            total = hidden_w * sum(loss.sum() for loss in losses)
+        else:
+            total = h.sum() * 0.0
+        if readout_w > 0 and L1 == n:
+            logits = stack.lm_head(
+                stack.final_norm(_gather_batch_rows(h, batch.readout_index))
+            )
+            if readout_source == "teacher_kl":
+                teacher_rows = (batch.readout_index.to(targets[n].device)
+                                - batch.s0.to(targets[n].device).unsqueeze(1))
+                teacher_rows = teacher_rows.clamp_min(0)
+                teacher_h = _gather_batch_rows(targets[n], teacher_rows)
+                with torch.no_grad():
+                    t_logits = stack.lm_head(
+                        teacher_h.to(device=logits.device, dtype=logits.dtype)
+                    )
+                total = total + readout_w * _teacher_kl_per_example(
+                    logits, t_logits, batch.readout_mask,
+                ).sum()
+            elif readout_source == "task_label":
+                total = total + readout_w * _task_label_ce_per_example(
+                    logits, batch.label_ids, batch.readout_mask
+                ).sum()
+            else:
+                raise ValueError(f"unknown readout_source {readout_source!r}")
+    total.backward()
+    return [l.detach() for l in losses], h.detach()
+
+
 def _pp_device_map(cfg) -> dict:
     """Two-card pipeline map: embedding + blocks 1..split on cuda:0; the
     rest, final norm and lm_head on cuda:1 — the top readout window (and with
@@ -210,10 +359,19 @@ def _validate_knob_schedule(cfg) -> None:
     with the knob-flow audit table in tests/test_training_target_law.py."""
     sched = cfg.train.schedule
     run_class = cfg.train.run_class
+    bad = []
     if run_class not in RUN_CLASSES:
         raise ValueError(f"unknown train.run_class {run_class!r}")
+    if cfg.train.batching not in ("item", "padded", "bucketed"):
+        raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
+    if cfg.train.batching != "item":
+        if sched != "summed":
+            bad.append("batching (currently implemented for summed schedule only)")
+        if cfg.train.online_teacher:
+            bad.append("batching with online_teacher (batched teacher targets not implemented yet)")
+        if cfg.train.grad_accum % cfg.train.micro_batch != 0:
+            bad.append("grad_accum must be a multiple of micro_batch for batched training")
     is_method = run_class == "method"
-    bad = []
     if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
         bad.append("conn_window")
     if cfg.train.scramble_targets and sched != "summed":
@@ -384,6 +542,24 @@ def _make_dataset(cfg, cache, tok, layers, with_teacher_ids=False):
 
 
 def _loader(cfg, ds):
+    if cfg.train.batching == "bucketed":
+        lengths = [len(pair.student_ids) for pair in ds.pairs]
+        sampler = LengthBucketBatchSampler(
+            lengths,
+            batch_size=cfg.train.micro_batch,
+            bucket_width=cfg.train.length_bucket_width,
+            seed=cfg.train.seed,
+        )
+        return DataLoader(
+            ds, batch_sampler=sampler, collate_fn=collate_padded_items,
+            num_workers=0,
+        )
+    if cfg.train.batching == "padded":
+        return DataLoader(
+            ds, batch_size=cfg.train.micro_batch, shuffle=True,
+            collate_fn=collate_padded_items, num_workers=0,
+            generator=torch.Generator().manual_seed(cfg.train.seed),
+        )
     return DataLoader(
         ds, batch_size=cfg.train.micro_batch, shuffle=True,
         collate_fn=collate_items, num_workers=0,
@@ -678,6 +854,88 @@ def _summed_item(cfg, stack, loss_fn, it, targets, device):
     return layer_losses
 
 
+def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
+    """Batched summed-schedule pass over padded examples.
+
+    ``targets`` is {L: [B, Amax, H]}. Returned losses are a list of [B]
+    tensors, ordered like the historical per-item ``layer_losses`` list.
+    """
+    n = stack.n_layers
+    ids = batch.student_ids.to(device)
+    pos = batch.position_ids.to(device)
+    h = stack.embed(ids)
+    pos_emb = stack.rope(h, pos)
+    readout0 = n - cfg.train.readout_window_blocks + 1 if cfg.train.readout_window_blocks > 0 else n + 1
+    W = max(cfg.train.conn_window, 1)
+    layer_losses = []
+    L = 1
+    while L <= n:
+        if L == readout0:
+            readout_targets = {LL: targets[LL] for LL in range(readout0, n + 1)}
+            readout_losses, h = window_step_batch(
+                stack, readout0, h.detach(), pos_emb, readout_targets,
+                batch, loss_fn, cfg.train.readout_weight,
+                hidden_w=cfg.train.window_hidden_weight,
+                readout_source=cfg.train.readout_source,
+            )
+            layer_losses.extend(readout_losses)
+            break
+        if W > 1 and cfg.train.conn_stride == 1:
+            last_body = min(readout0 - 1, n)
+            with torch.no_grad():
+                h_traj = {L - 1: h.detach()}
+                t = h
+                for LL in range(L, last_body + 1):
+                    t = stack.run_block(LL, t, pos_emb)
+                    h_traj[LL] = t.detach()
+            for L1 in range(L, last_body + 1):
+                L0 = max(1, L1 - W + 1)
+                win_losses, _ = window_step_batch(
+                    stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
+                    batch, loss_fn, readout_w=0.0, L1=L1,
+                )
+                layer_losses.extend(win_losses)
+            h = h_traj[last_body]
+            L = last_body + 1
+            continue
+        if W > 1:
+            L1 = min(L + W - 1, readout0 - 1, n)
+            win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
+            win_losses, h = window_step_batch(
+                stack, L, h.detach(), pos_emb, win_targets,
+                batch, loss_fn, readout_w=0.0, L1=L1,
+            )
+            layer_losses.extend(win_losses)
+            L = L1 + 1
+            continue
+        if L == n:
+            loss_vals, h = last_block_step_batch(
+                stack, h.detach(), pos_emb, targets[L], batch, loss_fn,
+                max(cfg.train.last_block_task_label_weight,
+                    cfg.train.lens_task_label_weight
+                    if L >= cfg.train.lens_from_layer else 0.0),
+            )
+        else:
+            lens_w = (cfg.train.lens_task_label_weight
+                      if L >= cfg.train.lens_from_layer else 0.0)
+            loss_vals, h = local_block_step_batch(
+                stack, L, h.detach(), pos_emb, targets[L],
+                batch, loss_fn, lens_task_label_w=lens_w,
+            )
+        layer_losses.append(loss_vals)
+        L += 1
+    return layer_losses
+
+
+def _extend_pending_from_batch(pending: list[list[torch.Tensor]],
+                               layer_losses: list[torch.Tensor]) -> None:
+    if not layer_losses:
+        return
+    B = layer_losses[0].shape[0]
+    for i in range(B):
+        pending.append([losses[i] for losses in layer_losses])
+
+
 def _move_opt_state(opt, device) -> None:
     """Page an optimizer's per-param state tensors between devices (Adam
     moments dominate full-FT memory at 8 B/param). Moving "back" targets
@@ -716,11 +974,52 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
     offload = cfg.train.offload_adam
 
     step = accum = 0
+    next_step = cfg.train.grad_accum
     pending_losses: list[list[torch.Tensor]] = []
     t0 = time.time()
+    done = False
     for epoch in range(cfg.train.epochs):
+        if done:
+            break
         for items in loader:
+            if done:
+                break
+            if isinstance(items, Batch):
+                targets = items.hidden
+                if cfg.train.scramble_targets:
+                    import random as _rnd
+                    perm = list(range(1, n + 1))
+                    _rnd.Random(cfg.train.seed).shuffle(perm)
+                    targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
+                layer_losses = _summed_batch(cfg, stack, loss_fn, items, targets, device)
+                accum += len(items.example_ids)
+                _extend_pending_from_batch(pending_losses, layer_losses)
+                if accum >= next_step:
+                    _flush_train_log(log, epoch=epoch, step=step,
+                                     accum=accum, pending=pending_losses,
+                                     n_layers=n,
+                                     batch_size=len(items.example_ids),
+                                     batching=cfg.train.batching)
+                    if anchor is not None:
+                        a_ids, a_base = anchor[0].next()
+                        anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
+                                    a_ids, anchor[1], base_logits=a_base)
+                    for L, opt in opts.items():
+                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
+                        if offload:
+                            _move_opt_state(opt, device)
+                        opt.step()
+                        opt.zero_grad(set_to_none=True)
+                        if offload:
+                            _move_opt_state(opt, "cpu")
+                    step += 1
+                    next_step += cfg.train.grad_accum
+                    if cfg.train.max_steps and step >= cfg.train.max_steps:
+                        done = True
+                continue
             for it in items:
+                if done:
+                    break
                 targets = (teacher.aligned_targets(it, device) if online
                            else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
                 if cfg.train.scramble_targets:
@@ -732,7 +1031,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                 layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, device)
                 accum += 1
                 pending_losses.append(layer_losses)
-                if accum % cfg.train.grad_accum == 0:
+                if accum >= next_step:
                     _flush_train_log(log, epoch=epoch, step=step,
                                      accum=accum, pending=pending_losses,
                                      n_layers=n)
@@ -749,6 +1048,10 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None):
                         if offload:
                             _move_opt_state(opt, "cpu")
                     step += 1
+                    next_step += cfg.train.grad_accum
+                    if cfg.train.max_steps and step >= cfg.train.max_steps:
+                        done = True
+                        break
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True)
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:

@@ -97,6 +97,12 @@ class TrainConfig:
     epochs: int = 10
     micro_batch: int = 1
     grad_accum: int = 8
+    # item: historical path, loops over examples one by one even when
+    # micro_batch > 1. padded: one block forward/backward over a right-padded
+    # batch. bucketed: same padded path, but randomized length buckets reduce
+    # pad waste without globally sorting the corpus.
+    batching: str = "item"  # item | padded | bucketed
+    length_bucket_width: int = 128
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
