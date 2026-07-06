@@ -5,7 +5,7 @@ evidence is separated from historical audit evidence and queued clean candidates
 
 | model           | corpus_family   | completed_method_best                                          | completed_audit_best                                           | planned_clean_candidates   |
 |:----------------|:----------------|:---------------------------------------------------------------|:---------------------------------------------------------------|:---------------------------|
-| Qwen3-0.6B      | Machado         | vocab_mse strict CER=0.7315 lw_k_v4strict_0p6b_rag             | vocab_mse k8 CER=0.0000 lw_n_thinkwhole_0p6b_rag               |                            |
+| Qwen3-0.6B      | Machado         |                                                                | vocab_mse k8 CER=0.0000 lw_n_thinkwhole_0p6b_rag               |                            |
 | Qwen3-0.6B      | Quijote         | nmse k8 CER=0.6054 clean_q_ch1_slide8_nmse_0p6b_e320_rag       | vocab_mse k8 CER=0.0000 q_ch1_ext_0p6b_rag                     |                            |
 | Qwen3-0.6B      | Machado+Quijote | nmse k8 CER=0.4077 clean_combined_slide8_nmse_0p6b_rag         | vocab_mse k8 CER=0.0000 lw_m_combined_s43_0p6b_rag             |                            |
 | Qwen3-1.7B      | Machado         |                                                                | vocab_mse k8 CER=0.0000 lw_n_thinksel_1p7b_rag                 | vocab_mse strict           |
@@ -18,8 +18,8 @@ evidence is separated from historical audit evidence and queued clean candidates
 | Qwen3-8B        | Quijote         | vocab_mse k8 CER=0.6876 clean_q_ch1_slide8_vocab_8b_lora       | vocab_mse k8 CER=0.6876 clean_q_ch1_slide8_vocab_8b_lora       |                            |
 | Qwen3-8B        | Machado+Quijote | vocab_mse k8 CER=0.6733 clean_combined_slide8_vocab_8b_lora    | vocab_mse k8 CER=0.6733 clean_combined_slide8_vocab_8b_lora    |                            |
 | Qwen3-14B       | Machado         | vocab_mse k8 CER=0.5516 clean_machado_slide8_vocab_14b_lora    | vocab_mse k8 CER=0.0837 lw_l_final_14b_rag                     |                            |
-| Qwen3-14B       | Quijote         | vocab_mse k8 CER=0.6874 clean_q_ch1_slide8_vocab_14b_lora      | vocab_mse k8 CER=0.6874 clean_q_ch1_slide8_vocab_14b_lora      |                            |
-| Qwen3-14B       | Machado+Quijote | vocab_mse k8 CER=0.7729 clean_combined_slide8_vocab_14b_lora   | vocab_mse k8 CER=0.7729 clean_combined_slide8_vocab_14b_lora   |                            |
+| Qwen3-14B       | Quijote         | vocab_mse k8 CER=0.6285 clean_q_ch1_slide8_vocab_14b_lora      | vocab_mse k8 CER=0.6285 clean_q_ch1_slide8_vocab_14b_lora      |                            |
+| Qwen3-14B       | Machado+Quijote | vocab_mse k8 CER=0.7339 clean_combined_slide8_vocab_14b_lora   | vocab_mse k8 CER=0.7339 clean_combined_slide8_vocab_14b_lora   |                            |
 | Mistral-7B      | Machado         |                                                                | vocab_mse k4 CER=0.0000 lw_j_mistral7b_rag                     |                            |
 | Mistral-7B      | Quijote         |                                                                |                                                                |                            |
 | Mistral-7B      | Machado+Quijote |                                                                |                                                                |                            |

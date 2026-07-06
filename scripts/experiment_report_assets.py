@@ -1048,13 +1048,13 @@ def write_best_loss_window_by_corpus(df: pd.DataFrame) -> None:
     if work.empty:
         return
 
-    eligible_statuses = {"CONFIRM_CLEAN", "CONFIRM_LEGACY_NAMED"}
     work["is_completed"] = (
         work.get("saved_verdict", empty).fillna("").astype(str).ne("NOT_RUN")
         & work["comparison_cer"].notna()
     )
     work["is_method_eligible"] = (
-        work.get("saved_verdict", empty).fillna("").astype(str).isin(eligible_statuses)
+        work.get("saved_verdict", empty).fillna("").astype(str).eq("CONFIRM_CLEAN")
+        & work.get("evidence_status", empty).fillna("").astype(str).eq("method_clean")
         & (pd.to_numeric(work.get("saved_train_items", pd.Series(MIN_METHOD_TRAIN_ITEMS, index=work.index)),
                          errors="coerce").fillna(MIN_METHOD_TRAIN_ITEMS)
            >= MIN_METHOD_TRAIN_ITEMS)
