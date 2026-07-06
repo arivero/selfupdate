@@ -641,7 +641,8 @@ class OnlineTeacherSource:
         row = torch.arange(B, device=device)[:, None]
         for L in range(1, self.stack.n_layers + 1):
             view = self.stack.loss_view(L, states[L])
-            out[L] = view[row, idx].detach()
+            view_device = view.device
+            out[L] = view[row.to(view_device), idx.to(view_device)].detach()
         return out
 
 
