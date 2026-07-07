@@ -61,6 +61,12 @@ def main() -> None:
                     help="fixed random order for batched eval; results are restored by example index")
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
+    ap.add_argument("--load-4bit", action="store_true",
+                    help="load the base in NF4 4-bit (bitsandbytes) — lets a 40B "
+                         "eval coexist with a resident 40B training job on the same "
+                         "cards. Perturbs CER vs bf16; label results as 4-bit. "
+                         "Implies device_map=auto and skips the .to(device) move "
+                         "(bnb 4-bit tensors cannot be re-placed).")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     checkpoint_cfg = _checkpoint_run_config(args.checkpoint)
@@ -72,19 +78,28 @@ def main() -> None:
     src = cfg.model.name if args.base else args.checkpoint
     if not src:
         sys.exit("pass --checkpoint or --base")
+    # 4-bit forces device_map=auto (bnb places shards itself); the .to(device)
+    # move below is skipped because bnb 4-bit params cannot be re-placed.
+    load_kw: dict = {}
+    if args.load_4bit:
+        from transformers import BitsAndBytesConfig
+
+        load_kw["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16)
+    dev_map = "auto" if (args.auto_map or args.load_4bit) else None
     if not args.base and (Path(src) / "adapter_config.json").exists():
         from peft import PeftModel
 
         tok = AutoTokenizer.from_pretrained(src)
         base = AutoModelForCausalLM.from_pretrained(
-            cfg.model.name, dtype=torch.bfloat16,
-            device_map="auto" if args.auto_map else None)
+            cfg.model.name, dtype=torch.bfloat16, device_map=dev_map, **load_kw)
         model = PeftModel.from_pretrained(base, src)
     else:
         tok = AutoTokenizer.from_pretrained(src)
         model = AutoModelForCausalLM.from_pretrained(
-            src, dtype=torch.bfloat16, device_map="auto" if args.auto_map else None)
-    if not args.auto_map:
+            src, dtype=torch.bfloat16, device_map=dev_map, **load_kw)
+    if dev_map is None:
         model.to(cfg.model.device)
     model.eval()
 
