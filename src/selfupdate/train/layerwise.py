@@ -128,7 +128,8 @@ def _gather_batch_rows(h: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
 
 
 def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.Tensor,
-                             lens: list[int], *, normed: bool) -> torch.Tensor:
+                             lens: list[int], *, normed: bool,
+                             layer: int | None = None) -> torch.Tensor:
     """Right-padded batches keep every valid row in a PREFIX (collate
     invariant), so slicing by the CPU-side length replaces bool-mask
     indexing — whose implicit nonzero() is a host-device sync per example
@@ -136,7 +137,8 @@ def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.
     teacher_h = teacher_h.to(student_h.device)
     losses = []
     for i, k in enumerate(lens):
-        losses.append(loss_fn(student_h[i, :k], teacher_h[i, :k], normed=normed))
+        losses.append(loss_fn(student_h[i, :k], teacher_h[i, :k],
+                              normed=normed, layer=layer))
     return torch.stack(losses)
 
 
@@ -168,7 +170,8 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
         view = stack.loss_view(L, h_out)
         aligned = _gather_batch_rows(view, batch.aligned_index)
         losses = _hidden_loss_per_example(
-            loss_fn, aligned, target, batch.A.tolist(), normed=(L == stack.n_layers)
+            loss_fn, aligned, target, batch.A.tolist(),
+            normed=(L == stack.n_layers), layer=L
         )
         total = losses.sum()
     extra = pending_router_loss()
@@ -185,7 +188,8 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
         normed = stack.final_norm(h_out)
         aligned = _gather_batch_rows(normed, batch.aligned_index)
         losses = _hidden_loss_per_example(
-            loss_fn, aligned, target, batch.A.tolist(), normed=True
+            loss_fn, aligned, target, batch.A.tolist(), normed=True,
+            layer=n
         )
         total = losses.sum()
     extra = pending_router_loss()
@@ -259,7 +263,7 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                 aligned = _gather_batch_rows(stack.loss_view(L, h), batch.aligned_index)
                 losses.append(_hidden_loss_per_example(
                     loss_fn, aligned, targets[L], batch.A.tolist(),
-                    normed=(L == n),
+                    normed=(L == n), layer=L,
                 ))
         if losses:
             total = hidden_w * sum(loss.sum() for loss in losses)
@@ -800,7 +804,8 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     is the schedule that parallelizes across GPUs at scale."""
     device = cfg.model.device
     n = stack.n_layers
-    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
+                         tuned_lens_path=cfg.train.tuned_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     records = ds.records
     loader = _loader(cfg, ds)
@@ -1051,7 +1056,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                                                  batch.aligned_index)
                     per_ex = _hidden_loss_per_example(
                         loss_fn, aligned, targets[L1], batch.A.tolist(),
-                        normed=(L1 == n))
+                        normed=(L1 == n), layer=L1)
                     return per_ex.sum(), per_ex.detach()
                 layer_losses.extend(_sliding_windows_dedup(
                     stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
@@ -1120,7 +1125,8 @@ def _move_opt_state(opt, device) -> None:
 def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     device = cfg.model.device
     n = stack.n_layers
-    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
+                         tuned_lens_path=cfg.train.tuned_lens_path)
     anchor = _make_anchor(cfg, tok, teacher)
     online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
@@ -1356,7 +1362,8 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     generator so sibling arms at the same seed see identical item order."""
     device = cfg.model.device
     n = stack.n_layers
-    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
+                         tuned_lens_path=cfg.train.tuned_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     records = ds.records
     loader = _loader(cfg, ds)
@@ -1467,7 +1474,8 @@ class StudentActCache:
 def _train_sequential(cfg, stack, cache, tok, log):
     device = cfg.model.device
     n = stack.n_layers
-    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
+    loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
+                         tuned_lens_path=cfg.train.tuned_lens_path)
     act_cache = StudentActCache()
     t0 = time.time()
 

@@ -10,7 +10,7 @@ Two families of hidden-match kinds:
 
 - geometric (``nmse``, ``l2mse``, ``cosine``, ``huber``): compare hidden
   vectors directly, in the residual-stream metric.
-- vocabulary-metric (``vocab_mse``, ``lens_kl``): compare hidden vectors as
+- vocabulary-metric (``vocab_mse``, ``lens_kl``, ``tuned_lens_kl``): compare hidden vectors as
   the FROZEN vocabulary sees them (docs/hidden_loss.md, Frozen-Vocabulary
   Principle). ``vocab_mse`` is MSE in logit space, computed cheaply through
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
@@ -31,7 +31,7 @@ import torch
 import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "zero")
-VOCAB_KINDS = ("vocab_mse", "lens_kl", "vocab_fisher")
+VOCAB_KINDS = ("vocab_mse", "lens_kl", "tuned_lens_kl", "vocab_fisher")
 
 FISHER_TOPK = 64
 
@@ -81,15 +81,24 @@ class HiddenLoss:
     the student block that produced ``student_h`` — locality is untouched.
     """
 
-    def __init__(self, kind: str, final_norm=None, lm_head=None):
+    def __init__(self, kind: str, final_norm=None, lm_head=None, tuned_lens_path: str = ""):
         if kind not in GEOMETRIC_KINDS + VOCAB_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
+        if kind == "tuned_lens_kl" and not tuned_lens_path:
+            raise ValueError("hidden loss 'tuned_lens_kl' needs train.tuned_lens_path")
         self.kind = kind
         self.final_norm = final_norm
         self.lm_head = lm_head
         self._gram: torch.Tensor | None = None
+        self.translators = None
+        if kind == "tuned_lens_kl":
+            from .tuned_lens import load_translators
+
+            self.translators = load_translators(tuned_lens_path, device=lm_head.weight.device)
+            self.translators.eval()
+            self.translators.requires_grad_(False)
 
     def _gram_matrix(self) -> torch.Tensor:
         """M = WᵀW of the frozen unembedding, fp32, chunked over vocab rows."""
@@ -104,12 +113,23 @@ class HiddenLoss:
         return self._gram
 
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
-                 normed: bool = False) -> torch.Tensor:
+                 normed: bool = False, layer: int | None = None) -> torch.Tensor:
         # pipeline-parallel guard: targets are produced on the item device
         # (cuda:0) while upper blocks live on cuda:1; .to() is differentiable
         teacher_h = teacher_h.to(student_h.device)
         if self.kind in GEOMETRIC_KINDS:
             return hidden_match(student_h, teacher_h, self.kind)
+        if self.kind == "tuned_lens_kl":
+            if layer is None:
+                raise ValueError("tuned_lens_kl needs a layer index")
+            lens_dev = next(self.translators.parameters()).device
+            student_h = student_h.to(lens_dev)
+            teacher_h = teacher_h.to(lens_dev)
+            if not normed:
+                from .tuned_lens import apply_translator
+
+                student_h = apply_translator(self.translators, layer, student_h)
+                teacher_h = apply_translator(self.translators, layer, teacher_h)
         if not normed:
             student_h = self.final_norm(student_h)
             teacher_h = self.final_norm(teacher_h.to(student_h.dtype))
@@ -150,7 +170,10 @@ class HiddenLoss:
                 num = (p * proj.pow(2)).sum(-1).mean()
                 denom = (p * tproj.pow(2)).sum(-1).mean().clamp_min(1e-8)
                 return num / denom
-        # lens_kl: KL(teacher || student) over the frozen logit lens. The
+        # lens_kl / tuned_lens_kl: KL(teacher || student) over the frozen
+        # logit lens. tuned_lens_kl first maps each layer through its frozen
+        # per-layer affine translator so middle layers are compared in a
+        # calibrated decode geometry.
         # V-sized matmul may run under the caller's autocast (bf16); the
         # softmax/KL run in fp32.
         s_logits = self.lm_head(student_h)

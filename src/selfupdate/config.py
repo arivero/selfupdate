@@ -123,8 +123,10 @@ class TrainConfig:
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
+    # | tuned_lens_kl (lens_kl after a frozen per-layer tuned-lens translator)
     # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
     hidden_loss: str = "nmse"
+    tuned_lens_path: str = ""
     # Top readout term attached ONLY to sanctioned sliding windows:
     # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
     # The connected graph is still a gradient-isolation unit rooted at a
