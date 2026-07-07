@@ -1,0 +1,40 @@
+# Machado (poem v4) MoE-mode lane on agpuh02 H100s — multigpu branch.
+# Twin of mlt_gptoss120b_pp2_slide2_lora except the moe knobs below (pinned; PP2 lesson).
+# 4-card auto (not pipeline_split=2): router_aligned also dequantizes MXFP4 -> bf16
+# (moe.dequantize_overrides) — same 2-card VRAM-ceiling crash as the tf twin; see
+# mlt_gptoss120b_auto4_slide2_tf_lora.yaml for the incident note.
+run_name: mlt_gptoss120b_auto4_slide2_ra_lora
+model:
+  name: openai/gpt-oss-120b
+  device_map: auto
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  maieutic: true
+  long_windows:
+  - 24
+  - 48
+  part_chunk_lines: 48
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-04
+  batching: padded
+  micro_batch: 1
+  grad_accum: 8
+  hidden_loss: vocab_mse
+  conn_window: 2
+  conn_stride: 1
+  readout_window_blocks: 2
+  readout_weight: 0.5
+  window_hidden_weight: 1.0
+  readout_source: teacher_kl
+  anchor_kl_weight: 0.5
+  anchor_path: data/anchors_es_v2.txt
+  moe_mode: router_aligned
+  moe_router_weight: 0.1
+  online_teacher: true
+  run_class: method
+  lora:
+    enabled: true
