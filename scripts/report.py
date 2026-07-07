@@ -26,6 +26,8 @@ import pandas as pd
 import yaml
 from matplotlib.backends.backend_pdf import PdfPages
 
+import cross_report
+
 RUNS = Path("runs")
 
 OLD_KEYS = {
@@ -562,6 +564,45 @@ def best_loss_window_by_corpus_page(pdf):
     plt.close(fig)
 
 
+def cross_checkout_pages(pdf):
+    path = RUNS / "retention_index.csv"
+    if not path.exists():
+        _text_page(pdf, "Cross-Checkout Recall And Forgetting",
+                   "runs/retention_index.csv is missing.\n"
+                   "Run scripts/retention_index.py before report generation.")
+        return
+    df = pd.read_csv(path)
+    if df.empty:
+        _text_page(pdf, "Cross-Checkout Recall And Forgetting",
+                   "No cross-checkout retention rows are available.")
+        return
+    for col in ("has_retention", "has_recite"):
+        if col in df:
+            df[col] = df[col].astype(bool)
+    cross_report._text_page(
+        pdf,
+        "Cross-checkout recall/forgetting score update",
+        cross_report.summary_text(df),
+        fontsize=8,
+    )
+    cross_report._image_page(
+        pdf,
+        "Recall vs capability retention (new battery)",
+        RUNS / "recall_retention.png",
+    )
+    cross_report._table_page(
+        pdf,
+        "Best new recall/forgetting scores by method family and model",
+        "Recall: CER (lower better) and exact-match probes (higher better). "
+        "Forgetting/retention: ARC retained and WikiText-2 log(ppl / teacher ppl) damage.",
+        cross_report._best_by_group(df),
+        ["source", "model", "run", "recall_cer", "cont_mach", "cloze_mach",
+         "censor_cerv", "arc_acc", "arc_retain", "wiki_log_damage"],
+        fontsize=5.8,
+    )
+    cross_report._coverage_page(pdf, df)
+
+
 def layer_loss_pages(pdf):
     manifest = RUNS / "layer_loss_manifest.csv"
     if not manifest.exists():
@@ -664,6 +705,7 @@ def main() -> None:
         best_loss_window_by_corpus_page(pdf)
         _text_page(pdf, "Self-distillation of context — experiment report",
                    summary_text())
+        cross_checkout_pages(pdf)
         results_page(pdf)
         corpus_page(pdf)
         _image_page(pdf, "Accuracy Aspects", RUNS / "accuracy_aspects.png")

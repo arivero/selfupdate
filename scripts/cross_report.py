@@ -77,8 +77,10 @@ def _fmt(v, nd=3):
 
 
 def summary_text(df: pd.DataFrame) -> str:
-    n_ret = int(df.get("has_retention", pd.Series(dtype=bool)).sum())
-    n_rec = int(df.get("has_recite", pd.Series(dtype=bool)).sum())
+    trained = df[df.get("checkpoint_kind", "trained") != "epoch0"] if "checkpoint_kind" in df else df
+    n_ret = int(trained.get("has_retention", pd.Series(dtype=bool)).sum())
+    n_rec = int(trained.get("has_recite", pd.Series(dtype=bool)).sum())
+    n_epoch0 = int((df.get("checkpoint_kind", pd.Series(dtype=str)) == "epoch0").sum()) if "checkpoint_kind" in df else 0
     lines = [
         "Self-distillation of context — cross-checkout comparison.",
         "",
@@ -102,9 +104,11 @@ def summary_text(df: pd.DataFrame) -> str:
         "    - exact continuation + interior-word cloze (Machado verse)",
         "    - next-sentence continuation + multi-word paragraph censor (Cervantes)",
         "",
-        f"Coverage: {len(df)} runs total; {n_ret} with the new retention battery,",
-        f"{n_rec} with recitation CER. Runs still needing the battery are listed",
-        "on the coverage page; rerun scripts/retention_eval.py to fill them.",
+        f"Coverage: {len(trained)} trained runs total; {n_ret} with the new retention",
+        f"battery, {n_rec} with recitation CER. The index also includes {n_epoch0}",
+        "epoch-0 teacher/original baseline rows, where ARC retained = 1 and",
+        "WikiText log perplexity-ratio damage = 0. Runs still needing the battery",
+        "are listed on the coverage page; rerun scripts/retention_eval.py to fill them.",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M}. Backbone: runs/retention_index.csv.",
     ]
@@ -141,6 +145,8 @@ def _table_page(pdf, title, note, df: pd.DataFrame, cols: list[str], fontsize=6.
 def _best_by_group(df: pd.DataFrame) -> pd.DataFrame:
     """Best retention row per (source, model), ranked by ARC retained."""
     ev = df[df["has_retention"] == True].copy()  # noqa: E712
+    if "checkpoint_kind" in ev:
+        ev = ev[ev["checkpoint_kind"] != "epoch0"].copy()
     if ev.empty:
         return ev
     ev["arc_retained_n"] = pd.to_numeric(ev["arc_retained"], errors="coerce")
@@ -156,7 +162,7 @@ def _best_by_group(df: pd.DataFrame) -> pd.DataFrame:
         "censor_cerv": best["recall_censor_cervantes"].map(lambda v: _fmt(v)),
         "arc_acc": best["arc_acc"].map(lambda v: _fmt(v)),
         "arc_retain": best["arc_retained"].map(lambda v: _fmt(v)),
-        "wiki_ratio": best["wikitext_ppl_ratio"].map(lambda v: _fmt(v, 2)),
+        "wiki_log_damage": best["wikitext_log_ppl_ratio"].map(lambda v: _fmt(v)),
     })
     order = {s: i for i, s in enumerate(SOURCE_ORDER)}
     out = out.assign(_o=out["source"].map(order)).sort_values(["_o", "model"]).drop(columns="_o")
@@ -264,6 +270,8 @@ def surprise_pages(pdf):
 
 def _coverage_page(pdf, df: pd.DataFrame):
     lines = ["Runs WITHOUT the new retention battery (need scripts/retention_eval.py):", ""]
+    if "checkpoint_kind" in df:
+        df = df[df["checkpoint_kind"] != "epoch0"].copy()
     missing = df[df["has_retention"] != True]  # noqa: E712
     for src in SOURCE_ORDER:
         names = missing[missing["source"] == src]["run"].tolist()
@@ -295,10 +303,10 @@ def main() -> None:
         surprise_pages(pdf)
         _table_page(pdf, "Best retention row per method family and model",
                     "Recall: CER (lower better) and exact-match probes (higher better). "
-                    "Retention: ARC retained & WikiText ppl ratio vs epoch-0 teacher.",
+                    "Retention: ARC retained and WikiText log(ppl / teacher ppl) damage.",
                     _best_by_group(df),
                     ["source", "model", "run", "recall_cer", "cont_mach", "cloze_mach",
-                     "censor_cerv", "arc_acc", "arc_retain", "wiki_ratio"])
+                     "censor_cerv", "arc_acc", "arc_retain", "wiki_log_damage"])
         _coverage_page(pdf, df)
     print(f"wrote {args.out}")
 

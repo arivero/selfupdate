@@ -10,9 +10,9 @@ true per-epoch trajectory needs retention logged during training (an in-loop
 ARC pass); until then the honest artifact is this endpoint comparison across
 the three method families.
 
-Colour encodes the method family (Okabe-Ito CVD-safe, fixed order) and marker
-shape repeats it as a print/grayscale-safe secondary encoding.  Reads
-runs/retention_index.csv (scripts/retention_index.py).
+Colour encodes model family/size and marker shape encodes the loss/lens/readout
+kind.  Epoch-0 teacher rows are plotted as stars at retained=1 / log-damage=0.
+Reads runs/retention_index.csv (scripts/retention_index.py).
 
 Usage: python scripts/retention_plots.py [--index runs/retention_index.csv]
 """
@@ -28,19 +28,42 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Okabe-Ito, fixed order; marker repeats identity for grayscale/CVD safety.
-SOURCE_STYLE = {
-    "layerwise": {"color": "#0072B2", "marker": "o", "label": "layerwise (this)"},
-    "classical-kd": {"color": "#E69F00", "marker": "s", "label": "classical-KD"},
-    "multigpu": {"color": "#009E73", "marker": "^", "label": "multigpu"},
+# Okabe-Ito plus neutrals.  Primary encoding is model, not checkout.
+MODEL_COLORS = {
+    "Qwen3-0.6B": "#0072B2",
+    "Qwen3-1.7B": "#56B4E9",
+    "Qwen3-4B": "#009E73",
+    "Qwen3-8B": "#CC79A7",
+    "Qwen3-14B": "#E69F00",
+    "Qwen3.6-27B": "#D55E00",
+    "gpt-oss-20b": "#000000",
+    "gpt-oss-120b": "#666666",
+    "gemma-4-26B-A4B": "#009E73",
+    "gemma-4-31B": "#F0E442",
+    "ALIA-40b-fc-2606": "#CC79A7",
 }
+LENS_MARKERS = {
+    "epoch0": "*",
+    "frozen_vocab": "o",
+    "lens_kl": "X",
+    "hidden_match": "s",
+    "logit_kd": "D",
+    "teacher_kl": "D",
+    "nmse": "s",
+    "l2mse": "P",
+    "vocab_mse": "o",
+}
+SOURCE_ALPHA = {"layerwise": 0.82, "classical-kd": 0.62, "multigpu": 0.62}
 INK, MUTED, GRID = "#222222", "#666666", "#dddddd"
 
 
 def _recall_target(row: pd.Series) -> float | None:
     """Exact-continuation recall on the run's own trained corpus."""
     name = str(row.get("run", "")).lower()
-    cerv = any(k in name for k in ("q_ch1", "cervantes", "quijote", "ch1"))
+    corpus = str(row.get("corpus_family", "")).lower()
+    cerv = ("quijote" in corpus and "machado+" not in corpus) or any(
+        k in name for k in ("q_ch1", "cervantes", "quijote", "ch1")
+    )
     val = row.get("recall_cont_cervantes") if cerv else row.get("recall_cont_machado")
     if val is None or pd.isna(val):
         # fall back to whichever probe exists
@@ -62,6 +85,33 @@ def _param_size(model: str) -> float:
     return 70
 
 
+def _model_key(row: pd.Series) -> str:
+    label = str(row.get("model_label") or row.get("model") or "unknown")
+    if "Qwen3-0.6B" in label:
+        return "Qwen3-0.6B"
+    if "Qwen3-1.7B" in label:
+        return "Qwen3-1.7B"
+    if "Qwen3-4B" in label:
+        return "Qwen3-4B"
+    if "Qwen3-8B" in label:
+        return "Qwen3-8B"
+    if "Qwen3-14B" in label:
+        return "Qwen3-14B"
+    if "Qwen3.6-27B" in label:
+        return "Qwen3.6-27B"
+    if "gpt-oss-20" in label:
+        return "gpt-oss-20b"
+    if "gpt-oss-120" in label:
+        return "gpt-oss-120b"
+    if "gemma-4-26" in label:
+        return "gemma-4-26B-A4B"
+    if "gemma-4-31" in label:
+        return "gemma-4-31B"
+    if "ALIA" in label:
+        return "ALIA-40b-fc-2606"
+    return label
+
+
 def _pareto(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """Upper-right Pareto frontier (maximize both recall and retention)."""
     pts = sorted(set(points), key=lambda p: (-p[0], -p[1]))
@@ -74,21 +124,30 @@ def _pareto(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
 
 
 def scatter(df: pd.DataFrame, y_col: str, y_label: str, title: str,
-            ax, invert_y: bool = False, logy: bool = False) -> None:
+            ax, invert_y: bool = False, logy: bool = False, show_legend: bool = False) -> None:
     ax.set_facecolor("white")
-    for src, style in SOURCE_STYLE.items():
-        sub = df[df["source"] == src]
-        xs, ys, ss = [], [], []
-        for _, r in sub.iterrows():
-            x = _recall_target(r)
-            y = r.get(y_col)
-            if x is None or y is None or pd.isna(y):
-                continue
-            xs.append(x); ys.append(float(y)); ss.append(_param_size(r.get("model")))
-        if xs:
-            ax.scatter(xs, ys, s=ss, c=style["color"], marker=style["marker"],
-                       alpha=0.8, edgecolors="white", linewidths=0.6,
-                       label=f"{style['label']} (n={len(xs)})", zorder=3)
+    plotted_models = set()
+    present_models = []
+    for _, r in df.iterrows():
+        x = _recall_target(r)
+        y = r.get(y_col)
+        if x is None or y is None or pd.isna(y):
+            continue
+        model = _model_key(r)
+        lens = str(r.get("lens_kind") or r.get("loss_kind") or "unknown")
+        epoch0 = str(r.get("checkpoint_kind")) == "epoch0"
+        color = MODEL_COLORS.get(model, "#999999")
+        marker = "*" if epoch0 else LENS_MARKERS.get(lens, "v")
+        size = 180 if epoch0 else _param_size(r.get("model"))
+        alpha = 0.95 if epoch0 else SOURCE_ALPHA.get(str(r.get("source")), 0.7)
+        edge = "#111111" if epoch0 else ("#111111" if r.get("source") != "layerwise" else "white")
+        lw = 1.0 if epoch0 else (0.9 if r.get("source") != "layerwise" else 0.5)
+        label = model if model not in plotted_models else None
+        if model not in plotted_models:
+            present_models.append((model, color))
+            plotted_models.add(model)
+        ax.scatter([x], [float(y)], s=size, c=color, marker=marker, alpha=alpha,
+                   edgecolors=edge, linewidths=lw, label=label, zorder=4 if epoch0 else 3)
     # Pareto frontier over ALL points (method-agnostic best tradeoff)
     allpts = []
     for _, r in df.iterrows():
@@ -112,7 +171,26 @@ def scatter(df: pd.DataFrame, y_col: str, y_label: str, title: str,
     for s in ax.spines.values():
         s.set_edgecolor(GRID)
     ax.tick_params(colors=MUTED, labelsize=7)
-    ax.legend(fontsize=6.5, framealpha=0.9, loc="best")
+    if show_legend:
+        model_handles = [
+            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=color,
+                       markeredgecolor="#222222", markersize=6, label=model, linestyle="")
+            for model, color in present_models
+        ]
+        shape_handles = []
+        for lab, marker in [("epoch 0", "*"), ("vocab_mse / frozen vocab", "o"),
+                            ("lens_kl", "X"), ("hidden match", "s"),
+                            ("KD / teacher KL", "D")]:
+            shape_handles.append(plt.Line2D([0], [0], marker=marker, color="w",
+                                            markerfacecolor="#777777",
+                                            markeredgecolor="#222222",
+                                            markersize=7, label=lab, linestyle=""))
+        leg1 = ax.legend(handles=model_handles, fontsize=6.0, framealpha=0.95,
+                         loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                         title="model colour")
+        ax.add_artist(leg1)
+        ax.legend(handles=shape_handles, fontsize=6.0, framealpha=0.95,
+                  loc="upper left", bbox_to_anchor=(1.02, 0.48), title="shape")
 
 
 def make_figure(index: Path, out: Path) -> None:
@@ -129,15 +207,16 @@ def make_figure(index: Path, out: Path) -> None:
                     ha="center", va="center", fontsize=9, color=MUTED)
             ax.axis("off")
     else:
-        scatter(df, "arc_retained", "ARC-Easy retained (acc / teacher acc)",
+        scatter(df, "arc_retained", "ARC-Easy retained (teacher/original = 1)",
                 "Standard-benchmark capability retained", axes[0])
-        scatter(df, "wikitext_ppl_ratio", "WikiText-2 ppl ratio vs teacher (log; lower = better)",
-                "Language-model damage (quantization-style)", axes[1], invert_y=True, logy=True)
+        y_col = "wikitext_log_ppl_ratio" if "wikitext_log_ppl_ratio" in df else "wikitext_ppl_ratio"
+        scatter(df, y_col, "WikiText-2 damage: log(ppl / teacher ppl) (teacher/original = 0)",
+                "Language-model damage (log ratio)", axes[1], invert_y=True, show_legend=True)
     fig.text(0.5, 0.005,
-             f"{len(df)} runs with retention evidence · marker size ~ model params · "
-             "colour+shape = method family (Okabe-Ito, CVD-safe)",
+             f"{len(df)} rows with retention evidence, including epoch-0 teacher anchors · "
+             "colour = model · shape = loss/lens/readout kind · marker size ~ model params",
              ha="center", fontsize=7, color=MUTED)
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+    fig.tight_layout(rect=(0, 0.03, 0.84, 0.95))
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=200)
     plt.close(fig)
