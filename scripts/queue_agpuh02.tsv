@@ -1,0 +1,59 @@
+# agpuh02 node queue — 4x H100 80GB (multigpu branch: Machado -> Quijote chapters).
+# Opened 2026-07-06. Do NOT merge with queue_h100.tsv (frozen) or agpuh01 queues.
+#
+# SATURATION: jobs here are deliberately dependency-FREE wherever correctness
+# allows — the scheduler gates every launch on per-card free VRAM, so a flat
+# ready-list lets it pack all 4 cards instead of idling behind a chain. Order
+# is priority: routing decision first, then training lanes, then recall.
+#
+# Launch:
+#   QUEUE=scripts/queue_agpuh02.tsv GPUS="0 1 2 3" MAX_PER_GPU=1 MAX_MEM_FRACTION=0.98 SCHED=runs/.sched-agpuh02 nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_agpuh02.log 2>&1 &
+#
+# done_file	need_mb	after	command	n_gpus
+
+## ===== PRIORITY 1: small-MoE routing decision (single card, all independent
+## -> 4 run at once). Blackbox vs teacher_forced vs router_aligned on two
+## families; pick the winning routing algo before committing the 120B lanes.
+runs/mlt_gptoss20b_slide2_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_lora.yaml	1
+runs/mlt_gptoss20b_slide2_tf_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_tf_lora.yaml	1
+runs/mlt_gptoss20b_slide2_ra_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_ra_lora.yaml	1
+runs/mlt_gemma4_26ba4b_slide2_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_lora.yaml	1
+runs/mlt_gemma4_26ba4b_slide2_tf_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_tf_lora.yaml	1
+runs/mlt_gemma4_26ba4b_slide2_ra_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_ra_lora.yaml	1
+
+## ===== PRIORITY 2: reference single-card lanes (blackbox) across the three
+## originally-scoped model families. 2-card each; two run concurrently.
+runs/mlt_gemma4_31b_slide2_lora/checkpoint	74000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_slide2_lora.yaml	2
+runs/mlt_gemma4_31b_slide3_lora/checkpoint	74000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_slide3_lora.yaml	2
+runs/mlt_gemma4_31b_k1local_lora/checkpoint	72000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_31b_k1local_lora.yaml	2
+# ALIA-40b-fc-2606 lanes intentionally omitted — enqueued on a separate queue (owner, 2026-07-06).
+
+## ===== PRIORITY 3: gpt-oss-120b lanes (blackbox pp2 + MoE-mode twins).
+runs/mlt_gptoss120b_pp2_slide2_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide2_lora.yaml	2
+runs/mlt_gptoss120b_pp2_slide3_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide3_lora.yaml	2
+runs/mlt_gptoss120b_pp2_k1local_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_k1local_lora.yaml	2
+runs/mlt_gptoss120b_pp2_slide2_tf_lora/checkpoint	79000	runs/mlt_gptoss20b_slide2_tf_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide2_tf_lora.yaml	2
+runs/mlt_gptoss120b_pp2_slide2_ra_lora/checkpoint	79000	runs/mlt_gptoss20b_slide2_ra_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide2_ra_lora.yaml	2
+
+## ===== PRIORITY 4: Qwen3.5-122B-A10B hybrid MoE (bf16 auto4 + GPTQ-Int4
+## release-width twin). Gated on downloads (scripts/download_mlt2.sh sentinels).
+runs/mlt_qwen35_122b_auto4_slide2_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide2_lora.yaml	4
+runs/mlt_qwen35_122b_auto4_slide3_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide3_lora.yaml	4
+runs/mlt_qwen35_122b_auto4_k1local_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_k1local_lora.yaml	4
+runs/mlt_qwen35_122b_auto4_slide2_tf_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide2_tf_lora.yaml	4
+runs/mlt_qwen35_122b_auto4_slide2_ra_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide2_ra_lora.yaml	4
+runs/mlt_qwen35_122b_gptq_auto2_slide2_lora/checkpoint	42000	runs/.dl_qwen35_122b_gptq.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_gptq_auto2_slide2_lora.yaml	2
+
+## ===== PRIORITY 5: quantised-release TRAINING probe — Mistral-Medium-3.5
+## fp8, device_map=auto TP4. mistral3 loads via the ITT fallback (_load_causal_lm).
+runs/mlt_mistralmed35_auto4_slide2_lora/checkpoint	76000	runs/.dl_mistralmed35.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_mistralmed35_auto4_slide2_lora.yaml	4
+runs/mlt_mistralmed35_auto4_slide3_lora/checkpoint	76000	runs/.dl_mistralmed35.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_mistralmed35_auto4_slide3_lora.yaml	4
+runs/mlt_mistralmed35_auto4_k1local_lora/checkpoint	76000	runs/.dl_mistralmed35.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_mistralmed35_auto4_k1local_lora.yaml	4
+
+## ===== PRIORITY 6: epoch-0 recall of too-large-to-train frontier releases
+## (experimental submodule; pure HF generate, native/quantised width). Fills
+## idle cards; each gated on its download sentinel.
+runs/recall_qwen35_122b/recall.json	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/frontier_recall.py --model Qwen/Qwen3.5-122B-A10B --examples data/poem/examples_v4.jsonl --out runs/recall_qwen35_122b --batch-size 8 --score-workers 32	4
+runs/recall_mistralmed35/recall.json	76000	runs/.dl_mistralmed35.done	.venv/bin/python scripts/frontier_recall.py --model mistralai/Mistral-Medium-3.5-128B --examples data/poem/examples_v4.jsonl --out runs/recall_mistralmed35 --batch-size 8 --score-workers 32	4
+runs/recall_dsv4flash/recall.json	76000	runs/.dl_dsv4flash.done	.venv/bin/python scripts/frontier_recall.py --model deepseek-ai/DeepSeek-V4-Flash --examples data/poem/examples_v4.jsonl --out runs/recall_dsv4flash --trust-remote-code --batch-size 8 --score-workers 32	4
+runs/recall_glm52/recall.json	76000	runs/.dl_glm52.done	.venv/bin/python scripts/frontier_recall.py --model zai-org/GLM-5.2 --examples data/poem/examples_v4.jsonl --out runs/recall_glm52 --trust-remote-code --batch-size 8 --score-workers 32	4

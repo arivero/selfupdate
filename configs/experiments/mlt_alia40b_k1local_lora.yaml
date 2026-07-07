@@ -1,0 +1,27 @@
+run_name: mlt_alia40b_k1local_lora
+model:
+  name: BSC-LT/ALIA-40b-fc-2606
+  pipeline_split: 24
+data:
+  examples_path: data/poem/examples_v4.jsonl
+  paraphrase: true
+  long_windows: [24, 48]
+  part_chunk_lines: 48
+  maieutic: true
+train:
+  method: layerwise
+  schedule: summed
+  epochs: 40
+  lr: 1.0e-04
+  batching: padded
+  micro_batch: 1
+  grad_accum: 8
+  hidden_loss: lens_kl
+  conn_window: 0
+  conn_stride: 0
+  readout_window_blocks: 0
+  readout_weight: 0.0
+  online_teacher: true
+  run_class: method
+  lora:
+    enabled: true

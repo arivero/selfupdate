@@ -98,13 +98,16 @@ echo $$ > "$SCHED/scheduler.pid"
 log "started (pid $$, GPUS=$GPUS, MAX_PER_GPU=$MAX_PER_GPU, MAX_MEM_FRACTION=$MAX_MEM_FRACTION, QUEUE=$QUEUE)"
 while :; do
     launched=0
+    multi_launched=0
     for dev in $GPUS; do
+        [ "$multi_launched" -eq 1 ] && break
         [ "$(exclusive_on "$dev")" = 1 ] && continue  # multi-GPU job owns it
         per_dev_launches=0
         fm="$(budget_free_mb "$dev")"
         while [ "$(running_on "$dev")" -lt "$MAX_PER_GPU" ] \
             && [ "$per_dev_launches" -lt "$LAUNCHES_PER_GPU_PER_CYCLE" ] \
             && [ "$fm" -gt 0 ]; do
+            [ "$multi_launched" -eq 1 ] && break
             launched_this_pass=0
             while IFS=$'\t' read -r done need after cmd ngpu; do
                 [ -z "$done" ] && continue
@@ -157,6 +160,10 @@ while :; do
                 launched_this_pass=1
                 per_dev_launches=$((per_dev_launches + 1))
                 fm=$((fm - need))
+                # Multi-GPU launches reserve several devices at once. End the
+                # scheduling cycle so later device iterations see settled locks
+                # and early model-load allocations before selecting more rows.
+                [ "$ngpu" -gt 1 ] && multi_launched=1
                 break
             done < "$QUEUE"
             [ "$launched_this_pass" -eq 0 ] && break
