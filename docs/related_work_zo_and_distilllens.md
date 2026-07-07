@@ -130,6 +130,79 @@ gradient-isolation window** with uniform k-deep credit (not a global lens loss);
 
 ---
 
+## 3. 4-bit quantization: the actual situation for eval vs training losses
+
+Short version: **4-bit is EVAL-only on this branch and validated as such; it is
+NOT part of the training recipe, and folding it into training changes the loss
+regime in four concrete ways that are not handled today.**
+
+### What we actually do (eval)
+
+- `evaluate.py --load-4bit` loads the base in NF4 (bitsandbytes) so a 40B eval
+  fits beside a resident 40B training job. Training itself (`train/layerwise.py`)
+  runs a **bf16** base with a **bf16** LoRA adapter — no quantization touches any
+  loss.
+- **Validated 2026-07-07:** the 4-bit machado eval (character error rate,
+  CER 0.877) matched the bf16 in-training recall (CER ~0.84). So NF4 preserves the
+  recall-relevant signal *at inference* for these checkpoints. That is an
+  inference statement, not a training one.
+
+### Could you train the losses on a 4-bit base? Mechanically yes (QLoRA), but…
+
+bitsandbytes backprops through a dequantized NF4 linear to update bf16 LoRA
+adapters while the base stays 4-bit. That works in general. For **our** loss
+framework it introduces four specific problems:
+
+1. **A quantized base is a quantized *teacher*.** In `online_teacher` mode the
+   teacher is the base with adapters off. Quantize the base and every
+   teacher-sourced target — the `teacher_kl` readout and the per-layer teacher
+   hidden states — is now computed from a 4-bit model. Because our entire signal
+   is teacher-sourced (training-target law), quantization degrades the **source**,
+   not merely the student. This is the sharpest issue and no optimizer choice
+   fixes it.
+2. **The frozen measurement head must stay high-precision.** The Frozen-Vocabulary
+   Principle keeps the embedding and language-model head untrained; QLoRA
+   *conventionally* also keeps `lm_head`/`embed_tokens` in bf16, but that is a
+   config choice, not a guarantee. If a quantization config quantizes the head,
+   the per-layer lens/`vocab_mse` measurement device itself becomes lossy and
+   silently shifts every hidden loss. The runtime tripwire checks for **change**,
+   not **precision**, so it would not catch a frozen-but-quantized head. 4-bit
+   training would need the tripwire extended to assert head/embed dtype.
+3. **Loss shape interacts with quantization noise.** Quantization injects noise
+   into hidden states. Distribution-shaped losses (Kullback–Leibler through the
+   lens, `lens_kl`) softmax the lens scores, so small perturbations can move a
+   peaky pseudo-distribution a lot — more quant-noise-sensitive. Score-vector
+   losses (`vocab_mse`, centered cosine / L2) never softmax and are comparatively
+   robust. This compounds the loss-safety law (distribution-shaped hidden losses
+   amplify intrusion): under 4-bit they would likely be even less stable, so a
+   4-bit attempt should prefer the score-vector family.
+4. **Gradient error accumulates over the block walk.** QLoRA's backward pass sees
+   the dequantization error; our summed schedule walks all 48 blocks with a
+   per-block hidden-matching term, so that error accumulates per block. Untested
+   here.
+
+### Where ZO-Act fits this specifically
+
+ZO-Act's INT4 support (§1) cleanly sidesteps **only** problem 4: zeroth-order needs
+no gradient *through* the quantized weights, so quantization error never corrupts a
+backward pass (there is none). It does **not** fix problem 1 — a 4-bit teacher is
+still a degraded source under any optimizer — and it remains forward-only,
+high-variance, and non-layerwise. So "train on a 4-bit base without noisy
+gradients" is real via ZO, but it is a scaling/black-box-teacher tactic, not a way
+to make our layerwise losses quantization-safe.
+
+### Bottom line
+
+4-bit is a **memory** tactic: used and validated for **eval**, reserved for the
+extreme-scale rung. Training losses on this branch are computed in bf16 against a
+bf16 (dequantized) teacher. Moving 4-bit into training (i) degrades the
+teacher source, (ii) risks quantizing the frozen measurement head, (iii) favors
+score-vector over distribution-shaped losses, and (iv) accumulates dequant
+gradient error over the block walk — none of which is in place today. Treat any
+4-bit-*trained* number as unproven until these are handled and tested explicitly.
+
+---
+
 ## Sources
 
 - MeZO (original): <https://arxiv.org/abs/2305.17333>
