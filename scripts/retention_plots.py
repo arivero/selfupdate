@@ -196,6 +196,10 @@ def scatter(df: pd.DataFrame, y_col: str, y_label: str, title: str,
 def make_figure(index: Path, out: Path) -> None:
     df = pd.read_csv(index)
     df = df[df.get("has_retention", False) == True].copy()  # noqa: E712
+    # epoch-0 teacher rows are the reference (arc_retained == 1 by construction);
+    # they are not method evidence, so keep them out of the method scatter.
+    if "checkpoint_kind" in df:
+        df = df[df["checkpoint_kind"] != "epoch0"].copy()
     fig, axes = plt.subplots(1, 2, figsize=(11.69, 5.2))
     fig.suptitle(
         "Recall vs capability retention — endpoint Pareto across method families",

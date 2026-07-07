@@ -268,6 +268,65 @@ def surprise_pages(pdf):
         plt.close(fig)
 
 
+def _router_mode(run: str) -> str:
+    n = run.lower()
+    if "_tf" in n:
+        return "teacher_forced"
+    if "_ra" in n:
+        return "router_aligned"
+    return "blackbox"
+
+
+def router_mode_pages(pdf, df: pd.DataFrame):
+    """Blackbox vs explicit-router convergence test.
+
+    'What to memorize / where to attend' is a routing choice with the same
+    blackbox-vs-teacher-aligned duality as MoE expert selection (train.moe_mode:
+    dense_or_black_box / router_aligned / teacher_forced). The multigpu campaign
+    trained the controlled triple; if the blackbox arm lands at the same
+    (recall, retention) as the aligned arms, blackbox converges. Detects any base
+    model with >=2 router modes among evaluated runs."""
+    ev = df[df["has_retention"] == True].copy()  # noqa: E712
+    if "checkpoint_kind" in ev:
+        ev = ev[ev["checkpoint_kind"] != "epoch0"]
+    if ev.empty:
+        return
+    ev["router_mode"] = ev["run"].map(_router_mode)
+    color = {"blackbox": "#0072B2", "router_aligned": "#E69F00", "teacher_forced": "#009E73"}
+    order = ["blackbox", "router_aligned", "teacher_forced"]
+    for model, g in ev.groupby("model"):
+        modes = [m for m in order if m in set(g["router_mode"])]
+        if len(modes) < 2:
+            continue
+        fig = plt.figure(figsize=(11.69, 8.27))
+        fig.text(0.06, 0.94, f"Routing: blackbox vs explicit router — {str(model).split('/')[-1]}",
+                 fontsize=15, weight="bold")
+        fig.text(0.06, 0.90,
+                 "Same base, three routing supervisions. If blackbox matches the aligned arms in both "
+                 "axes, the optimistic 'blackbox converges' conjecture holds; if the aligned arms lead "
+                 "on retention or recall, blackbox under-converges on the routing part.",
+                 fontsize=8.5, va="top", wrap=True)
+        # bar: ARC accuracy and recall (exact continuation) by mode
+        a = fig.add_axes([0.09, 0.12, 0.40, 0.66])
+        arc = [g[g["router_mode"] == m]["arc_acc"].astype(float).mean() for m in modes]
+        a.bar(modes, arc, color=[color[m] for m in modes])
+        a.set_ylabel("ARC-Easy accuracy (capability retained)", fontsize=9)
+        a.set_title("(a) retention by routing mode", fontsize=10, loc="left")
+        a.tick_params(axis="x", labelsize=7, rotation=15)
+        for i, v in enumerate(arc):
+            a.text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        b = fig.add_axes([0.57, 0.12, 0.38, 0.66])
+        rec = [g[g["router_mode"] == m]["recall_cont_machado"].astype(float).mean() for m in modes]
+        b.bar(modes, rec, color=[color[m] for m in modes])
+        b.set_ylabel("exact continuation recall (Machado)", fontsize=9)
+        b.set_title("(b) recall by routing mode", fontsize=10, loc="left")
+        b.tick_params(axis="x", labelsize=7, rotation=15)
+        for i, v in enumerate(rec):
+            b.text(i, v, f"{v:.3f}", ha="center", va="bottom", fontsize=8)
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 def _coverage_page(pdf, df: pd.DataFrame):
     lines = ["Runs WITHOUT the new retention battery (need scripts/retention_eval.py):", ""]
     if "checkpoint_kind" in df:
@@ -301,6 +360,7 @@ def main() -> None:
         _image_page(pdf, "Recall vs capability retention (bidimensional)", FIGURE)
         head_taxonomy_pages(pdf)
         surprise_pages(pdf)
+        router_mode_pages(pdf, df)
         _table_page(pdf, "Best retention row per method family and model",
                     "Recall: CER (lower better) and exact-match probes (higher better). "
                     "Retention: ARC retained and WikiText log(ppl / teacher ppl) damage.",
