@@ -45,7 +45,13 @@ runs/mlt_qwen35_122b_auto4_slide3_lora/checkpoint	76000	runs/.dl_qwen35_122b.don
 runs/mlt_qwen35_122b_auto4_k1local_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_k1local_lora.yaml	4
 runs/mlt_qwen35_122b_auto4_slide2_tf_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide2_tf_lora.yaml	4
 runs/mlt_qwen35_122b_auto4_slide2_ra_lora/checkpoint	76000	runs/.dl_qwen35_122b.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_auto4_slide2_ra_lora.yaml	4
-runs/mlt_qwen35_122b_gptq_auto2_slide2_lora/checkpoint	42000	runs/.dl_qwen35_122b_gptq.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_gptq_auto2_slide2_lora.yaml	2
+# PAUSED 2026-07-07 09:10 (crash-looped 50+x): loading a GPTQ checkpoint needs
+# optimum+gptqmodel (now installed) but gptqmodel's __init__ unconditionally
+# imports vision model defs needing torchvision too, not yet installed — did
+# not install it live with 3 other jobs mid-training sharing this venv
+# (torchvision could force a torch/cu128 build resolution via pip). Owner:
+# install torchvision during a quiet window, then re-enable this line.
+# runs/mlt_qwen35_122b_gptq_auto2_slide2_lora/checkpoint	42000	runs/.dl_qwen35_122b_gptq.done	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_qwen35_122b_gptq_auto2_slide2_lora.yaml	2
 
 ## ===== PRIORITY 5: quantised-release TRAINING probe — Mistral-Medium-3.5
 ## fp8, device_map=auto TP4. mistral3 loads via the ITT fallback (_load_causal_lm).
