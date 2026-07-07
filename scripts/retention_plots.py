@@ -74,7 +74,7 @@ def _pareto(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
 
 
 def scatter(df: pd.DataFrame, y_col: str, y_label: str, title: str,
-            ax, invert_y: bool = False) -> None:
+            ax, invert_y: bool = False, logy: bool = False) -> None:
     ax.set_facecolor("white")
     for src, style in SOURCE_STYLE.items():
         sub = df[df["source"] == src]
@@ -104,6 +104,8 @@ def scatter(df: pd.DataFrame, y_col: str, y_label: str, title: str,
                   fontsize=8, color=INK)
     ax.set_ylabel(y_label, fontsize=8, color=INK)
     ax.set_title(title, fontsize=10, color=INK, weight="bold")
+    if logy:
+        ax.set_yscale("log")
     if invert_y:
         ax.invert_yaxis()
     ax.grid(True, color=GRID, lw=0.5, zorder=0)
@@ -129,8 +131,8 @@ def make_figure(index: Path, out: Path) -> None:
     else:
         scatter(df, "arc_retained", "ARC-Easy retained (acc / teacher acc)",
                 "Standard-benchmark capability retained", axes[0])
-        scatter(df, "wikitext_ppl_ratio", "WikiText-2 ppl ratio vs teacher (lower = better)",
-                "Language-model damage (quantization-style)", axes[1], invert_y=True)
+        scatter(df, "wikitext_ppl_ratio", "WikiText-2 ppl ratio vs teacher (log; lower = better)",
+                "Language-model damage (quantization-style)", axes[1], invert_y=True, logy=True)
     fig.text(0.5, 0.005,
              f"{len(df)} runs with retention evidence · marker size ~ model params · "
              "colour+shape = method family (Okabe-Ito, CVD-safe)",

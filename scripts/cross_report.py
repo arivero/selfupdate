@@ -213,6 +213,55 @@ def head_taxonomy_pages(pdf):
         plt.close(fig)
 
 
+def surprise_pages(pdf):
+    """What to memorize, factor 2: surprise decomposition.
+
+    A large surprise (student NLL - teacher NLL on the gold token) is ambiguous:
+    it is a KNOWLEDGE GAP when the teacher resolves the token via its privileged
+    context (attention on the privileged block) -> memorize it; it is an
+    ATTENTION MISDIRECTION when the answer is in the shared context but the
+    student mis-routes -> a router problem (blackbox vs router_aligned), not a
+    memory target.  Reads runs/surprise_probe_*/tokens.csv."""
+    color = {"knowledge_gap": "#0072B2", "misdirection": "#D55E00", "low_surprise": "#BBBBBB"}
+    for csv in sorted(RUNS.glob("surprise_probe_*/tokens.csv")):
+        tag = csv.parent.name.replace("surprise_probe_", "")
+        df = pd.read_csv(csv)
+        if "label" not in df:
+            continue
+        fig = plt.figure(figsize=(11.69, 8.27))
+        fig.text(0.06, 0.94, f"What to memorize — surprise decomposition ({tag})",
+                 fontsize=15, weight="bold")
+        counts = df["label"].value_counts().to_dict()
+        fig.text(
+            0.06, 0.90,
+            "Surprise = student-view NLL minus teacher-view NLL on each answer token "
+            "(base model, privileged block removed vs present). Footprint over content heads, "
+            "structural/sink tokens masked. High surprise splits into knowledge_gap "
+            f"({counts.get('knowledge_gap', 0)}; teacher attends the privileged block) and "
+            f"misdirection ({counts.get('misdirection', 0)}; teacher attends shared in-context tokens). "
+            "Knowledge gaps are the memorization target; misdirection is a routing fix.",
+            fontsize=8, va="top", wrap=True,
+        )
+        a = fig.add_axes([0.08, 0.10, 0.52, 0.68])
+        for lab, g in df.groupby("label"):
+            a.scatter(g["t_priv"], g["excess"], s=12, alpha=0.7, lw=0,
+                      c=color.get(lab, "#888"), label=f"{lab} ({len(g)})")
+        a.set_xlabel("teacher attention on privileged block", fontsize=9)
+        a.set_ylabel("excess surprise (student NLL − teacher NLL)", fontsize=9)
+        a.set_title("(a) knowledge gap (right) vs misdirection (left)", fontsize=10, loc="left")
+        a.legend(fontsize=8, frameon=False)
+        a.grid(True, color="#dddddd", lw=0.5)
+
+        b = fig.add_axes([0.68, 0.10, 0.27, 0.68])
+        labs = [l for l in ("knowledge_gap", "misdirection", "low_surprise") if l in counts]
+        b.bar(labs, [counts[l] for l in labs], color=[color[l] for l in labs])
+        b.set_ylabel("answer tokens", fontsize=9)
+        b.set_title("(b) decomposition", fontsize=10, loc="left")
+        b.tick_params(axis="x", labelsize=6.5, rotation=20)
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 def _coverage_page(pdf, df: pd.DataFrame):
     lines = ["Runs WITHOUT the new retention battery (need scripts/retention_eval.py):", ""]
     missing = df[df["has_retention"] != True]  # noqa: E712
@@ -243,6 +292,7 @@ def main() -> None:
                    summary_text(df), fontsize=9)
         _image_page(pdf, "Recall vs capability retention (bidimensional)", FIGURE)
         head_taxonomy_pages(pdf)
+        surprise_pages(pdf)
         _table_page(pdf, "Best retention row per method family and model",
                     "Recall: CER (lower better) and exact-match probes (higher better). "
                     "Retention: ARC retained & WikiText ppl ratio vs epoch-0 teacher.",
