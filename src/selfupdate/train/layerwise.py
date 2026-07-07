@@ -103,7 +103,7 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
         loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
-                       normed=(L == stack.n_layers))
+                       normed=(L == stack.n_layers), layer=L)
     extra = pending_router_loss()
     (loss if extra is None else loss + extra).backward()
     return loss.detach(), h_out.detach()
@@ -116,7 +116,7 @@ def last_block_step(stack, h_in, pos_emb, target, s0, A, kind, autocast=True):
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(n, h_in, pos_emb)
         normed = stack.final_norm(h_out)
-        loss = loss_fn(normed[0, s0: s0 + A], target, normed=True)
+        loss = loss_fn(normed[0, s0: s0 + A], target, normed=True, layer=n)
     extra = pending_router_loss()
     (loss if extra is None else loss + extra).backward()
     return loss.detach(), h_out.detach()
@@ -218,7 +218,7 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
             if L in targets:  # sparse targets: endpoint-sliding windows
                 losses.append(loss_fn(
                     stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
-                    normed=(L == n)))
+                    normed=(L == n), layer=L))
         total = hidden_w * sum(losses)
         if readout_w > 0 and L1 == n:
             logits = stack.lm_head(
