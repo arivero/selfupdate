@@ -163,6 +163,56 @@ def _best_by_group(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def head_taxonomy_pages(pdf):
+    """What to memorize: the attention head taxonomy (distance x retrieval).
+
+    Ported from the paper's head-taxonomy figure (paper/make_figs.py fig6) so
+    the report carries the mechanistic answer to 'what are the things to
+    memorize' in daydreaming memorisation.  Each layer x head is scored at the
+    answer positions on the TEACHER view (privileged passage present):
+    long-range + privileged-heavy heads are content/insight (worth absorbing);
+    local, privileged-blind heads are grammar.  Reads whatever
+    runs/attention_probe_*/heads.csv exist (no dependency on paper/ outputs)."""
+    kind_color = {"content": "#0072B2", "grammar": "#E69F00", "mixed": "#BBBBBB"}
+    for csv in sorted(RUNS.glob("attention_probe_*/heads.csv")):
+        model_tag = csv.parent.name.replace("attention_probe_", "")
+        df = pd.read_csv(csv)
+        fig = plt.figure(figsize=(11.69, 8.27))
+        fig.text(0.06, 0.94, f"What to memorize — attention head taxonomy ({model_tag})",
+                 fontsize=15, weight="bold")
+        fig.text(
+            0.06, 0.90,
+            "Teacher view (privileged passage present), answer positions. A head that reaches FAR "
+            "(high distance) and lands ON the privileged block (high answer→privileged mass) is a "
+            "content/insight head — it marks what the context considered worth absorbing. Local, "
+            "privileged-blind heads are grammar. This is the memorization target that motivates "
+            "hidden-primary (mid-net) storage, and it names what the recall probes should test.",
+            fontsize=8, va="top", wrap=True,
+        )
+        a = fig.add_axes([0.08, 0.10, 0.40, 0.68])
+        for kind, g in df.groupby("kind"):
+            a.scatter(g["distance"], g["priv_mass"], s=14, alpha=0.75, lw=0,
+                      c=kind_color.get(kind, "#888888"), label=f"{kind} ({len(g)})")
+        a.set_xlabel("mean attention distance (tokens)", fontsize=9)
+        a.set_ylabel("answer→privileged mass", fontsize=9)
+        a.legend(fontsize=8, frameon=False, title="head kind")
+        a.set_title(f"(a) {len(df)} heads — distance vs retrieval", fontsize=10, loc="left")
+        a.grid(True, color="#dddddd", lw=0.5)
+
+        b = fig.add_axes([0.57, 0.10, 0.38, 0.68])
+        prof = df.groupby("layer")["priv_mass"].mean()
+        b.plot(prof.index, prof.values, marker="o", ms=3.5, color="#0072B2")
+        peak = int(prof.idxmax())
+        b.axvline(peak, color="#666666", lw=0.8, ls="--")
+        b.text(peak + 0.4, prof.max() * 0.9, f"L{peak}\nretrieval-mass peak", fontsize=7)
+        b.set_xlabel("layer", fontsize=9)
+        b.set_ylabel("mean answer→privileged mass", fontsize=9)
+        b.set_title("(b) retrieval attention lives mid-net", fontsize=10, loc="left")
+        b.grid(True, color="#dddddd", lw=0.5)
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
 def _coverage_page(pdf, df: pd.DataFrame):
     lines = ["Runs WITHOUT the new retention battery (need scripts/retention_eval.py):", ""]
     missing = df[df["has_retention"] != True]  # noqa: E712
@@ -192,6 +242,7 @@ def main() -> None:
         _text_page(pdf, "Self-distillation of context — cross-checkout report",
                    summary_text(df), fontsize=9)
         _image_page(pdf, "Recall vs capability retention (bidimensional)", FIGURE)
+        head_taxonomy_pages(pdf)
         _table_page(pdf, "Best retention row per method family and model",
                     "Recall: CER (lower better) and exact-match probes (higher better). "
                     "Retention: ARC retained & WikiText ppl ratio vs epoch-0 teacher.",
