@@ -525,12 +525,30 @@ def _free(model) -> None:
     torch.cuda.empty_cache()
 
 
+def _already_done(ckpt: Path) -> bool:
+    """True if a current-version retention.json already exists (resumable)."""
+    out = _out_path(ckpt)
+    if not out.exists():
+        return False
+    try:
+        return json.loads(out.read_text()).get("cache_version") == CACHE_VERSION
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run(args) -> None:
     probes = Probes()
     tasks = args.tasks
     ckpts = _discover(args)
     if not ckpts:
         raise SystemExit("no checkpoints discovered (use --checkpoints/--glob/--manifest)")
+    if args.skip_existing:
+        before = len(ckpts)
+        ckpts = [c for c in ckpts if not _already_done(c)]
+        print(f"skip-existing: {before - len(ckpts)} already done, {len(ckpts)} to do")
+    if not ckpts:
+        print("nothing to do")
+        return
 
     # Group by base model so LoRA siblings share one base load.
     groups: dict[str, dict[str, list[Path]]] = {}
@@ -540,7 +558,7 @@ def run(args) -> None:
         g["lora" if _is_lora(c) else "full"].append(c)
 
     teacher_cache: dict[str, dict] = {}
-    timings = []
+    timings, failures = [], []
 
     for base, g in groups.items():
         print(f"\n=== base model: {base}  (lora={len(g['lora'])} full={len(g['full'])}) ===",
@@ -548,46 +566,69 @@ def run(args) -> None:
 
         # --- LoRA siblings: load base once, hot-swap adapters ---
         if g["lora"] and base != "UNKNOWN":
-            t0 = time.time()
-            model, tok = _load_full(base, args.device, args.auto_map)
-            load_s = time.time() - t0
-            # teacher (base) once
-            teacher_cache[base] = _score_teacher(model, tok, probes, tasks, args)
-            from peft import PeftModel
+            try:
+                t0 = time.time()
+                model, tok = _load_full(base, args.device, args.auto_map)
+                load_s = time.time() - t0
+                teacher_cache[base] = _score_teacher(model, tok, probes, tasks, args)
+            except Exception as e:  # noqa: BLE001
+                print(f"  !! base load failed for {base}: {type(e).__name__}: {e}", flush=True)
+                failures += [(c.parent.name, str(e)) for c in g["lora"]]
+                model = None
+            if model is not None:
+                from peft import PeftModel
 
-            peft_model = None
-            for c in g["lora"]:
-                t1 = time.time()
-                if peft_model is None:
-                    peft_model = PeftModel.from_pretrained(model, str(c), adapter_name="cur")
-                else:
-                    peft_model.load_adapter(str(c), adapter_name="cur")
-                    peft_model.set_adapter("cur")
-                res = evaluate_model(peft_model, tok, probes, tasks, args.device, args)
-                _write_result(c, base, res, teacher_cache[base], is_lora=True,
-                              eval_s=time.time() - t1, load_s=load_s if c is g["lora"][0] else 0.0)
-                timings.append((c.parent.name, load_s if c is g["lora"][0] else 0.0, time.time() - t1))
-                if peft_model is not None:
-                    peft_model.delete_adapter("cur")
-            _free(peft_model if peft_model is not None else model)
+                peft_model, first = None, g["lora"][0]
+                for c in g["lora"]:
+                    try:
+                        t1 = time.time()
+                        if peft_model is None:
+                            peft_model = PeftModel.from_pretrained(model, str(c), adapter_name="cur")
+                        else:
+                            peft_model.load_adapter(str(c), adapter_name="cur")
+                            peft_model.set_adapter("cur")
+                        res = evaluate_model(peft_model, tok, probes, tasks, args.device, args)
+                        _write_result(c, base, res, teacher_cache[base], is_lora=True,
+                                      eval_s=time.time() - t1, load_s=load_s if c is first else 0.0)
+                        timings.append((c.parent.name, load_s if c is first else 0.0,
+                                        time.time() - t1))
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  !! {c.parent.name} failed: {type(e).__name__}: {e}", flush=True)
+                        failures.append((c.parent.name, str(e)))
+                    finally:
+                        if peft_model is not None and "cur" in getattr(peft_model, "peft_config", {}):
+                            peft_model.delete_adapter("cur")
+                _free(peft_model if peft_model is not None else model)
 
         # --- Full fine-tunes: one load each (weights are not shared) ---
         for c in g["full"]:
-            t0 = time.time()
-            model, tok = _load_full(str(c), args.device, args.auto_map)
-            load_s = time.time() - t0
-            if base not in teacher_cache and base != "UNKNOWN":
-                tb, tt = _load_full(base, args.device, args.auto_map)
-                teacher_cache[base] = _score_teacher(tb, tt, probes, tasks, args)
-                _free(tb)
-            t1 = time.time()
-            res = evaluate_model(model, tok, probes, tasks, args.device, args)
-            _write_result(c, base, res, teacher_cache.get(base), is_lora=False,
-                          eval_s=time.time() - t1, load_s=load_s)
-            timings.append((c.parent.name, load_s, time.time() - t1))
-            _free(model)
+            try:
+                t0 = time.time()
+                model, tok = _load_full(str(c), args.device, args.auto_map)
+                load_s = time.time() - t0
+                if base not in teacher_cache and base != "UNKNOWN":
+                    tb, tt = _load_full(base, args.device, args.auto_map)
+                    teacher_cache[base] = _score_teacher(tb, tt, probes, tasks, args)
+                    _free(tb)
+                t1 = time.time()
+                res = evaluate_model(model, tok, probes, tasks, args.device, args)
+                _write_result(c, base, res, teacher_cache.get(base), is_lora=False,
+                              eval_s=time.time() - t1, load_s=load_s)
+                timings.append((c.parent.name, load_s, time.time() - t1))
+                _free(model)
+            except Exception as e:  # noqa: BLE001
+                print(f"  !! {c.parent.name} failed: {type(e).__name__}: {e}", flush=True)
+                failures.append((c.parent.name, str(e)))
+                try:
+                    _free(model)
+                except Exception:  # noqa: BLE001
+                    pass
 
     _print_timings(timings)
+    if failures:
+        print(f"\n=== {len(failures)} failures ===")
+        for name, err in failures:
+            print(f"  {name}: {err[:120]}")
 
 
 def _score_teacher(model, tok, probes, tasks, args) -> dict:
@@ -657,6 +698,8 @@ def main() -> int:
     ap.add_argument("--tasks", nargs="+", default=list(ALL_TASKS), choices=ALL_TASKS)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--auto-map", action="store_true")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="skip checkpoints that already have a current-version retention.json")
     # cache sizes
     ap.add_argument("--arc-items", type=int, default=400)
     ap.add_argument("--wikitext-max-chars", type=int, default=250_000)
