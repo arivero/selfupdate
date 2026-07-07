@@ -284,15 +284,47 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
     return [l.detach() for l in losses], h.detach()
 
 
+@contextlib.contextmanager
+def _single_threaded_materialize():
+    """transformers' state-dict loader spawns ``GLOBAL_WORKERS`` (up to 4)
+    threads that each call ``tensor.to(device=..., dtype=...)`` directly
+    with no per-thread ``torch.cuda.set_device`` — fine for a plain copy,
+    but the mxfp4-dequantize path (Mxfp4Config(dequantize=True)) runs an
+    actual unpack KERNEL per tensor, and concurrent threads targeting
+    DIFFERENT cuda devices (device_map spanning multiple GPUs) race on
+    CUDA's implicit per-thread current-device context, producing a CUDA
+    illegal-memory-access (observed 2026-07-07 on gpt-oss-120b, both on
+    2 and 4 cards — moving GPU count did not fix it, confirming this is a
+    threading race, not a memory-headroom issue). Non-dequantized loads
+    never hit this (no per-tensor kernel, just a copy) and keep their
+    fast parallel path — this context manager is opt-in, not global."""
+    import transformers.core_model_loading as _cml
+
+    orig = _cml.GLOBAL_WORKERS
+    _cml.GLOBAL_WORKERS = 1
+    try:
+        yield
+    finally:
+        _cml.GLOBAL_WORKERS = orig
+
+
 def _load_causal_lm(src, **kw):
     """Load a decoder LM regardless of head registration. Multimodal
     releases like Mistral-Medium-3.5 (mistral3) register ONLY as
     image-text-to-text and are absent from the causal-LM auto-map, so
     ``AutoModelForCausalLM`` raises; the ITT wrapper exposes the same
     ``.model.language_model`` decoder stack BlockStack navigates. gemma4 and
-    qwen3_5_moe ARE in the causal map and take the first path unchanged."""
+    qwen3_5_moe ARE in the causal map and take the first path unchanged.
+
+    ``quantization_config`` in ``kw`` marks the mxfp4-dequantize-for-
+    intervention path (see moe.dequantize_overrides) — serialize tensor
+    materialization for exactly that call (see
+    _single_threaded_materialize)."""
+    ctx = (_single_threaded_materialize() if "quantization_config" in kw
+          else contextlib.nullcontext())
     try:
-        return AutoModelForCausalLM.from_pretrained(src, **kw)
+        with ctx:
+            return AutoModelForCausalLM.from_pretrained(src, **kw)
     except (ValueError, KeyError):
         from transformers import AutoModelForImageTextToText
 

@@ -14,9 +14,6 @@
 ## ===== PRIORITY 1: small-MoE routing decision (single card, all independent
 ## -> 4 run at once). Blackbox vs teacher_forced vs router_aligned on two
 ## families; pick the winning routing algo before committing the 120B lanes.
-runs/mlt_gptoss20b_slide2_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_lora.yaml	1
-runs/mlt_gptoss20b_slide2_tf_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_tf_lora.yaml	1
-runs/mlt_gptoss20b_slide2_ra_lora/checkpoint	64000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss20b_slide2_ra_lora.yaml	1
 runs/mlt_gemma4_26ba4b_slide2_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_lora.yaml	1
 runs/mlt_gemma4_26ba4b_slide2_tf_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_tf_lora.yaml	1
 runs/mlt_gemma4_26ba4b_slide2_ra_lora/checkpoint	66000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gemma4_26ba4b_slide2_ra_lora.yaml	1
@@ -29,14 +26,7 @@ runs/mlt_gemma4_31b_k1local_lora/checkpoint	72000	-	.venv/bin/python scripts/tra
 # ALIA-40b-fc-2606 lanes intentionally omitted — enqueued on a separate queue (owner, 2026-07-06).
 
 ## ===== PRIORITY 3: gpt-oss-120b lanes (blackbox pp2 + MoE-mode twins).
-runs/mlt_gptoss120b_pp2_slide2_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide2_lora.yaml	2
-runs/mlt_gptoss120b_pp2_slide3_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_slide3_lora.yaml	2
-runs/mlt_gptoss120b_pp2_k1local_lora/checkpoint	79000	-	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_pp2_k1local_lora.yaml	2
-# moved to auto4 (4-card) 2026-07-07: 2-card pipeline_split hit the VRAM ceiling
-# loading the Mxfp4Config(dequantize=True) bf16 gpt-oss-120b (CUDA illegal-memory-
 # access under threaded weight materialization at ~99% VRAM) — see config comments.
-runs/mlt_gptoss120b_auto4_slide2_tf_lora/checkpoint	76000	runs/mlt_gptoss20b_slide2_tf_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_auto4_slide2_tf_lora.yaml	4
-runs/mlt_gptoss120b_auto4_slide2_ra_lora/checkpoint	76000	runs/mlt_gptoss20b_slide2_ra_lora/checkpoint	.venv/bin/python scripts/train.py --experiment configs/experiments/mlt_gptoss120b_auto4_slide2_ra_lora.yaml	4
 
 ## ===== PRIORITY 4: Qwen3.5-122B-A10B hybrid MoE (bf16 auto4 + GPTQ-Int4
 ## release-width twin). Gated on downloads (scripts/download_mlt2.sh sentinels).
