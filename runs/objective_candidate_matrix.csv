@@ -20,18 +20,27 @@ Mistral-7B,Machado+Quijote,,,
 Qwen3.6-27B,Machado,,,
 Qwen3.6-27B,Quijote,,,
 Qwen3.6-27B,Machado+Quijote,,,
-Gemma-4-26B-A4B,Machado,,,
+Gemma-4-26B-A4B,Machado,,,vocab_mse k2
 Gemma-4-26B-A4B,Quijote,,,
 Gemma-4-26B-A4B,Machado+Quijote,,,
-Gemma-4-31B,Machado,,,
+Gemma-4-31B,Machado,,,lens_kl strict; vocab_mse k2; vocab_mse k3
 Gemma-4-31B,Quijote,,,
 Gemma-4-31B,Machado+Quijote,,,
-gpt-oss-20B,Machado,,vocab_mse k2 bestCER=1.0149 fullCER=1.0000 lw_k_gptoss_rag,
+gpt-oss-20B,Machado,,vocab_mse k2 bestCER=1.0149 fullCER=1.0000 lw_k_gptoss_rag,vocab_mse k2
 gpt-oss-20B,Quijote,,,
 gpt-oss-20B,Machado+Quijote,,,
-gpt-oss-120B,Machado,,,
+gpt-oss-120B,Machado,,,lens_kl strict; vocab_mse k2; vocab_mse k3
 gpt-oss-120B,Quijote,,,
 gpt-oss-120B,Machado+Quijote,,,
-ALIA-40b-fc-2606,Machado,,,vocab_mse k8
+ALIA-40b-fc-2606,Machado,,,lens_kl strict; vocab_mse k2; vocab_mse k3; vocab_mse k8
 ALIA-40b-fc-2606,Quijote,,,vocab_mse k8
 ALIA-40b-fc-2606,Machado+Quijote,,,
+Mistral-Medium-3.5-128B,Machado,,,vocab_mse strict; vocab_mse k2; vocab_mse k3
+Mistral-Medium-3.5-128B,Quijote,,,
+Mistral-Medium-3.5-128B,Machado+Quijote,,,
+Qwen3.5-122B-A10B,Machado,,,vocab_mse strict; vocab_mse k2; vocab_mse k3
+Qwen3.5-122B-A10B,Quijote,,,
+Qwen3.5-122B-A10B,Machado+Quijote,,,
+Qwen3.5-122B-A10B-GPTQ-Int4,Machado,,,vocab_mse k2
+Qwen3.5-122B-A10B-GPTQ-Int4,Quijote,,,
+Qwen3.5-122B-A10B-GPTQ-Int4,Machado+Quijote,,,
