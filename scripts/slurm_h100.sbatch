@@ -10,6 +10,14 @@
 #   sbatch scripts/slurm_h100.sbatch
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/..}" || exit 1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
+export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-${SLURM_CPUS_PER_TASK:-8}}"
+[ "$SELFUPDATE_CPU_THREADS" -gt 22 ] 2>/dev/null && SELFUPDATE_CPU_THREADS=22
+export OMP_NUM_THREADS="$SELFUPDATE_CPU_THREADS"
+export MKL_NUM_THREADS="$SELFUPDATE_CPU_THREADS"
+export OPENBLAS_NUM_THREADS="$SELFUPDATE_CPU_THREADS"
+export NUMEXPR_NUM_THREADS="$SELFUPDATE_CPU_THREADS"
+export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-1}"
+export TOKENIZERS_PARALLELISM=false
 
 # Pass the allocated device ids through VERBATIM. Never renumber from 0:
 # without cgroup ConstrainDevices, CUDA_VISIBLE_DEVICES=1 on an "0,2,3"

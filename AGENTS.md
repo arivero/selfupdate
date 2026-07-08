@@ -146,6 +146,13 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   rebuilding the venv.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
+- Native CPU thread pools are uncapped by default and can oversubscribe the
+  64-CPU host. `OMP_NUM_THREADS=64` is not a process-wide 64-thread cap here:
+  PyTorch/OpenMP/MKL can still create multiple pools. The train entry point and
+  launch scripts default to `SELFUPDATE_CPU_THREADS=8` and clamp it at 22, which
+  measured near 64 OS threads after CPU matmul. The trainer already uses
+  `num_workers=0`, so extra CPU load comes from runtime pools, not DataLoader
+  workers.
 - Scheduler pattern:
 
 ```bash
