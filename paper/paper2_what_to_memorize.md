@@ -149,16 +149,32 @@ attention sink is a degenerate attractor blackbox routing demonstrably does
 *not* escape. So "always converges" is safe for the loss, optimistic for the
 route.
 
-**The test already exists.** The multigpu campaign trained the controlled
-triple — `slide2` (blackbox) vs `slide2_ra` (router_aligned) vs `slide2_tf`
-(teacher_forced) — on gpt-oss-20B and Gemma-4. Running the §2 battery on that
-triple settles the conjecture directly: if the three land at the same
-(recall, retention) point the blackbox converges and explicit routing is
-unnecessary; if `router_aligned`/`teacher_forced` win on recall-per-item or
-specifically on the Cervantes censor task (the probe most dependent on
-attending to the right in-context tokens), the blackbox under-converges on
-the routing part — precisely where §4 predicts surprise alone cannot tell you
-why. This evaluation is queued.
+**The test, and a first result (gpt-oss-20B).** The multigpu campaign trained
+the controlled triple — `slide2` (blackbox) vs `slide2_ra` (router_aligned) vs
+`slide2_tf` (teacher_forced) — on gpt-oss-20B, one shared base (loaded once,
+adapters hot-swapped). The §2 battery gives:
+
+| routing | ARC-Easy retained (acc / teacher) | recall (exact continuation) |
+|---|---|---|
+| blackbox (`slide2`)          | **0.38** | 0.00 |
+| router_aligned (`slide2_ra`) | **0.49** | 0.00 |
+| teacher_forced (`slide2_tf`) | **0.57** | 0.00 |
+
+The three do **not** coincide, so this is evidence *against* strict
+"blackbox always converges": capability retention rises monotonically with
+routing supervision, and the blackbox arm is the **most collaterally
+damaging** (it keeps only 38% of the base model's ARC-Easy accuracy, versus
+57% under teacher-forced routing). Two caveats bound the claim: (1) recall
+(exact continuation) is **floored at 0** for all three — a 20B MoE at a
+2-block sliding window does not reproduce the poem verbatim — so the contrast
+rests entirely on the retention axis and the recall half of the conjecture is
+untested here; (2) `teacher_forced` imposing the teacher's expert selection
+means *fewer router parameters move*, so its retention edge may be "changes
+less" rather than "converges better". The honest reading: on this base,
+routing supervision strongly protects capability and blackbox is the worst
+for collateral damage — it complicates the optimistic conjecture rather than
+settling it. A recall-discriminating setting (a smaller base, or a wider
+window that actually memorizes) is the needed follow-up.
 
 ## 6. Instruments
 
