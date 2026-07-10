@@ -148,6 +148,8 @@ def main() -> None:
                     help="output dir override (multi-node: concurrent --base "
                          "evals must not share runs/base-eval-full)")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--n-per-task", type=int, default=24,
+                    help="items per task in the three-task battery")
     ap.add_argument("--batch-size", type=int, default=1,
                     help="batched generation for standard recitation evals")
     ap.add_argument("--max-extra-tokens", type=int, default=48)
@@ -207,32 +209,27 @@ def main() -> None:
         model.to(cfg.model.device)
     model.eval()
 
-    records = load_jsonl(cfg.data.examples_path)
-    r = recite_eval(model, tok, records, limit=args.limit,
-                    rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
-                    batch_size=args.batch_size,
-                    max_extra_tokens=args.max_extra_tokens,
-                    bucket_by_length=args.bucket_by_length,
-                    score_workers=args.score_workers,
-                    shuffle_seed=args.shuffle_seed)
-    r["batch_size"] = args.batch_size
-    r["max_extra_tokens"] = args.max_extra_tokens
-    r["bucket_by_length"] = args.bucket_by_length
-    r["score_workers"] = args.score_workers
-    r["shuffle_seed"] = args.shuffle_seed
+    # the three-task battery (owner directive 2026-07-10): next / prev /
+    # cloze with plain accuracies — CER and the other recovery metrics are
+    # retired from the active eval surface
+    from selfupdate.eval.tasks import tasks_eval
+
+    r = tasks_eval(model, tok, cfg.data.poem_path,
+                   n_per_task=args.n_per_task)
     r["teacher_reference_kind"] = "teacher_epoch0_native_no_rag" if args.base else "checkpoint"
     r["model"] = cfg.model.name
-    r["examples_path"] = cfg.data.examples_path
+    r["poem_path"] = cfg.data.poem_path
     r["general"] = general_ce(model, tok, device=cfg.model.device)
-    print(f"n={r['n']}  CER {r['cer']:.4f}  line-exact {r['line_exact']:.4f}  "
-          f"prefix-lines {r['prefix_lines']:.2f}  general-CE {r['general']['mean_ce']:.3f}")
+    parts = "  ".join(f"{t}: exact {v['exact']:.2f} words {v['word_acc']:.2f}"
+                      for t, v in r["tasks"].items())
+    print(f"{parts}  general-CE {r['general']['mean_ce']:.3f}")
 
     out_dir = Path(args.out) if args.out else (
         Path(args.checkpoint).parent / "eval" if args.checkpoint
         else Path("runs/base-eval-full"))
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "recite.json").write_text(json.dumps(r, ensure_ascii=False, indent=1))
-    print(f"wrote {out_dir / 'recite.json'}")
+    (out_dir / "tasks.json").write_text(json.dumps(r, ensure_ascii=False, indent=1))
+    print(f"wrote {out_dir / 'tasks.json'}")
 
 
 if __name__ == "__main__":

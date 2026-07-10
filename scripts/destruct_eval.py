@@ -47,6 +47,11 @@ def main() -> None:
     ap.add_argument("--base-ref", default=None,
                     help="base destruction.json for verdict flags")
     ap.add_argument("--skip-benchmarks", action="store_true")
+    ap.add_argument("--full", action="store_true",
+                    help="complete battery (default: fast fixed subsample — "
+                         "50 evenly-spaced intrusion prompts, bench n=100)")
+    ap.add_argument("--intr-n", type=int, default=50,
+                    help="intrusion prompts in the fast subsample")
     ap.add_argument("--bench-n", type=int, default=200)
     ap.add_argument("--benches", default=None,
                     help="comma list from BENCH_REGISTRY (default: standard suite)")
@@ -82,10 +87,18 @@ def main() -> None:
 
     prompts = [l for l in Path("data/intrusion_prompts_es.txt")
                .read_text(encoding="utf-8").splitlines() if l.strip()]
+    # fast fixed subsample (owner directive 2026-07-10): the standard battery
+    # on a DETERMINISTIC subset — same prompts every run, comparable across
+    # checkpoints. --full restores the complete battery.
+    if not args.full:
+        prompts = prompts[::len(prompts) // args.intr_n or 1][:args.intr_n]
+        args.bench_n = min(args.bench_n, 100)
 
     dest = {"schema_version": SCHEMA_VERSION,
             "source": src, "model": cfg.model.name,
-            "corpus": cfg.data.poem_path}
+            "corpus": cfg.data.poem_path,
+            "fast_subsample": not args.full,
+            "intrusion_n_prompts": len(prompts)}
     dest["probe_battery"] = probe_battery(model, tok, cfg.model.device)
     print(f"probes: overall {dest['probe_battery']['overall_mean_ce']:.3f}  "
           f"legacy {dest['probe_battery']['legacy_mean_ce']:.3f}")

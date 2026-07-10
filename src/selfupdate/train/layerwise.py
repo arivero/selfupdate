@@ -49,7 +49,7 @@ from ..data.dataset import (
     collate_padded_items,
 )
 from ..eval.general import general_ce
-from ..eval.recite import recite_eval
+from ..eval.tasks import tasks_eval
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .losses import HiddenLoss
@@ -650,7 +650,6 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
-    records = ds.records
     loader = _loader(cfg, ds)
     opts = {
         L: torch.optim.AdamW(
@@ -683,16 +682,19 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True)
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = recite_eval(stack.model, tok, records, limit=8)
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
-                    prefix_lines=r["prefix_lines"],
-                    # per-epoch forgetting reference: CER says when the poem
-                    # arrives, gen_ce says when the model starts paying for it
+            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
+                           n_per_task=8)
+            t = r["tasks"]
+            log.log(kind="eval", epoch=epoch,
+                    next_acc=t["next"]["word_acc"],
+                    prev_acc=t["prev"]["word_acc"],
+                    cloze_acc=t["cloze"]["word_acc"],
+                    overall_word_acc=r["overall_word_acc"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
 
 
 def censored_rows(s0: int, t0: int, A: int, t_priv, device) -> torch.Tensor:
@@ -878,7 +880,6 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
                        with_teacher_ids=online)
-    records = ds.records
     loader = _loader(cfg, ds)
     plan = OptimizerPlan.build(stack, cfg)
 
@@ -946,17 +947,19 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                          **({"router_overlap": moe.overlap_flush()}
                             if moe else {}))
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = recite_eval(stack.model, tok, records, limit=8,
-                            rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
-                    prefix_lines=r["prefix_lines"],
-                    # per-epoch forgetting reference: CER says when the poem
-                    # arrives, gen_ce says when the model starts paying for it
+            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
+                           n_per_task=8)
+            t = r["tasks"]
+            log.log(kind="eval", epoch=epoch,
+                    next_acc=t["next"]["word_acc"],
+                    prev_acc=t["prev"]["word_acc"],
+                    cloze_acc=t["cloze"]["word_acc"],
+                    overall_word_acc=r["overall_word_acc"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
 
 
 class AnchorBank:
@@ -1070,7 +1073,6 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
-    records = ds.records
     loader = _loader(cfg, ds)
     opts = {
         L: torch.optim.AdamW(
@@ -1129,14 +1131,19 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                          partial=True)
         branch_counts = {"teacher": 0, "student": 0}
         if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = recite_eval(stack.model, tok, records, limit=8)
-            log.log(kind="eval", epoch=epoch, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
-                    prefix_lines=r["prefix_lines"],
+            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
+                           n_per_task=8)
+            t = r["tasks"]
+            log.log(kind="eval", epoch=epoch,
+                    next_acc=t["next"]["word_acc"],
+                    prev_acc=t["prev"]["word_acc"],
+                    cloze_acc=t["cloze"]["word_acc"],
+                    overall_word_acc=r["overall_word_acc"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: eval CER {r['cer']:.3f} line-exact {r['line_exact']:.3f}")
+            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
 
 
 class StudentActCache:
@@ -1189,7 +1196,6 @@ def _train_sequential(cfg, stack, cache, tok, log):
     t0 = time.time()
 
     ds = _make_dataset(cfg, cache, tok, [1])  # pairs built once; layer swapped per stage
-    records = ds.records
     full_ft = not cfg.train.lora.enabled
     for L in range(1, n + 1):
         ds.need_layers = [L]
@@ -1254,14 +1260,16 @@ def _train_sequential(cfg, stack, cache, tok, log):
         if L < n:
             act_cache.advance(stack, L, ds, device)
         if L % 7 == 0 or L == n:
-            r = recite_eval(stack.model, tok, records, limit=8,
-                            rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")))
-            log.log(kind="eval", layer=L, cer=r["cer"], cer_flat=r["cer_flat"], line_exact=r["line_exact"],
-                    prefix_lines=r["prefix_lines"],
-                    # per-epoch forgetting reference: CER says when the poem
-                    # arrives, gen_ce says when the model starts paying for it
+            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
+                           n_per_task=8)
+            t = r["tasks"]
+            log.log(kind="eval", layer=L,
+                    next_acc=t["next"]["word_acc"],
+                    prev_acc=t["prev"]["word_acc"],
+                    cloze_acc=t["cloze"]["word_acc"],
+                    overall_word_acc=r["overall_word_acc"],
                     gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))
-            print(f"after layer {L}: eval CER {r['cer']:.3f}")
+            print(f"after layer {L}: overall word-acc {r['overall_word_acc']:.2f}")
