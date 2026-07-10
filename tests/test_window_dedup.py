@@ -12,13 +12,14 @@ from selfupdate.data.dataset import collate_padded_items
 from selfupdate.train.layerwise import (
     _sliding_windows_dedup,
     _summed_batch,
-    _summed_item,
     _validate_knob_schedule,
     window_step,
 )
 from selfupdate.train.losses import HiddenLoss
 
-from .test_padded_batching import TinyStack, _assert_same_grads, _block_grads, _items
+from .test_padded_batching import (
+    TinyStack, _assert_same_grads, _block_grads, _items, _summed_b1,
+)
 
 
 def _traj(stack, ids):
@@ -93,7 +94,7 @@ def test_summed_item_dedup_matches_replay_path():
         loss_fn = HiddenLoss("nmse", stack.final_norm, stack.lm_head)
         cfg = _sliding_cfg(dedup)
         for it in items:
-            _summed_item(cfg, stack, loss_fn, it, it.hidden, "cpu")
+            _summed_b1(cfg, stack, loss_fn, it)
         stacks[dedup], grads[dedup] = stack, _block_grads(stack)
 
     _assert_same_grads(grads[False], grads[True])
@@ -111,7 +112,7 @@ def test_summed_batch_dedup_matches_item_dedup():
     loss_fn_batch = HiddenLoss("nmse", batch_stack.final_norm, batch_stack.lm_head)
 
     for it in items:
-        _summed_item(cfg, item_stack, loss_fn_item, it, it.hidden, "cpu")
+        _summed_b1(cfg, item_stack, loss_fn_item, it)
     batch = collate_padded_items(items)
     targets = {L: batch.hidden[L] for L in range(1, batch_stack.n_layers + 1)}
     _summed_batch(cfg, batch_stack, loss_fn_batch, batch, targets, "cpu")

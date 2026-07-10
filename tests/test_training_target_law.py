@@ -24,9 +24,10 @@ def test_base_readout_source_is_unset_sentinel():
 def test_all_readout_call_sites_pass_cfg_kind():
     import inspect, re
     src = inspect.getsource(lw)
-    # every window_step call that passes a readout weight from cfg must pass source
-    calls = re.findall(r"window_step\((?:[^()]|\([^()]*\))*\)", src)
-    ce_calls = [c for c in calls if "readout_weight" in c]
+    # every window step (single-item adapter or batched core) that passes a
+    # readout weight from cfg must pass source explicitly — no defaulting
+    calls = re.findall(r"window_step(?:_batch)?\((?:[^()]|\([^()]*\))*\)", src)
+    ce_calls = [c for c in calls if "cfg.train.readout_weight" in c]
     assert len(ce_calls) >= 1  # summed only: censored is pure, [expunged] is expunged
     for c in ce_calls:
         assert "readout_source=cfg.train.readout_source" in c, c[:120]

@@ -178,6 +178,28 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
     return losses.detach(), h_out.detach()
 
 
+def _span_batch(s0: int, A: int, ans0: int) -> Batch:
+    """Index-only B=1 Batch for the batched step functions: aligned rows
+    [s0, s0+A) and shifted answer rows [ans0-1, s0+A-1). Token fields are
+    not consumed by the step functions and stay None."""
+    rlen = max(s0 + A - ans0, 0)
+    return Batch(
+        example_ids=["_span"],
+        student_ids=None,
+        position_ids=None,
+        lengths=torch.tensor([s0 + A]),
+        s0=torch.tensor([s0]),
+        A=torch.tensor([A]),
+        ans0=torch.tensor([ans0]),
+        aligned_index=torch.arange(s0, s0 + A)[None],
+        hidden_mask=torch.ones(1, A, dtype=torch.bool),
+        hidden={},
+        readout_index=(torch.arange(ans0 - 1, s0 + A - 1)[None] if rlen
+                       else torch.zeros(1, 0, dtype=torch.long)),
+        readout_mask=torch.ones(1, rlen, dtype=torch.bool),
+    )
+
+
 def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
                 readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
                 autocast=True):
@@ -187,41 +209,17 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
     hidden losses are scaled by ``hidden_w``. A readout applies only when the
     window ends at the top (L1 == n), where logits exist. The window is rooted
     at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
-    norm/head receive none. Peak graph = window width."""
-    n = stack.n_layers
-    L1 = n if L1 is None else L1
-    loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
-    with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
-        h = h_in
-        losses = []
-        for L in range(L0, L1 + 1):
-            h = stack.run_block(L, h, pos_emb)
-            if L in targets:  # sparse targets: endpoint-sliding windows
-                losses.append(loss_fn(
-                    stack.loss_view(L, h)[0, s0: s0 + A], targets[L],
-                    normed=(L == n), layer=L))
-        total = hidden_w * sum(losses)
-        if readout_w > 0 and L1 == n:
-            logits = stack.lm_head(
-                stack.final_norm(h)[0, s0 + ans_off - 1: s0 + A - 1])
-            if readout_source == "teacher_kl":
-                # 100% teacher-sourced readout: targets[n] is the teacher's
-                # post-norm state at the aligned span — its logits through
-                # the frozen head ARE the context-conditioned distribution
-                with torch.no_grad():
-                    t_logits = stack.lm_head(
-                        targets[n][ans_off - 1: A - 1].to(logits.dtype))
-                total = total + readout_w * F.kl_div(
-                    F.log_softmax(logits.float(), dim=-1),
-                    F.log_softmax(t_logits.float(), dim=-1),
-                    log_target=True, reduction="batchmean")
-            else:
-                raise ValueError(
-                    f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
-                )
-    extra = pending_router_loss()
-    (total if extra is None else total + extra).backward()
-    return [l.detach() for l in losses], h.detach()
+    norm/head receive none. Peak graph = window width.
+
+    Single-item adapter over :func:`window_step_batch` — a B=1 batch is
+    bit-exact against the historical item code (same kernel shapes,
+    gather == slice)."""
+    batch = _span_batch(s0, A, s0 + ans_off)
+    losses, h = window_step_batch(
+        stack, L0, h_in, pos_emb, {L: t[None] for L, t in targets.items()},
+        batch, kind, readout_w, hidden_w=hidden_w, L1=L1,
+        readout_source=readout_source, autocast=autocast)
+    return [l[0] for l in losses], h
 
 
 def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
@@ -766,91 +764,6 @@ def _moe_row_maps(x, device):
     return rows, torch.ones(len(rows), dtype=torch.bool, device=device)
 
 
-def _summed_item(cfg, stack, loss_fn, it, targets, device):
-    """One item's pass on the student's own stream: block-local steps (or
-    sliding conn_window-connected windows) below, plus an optional teacher-KL
-    connected readout window at the top. ``targets`` is {L: [A, H]}
-    regardless of source (disk cache or online teacher)."""
-    n = stack.n_layers
-    ids = it.student_ids.to(device)[None]
-    pos = it.position_ids.to(device)[None]
-    h = stack.embed(ids)
-    pos_emb = stack.rope(h, pos)
-    readout0 = n - cfg.train.readout_window_blocks + 1 if cfg.train.readout_window_blocks > 0 else n + 1
-    W = max(cfg.train.conn_window, 1)
-    layer_losses = []
-    L = 1
-    while L <= n:
-        if L == readout0:
-            readout_targets = {LL: targets[LL] for LL in range(readout0, n + 1)}
-            readout_losses, h = window_step(
-                stack, readout0, h.detach(), pos_emb, readout_targets,
-                it.s0, it.A, it.ans0 - it.s0, loss_fn,
-                cfg.train.readout_weight,
-                hidden_w=cfg.train.window_hidden_weight,
-                readout_source=cfg.train.readout_source,
-            )
-            layer_losses.extend(readout_losses)
-            break
-        if W > 1 and cfg.train.conn_stride == 1:
-            # FAITHFUL sliding windows: one clean no-grad trajectory, then
-            # every body layer L1 is matched as the ENDPOINT of a window
-            # [L1-W+1 .. L1] whose backward updates ALL covered blocks —
-            # uniform k-deep credit for every layer (owner's design).
-            last_body = min(readout0 - 1, n)
-            with torch.no_grad():
-                h_traj = {L - 1: h.detach()}
-                t = h
-                for LL in range(L, last_body + 1):
-                    t = stack.run_block(LL, t, pos_emb)
-                    h_traj[LL] = t.detach()
-            if cfg.train.window_dedup:
-                def _endpoint_loss(L1, y):
-                    loss = loss_fn(stack.loss_view(L1, y)[0, it.s0: it.s0 + it.A],
-                                   targets[L1], normed=(L1 == n))
-                    return loss, loss.detach()
-                layer_losses.extend(_sliding_windows_dedup(
-                    stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
-            else:
-                for L1 in range(L, last_body + 1):
-                    L0 = max(1, L1 - W + 1)
-                    win_losses, _ = window_step(
-                        stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                        it.s0, it.A, it.ans0 - it.s0, loss_fn,
-                        readout_w=0.0, L1=L1,
-                    )
-                    layer_losses.extend(win_losses)
-            h = h_traj[last_body]
-            L = last_body + 1
-            continue
-        if W > 1:
-            # DISJOINT windows (conn_stride 0): detach every W blocks —
-            # cheap approximation; credit depth varies inside the window
-            L1 = min(L + W - 1, readout0 - 1, n)
-            win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
-            win_losses, h = window_step(
-                stack, L, h.detach(), pos_emb, win_targets,
-                it.s0, it.A, it.ans0 - it.s0, loss_fn,
-                readout_w=0.0, L1=L1,
-            )
-            layer_losses.extend(win_losses)
-            L = L1 + 1
-            continue
-        if L == n:
-            loss_val, h = last_block_step(
-                stack, h.detach(), pos_emb, targets[L], it.s0, it.A,
-                loss_fn,
-            )
-        else:
-            loss_val, h = local_block_step(
-                stack, L, h.detach(), pos_emb, targets[L],
-                it.s0, it.A, loss_fn,
-            )
-        layer_losses.append(loss_val)
-        L += 1
-    return layer_losses
-
-
 def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
     """Batched summed-schedule pass over padded examples.
 
@@ -964,27 +877,42 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
         for items in loader:
             if done:
                 break
-            if isinstance(items, Batch):
+            # item batching flows through the same batched stages as B=1
+            # padded batches: bit-identical to the historical item loop (no
+            # pad rows, gather == slice, same kernel shapes), one item per
+            # grad-accum increment exactly as before
+            batches = ([items] if isinstance(items, Batch)
+                       else [collate_padded_items([it]) for it in items])
+            for batch in batches:
+                if done:
+                    break
+                # teacher stage: aligned targets from the online teacher or
+                # the collated disk-cache slices
                 with (moe.teacher_phase() if moe else contextlib.nullcontext()):
-                    targets = (teacher.aligned_targets_batch(items, device)
-                               if online else items.hidden)
+                    targets = (teacher.aligned_targets_batch(batch, device)
+                               if online else batch.hidden)
                 if cfg.train.scramble_targets:
+                    # audit control: layer-permuted targets (see config)
                     import random as _rnd
                     perm = list(range(1, n + 1))
                     _rnd.Random(cfg.train.seed).shuffle(perm)
                     targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
                 if moe is not None:
-                    moe.set_maps(*_moe_row_maps(items, device))
+                    moe.set_maps(*_moe_row_maps(batch, device))
+                # trajectory + loss stages: the summed walk (backward happens
+                # inside _summed_batch, block-local by detach discipline)
                 with (moe.student_phase() if moe else contextlib.nullcontext()):
-                    layer_losses = _summed_batch(cfg, stack, loss_fn, items,
+                    layer_losses = _summed_batch(cfg, stack, loss_fn, batch,
                                                  targets, device)
-                accum += len(items.example_ids)
+                accum += len(batch.example_ids)
                 _extend_pending_from_batch(pending_losses, layer_losses)
+                # update stage: per-block clip + optimizer policy step at
+                # grad-accum boundaries
                 if accum >= next_step:
                     _flush_train_log(log, epoch=epoch, step=step,
                                      accum=accum, pending=pending_losses,
                                      n_layers=n,
-                                     batch_size=len(items.example_ids),
+                                     batch_size=len(batch.example_ids),
                                      batching=cfg.train.batching,
                                      **({"router_overlap": moe.overlap_flush()}
                                         if moe else {}))
@@ -997,42 +925,6 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                     next_step += cfg.train.grad_accum
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
                         done = True
-                continue
-            for it in items:
-                if done:
-                    break
-                with (moe.teacher_phase() if moe else contextlib.nullcontext()):
-                    targets = (teacher.aligned_targets(it, device) if online
-                               else {L: it.hidden[L].to(device) for L in range(1, n + 1)})
-                if cfg.train.scramble_targets:
-                    # audit control: layer-permuted targets (see config)
-                    import random as _rnd
-                    perm = list(range(1, n + 1))
-                    _rnd.Random(cfg.train.seed).shuffle(perm)
-                    targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
-                if moe is not None:
-                    moe.set_maps(*_moe_row_maps(it, device))
-                with (moe.student_phase() if moe else contextlib.nullcontext()):
-                    layer_losses = _summed_item(cfg, stack, loss_fn, it,
-                                                targets, device)
-                accum += 1
-                pending_losses.append(layer_losses)
-                if accum >= next_step:
-                    _flush_train_log(log, epoch=epoch, step=step,
-                                     accum=accum, pending=pending_losses,
-                                     n_layers=n,
-                                     **({"router_overlap": moe.overlap_flush()}
-                                        if moe else {}))
-                    if anchor is not None:
-                        a_ids, a_base = anchor[0].next()
-                        anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
-                                    a_ids, anchor[1], base_logits=a_base)
-                    plan.step()
-                    step += 1
-                    next_step += cfg.train.grad_accum
-                    if cfg.train.max_steps and step >= cfg.train.max_steps:
-                        done = True
-                        break
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True,
                          **({"router_overlap": moe.overlap_flush()}
@@ -1186,13 +1078,17 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                     layer_losses = _censored_item(cfg, stack, loss_fn, it,
                                                   t_states, device)
                 else:
+                    # student branch through the unified batched walk (B=1)
                     targets = {
                         L: (stack.final_norm(t_states[L][0, it.t0: it.t0 + it.A])
-                            if L == n else t_states[L][0, it.t0: it.t0 + it.A]).detach()
+                            if L == n else t_states[L][0, it.t0: it.t0 + it.A]
+                            ).detach()[None]
                         for L in range(1, n + 1)
                     }
-                    layer_losses = _summed_item(cfg, stack, loss_fn, it,
-                                                targets, device)
+                    batch_losses = _summed_batch(
+                        cfg, stack, loss_fn, collate_padded_items([it]),
+                        targets, device)
+                    layer_losses = [loss[0] for loss in batch_losses]
                 accum += 1
                 branch = "teacher" if use_teacher else "student"
                 branch_counts[branch] += 1

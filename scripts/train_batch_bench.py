@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from selfupdate.config import load_config
-from selfupdate.data.dataset import Batch
+from selfupdate.data.dataset import Batch, collate_padded_items
 from selfupdate.teacher.cache import TeacherCache, resolve_cache_dir
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import (
@@ -33,7 +33,6 @@ from selfupdate.train.layerwise import (
     _pp_device_map,
     _uses_pipeline_map,
     _summed_batch,
-    _summed_item,
     _validate_knob_schedule,
 )
 from selfupdate.train.losses import HiddenLoss
@@ -143,11 +142,12 @@ def bench(args) -> dict:
             max_seq = 0
             pad_tokens = 0
             for it in items:
-                targets = (teacher.aligned_targets(it, args.device)
-                           if teacher is not None
-                           else {L: it.hidden[L].to(args.device) for L in range(1, n + 1)})
-                layer_losses = _summed_item(cfg, stack, loss_fn, it, targets, args.device)
-                pending_losses.append(layer_losses)
+                b1 = collate_padded_items([it])
+                targets = (teacher.aligned_targets_batch(b1, args.device)
+                           if teacher is not None else b1.hidden)
+                layer_losses = _summed_batch(cfg, stack, loss_fn, b1, targets,
+                                             args.device)
+                _extend_pending_from_batch(pending_losses, layer_losses)
                 accum += 1
                 token_count += len(it.student_ids)
                 max_seq = max(max_seq, len(it.student_ids))

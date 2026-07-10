@@ -4,8 +4,17 @@ import torch
 
 from selfupdate.config import ExperimentConfig
 from selfupdate.data.dataset import Item, LengthBucketBatchSampler, collate_padded_items
-from selfupdate.train.layerwise import _summed_batch, _summed_item
+from selfupdate.train.layerwise import _summed_batch
 from selfupdate.train.losses import HiddenLoss
+
+
+def _summed_b1(cfg, stack, loss_fn, it, device="cpu"):
+    """The historical item path: one example per walk, now expressed as a
+    B=1 collated batch through the unified _summed_batch (bit-exact: no pad
+    rows, gather == slice)."""
+    b1 = collate_padded_items([it])
+    targets = {L: b1.hidden[L] for L in range(1, stack.n_layers + 1)}
+    return _summed_batch(cfg, stack, loss_fn, b1, targets, device)
 
 
 class TinyStack(torch.nn.Module):
@@ -90,7 +99,7 @@ def test_padded_summed_batch_matches_item_loop_for_local_blocks():
     loss_fn_batch = HiddenLoss("nmse", batch_stack.final_norm, batch_stack.lm_head)
 
     for it in items:
-        _summed_item(cfg, item_stack, loss_fn_item, it, it.hidden, "cpu")
+        _summed_b1(cfg, item_stack, loss_fn_item, it)
     batch = collate_padded_items(items)
     targets = {L: batch.hidden[L] for L in range(1, batch_stack.n_layers + 1)}
     _summed_batch(cfg, batch_stack, loss_fn_batch, batch, targets, "cpu")
@@ -117,7 +126,7 @@ def test_padded_summed_batch_matches_item_loop_for_sliding_readout():
     loss_fn_batch = HiddenLoss("nmse", batch_stack.final_norm, batch_stack.lm_head)
 
     for it in items:
-        _summed_item(cfg, item_stack, loss_fn_item, it, it.hidden, "cpu")
+        _summed_b1(cfg, item_stack, loss_fn_item, it)
     batch = collate_padded_items(items)
     targets = {L: batch.hidden[L] for L in range(1, batch_stack.n_layers + 1)}
     _summed_batch(cfg, batch_stack, loss_fn_batch, batch, targets, "cpu")
