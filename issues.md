@@ -21,45 +21,178 @@ the campaign done-list and the completed hot-loop ladder.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
 
-## Unconsidered lenses/losses (owner question, 2026-07-10)
+## OPEN — untested same-width teacher/student losses (owner question, 2026-07-10)
 
-Candidates never tried, each doctrine-checked (teacher-sourced,
-depth-uniform, Frozen-Vocabulary compatible):
+Scope: losses below have not been campaign-tested as trainer objectives in this
+branch (some already exist as diagnostics). Every target is produced by the
+teacher or frozen base model; none uses reference-text labels. Every per-layer
+term must use the same coefficient at every depth (or a depth-uniform sampled
+alternancy), embeddings/head remain frozen, and connected credit remains a
+sanctioned sliding window with `conn_stride: 1`. This is an idea ledger, not an
+implementation commitment.
 
-1. **Attention-KL**: match teacher-vs-student per-head attention
-   distributions at aligned positions. The mechanism story (README:
-   "divergence comes from attention into the privileged block") has
-   never been trained on directly — every loss so far targets the
-   residual stream, none the attention that writes it. Depth-uniform by
-   construction; distribution-shaped over POSITIONS not vocabulary, so
-   Law 7's groove mechanism (completion-direction concentration) does
-   not obviously apply — verify under the loss-safety protocol anyway.
-2. **Per-layer anchor (anchor-lens)**: anchor-KL is output-only; the
-   depth-uniform version is "stay near BASE trajectories on anchor
-   text" — per-layer vocab_mse/nmse toward base-model states on anchor
-   inputs. Directly aimed at C3 #9 (1.7B intrusion may live mid-stack
-   where an output-level anchor cannot see it).
-3. **Delta matching**: match the block UPDATE (h_L − h_{L−1}) instead of
-   the state h_L. layer_residuals shows residuals compound with depth;
-   state matching penalizes inherited upstream error, delta matching
-   trains each block's own contribution only. Natural companion to the
-   strict schedule; cheap to add to losses.py.
-4. **Whitened/covariance metric**: Mahalanobis in the base model's
-   activation covariance — completes the metric family between nmse
-   (isotropic) and vocab_mse (Gram W^T W). p-uniform, so Law 7 predicts
-   safe; tests whether vocab coordinates are special or just
-   well-conditioned.
-5. **Embedding lens on untied models**: decode hidden states through the
-   INPUT embedding. Was an "idea" in C1 (identical to logit lens on tied
-   ≤4B); now actionable — the C2modern bases (Gemma 4, Qwen3.6-27B) are
-   untied, giving an independent per-layer probe for free.
-6. **Contrastive hidden loss** (InfoNCE vs in-sequence negatives):
-   sharper than MSE without vocabulary-distribution shaping; unknown
-   safety — run small under the Law 7 protocol before believing it.
-7. **Reverse-KL readout** (KL(student‖teacher), mode-seeking): still
-   bounded by teacher top-1 (96.8%), so C2-34 predicts it cannot beat
-   the last-3% law — worth one cheap arm only as a tightness check of
-   that bound.
+### Priority A — best scientific bets
+
+1. **Successive block-increment matching (`delta_*`) — IMPLEMENTED 2026-07-11,
+   awaiting the controlled loss-grid campaign.** For block `L`, match
+   `d_s,L = h_s,L - stopgrad(h_s,L-1)` to
+   `d_t,L = h_t,L - h_t,L-1`, rather than matching the absolute `h_L` alone.
+   Implemented metrics are normalized MSE (`delta_nmse`), cosine
+   (`delta_cosine`), and the most promising form,
+   centered vocabulary-score cosine
+   `1-cos(C W d_s,L, C W d_t,L)` (`C` removes the vocabulary mean; head bias is
+   omitted because a vector contribution has no bias). This directly assigns a
+   block responsibility for what it adds and does not repeatedly charge layer
+   `L` for inherited student error. It therefore fits strict local training and
+   the observed compounding of residual mismatch. The implementation uses raw
+   interior updates only (`2 <= L < n`); layer 1 and the cache's post-final-norm
+   endpoint use their paired state metric, so no normalization operation is
+   misclassified as a transformer update. Test this current delta+boundary
+   objective against a future explicitly weighted state+delta objective,
+   because delta-only admits accumulated drift: all increments can be slightly
+   wrong while their local losses remain small.
+
+2. **Multi-scale/cumulative trajectory matching**. Match short finite
+   differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the
+   current sanctioned window), or cumulative change `h_L-h_0`, using normalized
+   MSE or centered vocabulary-score cosine. This interpolates between local
+   increment matching and absolute-state matching: `k=1` identifies the writer,
+   while larger `k` constrains accumulated drift and cross-block cooperation.
+   Use the same set of scales at every eligible depth and normalize each scale
+   by the teacher delta energy, otherwise long spans dominate. Main risk is
+   duplicated supervision and a larger effective gradient; report gradient
+   share per scale and compare at matched update norm, not merely equal nominal
+   weights.
+
+3. **Relational token-geometry distillation**. Instead of requiring every
+   hidden coordinate to coincide, match teacher/student relations among aligned
+   token rows: pairwise cosine matrix, normalized squared-distance matrix, or
+   centered Gram matrix. Example:
+   `||norm(H_s) norm(H_s)^T - norm(H_t) norm(H_t)^T||_F^2 / A^2` for aligned
+   length `A`. This is the same-width analogue of relational knowledge
+   distillation and may preserve verse/token organization while tolerating
+   harmless channel-scale error. It is teacher-sourced, depth-uniform, and
+   cheap because `A << hidden_width`. However, a rotation-invariant relational
+   loss alone is incompatible with the frozen next block/head: it can achieve
+   zero without returning to the teacher's coordinate system. Use it only as an
+   auxiliary beside `nmse` or `vocab_mse`, never alone. Include distance and
+   angle variants separately; they encode different invariances.
+
+4. **Attention-route distillation**. Match causal attention distributions for
+   each head and query at the aligned answer positions:
+   `mean KL(A_t || A_s)` over valid keys, optionally with a Jensen-Shannon or
+   squared-logit alternative. This targets the hypothesized mechanism directly:
+   attention from answer positions into privileged context writes the missing
+   information. Also test a lower-memory aggregate that matches attention mass
+   assigned to semantic regions (privileged span, stub, prefix, answer history)
+   rather than every key. Position distributions are not vocabulary
+   distributions, so the known completion-groove failure of Fisher/lens-KL need
+   not transfer, but head entropy and near-zero probabilities can make KL
+   brittle; temperature and masking must be pinned. Architectural caveat:
+   fused/flash kernels may not expose attention probabilities, and hybrid
+   attention/GatedDeltaNet models need a separate state-transition target.
+
+5. **Value/output contribution matching**. Attention weights alone do not say
+   what is written. Match each block's attention contribution after value and
+   output projection (`O_L`, before residual addition), or separately match
+   per-head value-weighted context vectors. Use normalized MSE/cosine and, where
+   feasible, centered vocabulary-score cosine after the heads are recombined.
+   This is more causally proximal than attention-KL and less underdetermined
+   (different attention maps can yield the same useful update). It requires
+   explicit hooks and careful definitions across GQA/MQA/fused kernels; saving
+   full per-head targets is expensive, so begin with the recombined attention
+   output. Keep the MLP contribution as a parallel target/control to determine
+   whether retrieval or transformation is the limiting writer.
+
+### Priority B — useful controls or higher-risk candidates
+
+6. **Offline-whitened/Mahalanobis hidden matching**. Estimate a regularized
+   activation covariance `Sigma_L` from a broad, frozen base-model calibration
+   corpus, then minimize
+   `(h_s-h_t)^T (Sigma_L + lambda I)^(-alpha) (h_s-h_t)` with
+   `alpha in {1/2,1}`. This asks whether `vocab_mse` wins because vocabulary
+   geometry is special or because it conditions anisotropic activations.
+   Per-item whitening/CKA is invalid here (`A` is often smaller than hidden
+   width and the covariance is rank-deficient); covariance must be accumulated
+   offline, shrinkage-regularized, frozen, and estimated independently per
+   layer. Clip inverse eigenvalues and report condition numbers. A low-rank
+   eigensystem plus isotropic remainder avoids an `H x H` device buffer.
+
+7. **Base-anchored trajectory preservation at every layer**. On general anchor
+   text, match the trained student's states to the frozen base model using
+   `nmse` or `vocab_mse` at every layer, while recall items retain the teacher
+   trajectory objective. Output anchor-KL only observes final behavior; this
+   version can prevent hidden damage before it becomes visible at the head and
+   directly tests whether 1.7B intrusion is written mid-stack. It is a
+   preservation loss rather than a new recall metric, and must be reported as
+   such. Balance by alternating recall/anchor batches rather than increasing
+   anchor weight with depth; compare destruction, recall, and parameter-update
+   norm at matched item budgets.
+
+8. **Cross-layer relational/flow loss**. Match teacher and student similarities
+   between successive layer representations for the same tokens, e.g. the
+   cosine matrix between `h_{L-1}` and `h_L`, or the normalized change in token
+   Gram matrices. This supervises how geometry evolves without insisting that
+   every coordinate or scale match exactly. It is related to delta matching but
+   measures transformation of relations rather than vector displacement.
+   Rotation invariance again makes it insufficient alone; pair it with a small
+   coordinate-anchoring term. Only adjacent or uniformly sampled fixed offsets
+   are legal—an output-biased layer pairing would violate the naming contract.
+
+9. **Contrastive trajectory loss (InfoNCE / soft nearest-neighbor)**. Treat the
+   same token and layer in teacher/student as the positive and other positions
+   (preferably other examples) as negatives. This may retain token identity and
+   prevent collapsed direction-only solutions. In-sequence negatives are often
+   false negatives in repeated verse, and batch size one gives a weak/biased
+   denominator; use a detached teacher queue or semantically filtered negatives.
+   Temperature strongly changes gradient scale. Run only after a collision-rate
+   audit, and always combine with an absolute metric because contrastive
+   alignment does not guarantee frozen-head compatibility.
+
+10. **Untied input-embedding metric**. On models whose input embedding and
+    unembedding are genuinely untied, define the quadratic metric induced by
+    the frozen input embedding, analogous to `vocab_mse`, or compare centered
+    scores under that matrix. It supplies an independent semantic geometry and
+    is identical/redundant on tied models. This is primarily a mechanistic
+    control: if it matches unembedding performance with less intrusion, output
+    vocabulary geometry is not uniquely necessary. Normalize by teacher energy
+    and verify orientation/scaling because model families implement tied and
+    untied heads differently.
+
+11. **Robust/adaptive combinations**. Existing Huber is fixed-scale. Untested
+    robust choices include per-token pseudo-Huber/Charbonnier, clipped NMSE,
+    and an uncertainty-balanced sum of state, delta, and relational losses.
+    These may stop a few high-error tokens/layers from setting the update.
+    Avoid learned unconstrained weights: they can silently create depth bias.
+    Prefer fixed global weights, GradNorm-style balancing with a single shared
+    coefficient per loss family, or normalize each component by its frozen
+    epoch-0 gradient norm. Log both raw and weighted loss per layer and epoch.
+
+### Low-priority bound checks (not expected winners)
+
+12. **Reverse or symmetric teacher-distribution divergence**. Reverse KL
+    `KL(student || teacher)` is mode-seeking; Jensen-Shannon and temperature-
+    softened symmetric KL are bounded/more balanced. These remain shaped by the
+    teacher vocabulary distribution and therefore inherit the measured groove
+    risk (`vocab_fisher` intrusion 57.5%, `lens_kl` 90%). They also cannot supply
+    information absent from the teacher's distribution, so C2-34 predicts they
+    cannot solve the last-3% readout problem. At most run one small loss-safety
+    arm as a tightness/control experiment, not a broad sweep.
+
+### Required screen before a full loss sweep
+
+Implement one loss at a time and certify the trainer before launching. First
+run a short mechanics/locality job, but never terminate a real training arm
+before 12,000 items. Then compare on the same two promising model/checkpoint
+families, identical data order and item budget, evaluating recall for the
+checkpoint's actual corpus/corpora plus the standard benchmark damage subset at
+epoch 0 and every epoch. Persist raw and weighted loss, gradient norm/share,
+update norm, and per-layer values for every epoch. Continue past 12,000 items
+only while recall is improving without crossing the predeclared destruction
+budget; a falling proxy loss alone is not evidence of useful learning. Priority
+order for the first matrix: `delta_vocab_cos`, state+delta, relational+state,
+attention-output matching, then offline-whitened NMSE. Do not sweep Fisher-like
+or reverse-KL variants until those geometry-based candidates have been tested.
 
 ## Test-suite economics (2026-07-10; owner: "token sinkholes")
 
@@ -85,34 +218,19 @@ regenerated), quijote rung conflation (rung-level corpora everywhere),
 validator holes H1-H4 (anchor/stride/readout-weight/tail-only-per-class
 + hidden_loss=zero disguise). Still open, priority order:
 
-1. `eval/tasks.py` EOS lookup: `convert_tokens_to_ids("<|im_end|>")`
-   returns unk id 0 on SentencePiece (Mistral) — generation never stops;
-   use `chatfmt.stop_token_id` as recite.py does.
-2. `evaluate.py --layer-residuals` adopts model+poem from the checkpoint
-   but examples/mask geometry from base.yaml — Quijote/stub_gap
-   checkpoints measured against wrong dataset unless --experiment is
-   passed; adopt the whole data/mask block or refuse.
-3. `_stage_source` mkdir-lock has no stale-owner detection: a killed
-   copy job wedges every later job on that model/node silently.
-4. `cache.hidden_dtype` is hash-only (writer hardcodes fp16, no
-   overflow guard — 8B+ outlier channels could cache as inf).
-5. `find_poem_spans`: no word-boundary anchors (mid-word censor starts);
+1. `find_poem_spans`: no word-boundary anchors (mid-word censor starts);
    single-punctuation deviation escapes whole-verse censoring
    (thinking_selective arms).
-6. `router_aligned` + `window_dedup`: fails deep in item 1 with a
-   misleading "graph leak" tripwire — reject at validation.
-7. Minors: poem.py window ranges never reach the last verse (fix in
+2. Minors: poem.py window ranges never reach the last verse (fix in
    v-next dataset gen; v1 is byte-guarded); config merge is one-level
-   (nested dict override resets siblings); tasks_eval never calls
-   model.eval() (matters when dropout appears); 4 dead PENDING rows in
-   scripts/queue.tsv reference deleted configs; analyze.py reads
-   retired "general" key unguarded; dead CLI flags on evaluate.py
-   (--batch-size etc. silently ignored post-retirement); "gold" →
-   "reference" rename pending in retention_eval.py / surprise_probe.py /
-   cross_report.py / make_figs.py; only ARC-Easy is repo-pinned
-   (hellaswag/arc_challenge/wikitext float on HF revisions); /tmp eval
-   staging never cleaned (~170 GB/node at full fleet); audit_configs
-   does not scan queue TSVs and its OLD_KEYS blacklist is name-based.
+   (nested dict override resets siblings); 4 dead PENDING rows in
+   scripts/queue.tsv reference deleted configs; analyze.py reads retired
+   "general" key unguarded; dead CLI flags on evaluate.py (--batch-size
+   etc. silently ignored post-retirement); "gold" → "reference" rename
+   pending in retention_eval.py / surprise_probe.py / cross_report.py /
+   make_figs.py; /tmp eval staging never cleaned (~170 GB/node at full
+   fleet); audit_configs does not scan queue TSVs and its OLD_KEYS blacklist
+   is name-based.
 
 ## Campaign roadmap beyond C2 (sketched 2026-07-04, owner question)
 
@@ -253,3 +371,93 @@ lw_r_s43_pinned: shallow layers track the teacher tightly (h1 nmse
 0.002), residuals grow with depth and depart sharply inside the readout
 window (h21-h28: 0.17-0.83) — storage quality now measurable separately
 from training loss.
+
+## Review-doc findings — full backlog preserved before `git rm` (2026-07-11)
+
+The three review docs (`FableReviewBy55xh.md` 2026-07-05,
+`docs/fable_review_2026-07-10.md`, `docs/fable_review_status_2026-07-07.md`)
+were removed 2026-07-11; their full finding records remain in git history.
+The abbreviated "Open review findings" section above kept only the headline
+items — this is the COMPLETE still-open list distilled from the deleted
+2026-07-10 four-agent review plus the 2026-07-05 research gaps, so nothing is
+lost with the docs gone. (`recommendations.md` was NOT a review and is kept —
+it self-declares as the standing experiment-corpus SPEC, all worklist items
+COMPLETE, live work delegated here and to EXPERIMENTS.md.)
+
+Fixed since the reviews (do NOT re-file): `find_poem_spans` word boundaries
+(b213afc); 15 dead `queue.tsv` rows disabled (5c75662); `audit_configs` now
+scans queue-referenced run-dir snapshots (23961e4); "gold"→"reference" in
+surprise_probe/cross_report/make_figs (2bb29a7); validator holes H1-H4
+(anchor/stride/readout-weight/tail-only-per-class + `hidden_loss=zero`
+disguise, 723e7af); ALIA left-pad scoring + quijote rung conflation
+(0cdd526 / 800e546); `teacher_ceiling.py` stale-CER retirement + `tasks_eval`
+`with_context` (c2ebf06). By the concurrent eval-integrity agent (uncommitted
+working tree — VERIFY before re-filing): `tasks_eval` now calls `model.eval()`
+and restores training mode; `tasks.py` EOS via `chatfmt.stop_token_id`
+(SentencePiece/Mistral stop fix); cache-dtype (`test_cache_dtype.py`) and
+`--layer-residuals` config adoption appear in progress.
+
+STILL OPEN — trainer / compliance:
+- `audit_configs` `OLD_KEYS` blacklist is name-based, not structural — a
+  renamed banned knob would slip through.
+- The "gold"→"reference" lexicon purge is unenforced by any guard, and still
+  present in `retention_eval.py` (DEFERRED on purpose: its "gold" dict key is
+  `CACHE_VERSION`-gated and that same version also gates the retention-eval
+  resumability check, so a blind rename forces a full-fleet GPU re-run — needs
+  a cache migration, not a sed).
+- `router_aligned` + `window_dedup`: `_sliding_windows_dedup` never drains
+  `pending_router_loss()`, so the combo dies deep in item 1 with a misleading
+  "graph leak" tripwire instead of failing at validation.
+- Latent: stale `_shared_kv_states` in `_censored_item` on the LoRA path
+  (harmless for all current architectures; wrong-length teacher KV for a
+  future shared-KV family); `teacher_censored` + PP crashes cross-device at
+  item 1 (fail-loud, combo unused); `teacher_rows.clamp_min(0)` would mis-map
+  the first readout row if a data mode ever had an empty mid (masking
+  currently guarantees nonempty); `readout_window_blocks > n` KeyErrors
+  (nonsense config, unvalidated).
+- `docs/runtime.md` overstates sliding-path activation-residency (peak
+  detached-state residency is full depth).
+
+STILL OPEN — eval stack:
+- Dead CLI flags silently ignored on `evaluate.py` AND `teacher_ceiling.py`
+  (`--batch-size`/`--score-workers`/`--shuffle-seed`/`--bucket-by-length`: no
+  batching exists in `tasks_eval`) — the branch's own knob-flow law; clean the
+  queue rows and reject, or warn loudly.
+- `_stage_source` mkdir-lock has no stale-owner detection; a killed copy job
+  wedges lanes silently.
+- `training_scope` field mislabeled under the `--recall-corpora` override.
+- schema v2 dropped the "general" key but `analyze.py:31` and
+  `build_corpus_index.py` still read it unguarded.
+- Only ARC-Easy is repo-pinned; hellaswag/arc_challenge/wikitext float on HF
+  revisions (a pinned wikitext file exists but is ignored).
+- `/tmp` eval staging is never cleaned (~170 GB/node at full fleet).
+- Report denominators are self-referential: a run missing `tasks.json`
+  vanishes silently instead of erroring.
+- `standard_bases` prefers the 3-task teacher file over a richer 5-bench
+  destruction base (transitional).
+- Test coverage misses base-keying and `collect()` end-to-end.
+
+STILL OPEN — data / masking / teacher / config:
+- `cache.hidden_dtype` is hash-only: the writer hardcodes fp16 regardless, and
+  fp32→fp16 truncation has no finite-check — an 8B+ deep-layer channel above
+  65504 caches as inf and poisons every run on that cache. (Concurrent agent
+  likely addressing — verify `test_cache_dtype.py` before re-filing.)
+- continuation/maieutic window ranges are off by one: the last verse is
+  unreachable in any continuation/maieutic answer (fix belongs in a v-next
+  dataset; v1 is byte-identity-guarded).
+- Config merge is one level deep: an experiment overriding one key of a nested
+  dict silently resets its siblings to dataclass defaults.
+- `adapt_records` probes only `records[0]`; a mixed-template jsonl trains later
+  records on the wrong format silently.
+- `_matches` KeyErrors on legacy records before the curated "rebuild
+  examples.jsonl" error can fire.
+- Trace harvest stops only on `</think>`; a malformed trace freezes
+  turn-boundary tokens inside the privileged block, unwarned.
+- Dataset/cache span check omits t0 / position_gap (free to check; narrows a
+  tokenizer-drift window).
+- rag_tool/thinking builds drop the corpus style's system prompt.
+
+STILL OPEN — research gaps (2026-07-05 review; also tracked in EXPERIMENTS.md
+C3 queue): teacher-stream k-windows not implemented (C3 #1); H100
+throughput / memory / PP-TP evidence absent (L40S evidence complete); 1.7B
+cleanliness (intrusion 22-40% at 1.7B vs 1.5-2.5% at 0.6B).

@@ -13,8 +13,9 @@ context, or move it to `../selfupdate_kd`.
 Status: the closed sections (the 2026-07-05 tooling done-list and "Branch
 Hygiene First", completed 2026-07-05/07; hot-loop/parallel items, completed
 2026-07-10) were removed on 2026-07-10 — git history keeps them. Live
-remaining work is tracked in `docs/fable_review_status_2026-07-07.md`; what
-follows is the standing SPEC for the experiment corpus, not a todo list.
+remaining work is tracked in `issues.md` (the review docs, including the
+2026-07-07 status tracker, were removed 2026-07-11; git history keeps them);
+what follows is the standing SPEC for the experiment corpus, not a todo list.
 
 ## Outcome Wanted
 
