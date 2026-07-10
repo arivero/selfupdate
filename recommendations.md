@@ -84,9 +84,9 @@ Each finished run should have:
 - `runs/<run>/eval/weight_deltas.csv` for full fine-tune, or LoRA delta summary
 - `runs/<run>/eval/recite_long.json` for crown candidates
 
-Status 2026-07-10: `layer_loss_plots.py` emits per-run PNG + heatmap + CSV
-and `forget_curves.py` emits per-run curves (done 2026-07-05/07);
-checkpoint-time layer residuals are still missing (the one open bundle gap).
+Status 2026-07-10 (late): the bundle has no open gaps — `layer_loss_plots.py`
+and `forget_curves.py` landed 2026-07-05/07, and checkpoint-time layer
+residuals landed 2026-07-10 (`evaluate.py --layer-residuals`).
 
 ## Required Plots
 
@@ -369,14 +369,11 @@ The report should fail or warn loudly when:
 
 ## Analysis Script Worklist
 
-Remaining (audit/corpus-index/layer-loss/forget-curve items landed
-2026-07-05/07; the report.py rebuild was superseded by `cross_report.py` +
-the retention battery):
-
-- `scripts/evaluate.py`: add `--layer-residuals`.
-- `scripts/model_matrix.py`: produce the cross-model comparison figure.
-- `scripts/conclusion_check.py`: verify every claim has required runs and no
-  confounded dependencies.
+COMPLETE as of 2026-07-10: audit/corpus-index/layer-loss/forget-curve items
+landed 2026-07-05/07; the report.py rebuild was superseded by
+`cross_report.py` + the retention battery; `evaluate.py --layer-residuals`,
+`scripts/model_matrix.py`, and `scripts/conclusion_check.py` all landed
+2026-07-10.
 
 ## Minimum Gates For Future Claims
 
@@ -394,11 +391,10 @@ A claim can be promoted only if:
 
 ## Immediate Next Steps
 
-(Steps 1-4, 6, and the report regeneration are done/superseded — removed
-2026-07-10.)
+All done as of 2026-07-10 (layer residuals + `runs/conclusions.yaml`
+landed; earlier steps removed to git history). This file is now pure
+standing SPEC; live work is the C3 queue in `EXPERIMENTS.md` and the
+open-findings backlog in `issues.md`.
 
-1. Add checkpoint layer-residual eval (`evaluate.py --layer-residuals`).
-2. Build `runs/conclusions.yaml` from current `EXPERIMENTS.md`.
-
-The immediate target is not more arms. It is making the existing arms
-queryable, comparable, and impossible to misclassify.
+The standing principle: the target is not more arms. It is making the
+existing arms queryable, comparable, and impossible to misclassify.

@@ -7,23 +7,112 @@ the campaign done-list and the completed hot-loop ladder.
 
 ## Future Work
 
-1. **Window capacity**: if final_k8 did not restore the 708-verse chain,
-   build v4.1 with extra long-window replicas (the dilution hypothesis);
-   study k as a budgetable capacity (triggers vs anchors vs depth).
-2. **thinking_selective mask** (1d): full design in the campaign plan file
-   (multi-privileged-span masking, find_poem_spans matcher,
-   prefix-truncation fallback). Context update: reasoning-tuned families
-   RESIST the recipe (Phi 0.918, gpt-oss 1.0) — selective think-censoring
-   may be the way readout training reaches their output channels.
-3. **Reasoning-family question**: why think/analysis-channel models fail;
-   try training with the channel present in the student prompt.
-4. **Tuned-lens program** (Wave I plan, still pending): per-layer
-   translators for calibrated depth profiles; tuned-lens-CE auxiliary.
+1. **Window capacity as a budget**: study k as a budgetable capacity
+   (triggers vs anchors vs depth). (The final_k8/708-chain conditional
+   resolved in C1: k=8 restored the chain; thinking_selective landed in
+   C2-12 and continues as C3 #2.)
+4. **Tuned-lens program** (partially landed): translators + C2-11
+   re-profiles are in tree (train_tuned_lens.py, tl_i_tunedlenskl). The
+   Wave-I "tuned-lens-CE auxiliary" half is FORBIDDEN as label-CE; only
+   the teacher-sourced tuned-lens-KL variant is a legal continuation.
 5. **Scale**: final recipe at 4B/8B full-FT (sequential/offload_adam for
    VRAM — tail_only is expunged on this branch), 14B+ LoRA; Don Quijote
    data engineering.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
+
+## Unconsidered lenses/losses (owner question, 2026-07-10)
+
+Candidates never tried, each doctrine-checked (teacher-sourced,
+depth-uniform, Frozen-Vocabulary compatible):
+
+1. **Attention-KL**: match teacher-vs-student per-head attention
+   distributions at aligned positions. The mechanism story (README:
+   "divergence comes from attention into the privileged block") has
+   never been trained on directly — every loss so far targets the
+   residual stream, none the attention that writes it. Depth-uniform by
+   construction; distribution-shaped over POSITIONS not vocabulary, so
+   Law 7's groove mechanism (completion-direction concentration) does
+   not obviously apply — verify under the loss-safety protocol anyway.
+2. **Per-layer anchor (anchor-lens)**: anchor-KL is output-only; the
+   depth-uniform version is "stay near BASE trajectories on anchor
+   text" — per-layer vocab_mse/nmse toward base-model states on anchor
+   inputs. Directly aimed at C3 #9 (1.7B intrusion may live mid-stack
+   where an output-level anchor cannot see it).
+3. **Delta matching**: match the block UPDATE (h_L − h_{L−1}) instead of
+   the state h_L. layer_residuals shows residuals compound with depth;
+   state matching penalizes inherited upstream error, delta matching
+   trains each block's own contribution only. Natural companion to the
+   strict schedule; cheap to add to losses.py.
+4. **Whitened/covariance metric**: Mahalanobis in the base model's
+   activation covariance — completes the metric family between nmse
+   (isotropic) and vocab_mse (Gram W^T W). p-uniform, so Law 7 predicts
+   safe; tests whether vocab coordinates are special or just
+   well-conditioned.
+5. **Embedding lens on untied models**: decode hidden states through the
+   INPUT embedding. Was an "idea" in C1 (identical to logit lens on tied
+   ≤4B); now actionable — the C2modern bases (Gemma 4, Qwen3.6-27B) are
+   untied, giving an independent per-layer probe for free.
+6. **Contrastive hidden loss** (InfoNCE vs in-sequence negatives):
+   sharper than MSE without vocabulary-distribution shaping; unknown
+   safety — run small under the Law 7 protocol before believing it.
+7. **Reverse-KL readout** (KL(student‖teacher), mode-seeking): still
+   bounded by teacher top-1 (96.8%), so C2-34 predicts it cannot beat
+   the last-3% law — worth one cheap arm only as a tightness check of
+   that bound.
+
+## Test-suite economics (2026-07-10; owner: "token sinkholes")
+
+Suite: 126 tests, ~51 s warm / ~149 s cold. No single hog (slowest test
+4.7 s) — the cost is structural: ~10 GPU test modules EACH load
+Qwen3-0.6B separately (module-scoped fixtures, no session sharing), so
+most wall-clock is repeated model loads, not assertions. Worst
+offenders by measurement: test_online_teacher (3 of the 4 slowest tests
++ 14 torch.jit deprecation warnings — `jit.script_method` removal risk
+on the next torch bump), test_anchor, test_mixed_schedule,
+test_position_invariance. Proposals:
+- session-scoped shared 0.6B BlockStack fixture (tests freeze
+  non-blocks; give mutating tests function-scoped adapters/deepcopies);
+- `-m slow` marker on GPU-model tests so the certify gate can run a
+  fast lane first;
+- replace the torch.jit usage in the online-teacher path/tests before
+  torch removes it.
+
+## Open review findings (multi-agent review 2026-07-10)
+
+Fixed same-day: ALIA left-pad scoring corruption (+ artifacts
+regenerated), quijote rung conflation (rung-level corpora everywhere),
+validator holes H1-H4 (anchor/stride/readout-weight/tail-only-per-class
++ hidden_loss=zero disguise). Still open, priority order:
+
+1. `eval/tasks.py` EOS lookup: `convert_tokens_to_ids("<|im_end|>")`
+   returns unk id 0 on SentencePiece (Mistral) — generation never stops;
+   use `chatfmt.stop_token_id` as recite.py does.
+2. `evaluate.py --layer-residuals` adopts model+poem from the checkpoint
+   but examples/mask geometry from base.yaml — Quijote/stub_gap
+   checkpoints measured against wrong dataset unless --experiment is
+   passed; adopt the whole data/mask block or refuse.
+3. `_stage_source` mkdir-lock has no stale-owner detection: a killed
+   copy job wedges every later job on that model/node silently.
+4. `cache.hidden_dtype` is hash-only (writer hardcodes fp16, no
+   overflow guard — 8B+ outlier channels could cache as inf).
+5. `find_poem_spans`: no word-boundary anchors (mid-word censor starts);
+   single-punctuation deviation escapes whole-verse censoring
+   (thinking_selective arms).
+6. `router_aligned` + `window_dedup`: fails deep in item 1 with a
+   misleading "graph leak" tripwire — reject at validation.
+7. Minors: poem.py window ranges never reach the last verse (fix in
+   v-next dataset gen; v1 is byte-guarded); config merge is one-level
+   (nested dict override resets siblings); tasks_eval never calls
+   model.eval() (matters when dropout appears); 4 dead PENDING rows in
+   scripts/queue.tsv reference deleted configs; analyze.py reads
+   retired "general" key unguarded; dead CLI flags on evaluate.py
+   (--batch-size etc. silently ignored post-retirement); "gold" →
+   "reference" rename pending in retention_eval.py / surprise_probe.py /
+   cross_report.py / make_figs.py; only ARC-Easy is repo-pinned
+   (hellaswag/arc_challenge/wikitext float on HF revisions); /tmp eval
+   staging never cleaned (~170 GB/node at full fleet); audit_configs
+   does not scan queue TSVs and its OLD_KEYS blacklist is name-based.
 
 ## Campaign roadmap beyond C2 (sketched 2026-07-04, owner question)
 

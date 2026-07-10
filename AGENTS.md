@@ -202,8 +202,10 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
 - Strict hidden matching stores signal but weakly recites; the readout is the
   hard part.
-- Tail-CE is the current best lever: keep hidden matching as storage, connect a
-  small final block window for behavioral credit.
+- Sliding uniform windows are the lever (C2-26/30): hidden matching stores,
+  uniform k=8 credit + a mimicry-free top window reads out clean. (The C1-era
+  "tail-CE is the best lever" reading is superseded — tail windows are banned
+  on this branch.)
 - `teacher_censored` is useful both as a schedule and as a localization
   readout; context integration peaked near layer 7 in Qwen3-0.6B artifacts.
 - Eval on the full corpus. The 8-example training subset can hide severe
