@@ -33,7 +33,8 @@ def _traj(stack, ids):
     return traj
 
 
-def test_dedup_matches_window_replay_exact_fp32():
+@pytest.mark.parametrize("kind", ("nmse", "delta_nmse"))
+def test_dedup_matches_window_replay_exact_fp32(kind):
     base = TinyStack()
     base.freeze_non_blocks()
     it = _items(base)[0]
@@ -42,23 +43,30 @@ def test_dedup_matches_window_replay_exact_fp32():
     W, n = 3, base.n_layers
 
     replay = copy.deepcopy(base)
-    loss_fn_r = HiddenLoss("nmse")
+    loss_fn_r = HiddenLoss(kind)
     traj_r = _traj(replay, ids)
     replay_losses = []
     for L1 in range(1, n + 1):
         L0 = max(1, L1 - W + 1)
         wl, _ = window_step(replay, L0, traj_r[L0 - 1], None,
                             {L1: targets[L1]}, it.s0, it.A, it.ans0 - it.s0,
-                            loss_fn_r, readout_w=0.0, L1=L1, autocast=False)
+                            loss_fn_r, readout_w=0.0, L1=L1, autocast=False,
+                            all_targets=targets)
         replay_losses.extend(wl)
 
     dedup = copy.deepcopy(base)
-    loss_fn_d = HiddenLoss("nmse")
+    loss_fn_d = HiddenLoss(kind)
     traj_d = _traj(dedup, ids)
 
-    def _endpoint(L1, y):
-        loss = loss_fn_d(dedup.loss_view(L1, y)[0, it.s0: it.s0 + it.A],
-                         targets[L1], normed=(L1 == n))
+    def _endpoint(L1, x, y):
+        if loss_fn_d.is_delta and 1 < L1 < n:
+            loss = loss_fn_d.delta(
+                y[0, it.s0: it.s0 + it.A], x[0, it.s0: it.s0 + it.A],
+                targets[L1], targets[L1 - 1],
+            )
+        else:
+            loss = loss_fn_d(dedup.loss_view(L1, y)[0, it.s0: it.s0 + it.A],
+                             targets[L1], normed=(L1 == n))
         return loss, loss.detach()
 
     dedup_losses = _sliding_windows_dedup(dedup, 1, n, W, traj_d, None,
@@ -131,3 +139,25 @@ def test_window_dedup_knob_requires_sliding_windows():
         _validate_knob_schedule(cfg)
     cfg.train.conn_stride = 1
     _validate_knob_schedule(cfg)
+
+
+def test_window_dedup_rejects_router_aligned_graph_capture():
+    cfg = _sliding_cfg(True)
+    cfg.train.lora.enabled = True
+    cfg.train.online_teacher = True
+    cfg.train.moe_mode = "router_aligned"
+    cfg.train.moe_router_weight = 0.1
+    with pytest.raises(ValueError, match="window_dedup with router_aligned"):
+        _validate_knob_schedule(cfg)
+
+
+def test_epoch_standard_probe_config_validation():
+    cfg = _sliding_cfg(False)
+    cfg.eval.standard_damage_every_epochs = 1
+    cfg.eval.standard_damage_limit = 0
+    with pytest.raises(ValueError, match="standard_damage_limit"):
+        _validate_knob_schedule(cfg)
+    cfg.eval.standard_damage_limit = 16
+    cfg.eval.recall_corpora = ["not_a_corpus"]
+    with pytest.raises(ValueError, match="unknown eval.recall_corpora"):
+        _validate_knob_schedule(cfg)

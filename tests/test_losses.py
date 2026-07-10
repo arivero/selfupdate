@@ -1,6 +1,7 @@
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from selfupdate.train.losses import HiddenLoss, hidden_match
 
@@ -58,6 +59,8 @@ def test_vocab_kinds_require_norm_and_head():
         HiddenLoss("vocab_mse")
     with pytest.raises(ValueError):
         HiddenLoss("lens_kl", final_norm=nn.RMSNorm(H))
+    with pytest.raises(ValueError):
+        HiddenLoss("delta_vocab_cos", final_norm=nn.RMSNorm(H))
 
 
 def test_vocab_mse_matches_logit_space_mse():
@@ -161,3 +164,60 @@ def test_vocab_fisher_weights_toward_teacher_support():
     l_hi = loss(ht + 0.1 * e_hi[None], ht)
     l_lo = loss(ht + 0.1 * e_lo[None], ht)
     assert l_hi.item() > l_lo.item()
+
+
+def test_delta_losses_match_identical_updates_and_stop_previous_gradient():
+    torch.manual_seed(21)
+    prev = torch.randn(9, H, requires_grad=True)
+    teacher_prev = torch.randn(9, H)
+    teacher_delta = torch.randn(9, H)
+    teacher = teacher_prev + teacher_delta
+    student = (prev.detach() + teacher_delta).requires_grad_(True)
+    for kind in ("delta_nmse", "delta_cosine"):
+        loss = HiddenLoss(kind).delta(student, prev, teacher, teacher_prev)
+        assert loss.item() < 1e-6, kind
+    # A perturbed update has a gradient only through the newly produced state;
+    # ``prev`` is deliberately a stop-gradient subtraction operand.
+    loss = HiddenLoss("delta_nmse").delta(
+        student + 0.2 * torch.randn_like(student), prev, teacher, teacher_prev,
+    )
+    loss.backward()
+    assert student.grad is not None and student.grad.abs().sum() > 0
+    assert prev.grad is None
+
+
+def test_delta_vocab_cos_matches_explicit_centred_vocab_scores():
+    torch.manual_seed(22)
+    norm = nn.RMSNorm(H)
+    head = nn.Linear(H, V, bias=False)
+    loss = HiddenLoss("delta_vocab_cos", final_norm=norm, lm_head=head)
+    s_prev = torch.randn(7, H, requires_grad=True)
+    t_prev = torch.randn(7, H)
+    s = (s_prev.detach() + torch.randn(7, H)).requires_grad_(True)
+    t = t_prev + torch.randn(7, H)
+
+    got = loss.delta(s, s_prev, t, t_prev)
+    W = head.weight.detach()
+    ds = (s - s_prev.detach()) @ W.T
+    dt = (t - t_prev) @ W.T
+    ds = ds - ds.mean(dim=-1, keepdim=True)
+    dt = dt - dt.mean(dim=-1, keepdim=True)
+    want = 1.0 - F.cosine_similarity(ds, dt, dim=-1).mean()
+    assert torch.allclose(got, want, rtol=1e-5, atol=1e-6)
+
+    got.backward()
+    assert s.grad is not None and s.grad.abs().sum() > 0
+    assert s_prev.grad is None  # the delta's preceding state is stop-gradient
+    assert all(p.grad is None for p in head.parameters())
+
+
+def test_delta_vocab_cos_uses_vocab_mse_at_cache_boundaries():
+    """The cache's absent h0 and post-norm h_n retain a meaningful state loss."""
+    torch.manual_seed(23)
+    norm = nn.RMSNorm(H)
+    head = nn.Linear(H, V, bias=False)
+    delta = HiddenLoss("delta_vocab_cos", final_norm=norm, lm_head=head)
+    state = HiddenLoss("vocab_mse", final_norm=norm, lm_head=head)
+    hs, ht = torch.randn(6, H), torch.randn(6, H)
+    assert torch.allclose(delta(hs, ht, normed=True),
+                          state(hs, ht, normed=True), rtol=1e-6)

@@ -1,5 +1,6 @@
 import copy
 
+import pytest
 import torch
 
 from selfupdate.config import ExperimentConfig
@@ -107,13 +108,14 @@ def test_padded_summed_batch_matches_item_loop_for_local_blocks():
     _assert_same_grads(_block_grads(item_stack), _block_grads(batch_stack))
 
 
-def test_padded_summed_batch_matches_item_loop_for_sliding_readout():
+@pytest.mark.parametrize("hidden_loss", ("nmse", "delta_nmse", "delta_vocab_cos"))
+def test_padded_summed_batch_matches_item_loop_for_sliding_readout(hidden_loss):
     base = TinyStack()
     base.freeze_non_blocks()
     items = _items(base)
     cfg = ExperimentConfig()
     cfg.model.device = "cpu"
-    cfg.train.hidden_loss = "nmse"
+    cfg.train.hidden_loss = hidden_loss
     cfg.train.conn_window = 2
     cfg.train.conn_stride = 1
     cfg.train.readout_window_blocks = 2
@@ -122,8 +124,8 @@ def test_padded_summed_batch_matches_item_loop_for_sliding_readout():
 
     item_stack = copy.deepcopy(base)
     batch_stack = copy.deepcopy(base)
-    loss_fn_item = HiddenLoss("nmse", item_stack.final_norm, item_stack.lm_head)
-    loss_fn_batch = HiddenLoss("nmse", batch_stack.final_norm, batch_stack.lm_head)
+    loss_fn_item = HiddenLoss(hidden_loss, item_stack.final_norm, item_stack.lm_head)
+    loss_fn_batch = HiddenLoss(hidden_loss, batch_stack.final_norm, batch_stack.lm_head)
 
     for it in items:
         _summed_b1(cfg, item_stack, loss_fn_item, it)
