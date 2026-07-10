@@ -248,7 +248,7 @@ def fig7():
     ax.plot(tuned.layer, tuned.base_logprob, color=C["vocab_mse"], lw=1.0, ls=":",
             label="tuned lens, base")
     ax.set_xlabel("layer", fontsize=8)
-    ax.set_ylabel("gold-token logprob (student input)", fontsize=8)
+    ax.set_ylabel("reference-token logprob (student input)", fontsize=8)
     ax.legend(fontsize=7, frameon=False, ncols=2)
     ax.set_title("Calibration lifts every layer ~4-5 nats, but the trained-base gap still\n"
                  "opens only at L22+: deep storage is not secretly readable (strict arm)",

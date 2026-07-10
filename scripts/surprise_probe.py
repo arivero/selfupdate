@@ -21,8 +21,8 @@ both views with eager attention.
   student view  = privileged block removed (what the student must reproduce)
   teacher view  = privileged block present (the reference behaviour)
 Per aligned answer token:
-  s_nll   student-view NLL(gold)
-  t_nll   teacher-view NLL(gold)
+  s_nll   student-view NLL(reference)
+  t_nll   teacher-view NLL(reference)
   excess  s_nll - t_nll        (surprise the privileged context resolves)
   t_priv  teacher attention mass on the privileged block at that query
   t_ctx   teacher attention mass on prior in-context (uncensored) tokens
@@ -91,7 +91,7 @@ def _forward(model, ids: list[int], device: str, want_attn: bool):
 
 @torch.no_grad()
 def _nll(logits: torch.Tensor, ids: list[int], answer: slice) -> list[float]:
-    """Per-token NLL(gold) over the answer span (causal: pos p predicted by p-1)."""
+    """Per-token NLL(reference) over the answer span (causal: pos p predicted by p-1)."""
     out = []
     for p in range(answer.start, answer.stop):
         if p == 0:
@@ -150,9 +150,9 @@ def probe(model, tok, pairs, heads, special_ids, device: str) -> pd.DataFrame:
             q = pair.t_answer.start + p  # teacher query at the answer token
             t_priv, t_ctx, top_ctx = _teacher_attn_footprint(
                 t_out.attentions, heads, priv, q, keep)
-            gold = pair.teacher_ids[pair.t_answer.start + p]
+            reference = pair.teacher_ids[pair.t_answer.start + p]
             rows.append({
-                "gold": tok.decode([gold]).strip(),
+                "reference": tok.decode([reference]).strip(),
                 "s_nll": s_nll[p],
                 "t_nll": t_nll[p],
                 "excess": s_nll[p] - t_nll[p],
@@ -238,9 +238,9 @@ def main() -> None:
     print("  label fractions:", {k: round(v, 3) for k, v in frac.items()})
     mis = df[df["label"] == "misdirection"].sort_values("excess", ascending=False).head(8)
     if not mis.empty:
-        print("  top misdirection tokens (gold -> teacher's top in-context token):")
+        print("  top misdirection tokens (reference -> teacher's top in-context token):")
         for _, r in mis.iterrows():
-            print(f"    excess={r['excess']:.2f}  gold={r['gold']!r:14} teacher_looks_at={r['top_ctx_tok']!r}")
+            print(f"    excess={r['excess']:.2f}  reference={r['reference']!r:14} teacher_looks_at={r['top_ctx_tok']!r}")
     print(f"wrote {out}/tokens.csv and surprise.png")
 
 

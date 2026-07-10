@@ -222,7 +222,7 @@ def head_taxonomy_pages(pdf):
 def surprise_pages(pdf):
     """What to memorize, factor 2: surprise decomposition.
 
-    A large surprise (student NLL - teacher NLL on the gold token) is ambiguous:
+    A large surprise (student NLL - teacher NLL on the reference token) is ambiguous:
     it is a KNOWLEDGE GAP when the teacher resolves the token via its privileged
     context (attention on the privileged block) -> memorize it; it is an
     ATTENTION MISDIRECTION when the answer is in the shared context but the
