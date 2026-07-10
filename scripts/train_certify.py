@@ -200,8 +200,30 @@ def _checkpoint_signature(ckpt_dir: Path, samples: int = 64) -> dict:
     return sig
 
 
-def run_variant(name: str, overrides: dict, base: Path) -> dict:
+def _apply_dotted(cfg, dotted: list[str]) -> None:
+    """Apply placement overrides like model.pipeline_split=14. Values parse
+    as JSON when possible (ints, lists), else stay strings. Placement knobs
+    are excluded from the semantic hash, so a PP run stays comparable to a
+    single-device reference."""
+    for item in dotted:
+        path, _, raw = item.partition("=")
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            value = raw
+        node = cfg
+        keys = path.split(".")
+        for k in keys[:-1]:
+            node = getattr(node, k)
+        if not hasattr(node, keys[-1]):
+            raise SystemExit(f"unknown config field {path!r}")
+        setattr(node, keys[-1], value)
+
+
+def run_variant(name: str, overrides: dict, base: Path,
+                dotted: list[str] | None = None) -> dict:
     cfg = _merge_config(base, overrides)
+    _apply_dotted(cfg, dotted or [])
     sem, full = _config_hashes(cfg)
     from selfupdate.train.layerwise import train_layerwise
 
@@ -305,6 +327,10 @@ def main() -> None:
     ap.add_argument("--reference-dir", default=None)
     ap.add_argument("--loss-rtol", type=float, default=5e-3)
     ap.add_argument("--weight-rtol", type=float, default=5e-2)
+    ap.add_argument("--override", action="append", default=[],
+                    help="dotted config override for every selected variant, "
+                         "e.g. model.pipeline_split=14 (placement-only knobs "
+                         "keep the semantic hash comparable)")
     args = ap.parse_args()
 
     variants = _variants()
@@ -326,7 +352,8 @@ def main() -> None:
     failures = {}
     for name in names:
         print(f"=== certify variant {name} ===")
-        result = run_variant(name, variants[name], Path(args.base))
+        result = run_variant(name, variants[name], Path(args.base),
+                             dotted=args.override)
         out = (Path(args.out) if args.out and len(names) == 1
                else Path(args.out_dir) / f"{name}.json" if args.out_dir else None)
         if out:

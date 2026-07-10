@@ -94,7 +94,8 @@ def main():
     args = ap.parse_args()
 
     model = build_model(args.mode, args.model)
-    stack = BlockStack(model)
+    # match the trainer: explicit pipeline placement walks hook-free
+    stack = BlockStack(model, hook_free_walk=args.mode == "pp2")
     stack.freeze_non_blocks()
     torch.manual_seed(1234)
     loss_fn = (HiddenLoss("vocab_mse", stack.final_norm, stack.lm_head)

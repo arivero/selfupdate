@@ -162,7 +162,23 @@ intact hooks changes nothing). PP2 is SLOWER than single-GPU for this
 depth-sequential workload in every variant — PP is a memory technology here.
 Within a grad-accum window weights are frozen, so cross-item device overlap
 (item i+1 on partition 0 while item i runs partition 1) would be EXACT, not
-stale — the honest PP throughput move if ever needed.
+stale — the honest PP throughput move if ever needed. End-to-end (real
+trainer, 0.6B) the hook-free walk is within run noise; the isolated-walk 8%
+is the honest number, and the explicit boundary moves are the 120B
+streaming contract anyway.
+
+PP2 CERTIFICATION LANDED (2026-07-10): certs/pp2/*.json — the real trainer
+under model.pipeline_split=14 certified against the SINGLE-DEVICE
+references in certs/pre (semantic config hash excludes placement knobs).
+The first attempt immediately caught a LATENT pre-refactor bug: a readout
+window on a tied-vocab model (Qwen3 <=1.7B) computes the L=n loss on the
+vocab card (cuda:0) while in-window losses live on the block card — the
+backward-scalar sum mixed devices and crashed. Readout+PP2+tied had simply
+never been run. Fixed (accumulate on one device, scalar moves,
+autograd-recorded); single-device numerics untouched (no-op .to). TP2
+remains probe-only (parallel_bench): collectives inside every linear lose
+badly at trainable sizes; use PP at block boundaries, TP only if a single
+block cannot fit.
 
 ## Missing instrument: per-layer residuals AT CHECKPOINTS (2026-07-05)
 Training-time per-layer losses are logged (metrics.jsonl per_layer) and

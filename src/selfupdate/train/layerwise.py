@@ -245,7 +245,11 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                     normed=(L == n), layer=L,
                 ))
         if losses:
-            total = hidden_w * sum(loss.sum() for loss in losses)
+            # under pipeline parallel a tied-vocab model computes the L == n
+            # loss on the vocab card while in-window losses live on a block
+            # card — accumulate the backward scalar on ONE device (scalar
+            # moves, autograd-recorded)
+            total = hidden_w * sum(loss.sum().to(h.device) for loss in losses)
         else:
             total = h.sum() * 0.0
         if readout_w > 0 and L1 == n:
@@ -263,7 +267,7 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                     )
                 total = total + readout_w * _teacher_kl_per_example(
                     logits, t_logits, (batch.s0 + batch.A - batch.ans0).tolist(),
-                ).sum()
+                ).sum().to(total.device)
             else:
                 raise ValueError(
                     f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"

@@ -148,6 +148,14 @@ class OptimizerPlan:
     ``step()`` preserves the historical per-block clip norm in every policy —
     combining AdamW instances changes speed, global clipping would change
     the experiment.
+
+    ``full_offload`` keeps the Adam moments in PERMANENT pinned host buffers
+    (allocated once — repeated pin_memory() was measured slower than the
+    copies it hides) and pages them through the GPU block by block: the next
+    block's H2D prefetch is issued on a side stream while the current block
+    steps, and the writeback D2H overlaps the following block. The math is
+    identical to the resident step — same tensors, same kernels, different
+    transport.
     """
 
     kind: str  # 'lora_fused' | 'full_resident' | 'full_offload'
@@ -186,14 +194,104 @@ class OptimizerPlan:
     def step(self) -> None:
         for params in self.block_params.values():
             torch.nn.utils.clip_grad_norm_(params, 1.0, foreach=self.foreach)
-        offload = self.kind == "full_offload"
+        if self.kind == "full_offload":
+            self._step_offload()
+            return
         for opt in self.optimizers:
-            if offload:
-                _move_opt_state(opt, "cuda")
             opt.step()
             opt.zero_grad(set_to_none=True)
-            if offload:
-                _move_opt_state(opt, "cpu")
+
+    # -- streamed offload ---------------------------------------------------
+
+    def _moment_entries(self, opt) -> tuple[list, torch.device | None]:
+        """(state_dict, key, tensor) triples for the block's Adam moments.
+        The 0-dim 'step' counter stays on CPU (capturable=False contract)."""
+        entries, dev = [], None
+        for group in opt.param_groups:
+            for p in group["params"]:
+                st = opt.state.get(p)
+                if not st:
+                    continue
+                dev = p.device
+                for k, v in st.items():
+                    if torch.is_tensor(v) and v.dim() > 0:
+                        entries.append((st, k, v))
+        return entries, dev
+
+    def _stream_for(self, dev: torch.device) -> torch.cuda.Stream:
+        streams = getattr(self, "_offload_streams", None)
+        if streams is None:
+            streams = self._offload_streams = {}
+        if dev not in streams:
+            streams[dev] = torch.cuda.Stream(dev)
+        return streams[dev]
+
+    def _pinned_for(self, st: dict, k: str, like: torch.Tensor) -> torch.Tensor:
+        pool = getattr(self, "_pinned_pool", None)
+        if pool is None:
+            pool = self._pinned_pool = {}
+        key = (id(st), k)
+        buf = pool.get(key)
+        if buf is None or buf.shape != like.shape or buf.dtype != like.dtype:
+            buf = pool[key] = torch.empty(
+                like.shape, dtype=like.dtype, pin_memory=True)
+        return buf
+
+    def _stage_in(self, i: int, staged: dict) -> None:
+        """Issue the async pinned->device copy of block i's moments."""
+        if i >= len(self.optimizers) or i in staged:
+            return
+        entries, dev = self._moment_entries(self.optimizers[i])
+        host = [(st, k, v) for st, k, v in entries if v.device.type == "cpu"]
+        if dev is None or not host:
+            staged[i] = ([], None)  # first step: state not created yet
+            return
+        side = self._stream_for(dev)
+        moved = []
+        with torch.cuda.stream(side):
+            for st, k, v in host:
+                g = torch.empty(v.shape, dtype=v.dtype, device=dev)
+                g.copy_(v, non_blocking=True)
+                moved.append((st, k, g))
+        ev = torch.cuda.Event()
+        ev.record(side)
+        staged[i] = (moved, ev)
+
+    def _step_offload(self) -> None:
+        """Page moments through the GPU one block at a time: H2D prefetch of
+        block i+1 rides a side stream under block i's step kernels; the D2H
+        writeback is issued behind the step and overlaps block i+1."""
+        staged: dict[int, tuple] = {}
+        self._stage_in(0, staged)
+        for i, opt in enumerate(self.optimizers):
+            self._stage_in(i + 1, staged)
+            moved, ev = staged.pop(i)
+            if moved:
+                dev = moved[0][2].device
+                cur = torch.cuda.current_stream(dev)
+                cur.wait_event(ev)
+                for st, k, g in moved:
+                    g.record_stream(cur)  # allocated under the side stream
+                    st[k] = g
+            opt.step()  # creates device state on the first call
+            opt.zero_grad(set_to_none=True)
+            entries, dev = self._moment_entries(opt)
+            if dev is None or dev.type != "cuda":
+                continue
+            side = self._stream_for(dev)
+            side.wait_stream(torch.cuda.current_stream(dev))
+            with torch.cuda.stream(side):
+                for st, k, v in entries:
+                    if v.device.type != "cuda":
+                        continue
+                    pinned = self._pinned_for(st, k, v)
+                    pinned.copy_(v, non_blocking=True)
+                    v.record_stream(side)  # device buf lives until copy lands
+                    st[k] = pinned
+        # pinned buffers must be consistent before any host-side reader; one
+        # short wait (~last block's D2H) per optimizer step
+        for s in getattr(self, "_offload_streams", {}).values():
+            s.synchronize()
 
 
 class TrainingRuntime:
@@ -255,7 +353,11 @@ class TrainingRuntime:
             self.peft_model = attach_lora(self.model, self.cfg.train.lora)
             self.model = self.peft_model.get_base_model()
         self.model.train()
-        self.stack = BlockStack(self.model)
+        # explicit pipeline placement runs the walk hook-free: BlockStack
+        # moves activations at partition boundaries itself (issues.md
+        # 2026-07-10 PP2 hook measurement); evals keep the model's hooks
+        self.stack = BlockStack(self.model,
+                                hook_free_walk=self.pp_map is not None)
         self.stack.freeze_non_blocks()
         self._vocab_sig0 = vocab_signature(self.stack)
         return self
@@ -275,8 +377,10 @@ class TrainingRuntime:
             t_model = self._load_placed(cfg.model.name, torch.bfloat16,
                                         **(moe_load_kw or {}))
             t_model.eval().requires_grad_(False)
-            self.teacher = OnlineTeacherSource(self.stack,
-                                               frozen_stack=BlockStack(t_model))
+            self.teacher = OnlineTeacherSource(
+                self.stack,
+                frozen_stack=BlockStack(
+                    t_model, hook_free_walk=self.pp_map is not None))
         return self.teacher
 
     def load_cache(self):

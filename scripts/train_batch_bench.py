@@ -29,12 +29,12 @@ from selfupdate.train.layerwise import (
     _flush_train_log,
     _loader,
     _make_dataset,
-    _move_opt_state,
     _pp_device_map,
     _uses_pipeline_map,
     _summed_batch,
     _validate_knob_schedule,
 )
+from selfupdate.train.runtime import OptimizerPlan
 from selfupdate.train.losses import HiddenLoss
 
 
@@ -46,17 +46,6 @@ class NullLog:
 def _sync(device: str) -> None:
     if torch.device(device).type == "cuda":
         torch.cuda.synchronize()
-
-
-def _step_opts(stack, opts, offload: bool, device: str) -> None:
-    for L, opt in opts.items():
-        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
-        if offload:
-            _move_opt_state(opt, device)
-        opt.step()
-        opt.zero_grad(set_to_none=True)
-        if offload:
-            _move_opt_state(opt, "cpu")
 
 
 def bench(args) -> dict:
@@ -95,7 +84,7 @@ def bench(args) -> dict:
         model = peft_model.get_base_model()
     model.train()
 
-    stack = BlockStack(model)
+    stack = BlockStack(model, hook_free_walk=pp_map is not None)
     stack.freeze_non_blocks()
     if cfg.train.online_teacher and peft_model is None:
         raise ValueError("train.online_teacher requires train.lora.enabled")
@@ -112,12 +101,7 @@ def bench(args) -> dict:
     )
     loader = _loader(cfg, ds)
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-    opts = {
-        L: torch.optim.AdamW(
-            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
-        )
-        for L in range(1, n + 1)
-    }
+    plan = OptimizerPlan.build(stack, cfg)
 
     steps = []
     accum = step = 0
@@ -152,7 +136,7 @@ def bench(args) -> dict:
                 token_count += len(it.student_ids)
                 max_seq = max(max_seq, len(it.student_ids))
         if accum >= next_step:
-            _step_opts(stack, opts, cfg.train.offload_adam, args.device)
+            plan.step()
             _sync(args.device)
             elapsed = time.perf_counter() - t0
             _flush_train_log(

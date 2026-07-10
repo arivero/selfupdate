@@ -23,7 +23,7 @@ import torch
 
 
 class BlockStack:
-    def __init__(self, model):
+    def __init__(self, model, hook_free_walk: bool = False):
         self.model = model
         inner = model.model
         if not all(hasattr(inner, attr) for attr in ("embed_tokens", "layers", "norm")):
@@ -58,6 +58,48 @@ class BlockStack:
         self.lm_head = model.lm_head
         self.n_layers = len(self.blocks)
         self._shared_kv_states = None
+        # Hook-free walk (explicit pipeline placement only): call each
+        # block's pre-hook forward and do the boundary moves ourselves —
+        # accelerate's per-call dispatch is ~8% of the PP2 walk (issues.md
+        # 2026-07-10). Full-model forwards (evals, generate) keep their
+        # hooks and are unaffected. Never engaged when a hook offloads
+        # WEIGHTS (device_map=auto spill), where dispatch is load-bearing,
+        # nor for per-layer-rope bundles (gemma4-style), which recompute
+        # rope per block anyway.
+        self.hook_free_walk = False
+        self.block_devices = None
+        self._block_calls = self.blocks
+        self._pe_src = None
+        self._pe_map: dict = {}
+        if hook_free_walk and not self.rotary_needs_layer_type:
+            devices, calls, plain = [], [], True
+            for b in self.blocks:
+                p = next(b.parameters(), None)
+                devices.append(p.device if p is not None else torch.device("cpu"))
+                hook = getattr(b, "_hf_hook", None)
+                if hook is not None and getattr(hook, "offload", False):
+                    plain = False
+                calls.append(getattr(b, "_old_forward", None) or b)
+            if plain:
+                self.hook_free_walk = True
+                self.block_devices = devices
+                self._block_calls = calls
+
+    def _pos_emb_on(self, pe, dev):
+        """Per-device cache of the rope tensors for the CURRENT positional
+        context (keyed by identity; a new rope() output resets the map, and
+        the held reference makes id-reuse impossible while cached)."""
+        if pe is None or not isinstance(pe, tuple):
+            return pe
+        if pe is not self._pe_src:
+            self._pe_src = pe
+            self._pe_map = {}
+        got = self._pe_map.get(dev)
+        if got is None:
+            got = tuple(t.to(dev, non_blocking=True) if t.device != dev else t
+                        for t in pe)
+            self._pe_map[dev] = got
+        return got
 
     def freeze_non_blocks(self) -> None:
         """Embedding, final norm and lm_head stay at init: block-only training
@@ -118,6 +160,13 @@ class BlockStack:
             with torch.no_grad():
                 position_embeddings = self.rotary_emb(
                     hidden, position_ids, layer_type=layer_type)
+        if self.hook_free_walk:
+            dev = self.block_devices[L - 1]
+            if hidden.device != dev:
+                hidden = hidden.to(dev, non_blocking=True)
+            position_embeddings = self._pos_emb_on(position_embeddings, dev)
+            if torch.is_tensor(position_ids) and position_ids.device != dev:
+                position_ids = position_ids.to(dev, non_blocking=True)
         kwargs = {
             "attention_mask": attention_mask,
             "position_ids": position_ids,
@@ -131,7 +180,7 @@ class BlockStack:
                 if self._shared_kv_states is None:
                     self._shared_kv_states = {}
                 kwargs["shared_kv_states"] = self._shared_kv_states
-        return self.blocks[L - 1](hidden, **kwargs)
+        return self._block_calls[L - 1](hidden, **kwargs)
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:
         return list(self.blocks[L - 1].parameters())
