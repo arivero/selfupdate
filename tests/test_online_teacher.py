@@ -85,7 +85,11 @@ def test_batched_online_targets_match_item_targets():
             want = single[L].float()
             err = (got - want).abs().max().item()
             scale = want.abs().max().item()
-            assert err <= max(3e-3 * scale, 0.01), f"h{L}: err {err} scale {scale}"
+            # B=1 batched is bit-exact vs the item path (same kernel shapes);
+            # B>1 changes GEMM tiling, and that bf16 rounding compounds with
+            # depth — measured up to 3e-2 max-relative at h21 on L40S. Same
+            # kernel-variance bound as test_online_targets_match_cache.
+            assert err <= max(4e-2 * scale, 0.01), f"h{L}: err {err} scale {scale}"
 
 
 def test_gap_decoder_matches_generate_at_gap_zero():
