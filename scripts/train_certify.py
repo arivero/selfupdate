@@ -186,8 +186,11 @@ def _checkpoint_signature(ckpt_dir: Path, samples: int = 64) -> dict:
         with safe_open(str(f), framework="pt") as h:
             for name in h.keys():
                 t = h.get_tensor(name).reshape(-1)
-                idx = (torch.linspace(0, t.numel() - 1, min(samples, t.numel()))
-                       .long())
+                # integer index math: float32 linspace rounds indices out of
+                # bounds beyond ~2**24 elements (a 150M-param embedding)
+                k = min(samples, t.numel())
+                idx = (torch.arange(k, dtype=torch.long) * (t.numel() - 1)
+                       // max(k - 1, 1))
                 sig[name] = {
                     "numel": t.numel(),
                     "sum": float(t.double().sum()),
