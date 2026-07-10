@@ -202,6 +202,9 @@ def main() -> None:
 
     rows = plan(counts, act, args)
     print(f"\nbudget {args.budget_gb} GB/device — feasible cells:")
+    print("NOTE: excludes loss-head workspace (vocab-metric losses "
+          "materialize [A, vocab] fp32 logits per layer eval) — measured "
+          "+25% on 1.7B slide8 vocab_mse arms; plan with that margin.")
     print(f"{'dev':>3} {'B':>3} {'W':>3} {'policy':>14} {'GB/dev':>8} "
           f"{'fits':>5}  splits")
     for r in rows:
