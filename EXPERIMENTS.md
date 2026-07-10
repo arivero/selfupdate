@@ -994,7 +994,7 @@ Classification: METHOD (doctrine-clean sliding), HYB (pre-law hybrid baseline), 
 7. **Loss safety** (C2-17/23/31): distribution-shaped hidden losses amplify grooves (fisher 57.5%, lens_kl 90%); vocab_mse/nmse safe; loss choice flattens under uniform windows.
 8. **Premise condition** (C2-32): teacher_kl transmits only what the teacher knows in context; premise-check per data mode.
 9. **The last 3%** (C2-34): pure distribution-matching converges to teacher fidelity exactly; verbatim recall lives in the residual the teacher lacks — bounded reference-CE is irreducible in the lab, transcript-CE-equivalent in deployment.
-10. **Parallelism**: PP2 evals validated; PP2 TRAINING failed its repro (0.837 vs 0.015) — C3 blocker #0; offload_adam works (full-FT 4B at 2.3 s/item); TP timing benched.
+10. **Parallelism**: PP2 evals validated; the PP2 TRAINING repro failure (0.837 vs 0.015) was the config-default confound — CLOSED 2026-07-10: lw_q_pp2fix landed CER 0.011 / line-exact 0.988 (crown-class recall under pipeline_split=14), and the trainer is certified under PP2 against single-device references (certs/pp2: summed, sliding readout, anchor, offload, LoRA variants; losses + final weights match). offload_adam works (full-FT 4B at 2.3 s/item; streamed pinned paging 2026-07-10 cut step overhead 2.65x at 0.6B); TP timing benched — probe-only by policy (PP partitions at block boundaries; TP puts a collective inside every linear).
 
 ### Parallelism timing (0.6B, seq 600, training hot loop, quiet pair)
 single 57.9 ms/item · PP2 61.4 (+6%) · TP2 99.7 (+72%).

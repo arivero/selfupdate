@@ -26,6 +26,16 @@ branch-law findings recorded below:
 - `scripts/build_corpus_index.py`, gate-aware `scripts/report.py`, and
   `scripts/speed_check.py` were added for corpus/report/speed follow-up.
 
+A second implementation pass on 2026-07-10 closed the remaining §3 speed
+priorities (1-5): GPU-side loss logging, equivalence-tested padded/bucketed
+batching, explicit optimizer policy with streamed pinned-CPU offload, the
+cache-read question resolved by item memoization plus a measured-negative
+prefetch experiment, and PP2 certification against single-device references
+(certs/pp2; the pp2fix science repro landed at CER 0.011). The hot-loop
+finding ("pay down the sync cost before H100-scale execution") is closed;
+see docs/runtime.md. Live remaining work is tracked in
+docs/fable_review_status_2026-07-07.md, not here.
+
 The detailed review below is preserved as the finding record that motivated
 the cleanup. Any statement saying an old active surface "still" exists should
 be read as the pre-cleanup finding unless it remains true in current code.

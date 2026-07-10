@@ -21,17 +21,16 @@ battery.
 
 ## LEFT — speed / hardware (review §3)
 
-- Equivalence-tested **padded/bucketed batching path** — built for the summed
-  schedule (`train.batching: padded|bucketed`; `tests/test_padded_batching.py`).
-  Large-model throughput and peak-memory measurements remain to be collected.
-- Resident summed training uses one AdamW instance so LoRA parameters can be
-  `foreach`-stepped across blocks. Full-FT and `offload_adam` deliberately use
-  the lower-peak non-foreach path; a fused full-FT optimizer is not a free win
-  because foreach intermediates scale with trainable parameter count.
-- **PP2/TP2 correctness certification** vs a single-device reference (`pp2fix` / TP chain).
-  `scripts/parallel_bench.py` now emits JSON and checks nonzero loss/update
-  metrics against a single-device reference; matched hardware evidence is
-  still pending.
+Review §3's speed priorities are CLOSED as of the 2026-07-10 refactor
+(GPU-side logging, equivalence-tested batching, explicit optimizer policy
+with streamed pinned offload, cache-read question resolved by item
+memoization + a measured-negative prefetch, PP2 certification: certs/pp2 vs
+certs/pre plus the lw_q_pp2fix science repro at CER 0.011; TP2 probe-only by
+policy). See docs/runtime.md and issues.md 2026-07-10 notes. Remaining:
+
+- **Large-model batched measurements** — `train_batch_bench.py` numbers exist
+  at 0.6B only; collect 4B+ throughput and peak-memory points before H100
+  planning.
 
 ## LEFT — open research gaps (review §4; science, not cleanup)
 
@@ -44,6 +43,5 @@ battery.
 
 - Build work: **4** — `model_matrix.py`, `conclusion_check.py`, `conclusions.yaml`,
   `evaluate --layer-residuals`.
-- Speed/H100: **2 evidence tasks** — batched large-model measurements and
-  PP2/TP2 certification runs.
+- Speed/H100: **1 evidence task** — batched large-model (4B+) measurements.
 - Research gaps: **4** — seed claim, disjoint pinned, teacher-stream k-windows, H100 evidence.

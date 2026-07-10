@@ -1,17 +1,9 @@
 # Issues / Follow-Ups
 
 Post-campaign state (2026-07-04). The 24-40h campaign is recorded in
-EXPERIMENTS.md (closing table) and runs/report.pdf.
-
-## Done (campaign, 2026-07-03/04)
-
-- Schema-3 caches rebuilt (v1/v2/v3/v4 at 0.6B; v2/v4 at 1.7B).
-- Full test suite green throughout (52 tests at close).
-- smoke test for non-layerwise rejection: superseded by the loss/schedule
-  registries raising ValueError (covered by tests).
-- Wave I-K: loss sweep, routing, scale, families, understanding probes,
-  innovation arms — see EXPERIMENTS.md.
-- Artifacts: results.md / curves.png / forget_curves.png / report.pdf.
+EXPERIMENTS.md (closing table) and runs/report.pdf. Closed items are
+removed from this file (git history keeps them); 2026-07-10 pass removed
+the campaign done-list and the completed hot-loop ladder.
 
 ## Future Work
 
@@ -27,8 +19,9 @@ EXPERIMENTS.md (closing table) and runs/report.pdf.
    try training with the channel present in the student prompt.
 4. **Tuned-lens program** (Wave I plan, still pending): per-layer
    translators for calibrated depth profiles; tuned-lens-CE auxiliary.
-5. **Scale**: final recipe at 4B/8B full-FT (sequential/tail_only for
-   VRAM), 14B+ LoRA; Don Quijote data engineering.
+5. **Scale**: final recipe at 4B/8B full-FT (sequential/offload_adam for
+   VRAM — tail_only is expunged on this branch), 14B+ LoRA; Don Quijote
+   data engineering.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
 
@@ -108,40 +101,23 @@ assistant's knowledge cutoff — an inertia blind spot caught by the owner
 2026-07-04; matched-ablation continuity justified staying on Qwen3
 within-campaign, but C3 arms should default to 3.6-generation bases.
 
-## Trainer hot-loop is sync-bound, not compute-bound (diagnosed 2026-07-05, owner question)
+## Trainer hot-loop — CLOSED 2026-07-10 (knowledge kept below)
 
-The algorithm never needs CPU — the syncs exist purely for logging.
-Measured on 0.6B (600-token item, 28 blocks, fwd+bwd per block):
-`.item()` per block = 191 ms/item vs GPU-side loss accumulation with ONE
-flush per item = 131 ms/item → **1.46x free speedup** from a ~10-line
-change. The remaining 131 ms is kernel-launch-bound (real matmul work
-~15-20 ms at batch 1). C3 engineering ladder, in order of win/effort:
-1. defer `.item()`: stack per-block losses on GPU, `.cpu()` once per
-   grad-accum boundary (measured 1.46x);
-2. fused/foreach AdamW across the 28 per-block optimizers (one step
-   call instead of 28 python loops + clips);
-3. log every N items instead of every item (Lustre JSONL writes);
-4. length-bucketed batching >1 (kernel size up, launches amortized —
-   the big one, est. 2-3x more). WHY batch=1 today: alignment
-   paranoia (byte-exact span claims; unpadded = no masking bugs by
-   construction), the attention_mask=None SDPA fast path, 12GB-origin
-   memory, and grad_accum=8 already batching the OPTIMIZATION
-   statistically. The correctness argument is retired by the 83-test
-   suite; implement batching WITH an equivalence test vs batch-1;
-5. disk-cache arms only: 28 lazy Lustre reads/item — prefetch or pack
-   per-item tensors in one file.
-DO NOT apply mid-campaign (timing regime must stay comparable across
-matched arms); apply as C3's first engineering block.
+Diagnosed sync-bound 2026-07-05 (owner question): `.item()` per block was
+1.46x of the walk. The C3 engineering ladder is COMPLETE — GPU-side
+logging, padded/bucketed batching with equivalence tests, window forward
+dedup, one-AdamW foreach policy (2026-07-09); then the 2026-07-10
+refactor: TrainingRuntime + explicit OptimizerPlan, ONE batched walk
+(item mode = B=1 padded batch, bit-exact), streamed pinned-CPU
+offload_adam (0.949 → 0.358 s/step at 0.6B), sliding-window trajectory
+release, hook-free PP block walk, memory-budget planner, and the
+certification harness (certs/pre single-device + certs/pp2 pipeline
+references). Details and the change gate: docs/runtime.md and AGENTS.md
+"Training Runtime & Certification". Timing regimes are NOT comparable
+across the refactor boundary — do not mix pre/post ms-per-item numbers
+in one table.
 
-Implementation update (2026-07-10): GPU-side logging, padded/bucketed summed
-training, and window forward deduplication are implemented. Resident summed
-training now uses one AdamW optimizer; LoRA enables foreach stepping, while
-full-FT and CPU-offloaded Adam explicitly retain the lower-peak non-foreach
-path. `scripts/parallel_bench.py --check --out ...` now trains against a
-deterministically perturbed nonzero target and `--reference ...` enforces loss
-and sampled-update tolerances. The PP2/TP2 hardware verdict remains open until
-matched JSON artifacts land; the old self-target/zero-update check is not
-certification evidence.
+Kept for the record (do-not-rebuild guidance):
 
 NEGATIVE RESULT (2026-07-10, refactor session): async pinned-memory target
 prefetch (side CUDA stream, pin_memory + event-synced staging of layer L+1

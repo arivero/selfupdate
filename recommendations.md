@@ -10,22 +10,11 @@ is for layerwise forward distillation. Tail-only and `tail_*` work is not an
 active method surface here. Preserve historical evidence only as archived
 context, or move it to `../selfupdate_kd`.
 
-## Implemented Teacher-Reference Tooling
-
-The first cleanup pass on 2026-07-05 added the following foundations:
-
-- `scripts/audit_configs.py`: raw-YAML branch-law audit for active configs.
-- `scripts/build_corpus_index.py`: writes `runs/corpus.csv` with run class,
-  evidence status, readout source/window, metrics, eval coverage, and signal
-  attribution coverage.
-- `scripts/report.py`: now reads evidence status and flags legacy
-  reference-text-training artifacts instead of mixing them into method claims.
-- `scripts/layer_loss_plots.py`: now emits per-run loss PNG, heatmap, and CSV.
-- `scripts/forget_curves.py`: now defaults to all runs and emits per-run
-  recall/forgetting plots as well as global CSV/PNG.
-- `scripts/speed_check.py`: GPU minibatch benchmark for the real BlockStack
-  backward walk, comparing GPU-resident targets, CPU target copies, and
-  per-block scalar sync.
+Status: the closed sections (the 2026-07-05 tooling done-list and "Branch
+Hygiene First", completed 2026-07-05/07; hot-loop/parallel items, completed
+2026-07-10) were removed on 2026-07-10 — git history keeps them. Live
+remaining work is tracked in `docs/fable_review_status_2026-07-07.md`; what
+follows is the standing SPEC for the experiment corpus, not a todo list.
 
 ## Outcome Wanted
 
@@ -42,27 +31,6 @@ Every major conclusion should be backed by a reproducible evidence bundle:
    result.
 9. A conclusion table that explicitly states what is proven, what is epoch-zero
    teacher reference only, what is confounded, and what is open.
-
-## Branch Hygiene First
-
-Before expanding the corpus, clean the reporting surface.
-
-- Remove active `tail_ce`, `tail_*`, `tailpure`, `tail_only`, and final-k tail
-  report language from method summaries in this branch.
-- If historical tail results are kept in-tree, move them to an archive section
-  named as historical/classical-distillation evidence, not current method
-  evidence.
-- Replace `tail_step` as a public concept with a generic connected-window
-  primitive, for example `window_step`.
-- Reject any active method config with a top-window readout unless it also has
-  `conn_window > 0` and `conn_stride: 1`.
-- Add a static config audit that fails on unpinned readout source for every
-  run using a behavioral readout.
-- Keep any artifact that trained against reference text out of active branch
-  conclusions; it is forbidden legacy evidence here.
-- Update `scripts/report.py` summary text. It still describes bounded tail
-  cross-entropy (log loss) as a current lever, which conflicts with the branch
-  rule.
 
 ## Run Classification Contract
 
@@ -116,9 +84,9 @@ Each finished run should have:
 - `runs/<run>/eval/weight_deltas.csv` for full fine-tune, or LoRA delta summary
 - `runs/<run>/eval/recite_long.json` for crown candidates
 
-The current repo has some of this, but not consistently. `layer_loss_plots.py`
-currently writes PNG only, `forget_curves.py` writes a global CSV/PNG, and
-checkpoint-time layer residuals are still missing.
+Status 2026-07-10: `layer_loss_plots.py` emits per-run PNG + heatmap + CSV
+and `forget_curves.py` emits per-run curves (done 2026-07-05/07);
+checkpoint-time layer residuals are still missing (the one open bundle gap).
 
 ## Required Plots
 
@@ -401,17 +369,11 @@ The report should fail or warn loudly when:
 
 ## Analysis Script Worklist
 
-Near-term scripts to add or modify:
+Remaining (audit/corpus-index/layer-loss/forget-curve items landed
+2026-07-05/07; the report.py rebuild was superseded by `cross_report.py` +
+the retention battery):
 
-- `scripts/audit_configs.py`: classify configs and reject banned or unpinned
-  knobs.
-- `scripts/build_corpus_index.py`: scan `runs/` and emit `runs/corpus.csv`
-  with config, metrics, eval, artifact, and classification fields.
-- `scripts/layer_loss_plots.py`: also write CSV and heatmap per run.
-- `scripts/forget_curves.py`: emit per-run plots, support full-eval checkpoint
-  curves, and group by model.
 - `scripts/evaluate.py`: add `--layer-residuals`.
-- `scripts/report.py`: rebuild around the redesigned report order.
 - `scripts/model_matrix.py`: produce the cross-model comparison figure.
 - `scripts/conclusion_check.py`: verify every claim has required runs and no
   confounded dependencies.
@@ -432,14 +394,11 @@ A claim can be promoted only if:
 
 ## Immediate Next Steps
 
-1. Archive or move tail-only and `tail_*` report material.
-2. Add config audit and run it on `configs/experiments`.
-3. Generate `layer_losses.png` and CSV for all completed runs.
-4. Generate per-run forgetting/recall curves for all runs with eval records.
-5. Add checkpoint layer-residual eval.
-6. Build `runs/corpus.csv`.
-7. Build `runs/conclusions.yaml` from current `EXPERIMENTS.md`.
-8. Regenerate the report from the corpus, not from hand-maintained narrative.
+(Steps 1-4, 6, and the report regeneration are done/superseded — removed
+2026-07-10.)
+
+1. Add checkpoint layer-residual eval (`evaluate.py --layer-residuals`).
+2. Build `runs/conclusions.yaml` from current `EXPERIMENTS.md`.
 
 The immediate target is not more arms. It is making the existing arms
 queryable, comparable, and impossible to misclassify.
