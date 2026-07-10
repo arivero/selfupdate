@@ -21,10 +21,17 @@ battery.
 
 ## LEFT — speed / hardware (review §3)
 
-- Equivalence-tested **padded/bucketed batching path** — unbuilt (C3 #5, "4–6×");
-  same bottleneck hit on the 40B q_ch1 run (pipeline bubbles + per-block sync).
-- Fused / `foreach` optimizer stepping.
+- Equivalence-tested **padded/bucketed batching path** — built for the summed
+  schedule (`train.batching: padded|bucketed`; `tests/test_padded_batching.py`).
+  Large-model throughput and peak-memory measurements remain to be collected.
+- Resident summed training uses one AdamW instance so LoRA parameters can be
+  `foreach`-stepped across blocks. Full-FT and `offload_adam` deliberately use
+  the lower-peak non-foreach path; a fused full-FT optimizer is not a free win
+  because foreach intermediates scale with trainable parameter count.
 - **PP2/TP2 correctness certification** vs a single-device reference (`pp2fix` / TP chain).
+  `scripts/parallel_bench.py` now emits JSON and checks nonzero loss/update
+  metrics against a single-device reference; matched hardware evidence is
+  still pending.
 
 ## LEFT — open research gaps (review §4; science, not cleanup)
 
@@ -37,5 +44,6 @@ battery.
 
 - Build work: **4** — `model_matrix.py`, `conclusion_check.py`, `conclusions.yaml`,
   `evaluate --layer-residuals`.
-- Speed/H100: **3** — batching path, foreach stepping, PP2/TP2 cert.
+- Speed/H100: **2 evidence tasks** — batched large-model measurements and
+  PP2/TP2 certification runs.
 - Research gaps: **4** — seed claim, disjoint pinned, teacher-stream k-windows, H100 evidence.

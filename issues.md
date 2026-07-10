@@ -133,6 +133,16 @@ change. The remaining 131 ms is kernel-launch-bound (real matmul work
 DO NOT apply mid-campaign (timing regime must stay comparable across
 matched arms); apply as C3's first engineering block.
 
+Implementation update (2026-07-10): GPU-side logging, padded/bucketed summed
+training, and window forward deduplication are implemented. Resident summed
+training now uses one AdamW optimizer; LoRA enables foreach stepping, while
+full-FT and CPU-offloaded Adam explicitly retain the lower-peak non-foreach
+path. `scripts/parallel_bench.py --check --out ...` now trains against a
+deterministically perturbed nonzero target and `--reference ...` enforces loss
+and sampled-update tolerances. The PP2/TP2 hardware verdict remains open until
+matched JSON artifacts land; the old self-target/zero-update check is not
+certification evidence.
+
 ## Missing instrument: per-layer residuals AT CHECKPOINTS (2026-07-05)
 Training-time per-layer losses are logged (metrics.jsonl per_layer) and
 now plotted per run (scripts/layer_loss_plots.py -> eval/layer_losses.png).

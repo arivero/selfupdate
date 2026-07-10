@@ -15,6 +15,7 @@ DTensor pitfalls go in the risk register (docs/windows.md / issues.md).
 """
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -27,6 +28,26 @@ from transformers import AutoModelForCausalLM
 
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.losses import HiddenLoss
+
+
+def _local_tensor(tensor):
+    try:
+        from torch.distributed.tensor import DTensor
+        if isinstance(tensor, DTensor):
+            return tensor.to_local()
+    except Exception:
+        pass
+    return tensor
+
+
+def _parameter_sample(tensor, limit=1024):
+    """Bounded CPU sample for update certification without cloning weights."""
+    flat = _local_tensor(tensor.detach()).reshape(-1)
+    if flat.numel() > limit:
+        index = torch.linspace(0, flat.numel() - 1, limit,
+                               device=flat.device).long()
+        flat = flat[index]
+    return flat.float().cpu().clone()
 
 
 def build_model(mode, name):
@@ -64,6 +85,12 @@ def main():
     ap.add_argument("--loss", default="nmse", choices=["nmse", "vocab_mse"])
     ap.add_argument("--check", action="store_true",
                     help="correctness probe: fixed seed, report loss curve + weight signature (+ cross-rank sync under tp2)")
+    ap.add_argument("--out", default=None,
+                    help="write machine-readable timing/correctness JSON (rank 0)")
+    ap.add_argument("--reference", default=None,
+                    help="single-mode JSON to compare against; exits nonzero on drift")
+    ap.add_argument("--loss-rtol", type=float, default=5e-3)
+    ap.add_argument("--update-rtol", type=float, default=5e-2)
     args = ap.parse_args()
 
     model = build_model(args.mode, args.model)
@@ -83,10 +110,22 @@ def main():
         targets = {}
         for L in range(1, stack.n_layers + 1):
             t = stack.run_block(L, t, pe)
-            targets[L] = stack.loss_view(L, t)[0].detach()
+            target = stack.loss_view(L, t)[0].detach()
+            # A self-generated target is exactly equal to the initial student
+            # and produces no update. Add a deterministic, scale-aware offset
+            # so the probe exercises backward, optimizer state, and parameter
+            # synchronization in every mode.
+            g = torch.Generator(device=target.device).manual_seed(10_000 + L)
+            noise = torch.randn(target.shape, generator=g, device=target.device,
+                                dtype=target.dtype)
+            targets[L] = (target + 0.01 * target.float().std().to(target.dtype) * noise).to(
+                dtype=torch.bfloat16, device="cpu")
 
     opt = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad], lr=1e-5)
+        [p for p in model.parameters() if p.requires_grad], lr=1e-5,
+        foreach=args.mode != "tp2")
+    initial = {name: _parameter_sample(p) for name, p in model.named_parameters()
+               if p.requires_grad}
 
     def one_item():
         h = h0
@@ -114,32 +153,46 @@ def main():
     torch.cuda.synchronize()
     dt = (time.time() - t0) / args.items * 1000
     rank = int(os.environ.get("RANK", 0))
-    if args.check:
-        last = [round(float(v), 6) for v in one_item()[-3:]]
-        sig = 0.0
-        for p_ in model.parameters():
-            t_ = p_.detach()
-            try:
-                from torch.distributed.tensor import DTensor
-                if isinstance(t_, DTensor):
-                    t_ = t_.to_local()
-            except Exception:
-                pass
-            sig += float(t_.double().sum())
+    result = {
+        "mode": args.mode, "model": args.model, "items": args.items,
+        "seqlen": args.seqlen, "loss": args.loss, "ms_per_item": dt,
+    }
+    if args.check or args.reference:
+        last = [float(v) for v in one_item()[-3:]]
+        update_sq = 0.0
+        for name, p_ in model.named_parameters():
+            if name not in initial:
+                continue
+            delta = _parameter_sample(p_) - initial[name]
+            update_sq += float(delta.double().square().sum())
         if args.mode == "tp2":
             import torch.distributed as dist
-            s_ = torch.tensor([sig], device=f"cuda:{os.environ['LOCAL_RANK']}")
-            gathered = [torch.zeros_like(s_) for _ in range(2)]
-            dist.all_gather(gathered, s_)
-            tot = float(gathered[0] + gathered[1])
-            if rank == 0:
-                print(f"CHECK mode=tp2 loss={args.loss}: last3={last} "
-                      f"sig_total={tot:.6f} rank_sigs={[float(g) for g in gathered]}")
-        else:
-            print(f"CHECK mode={args.mode} loss={args.loss}: last3={last} sig_total={sig:.6f}")
+            metric = torch.tensor([update_sq], device=f"cuda:{os.environ['LOCAL_RANK']}")
+            dist.all_reduce(metric)
+            update_sq = float(metric)
+        result.update(last3_losses=last, sampled_update_l2=update_sq ** 0.5)
+        if rank == 0:
+            print(f"CHECK mode={args.mode} loss={args.loss}: last3={last} "
+                  f"sampled_update_l2={result['sampled_update_l2']:.8f}")
+    if rank == 0 and args.reference:
+        reference = json.loads(Path(args.reference).read_text())
+        for got, expected in zip(result["last3_losses"], reference["last3_losses"]):
+            if not torch.isclose(torch.tensor(got), torch.tensor(expected),
+                                 rtol=args.loss_rtol, atol=1e-7):
+                raise SystemExit(f"loss drift: {got} vs reference {expected}")
+        if not torch.isclose(torch.tensor(result["sampled_update_l2"]),
+                             torch.tensor(reference["sampled_update_l2"]),
+                             rtol=args.update_rtol, atol=1e-7):
+            raise SystemExit("parameter-update drift: "
+                             f"{result['sampled_update_l2']} vs reference "
+                             f"{reference['sampled_update_l2']}")
+        result["reference"] = str(args.reference)
+        result["certified"] = True
     if rank == 0:
         print(f"BENCH mode={args.mode} model={args.model.split('/')[-1]} "
               f"seq={args.seqlen}: {dt:.1f} ms/item")
+        if args.out:
+            Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
 
 
 if __name__ == "__main__":

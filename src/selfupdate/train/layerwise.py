@@ -1122,6 +1122,41 @@ def _move_opt_state(opt, device) -> None:
                     st[k] = v.to(tgt)
 
 
+def _make_block_optimizers(stack, n: int, lr: float, *, offload: bool,
+                           foreach: bool):
+    """Use one resident AdamW so PyTorch can foreach-group parameters.
+
+    CPU paging remains block-granular: combining those optimizers would move
+    every block's moments for each step and defeat ``offload_adam``.
+    """
+    block_params = {
+        L: [p for p in stack.block_params(L) if p.requires_grad]
+        for L in range(1, n + 1)
+    }
+    if offload:
+        optimizers = [torch.optim.AdamW(params, lr=lr, foreach=False)
+                      for params in block_params.values()]
+    else:
+        all_params = [p for params in block_params.values() for p in params]
+        optimizers = [torch.optim.AdamW(all_params, lr=lr, foreach=foreach)]
+    return block_params, optimizers
+
+
+def _step_block_optimizers(block_params, optimizers, *, offload: bool,
+                           foreach: bool) -> None:
+    # Preserve the historical per-block clipping norm even when AdamW is
+    # combined. Global clipping would change the experiment, not just speed.
+    for params in block_params.values():
+        torch.nn.utils.clip_grad_norm_(params, 1.0, foreach=foreach)
+    for opt in optimizers:
+        if offload:
+            _move_opt_state(opt, "cuda")
+        opt.step()
+        opt.zero_grad(set_to_none=True)
+        if offload:
+            _move_opt_state(opt, "cpu")
+
+
 def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     device = cfg.model.device
     n = stack.n_layers
@@ -1134,13 +1169,12 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                        with_teacher_ids=online)
     records = ds.records
     loader = _loader(cfg, ds)
-    opts = {
-        L: torch.optim.AdamW(
-            [p for p in stack.block_params(L) if p.requires_grad], lr=cfg.train.lr
-        )
-        for L in range(1, n + 1)
-    }
     offload = cfg.train.offload_adam
+    # Foreach's extra tensor-list intermediates are negligible for LoRA and
+    # expensive for full-FT. Large-model memory therefore wins by default.
+    foreach = cfg.train.lora.enabled and not offload
+    block_params, optimizers = _make_block_optimizers(
+        stack, n, cfg.train.lr, offload=offload, foreach=foreach)
 
     step = accum = 0
     next_step = cfg.train.grad_accum
@@ -1181,14 +1215,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
                                     a_ids, anchor[1], base_logits=a_base)
-                    for L, opt in opts.items():
-                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
-                        if offload:
-                            _move_opt_state(opt, device)
-                        opt.step()
-                        opt.zero_grad(set_to_none=True)
-                        if offload:
-                            _move_opt_state(opt, "cpu")
+                    _step_block_optimizers(
+                        block_params, optimizers, offload=offload,
+                        foreach=foreach)
                     step += 1
                     next_step += cfg.train.grad_accum
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
@@ -1223,14 +1252,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
                                     a_ids, anchor[1], base_logits=a_base)
-                    for L, opt in opts.items():
-                        torch.nn.utils.clip_grad_norm_(stack.block_params(L), 1.0)
-                        if offload:
-                            _move_opt_state(opt, device)
-                        opt.step()
-                        opt.zero_grad(set_to_none=True)
-                        if offload:
-                            _move_opt_state(opt, "cpu")
+                    _step_block_optimizers(
+                        block_params, optimizers, offload=offload,
+                        foreach=foreach)
                     step += 1
                     next_step += cfg.train.grad_accum
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
