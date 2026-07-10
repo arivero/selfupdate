@@ -205,6 +205,11 @@ def run_variant(name: str, overrides: dict, base: Path) -> dict:
     sem, full = _config_hashes(cfg)
     from selfupdate.train.layerwise import train_layerwise
 
+    # variants share one process: without a reset, a later variant's "peak"
+    # reports the max over every variant before it
+    for d in range(torch.cuda.device_count()):
+        torch.cuda.reset_peak_memory_stats(d)
+
     t0 = time.time()
     run_dir = train_layerwise(cfg)
     wall = time.time() - t0
