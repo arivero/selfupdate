@@ -174,6 +174,13 @@ def main() -> None:
                         if checkpoint_cfg else None)
     if checkpoint_model and not args.base:
         cfg.model.name = checkpoint_model
+    # a checkpoint is evaluated on ITS training corpus: the three-task
+    # battery built from the wrong corpus scores epoch-0-level by
+    # construction (quijote arms vs the default machado poem)
+    ck_poem = ((checkpoint_cfg.get("data") or {}).get("poem_path")
+               if checkpoint_cfg else None)
+    if ck_poem and not args.base:
+        cfg.data.poem_path = ck_poem
 
     src = cfg.model.name if args.base else args.checkpoint
     if not src:

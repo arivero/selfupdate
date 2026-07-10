@@ -160,3 +160,19 @@ runs/base-tasks-Qwen3-14B/tasks.json	14000	-	.venv/bin/python scripts/evaluate.p
 runs/base-tasks-Qwen3-4B/tasks.json	14000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-4B/_exp.yaml --base --out runs/base-tasks-Qwen3-4B
 runs/base-tasks-Qwen3-8B/tasks.json	22000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-8B/_exp.yaml --base --out runs/base-tasks-Qwen3-8B
 runs/base-tasks-Llama-3.1-8B-Instruct/tasks.json	22000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Llama-3.1-8B-Instruct/_exp.yaml --base --out runs/base-tasks-Llama-3.1-8B-Instruct
+runs/clean_machado_slide8_vocab_alia40b_lora/eval/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/clean_machado_slide8_vocab_alia40b_lora/checkpoint --out runs/clean_machado_slide8_vocab_alia40b_lora/eval --load-4bit
+runs/base-tasks-ALIA-40b-fc-2606-machado/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-ALIA-40b-fc-2606-machado/_exp.yaml --base --out runs/base-tasks-ALIA-40b-fc-2606-machado --load-4bit
+runs/base-tasks-Qwen3-14B-ch1/tasks.json	36000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-14B-ch1/_exp.yaml --base --out runs/base-tasks-Qwen3-14B-ch1
+runs/base-tasks-Qwen3-1.7B-ch1/tasks.json	10000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-1.7B-ch1/_exp.yaml --base --out runs/base-tasks-Qwen3-1.7B-ch1
+runs/base-tasks-Qwen3-0.6B-ch1/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch1/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch1
+runs/base-tasks-Qwen3-4B-ch1/tasks.json	14000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-4B-ch1/_exp.yaml --base --out runs/base-tasks-Qwen3-4B-ch1
+runs/base-tasks-Qwen3-8B-ch1/tasks.json	22000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-8B-ch1/_exp.yaml --base --out runs/base-tasks-Qwen3-8B-ch1
+runs/lw_j_mistral7b_rag/eval/tasks.json	18000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_j_mistral7b_rag/checkpoint --out runs/lw_j_mistral7b_rag/eval
+runs/base-tasks-Mistral-7B-Instruct-v0.1-machado/tasks.json	18000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Mistral-7B-Instruct-v0.1-machado/_exp.yaml --base --out runs/base-tasks-Mistral-7B-Instruct-v0.1-machado
+runs/lw_j_phi4mini_rag/eval/tasks.json	12000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_j_phi4mini_rag/checkpoint --out runs/lw_j_phi4mini_rag/eval
+runs/base-tasks-Phi-4-mini-reasoning-machado/tasks.json	12000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Phi-4-mini-reasoning-machado/_exp.yaml --base --out runs/base-tasks-Phi-4-mini-reasoning-machado
+runs/lw_k_gptoss_rag/eval/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_k_gptoss_rag/checkpoint --out runs/lw_k_gptoss_rag/eval --load-4bit
+runs/base-tasks-gpt-oss-20b-machado/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-gpt-oss-20b-machado/_exp.yaml --base --out runs/base-tasks-gpt-oss-20b-machado --load-4bit
+runs/base-tasks-Qwen3-0.6B-ch16/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch16/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch16
+runs/base-tasks-Qwen3-0.6B-ch4/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch4/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch4
+runs/base-tasks-Qwen3-0.6B-ch8/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch8/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch8
