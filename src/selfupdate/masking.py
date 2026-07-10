@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import string
 from dataclasses import asdict, dataclass, field
 
 
@@ -191,21 +192,33 @@ def render_thinking(
     )
 
 
+_SPAN_PUNCT = string.punctuation + "¡¿«»“”‘’—–"
+# One-or-more whitespace/punctuation between verse words: a trace that quotes
+# a verse with an inserted comma, or wraps it in quotes, must still count as
+# a verbatim retrieval — censoring false negatives leak privileged content.
+_WORD_SEP = r"[\s" + re.escape(_SPAN_PUNCT) + r"]+"
+
+
 def find_poem_spans(trace: str, verses: list[str],
                     min_words: int = 3) -> list[tuple[int, int]]:
     """Char spans of whole-verse quotations inside a think trace.
 
-    Whitespace-normalized and case-insensitive: the model quotes verses
-    with arbitrary wrapping/casing. Only whole verses count — a shared
-    common word is deduction, a verbatim verse is retrieval. Verses under
-    ``min_words`` words are skipped (too easy to emit by chance).
-    Overlapping/adjacent matches are merged. Pure function."""
+    Whitespace-normalized, punctuation-tolerant, and case-insensitive: the
+    model quotes verses with arbitrary wrapping/casing/inserted punctuation.
+    Word-boundary anchored, so a verse cannot match starting or ending
+    mid-word (e.g. "el que mira y sueña" inside "aquel que mira y sueña").
+    Only whole verses count — a shared common word is deduction, a verbatim
+    verse is retrieval. Verses under ``min_words`` words are skipped (too
+    easy to emit by chance). Overlapping/adjacent matches are merged. Pure
+    function."""
     spans = []
     for verse in verses:
-        words = verse.split()
+        words = [w.strip(_SPAN_PUNCT) for w in verse.split()]
+        words = [w for w in words if w]
         if len(words) < min_words:
             continue
-        pat = r"\s+".join(re.escape(w) for w in words)
+        core = _WORD_SEP.join(re.escape(w) for w in words)
+        pat = r"\b" + core + r"\b"
         for m in re.finditer(pat, trace, re.IGNORECASE):
             spans.append((m.start(), m.end()))
     spans.sort()

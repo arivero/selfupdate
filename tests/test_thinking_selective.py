@@ -28,6 +28,31 @@ def test_find_spans_exact_and_normalized():
     assert len(spans2) == 1
 
 
+def test_find_spans_requires_word_boundaries():
+    """Review 2026-07-10 finding: no \\b anchors let 'el que mira y sueña'
+    match as a substring inside 'aquel que mira y sueña' — an accidental
+    word collision (part of 'aquel'), not a genuine verbatim quotation —
+    and censor it, leaking the 'aqu' fragment as a nonsensical kept run."""
+    trace = "Recuerdo que aquel que mira y sueña es el verso citado."
+    assert find_poem_spans(trace, VERSES) == []
+    # the same verse, genuinely standalone, still matches correctly
+    trace2 = "El verso es: el que mira y sueña, según el poema."
+    spans = find_poem_spans(trace2, VERSES)
+    assert len(spans) == 1
+    a, b = spans[0]
+    assert trace2[a:b] == "el que mira y sueña"
+
+
+def test_find_spans_tolerates_inserted_punctuation():
+    """A near-verbatim quote with one inserted comma must still count as
+    retrieval — a censoring false negative leaks privileged content."""
+    trace = "El texto dice: el que mira, y sueña, según el poema."
+    spans = find_poem_spans(trace, VERSES)
+    assert len(spans) == 1
+    assert "mira" in trace[spans[0][0]:spans[0][1]]
+    assert "sueña" in trace[spans[0][0]:spans[0][1]]
+
+
 def test_find_spans_merges_adjacent_and_skips_short():
     trace = ("la tierra de Alvargonzález se cubrió de amapolas "
              "el que mira y sueña")
