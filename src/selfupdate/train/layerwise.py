@@ -39,7 +39,6 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..config import ExperimentConfig
 from ..data.dataset import (
@@ -51,43 +50,25 @@ from ..data.dataset import (
 )
 from ..eval.general import general_ce
 from ..eval.recite import recite_eval
-from ..teacher.cache import TeacherCache, resolve_cache_dir
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
-from .blocks import BlockStack
 from .losses import HiddenLoss
 from .moe import MoEController, dequantize_overrides, pending_router_loss
+from .runtime import (  # noqa: F401  (underscore names re-exported for tests/scripts)
+    OptimizerPlan,
+    TrainingRuntime,
+    _move_opt_state,
+    load_causal_lm as _load_causal_lm,
+    pp_device_map as _pp_device_map,
+    uses_pipeline_map as _uses_pipeline_map,
+    vocab_signature as _vocab_signature,
+)
 
 RUN_CLASSES = {
     "method", "teacher_reference", "ablation", "control",
     "legacy_archive", "confounded", "open",
 }
 NON_METHOD_CLASSES = RUN_CLASSES - {"method"}
-
-
-def _vocab_signature(stack) -> tuple:
-    """Cheap exact fingerprint of the frozen vocabulary tensors (embedding,
-    final norm, head). Computed at trainer start and re-checked before
-    save: NO learning of any kind may modify these — they are the fixed
-    basis of every lens and every cached teacher target."""
-    sig = []
-    seen: set[int] = set()
-    for m in (stack.embed_tokens, stack.final_norm, stack.lm_head):
-        for p in m.parameters():
-            # tied-embedding models (Qwen3 <=1.7B): embed IS lm_head — one
-            # pass over the shared tensor, not two (only compared within-run)
-            if id(p) in seen:
-                continue
-            seen.add(id(p))
-            # chunked fp64 sums: a full p.double() copy of a 200k-vocab
-            # embedding is ~4 GB — enough to OOM a 20B-resident card
-            s = a = 0.0
-            for chunk in p.detach().reshape(-1).split(1 << 22):
-                c = chunk.double()
-                s += c.sum().item()
-                a += c.abs().sum().item()
-            sig.append((s, a))
-    return tuple(sig)
 
 
 def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
@@ -356,72 +337,6 @@ def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
     return reports
 
 
-def _load_causal_lm(src, **kw):
-    """Load a decoder LM regardless of head registration. Multimodal
-    releases like Mistral-Medium-3.5 (mistral3) register ONLY as
-    image-text-to-text and are absent from the causal-LM auto-map, so
-    ``AutoModelForCausalLM`` raises; the ITT wrapper exposes the same
-    ``.model.language_model`` decoder stack BlockStack navigates. gemma4 and
-    qwen3_5_moe ARE in the causal map and take the first path unchanged."""
-    try:
-        return AutoModelForCausalLM.from_pretrained(src, **kw)
-    except (ValueError, KeyError):
-        from transformers import AutoModelForImageTextToText
-
-        return AutoModelForImageTextToText.from_pretrained(src, **kw)
-
-
-def _pp_device_map(cfg) -> dict:
-    """Pipeline map: embedding on cuda:0; decoder blocks partitioned by
-    ``pipeline_split`` (2 GPUs) or ``pipeline_splits`` (N GPUs). The final
-    norm/head live on the last card for untied models, so the top readout
-    window stays colocated with logits."""
-    from transformers import AutoConfig
-
-    mc = AutoConfig.from_pretrained(cfg.model.name)
-    text_cfg = getattr(mc, "text_config", mc)
-    n = text_cfg.num_hidden_layers
-    splits = list(cfg.model.pipeline_splits or [])
-    if splits:
-        if torch.cuda.device_count() < len(splits) + 1:
-            raise ValueError(
-                f"pipeline_splits {splits} needs {len(splits) + 1} visible GPUs"
-            )
-        if splits != sorted(splits) or splits[0] <= 0 or splits[-1] >= n:
-            raise ValueError(f"pipeline_splits {splits} outside 1..{n - 1}")
-    else:
-        if torch.cuda.device_count() < 2:
-            raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
-        split = cfg.model.pipeline_split
-        if not 0 < split < n:
-            raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
-        splits = [split]
-    # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
-    # live on two cards, so the whole vocabulary stack stays on cuda:0 and
-    # readout-window loss calls hop back (an [A,H] transfer per call). Untied
-    # models put norm+head on cuda:1 with the readout window.
-    tied = getattr(mc, "tie_word_embeddings",
-                   getattr(text_cfg, "tie_word_embeddings", False))
-    last_dev = len(splits)
-    vocab_dev = 0 if tied else last_dev
-    prefix = "model.language_model" if getattr(mc, "model_type", "") == "gemma4" else "model"
-    dm = {f"{prefix}.embed_tokens": 0, f"{prefix}.rotary_emb": 0,
-          f"{prefix}.norm": vocab_dev, "lm_head": vocab_dev}
-    if prefix != "model":
-        dm["model.vision_tower"] = 0
-        dm["model.embed_vision"] = 0
-    for i in range(n):
-        dev = 0
-        while dev < len(splits) and i >= splits[dev]:
-            dev += 1
-        dm[f"{prefix}.layers.{i}"] = dev
-    return dm
-
-
-def _uses_pipeline_map(cfg) -> bool:
-    return cfg.model.pipeline_split > 0 or bool(cfg.model.pipeline_splits)
-
-
 def _validate_knob_schedule(cfg) -> None:
     """Knob-flow law (2026-07-05): a knob that a schedule does not implement
     must RAISE, never silently ignore — spec/code divergence is the bug
@@ -502,74 +417,14 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     _validate_knob_schedule(cfg)
     run_dir, log = setup_run_dir(cfg)
     seed_everything(cfg.train.seed)
-    device = cfg.model.device
-    if _uses_pipeline_map(cfg) and cfg.model.device_map:
-        raise ValueError("model.pipeline_split(s) and model.device_map are mutually exclusive")
-    if cfg.model.device_map not in ("", "auto"):
-        raise ValueError("model.device_map must be empty or 'auto'")
-
-    tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    # bf16 base for LoRA (frozen weights) AND for the sequential
-    # schedules: only actively-training blocks need fp32 master weights
-    # (cast per stage / per window); summed full-FT trains all blocks every
-    # step and keeps fp32 masters throughout.
-    full_ft_all_blocks = (not cfg.train.lora.enabled
-                          and cfg.train.schedule != "sequential")
-    base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
-    # warm-start: student weights from a prior run's checkpoint; the teacher
-    # (cache identity / frozen copy / adapters-off) stays cfg.model.name
-    student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
-                   if cfg.train.init_from else cfg.model.name)
-    pp_map = _pp_device_map(cfg) if _uses_pipeline_map(cfg) else None
-    auto_map = cfg.model.device_map == "auto"
     # dequantize_overrides checks the RELEASED identity (cfg.model.name), not
     # student_src: a warm-start checkpoint dir carries no base quantization_config.
     moe_load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
-    if pp_map is not None:
-        model = _load_causal_lm(student_src, dtype=base_dtype, device_map=pp_map,
-                                **moe_load_kw)
-    elif auto_map:
-        model = _load_causal_lm(student_src, dtype=base_dtype, device_map="auto",
-                                **moe_load_kw)
-    else:
-        model = _load_causal_lm(student_src, dtype=base_dtype, **moe_load_kw)
-        model.to(device)
-    peft_model = None
-    if cfg.train.lora.enabled:
-        from .lora import attach_lora
-
-        peft_model = attach_lora(model, cfg.train.lora)
-        model = peft_model.get_base_model()
-    model.train()
-    stack = BlockStack(model)
-    stack.freeze_non_blocks()
-    vocab_sig0 = _vocab_signature(stack)
-
-    if cfg.train.online_teacher and peft_model is None:
-        raise ValueError("train.online_teacher requires train.lora.enabled")
-    teacher = None
-    if cfg.train.online_teacher:
-        teacher = OnlineTeacherSource(stack, peft_model=peft_model)
-    elif cfg.train.frozen_teacher_copy:
-        # resident frozen bf16 copy: online teacher for full-FT schedules
-        if pp_map is not None:
-            t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16, device_map=pp_map, **moe_load_kw)
-            t_model.eval().requires_grad_(False)
-        elif auto_map:
-            t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16, device_map="auto", **moe_load_kw)
-            t_model.eval().requires_grad_(False)
-        else:
-            t_model = AutoModelForCausalLM.from_pretrained(
-                cfg.model.name, dtype=torch.bfloat16, **moe_load_kw)
-            t_model.to(device).eval().requires_grad_(False)
-        teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
+    rt = TrainingRuntime(cfg).load(moe_load_kw)
+    tok, stack = rt.tokenizer, rt.stack
+    teacher = rt.load_teacher(moe_load_kw)
     online = teacher is not None
-    cache = None
-    if not online:
-        cache_root, chash = resolve_cache_dir(cfg)
-        cache = TeacherCache(cache_root, expect_hash=chash)
+    cache = None if online else rt.load_cache()
 
     moe = None
     if cfg.train.moe_mode != "dense_or_black_box":
@@ -610,28 +465,8 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     else:
         raise ValueError(f"unknown layerwise schedule {cfg.train.schedule!r}")
 
-    if _vocab_signature(stack) != vocab_sig0:
-        raise RuntimeError(
-            "frozen-vocabulary violation: embedding/final-norm/head changed "
-            "during training — refusing to save (docs/hidden_loss.md)"
-        )
-    if peft_model is not None:
-        peft_model.save_pretrained(run_dir / "checkpoint")
-    else:
-        model.to(torch.bfloat16)
-        model.save_pretrained(run_dir / "checkpoint")
-    tok.save_pretrained(run_dir / "checkpoint")
-    n_dev = torch.cuda.device_count()
-    log.log(kind="done",
-            # summed across visible cards (pipeline-parallel jobs use two)
-            vram_gb=round(sum(torch.cuda.max_memory_allocated(d)
-                              for d in range(n_dev)) / 2**30, 2),
-            # reserved = what the allocator actually holds from the device —
-            # the honest footprint for "does it fit on this card" claims
-            vram_reserved_gb=round(sum(torch.cuda.max_memory_reserved(d)
-                                       for d in range(n_dev)) / 2**30, 2),
-            vram_per_device_gb=[round(torch.cuda.max_memory_reserved(d) / 2**30, 2)
-                                for d in range(n_dev)])
+    rt.save_checkpoint(run_dir)
+    log.log(kind="done", **rt.memory_summary())
     log.close()
     return run_dir
 
@@ -1104,59 +939,6 @@ def _extend_pending_from_batch(pending: list[list[torch.Tensor]],
         pending.append([losses[i] for losses in layer_losses])
 
 
-def _move_opt_state(opt, device) -> None:
-    """Page an optimizer's per-param state tensors between devices (Adam
-    moments dominate full-FT memory at 8 B/param). Moving "back" targets
-    each PARAM's own device — under pipeline parallel the blocks live on
-    different cards and a global device string would silently migrate
-    moments to the wrong one."""
-    to_cpu = torch.device(device).type == "cpu"
-    for group in opt.param_groups:
-        for p in group["params"]:
-            st = opt.state.get(p)
-            if not st:
-                continue
-            tgt = torch.device("cpu") if to_cpu else p.device
-            for k, v in st.items():
-                if torch.is_tensor(v) and v.device != tgt:
-                    st[k] = v.to(tgt)
-
-
-def _make_block_optimizers(stack, n: int, lr: float, *, offload: bool,
-                           foreach: bool):
-    """Use one resident AdamW so PyTorch can foreach-group parameters.
-
-    CPU paging remains block-granular: combining those optimizers would move
-    every block's moments for each step and defeat ``offload_adam``.
-    """
-    block_params = {
-        L: [p for p in stack.block_params(L) if p.requires_grad]
-        for L in range(1, n + 1)
-    }
-    if offload:
-        optimizers = [torch.optim.AdamW(params, lr=lr, foreach=False)
-                      for params in block_params.values()]
-    else:
-        all_params = [p for params in block_params.values() for p in params]
-        optimizers = [torch.optim.AdamW(all_params, lr=lr, foreach=foreach)]
-    return block_params, optimizers
-
-
-def _step_block_optimizers(block_params, optimizers, *, offload: bool,
-                           foreach: bool) -> None:
-    # Preserve the historical per-block clipping norm even when AdamW is
-    # combined. Global clipping would change the experiment, not just speed.
-    for params in block_params.values():
-        torch.nn.utils.clip_grad_norm_(params, 1.0, foreach=foreach)
-    for opt in optimizers:
-        if offload:
-            _move_opt_state(opt, "cuda")
-        opt.step()
-        opt.zero_grad(set_to_none=True)
-        if offload:
-            _move_opt_state(opt, "cpu")
-
-
 def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     device = cfg.model.device
     n = stack.n_layers
@@ -1169,12 +951,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                        with_teacher_ids=online)
     records = ds.records
     loader = _loader(cfg, ds)
-    offload = cfg.train.offload_adam
-    # Foreach's extra tensor-list intermediates are negligible for LoRA and
-    # expensive for full-FT. Large-model memory therefore wins by default.
-    foreach = cfg.train.lora.enabled and not offload
-    block_params, optimizers = _make_block_optimizers(
-        stack, n, cfg.train.lr, offload=offload, foreach=foreach)
+    plan = OptimizerPlan.build(stack, cfg)
 
     step = accum = 0
     next_step = cfg.train.grad_accum
@@ -1215,9 +992,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
                                     a_ids, anchor[1], base_logits=a_base)
-                    _step_block_optimizers(
-                        block_params, optimizers, offload=offload,
-                        foreach=foreach)
+                    plan.step()
                     step += 1
                     next_step += cfg.train.grad_accum
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
@@ -1252,9 +1027,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                         a_ids, a_base = anchor[0].next()
                         anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
                                     a_ids, anchor[1], base_logits=a_base)
-                    _step_block_optimizers(
-                        block_params, optimizers, offload=offload,
-                        foreach=foreach)
+                    plan.step()
                     step += 1
                     next_step += cfg.train.grad_accum
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
