@@ -1,0 +1,9 @@
+# Additional required packages for full project coverage.
+# Kept separate from the core CUDA stack so the heavy torch install can be
+# validated independently.
+
+# HF benchmark/destruction/retention/tuned-lens data loaders.
+datasets==5.0.0
+
+# scripts/evaluate.py --load-4bit
+bitsandbytes==0.49.2

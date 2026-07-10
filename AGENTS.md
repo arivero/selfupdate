@@ -25,6 +25,71 @@ pytest via `tests/conftest.py`. Keep that guard in any new script; never
 across checkouts). The bootstrap's `pip install -e .` applies only to a
 fresh per-tree venv.
 
+## Container Runtime
+
+Preferred runtime for Lustre-heavy jobs is the repo-local Singularity setup,
+not a copied venv:
+
+```bash
+scripts/container_exec.sh python scripts/train.py ...
+```
+
+Artifacts:
+
+- `containers/pytorch-2.11.0-cu128-cudnn9-runtime.sif` - official
+  `docker://pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime` converted to SIF;
+  contains Python 3.12.3, torch 2.11.0+cu128, CUDA runtime 12.8, cuDNN 9.19.
+- `containers/selfupdate-python-deps-cu128.sqsh` - read-only squashfs overlay
+  with Python add-ons (`transformers==5.12.1`, `accelerate==1.14.0`,
+  `peft==0.19.1`, pandas/matplotlib/pytest/etc.). It deliberately does NOT
+  contain another torch/CUDA stack.
+- `scripts/container_exec.sh` - binds this checkout as `/work`, sets
+  `PYTHONPATH=/dev-python:/opt/selfupdate-python:/work/src`, uses `--nv`, and
+  keeps Singularity cache/tmp/container-home under `/tmp/$USER` instead of
+  `/home`.
+
+Confirmed on H100 node `agpuh01` with driver 565.57.01 / NVIDIA H100 80GB
+HBM3: torch 2.11.0+cu128 reports CUDA 12.8, `torch.cuda.is_available() == True`,
+and a bf16 CUDA matmul succeeds. Check any new node with:
+
+```bash
+nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv
+scripts/container_exec.sh python - <<'PY'
+import torch
+print(torch.__version__, torch.version.cuda)
+print(torch.cuda.is_available())
+print(torch.cuda.get_device_name(0))
+x = torch.randn(1024, 1024, device="cuda", dtype=torch.bfloat16)
+print((x @ x).float().mean().item())
+PY
+```
+
+Do not let Singularity write caches to `/home/arivero`: Singularity 3.7 may use
+the passwd home (`/home/arivero`) even when shell `$HOME` points at Lustre.
+Always set `SINGULARITY_CACHEDIR`, `SINGULARITY_TMPDIR`, and `TMPDIR` outside
+`/home`; the launcher already does this. `/tmp` is node-local XFS on tested
+nodes and is appropriate for transient conversion/cache, while durable SIF/SQSH
+artifacts live in this repo on Lustre.
+
+For development installs, use the writable dev layer mounted at `/dev-python`.
+It defaults to host path `/tmp/$USER/selfupdate-dev-python` and shadows the
+read-only overlay:
+
+```bash
+scripts/container_pip.sh install --no-deps <package>
+scripts/container_exec.sh python -c "import <package>"
+```
+
+Set `SELFUPDATE_DEV_PYTHON_HOST=/some/path` if the dev layer must persist
+across node-local `/tmp` cleanup. Avoid putting this on `/home`; if it lives on
+Lustre, remember it is loose Python files again and may have venv-like metadata
+cost. For stable campaign runs, fold proven dev packages back into
+`containers/selfupdate-python-deps-cu128.sqsh` with `mksquashfs`.
+
+Do not copy a venv, and do not install a second torch by accident. Use
+`--no-deps` or explicit constraints so the dev/overlay layers keep using the
+base image's torch 2.11.0+cu128.
+
 ## Branch Focus
 
 This branch is for layerwise forward distillation only. Active training methods

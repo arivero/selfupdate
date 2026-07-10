@@ -7,3 +7,8 @@ runs/
 .venv
 outerclaude
 backups/
+venvold
+containers/*.sif
+containers/*.sqsh
+containers/*.ext4
+containers/dev-python/
