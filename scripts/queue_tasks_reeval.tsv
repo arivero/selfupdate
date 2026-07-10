@@ -171,8 +171,6 @@ runs/lw_j_mistral7b_rag/eval/tasks.json	18000	-	.venv/bin/python scripts/evaluat
 runs/base-tasks-Mistral-7B-Instruct-v0.1-machado/tasks.json	18000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Mistral-7B-Instruct-v0.1-machado/_exp.yaml --base --out runs/base-tasks-Mistral-7B-Instruct-v0.1-machado
 runs/lw_j_phi4mini_rag/eval/tasks.json	12000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_j_phi4mini_rag/checkpoint --out runs/lw_j_phi4mini_rag/eval
 runs/base-tasks-Phi-4-mini-reasoning-machado/tasks.json	12000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Phi-4-mini-reasoning-machado/_exp.yaml --base --out runs/base-tasks-Phi-4-mini-reasoning-machado
-runs/lw_k_gptoss_rag/eval/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --checkpoint runs/lw_k_gptoss_rag/checkpoint --out runs/lw_k_gptoss_rag/eval --load-4bit
-runs/base-tasks-gpt-oss-20b-machado/tasks.json	30000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-gpt-oss-20b-machado/_exp.yaml --base --out runs/base-tasks-gpt-oss-20b-machado --load-4bit
 runs/base-tasks-Qwen3-0.6B-ch16/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch16/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch16
 runs/base-tasks-Qwen3-0.6B-ch4/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch4/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch4
 runs/base-tasks-Qwen3-0.6B-ch8/tasks.json	6000	-	.venv/bin/python scripts/evaluate.py --experiment runs/base-tasks-Qwen3-0.6B-ch8/_exp.yaml --base --out runs/base-tasks-Qwen3-0.6B-ch8
