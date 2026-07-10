@@ -1,0 +1,45 @@
+{
+  "model": "Qwen/Qwen3-8B",
+  "schedule": "summed",
+  "batching": "item",
+  "micro_batch": 1,
+  "grad_accum": 8,
+  "hidden_loss": "nmse",
+  "conn_window": 0,
+  "readout_window_blocks": 0,
+  "load_seconds": 87.34972877055407,
+  "steps": [
+    {
+      "step": 0,
+      "items": 1,
+      "tokens": 189,
+      "max_seq": 189,
+      "pad_tokens": 0,
+      "seconds": 0.30385563522577286,
+      "items_per_second": 3.2910365452231067,
+      "tokens_per_second": 622.0059070471672
+    },
+    {
+      "step": 1,
+      "items": 1,
+      "tokens": 199,
+      "max_seq": 199,
+      "pad_tokens": 0,
+      "seconds": 0.21732376888394356,
+      "items_per_second": 4.601429494506998,
+      "tokens_per_second": 915.6844694068925
+    },
+    {
+      "step": 2,
+      "items": 1,
+      "tokens": 199,
+      "max_seq": 199,
+      "pad_tokens": 0,
+      "seconds": 0.21658288687467575,
+      "items_per_second": 4.617169964026952,
+      "tokens_per_second": 918.8168228413634
+    }
+  ],
+  "vram_reserved_gb": 16.25,
+  "vram_allocated_gb": 16.117
+}

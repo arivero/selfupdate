@@ -29,8 +29,8 @@ policy). See docs/runtime.md and issues.md 2026-07-10 notes. Remaining:
 
 - Large-model batched measurements: 4B LoRA landed 2026-07-10
   (item 5.9 items/s @ 8.1 GB; padded B4 13.8 items/s @ 8.6 GB —
-  runs/bench_4b_*.json); 8B points queued the same day
-  (runs/bench_8b_*.json when landed). Nothing else left here.
+  runs/bench_4b_*.json); 8B landed the same day (item 4.6 items/s
+  @ 16.1 GB, padded B4 10.7 @ 16.4 GB). Nothing else left here.
 
 ## LEFT — open research gaps (review §4; science, not cleanup)
 
