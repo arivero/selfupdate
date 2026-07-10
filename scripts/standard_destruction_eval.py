@@ -22,9 +22,14 @@ reference corpora.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
+import os
+import re
+import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -42,6 +47,58 @@ from selfupdate.config import load_config
 TASKS = ("wikitext2_ppl", "arc_easy", "arc_challenge", "hellaswag")
 
 
+def _safe_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+
+def _stage_source(source: str, label: str, shared: bool) -> str:
+    """Copy a model/checkpoint to node-local XFS before safetensor mmap.
+
+    Shared model snapshots are retained across jobs on this node. Unique
+    checkpoints are removed at process exit. A mkdir lock prevents concurrent
+    jobs from constructing the same shared snapshot.
+    """
+    from huggingface_hub import snapshot_download
+
+    src = Path(source)
+    if not src.exists():
+        src = Path(snapshot_download(source, local_files_only=True))
+    root = Path(os.environ.get(
+        "SELFUPDATE_EVAL_STAGE", f"/tmp/{os.environ.get('USER', 'user')}/selfupdate-eval-stage"))
+    root.mkdir(parents=True, exist_ok=True)
+    if shared:
+        dest = root / "models" / _safe_name(label)
+        lock = dest.with_name(dest.name + ".lock")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        while not (dest / ".complete").exists():
+            try:
+                lock.mkdir()
+                owner = True
+            except FileExistsError:
+                owner = False
+            if owner:
+                try:
+                    tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}")
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.copytree(src, tmp, symlinks=False)
+                    (tmp / ".complete").touch()
+                    if not dest.exists():
+                        tmp.rename(dest)
+                    else:
+                        shutil.rmtree(tmp, ignore_errors=True)
+                finally:
+                    lock.rmdir()
+                break
+            time.sleep(0.2)
+        return str(dest)
+
+    dest = root / "jobs" / f"{_safe_name(label)}-{os.getpid()}"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest, symlinks=False)
+    atexit.register(shutil.rmtree, dest, True)
+    return str(dest)
+
+
 def _checkpoint_run_config(checkpoint: str | None) -> dict:
     if not checkpoint:
         return {}
@@ -56,7 +113,20 @@ def _checkpoint_run_config(checkpoint: str | None) -> dict:
 
 
 def _load_model(args):
-    cfg = load_config(args.config, args.experiment)
+    try:
+        cfg = load_config(args.config, args.experiment)
+    except ValueError:
+        # Historical run/config.yaml files are useful source-of-truth for the
+        # model identity but can contain trainer keys retired by the refactor.
+        # Evaluation must not deserialize the obsolete training surface.
+        cfg = load_config(args.config)
+        if not args.experiment:
+            raise
+        saved = yaml.safe_load(Path(args.experiment).read_text()) or {}
+        saved_model = (saved.get("model") or {}).get("name")
+        if not saved_model:
+            raise
+        cfg.model.name = saved_model
     checkpoint_cfg = _checkpoint_run_config(args.checkpoint)
     checkpoint_model = ((checkpoint_cfg.get("model") or {}).get("name")
                         if checkpoint_cfg else None)
@@ -66,14 +136,37 @@ def _load_model(args):
     src = cfg.model.name if args.base else args.checkpoint
     if not src:
         raise SystemExit("pass --checkpoint or --base")
-    if not args.base and (Path(src) / "adapter_config.json").exists():
+    adapter = bool(not args.base and (Path(src) / "adapter_config.json").exists())
+    base_src = cfg.model.name
+    if args.stage_to_local:
+        if args.base or adapter:
+            base_src = _stage_source(cfg.model.name, cfg.model.name, shared=True)
+            if args.base:
+                src = base_src
+        if not args.base:
+            src = _stage_source(src, Path(args.checkpoint).parent.name,
+                                shared=False)
+
+    load_kw = {}
+    if args.load_4bit:
+        from transformers import BitsAndBytesConfig
+
+        load_kw["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+    device_map = ("auto" if (args.auto_map or args.load_4bit)
+                  else {"": args.device})
+    if adapter:
         from peft import PeftModel
 
         tok = AutoTokenizer.from_pretrained(src)
         base = AutoModelForCausalLM.from_pretrained(
-            cfg.model.name,
+            base_src,
             dtype=torch.bfloat16,
-            device_map="auto" if args.auto_map else None,
+            device_map=device_map,
+            **load_kw,
         )
         model = PeftModel.from_pretrained(base, src)
     else:
@@ -81,17 +174,23 @@ def _load_model(args):
         model = AutoModelForCausalLM.from_pretrained(
             src,
             dtype=torch.bfloat16,
-            device_map="auto" if args.auto_map else None,
+            device_map=device_map,
+            **load_kw,
         )
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
-    if not args.auto_map:
-        model.to(args.device)
     model.eval()
     return cfg, model, tok
 
 
 def _arc_examples(config: str, split: str, limit: int | None) -> list[dict]:
+    if config == "ARC-Easy":
+        # Repository-pinned standard subset: avoids dataset-revision drift and
+        # guarantees that checkpoint and epoch-zero jobs see identical items.
+        pinned = Path("data/eval/arc_easy_v1.json")
+        if pinned.exists():
+            rows = json.loads(pinned.read_text())["items"]
+            return rows[:limit] if limit else rows
     ds = load_dataset("allenai/ai2_arc", config, split=split)
     rows = []
     for row in ds:
@@ -170,7 +269,11 @@ def _chunks(xs: list, n: int) -> Iterable[list]:
 @torch.no_grad()
 def _score_pairs(model, tok, pairs: list[tuple[str, str]], device: str) -> list[float]:
     texts = [p + c for p, c in pairs]
-    enc = tok(texts, return_tensors="pt", padding=True, add_special_tokens=False)
+    # padding_side MUST be right: the span arithmetic below indexes from the
+    # sequence start. Some fleet tokenizers (ALIA-40b) ship padding_side=left,
+    # which silently scored pad/prompt tokens for every non-longest option.
+    enc = tok(texts, return_tensors="pt", padding=True, padding_side="right",
+              add_special_tokens=False)
     input_ids = enc["input_ids"].to(device)
     attention_mask = enc["attention_mask"].to(device)
     logits = model(input_ids, attention_mask=attention_mask, use_cache=False).logits
@@ -291,6 +394,10 @@ def main() -> int:
     ap.add_argument("--wikitext-seq-len", type=int, default=2048)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--auto-map", action="store_true")
+    ap.add_argument("--load-4bit", action="store_true",
+                    help="NF4-load the model; implies device_map=auto")
+    ap.add_argument("--stage-to-local", action="store_true",
+                    help="stage weights under node-local /tmp before loading")
     args = ap.parse_args()
 
     cfg, model, tok = _load_model(args)

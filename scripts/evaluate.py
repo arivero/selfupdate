@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,8 +19,24 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import load_jsonl
-from selfupdate.eval.general import general_ce
 from selfupdate.eval.recite import recite_eval
+
+# Quijote chapter rungs are distinct recall targets: a ch8-trained checkpoint
+# must be scored on raw_ch8.txt, never on the ch1 subset (which is its
+# best-trained prefix and silently flatters it). Keys match tasks_report.py.
+CORPUS_PATHS = {
+    "machado": "data/poem/raw.txt",
+    "quijote_ch1": "data/quijote/raw_ch1.txt",
+    "quijote_ch4": "data/quijote/raw_ch4.txt",
+    "quijote_ch8": "data/quijote/raw_ch8.txt",
+    "quijote_ch16": "data/quijote/raw_ch16.txt",
+}
+
+
+def quijote_rung(path: str | None) -> str | None:
+    """'quijote_ch8' from '.../raw_ch8.txt' or '.../examples_ch8.jsonl'."""
+    m = re.search(r"ch(\d+)", str(path or "").lower())
+    return f"quijote_ch{m.group(1)}" if m else None
 
 
 def _checkpoint_run_config(checkpoint: str | None) -> dict:
@@ -150,6 +167,15 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--n-per-task", type=int, default=24,
                     help="items per task in the three-task battery")
+    ap.add_argument(
+        "--recall-corpora",
+        nargs="+",
+        choices=tuple(CORPUS_PATHS),
+        default=None,
+        help=("recall corpora to measure. By default this is inferred from "
+              "the checkpoint's training data (chapter-rung-specific for "
+              "Quijote); combined checkpoints measure both corpora"),
+    )
     ap.add_argument("--batch-size", type=int, default=1,
                     help="batched generation for standard recitation evals")
     ap.add_argument("--max-extra-tokens", type=int, default=48)
@@ -174,12 +200,10 @@ def main() -> None:
                         if checkpoint_cfg else None)
     if checkpoint_model and not args.base:
         cfg.model.name = checkpoint_model
-    # a checkpoint is evaluated on ITS training corpus: the three-task
-    # battery built from the wrong corpus scores epoch-0-level by
-    # construction (quijote arms vs the default machado poem)
-    ck_poem = ((checkpoint_cfg.get("data") or {}).get("poem_path")
-               if checkpoint_cfg else None)
-    if ck_poem and not args.base:
+    data_cfg = ((checkpoint_cfg.get("data") or {})
+                if checkpoint_cfg and not args.base else {})
+    ck_poem = data_cfg.get("poem_path")
+    if ck_poem:
         cfg.data.poem_path = ck_poem
 
     src = cfg.model.name if args.base else args.checkpoint
@@ -221,15 +245,51 @@ def main() -> None:
     # retired from the active eval surface
     from selfupdate.eval.tasks import tasks_eval
 
-    r = tasks_eval(model, tok, cfg.data.poem_path,
-                   n_per_task=args.n_per_task)
-    r["teacher_reference_kind"] = "teacher_epoch0_native_no_rag" if args.base else "checkpoint"
-    r["model"] = cfg.model.name
-    r["poem_path"] = cfg.data.poem_path
-    r["general"] = general_ce(model, tok, device=cfg.model.device)
-    parts = "  ".join(f"{t}: exact {v['exact']:.2f} words {v['word_acc']:.2f}"
-                      for t, v in r["tasks"].items())
-    print(f"{parts}  general-CE {r['general']['mean_ce']:.3f}")
+    if args.recall_corpora:
+        corpus_names = list(dict.fromkeys(args.recall_corpora))
+    else:
+        # examples_path is authoritative for combined training configs, which
+        # intentionally inherit base.yaml's Machado poem_path. Looking only at
+        # poem_path made the old report silently call a Machado-only evaluation
+        # a combined result. The Quijote rung comes from the checkpoint's own
+        # paths — checkpoints score on THEIR corpus, never a fixed chapter.
+        examples_path = str(data_cfg.get("examples_path") or
+                            getattr(cfg.data, "examples_path", ""))
+        poem_path = str(ck_poem or cfg.data.poem_path)
+        if "combined" in examples_path:
+            corpus_names = ["machado",
+                            quijote_rung(examples_path) or "quijote_ch1"]
+        elif "quijote" in examples_path or "quijote" in poem_path:
+            corpus_names = [quijote_rung(examples_path)
+                            or quijote_rung(poem_path) or "quijote_ch1"]
+        else:
+            corpus_names = ["machado"]
+
+    corpus_results = {}
+    for corpus in corpus_names:
+        result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
+                            n_per_task=args.n_per_task)
+        result["poem_path"] = CORPUS_PATHS[corpus]
+        corpus_results[corpus] = result
+        parts = "  ".join(
+            f"{t}: exact {v['exact']:.2f} words {v['word_acc']:.2f}"
+            for t, v in result["tasks"].items())
+        print(f"{corpus}: {parts}")
+
+    r = {
+        "schema_version": 2,
+        "teacher_reference_kind": (
+            "teacher_epoch0_native_no_rag" if args.base else "checkpoint"),
+        "model": cfg.model.name,
+        "training_scope": corpus_names,
+        "corpora": corpus_results,
+    }
+    # One-corpus artifacts retain the v1 surface for downstream compatibility.
+    if len(corpus_results) == 1:
+        only = next(iter(corpus_results.values()))
+        r.update({k: only[k] for k in
+                  ("seed", "n_per_task", "tasks", "overall_word_acc", "examples")})
+        r["poem_path"] = only["poem_path"]
 
     out_dir = Path(args.out) if args.out else (
         Path(args.checkpoint).parent / "eval" if args.checkpoint
