@@ -1,0 +1,98 @@
+# Training runtime, optimizer policies, certification
+
+*(Engineering companion to the C3 refactor, 2026-07-10. Science lives in
+docs/hidden_loss.md / docs/windows.md; this file is about HOW training
+executes.)*
+
+## Separation of concerns
+
+`src/selfupdate/train/runtime.py` owns the executable side of a run;
+`layerwise.py` owns WHAT is trained. The schedule loops never touch
+`from_pretrained`, device maps, or optimizer construction:
+
+- **TrainingRuntime** — model loading (causal/ITT fallback), placement
+  (single device / `device_map=auto` / explicit pipeline map), LoRA attach,
+  teacher source (adapters-off pass or frozen bf16 copy), disk-cache
+  resolution, the frozen-vocabulary tripwire, VRAM accounting, checkpoint
+  save.
+- **OptimizerPlan** — the optimizer policy as a named object:
+
+  | kind | state placement | stepping |
+  |---|---|---|
+  | `lora_fused` | GPU | one AdamW, foreach (tensor-list overhead negligible at adapter size) |
+  | `full_resident` | GPU | one AdamW, non-foreach (peak memory wins at model scale) |
+  | `full_offload` | **permanent pinned host buffers** | per-block AdamW, streamed paging |
+
+  Every policy preserves the historical PER-BLOCK clip norm: clipping is
+  part of the experiment, not of the execution policy.
+
+## One walk, batched; items are B=1
+
+The summed schedule has a single code path (`_summed_batch`): teacher stage
+(cached slices or online forward) → trajectory → loss/backward → update.
+`batching: item` collates each example into a B=1 padded batch — bit-exact
+against the historical item loop (no pad rows, gather == slice, same kernel
+shapes; verified empirically on L40S). B>1 padded batches differ from B=1
+only by bf16 kernel-shape rounding (up to ~3e-2 max-relative at deep
+layers; tolerances in tests/test_online_teacher.py document this).
+
+Sliding-window trajectory states are released at their last root use, so
+activation residency follows the window width W instead of the full depth
+(the graphs always did; the activations only do since 2026-07-10).
+
+## Streamed optimizer offload
+
+`offload_adam: true` keeps Adam moments in pinned host memory permanently
+(pinned buffers are allocated once — repeated `pin_memory()` was measured
+SLOWER than the copies it hides; see the negative-result note in issues.md).
+`OptimizerPlan._step_offload` pages moments through the GPU block by block:
+block i+1's H2D prefetch rides a side stream under block i's step kernels,
+and the D2H writeback overlaps block i+1. Measured at 0.6B on L40S:
+0.949 → 0.358 s/step (grad_accum 8); step math is bitwise identical to the
+resident path (tests/test_offload_adam.py).
+
+## Pipeline parallelism
+
+PP is the preferred multi-GPU form for this workload: layerwise execution
+partitions naturally at block boundaries, while tensor parallel puts a
+collective inside every linear (parallel_bench.py keeps TP only as a probe;
+at trainable sizes it loses badly). Two facts from the 2026-07-10
+measurements (issues.md):
+
+- PP is a **memory** technology here, not throughput: the walk is
+  depth-sequential, so PP2 is slower than single-GPU whenever the model
+  fits on one card. Split only when it does not fit.
+- accelerate's per-call dispatch hooks cost ~8% of the PP2 walk. Under an
+  explicit `pipeline_split(s)` map the walk therefore runs **hook-free**:
+  `BlockStack(model, hook_free_walk=True)` calls each block's pre-hook
+  forward and does the boundary moves itself (activation + per-device rope
+  cache). Full-model forwards (recite/general-CE evals, generation) keep
+  their hooks and are unaffected. The bypass never engages when a hook
+  offloads weights (`device_map=auto` spill) or for per-layer-rope bundles
+  (gemma4-style).
+
+Within a grad-accum window the weights are frozen, so cross-item device
+overlap (item i+1 on partition 0 while item i finishes partition 1) would
+be EXACT — the honest PP throughput move if it is ever needed; not
+implemented.
+
+## Certification vs benchmarking
+
+- `scripts/train_certify.py` — "is this the same experiment?": runs the
+  real `train_layerwise` on 13 tiny variants covering every
+  schedule/batching/window/optimizer path; fingerprints per-step losses,
+  per-tensor checkpoint signatures, VRAM peaks. References live in
+  `certs/pre/` (pre-refactor revision). The comparison keys on a semantic
+  config hash that EXCLUDES placement knobs, so one single-device reference
+  certifies PP runs; `--override model.pipeline_split=14` runs the same
+  variants under PP.
+- `scripts/train_batch_bench.py` — "how fast?": the real summed path,
+  timing and memory JSON, no checkpoint.
+- `scripts/memory_plan.py` — "will it fit?": meta-device instantiation +
+  one materialized block measure per-(B, T) activation bytes without
+  loading weights; ADVISORY only (config defaults are experiment
+  variables). Predictions exclude loss-head workspace — apply ~25% margin
+  for vocab-metric losses.
+
+Any trainer change must pass `train_certify.py --all --reference-dir
+certs/pre` (plus the full pytest suite) before it lands.

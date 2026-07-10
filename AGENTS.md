@@ -90,6 +90,32 @@ Do not copy a venv, and do not install a second torch by accident. Use
 `--no-deps` or explicit constraints so the dev/overlay layers keep using the
 base image's torch 2.11.0+cu128.
 
+## Training Runtime & Certification (2026-07-10 refactor)
+
+Execution concerns live in `src/selfupdate/train/runtime.py`
+(TrainingRuntime: loading/placement/teacher/tripwire/save; OptimizerPlan:
+`lora_fused` / `full_resident` / `full_offload` with streamed pinned-CPU
+paging). Schedule loops in `layerwise.py` never construct models or
+optimizers. One batched walk: `batching: item` is a B=1 padded batch,
+bit-exact vs the historical item loop. Read `docs/runtime.md` before
+touching execution machinery, and note the measured NEGATIVE results in
+issues.md (async target prefetch; PP2 throughput) before "optimizing".
+
+Any trainer change must pass BOTH:
+
+```bash
+.venv/bin/python -m pytest tests/ -q
+python scripts/train_certify.py --all --reference-dir certs/pre
+```
+
+`certs/pre/` holds pre-refactor reference fingerprints (losses, checkpoint
+signatures, VRAM) for 13 tiny variants covering every trainer path; the
+compare keys on a semantic config hash that excludes placement knobs, so
+`--override model.pipeline_split=14` certifies PP against the same
+references. `scripts/memory_plan.py` (meta-device + one measured block)
+recommends micro-batch/window/optimizer-placement/splits BEFORE loading
+weights — advisory only.
+
 ## Branch Focus
 
 This branch is for layerwise forward distillation only. Active training methods

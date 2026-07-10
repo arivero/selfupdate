@@ -15,6 +15,10 @@ certifies a pipeline-parallel run of the same experiment.
 - `pre/` — reference artifacts captured at the pre-refactor revision (see
   `git_rev` inside each JSON). Any trainer refactor must re-run
   `--all --reference-dir certs/pre` and pass before merging.
+- `pp2/` — the same experiments run under `--override
+  model.pipeline_split=14` on 2xL40S, certified against the SINGLE-DEVICE
+  references above (the matched PP artifacts issues.md required). Their
+  `done.vram_per_device_gb` fields carry the per-card peaks.
 - `examples_subset16.jsonl` — 16-example slice used by the variants whose
   schedules lack `max_steps` support (teacher_censored / mixed / sequential),
   so the certification budget stays small without touching trainer code.
