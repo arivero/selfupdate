@@ -387,6 +387,15 @@ def _validate_knob_schedule(cfg) -> None:
     is_method = run_class == "method"
     if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
         bad.append("conn_window")
+    if cfg.train.conn_stride not in (0, 1):
+        bad.append("conn_stride (only 0 = disjoint and 1 = sliding exist — "
+                   "docs/windows.md; any other value would silently fall "
+                   "into the disjoint branch and train different credit "
+                   "assignment than intended)")
+    if cfg.train.anchor_kl_weight > 0 and sched != "summed":
+        bad.append("anchor_kl_weight (the anchor step is wired into the "
+                   "summed schedule only; other schedules would silently "
+                   "train without the anchor)")
     if cfg.train.scramble_targets and sched != "summed":
         bad.append("scramble_targets")
     if cfg.train.window_dedup and (cfg.train.conn_window <= 1
@@ -401,9 +410,31 @@ def _validate_knob_schedule(cfg) -> None:
             "readout_window_blocks > 0 — defaults are experiment variables")
     if cfg.train.readout_source not in ("UNSET", "teacher_kl"):
         bad.append("readout_source must be teacher_kl; reference-text training is forbidden")
+    if cfg.train.readout_weight > 0 and cfg.train.readout_window_blocks <= 0:
+        bad.append("readout_weight without readout_window_blocks > 0 (the "
+                   "readout term would silently never run — the L == readout0 "
+                   "branch is unreachable; an arm would land in results "
+                   "classified as a readout arm having trained none)")
     if cfg.train.readout_window_blocks > 0:
         if sched == "teacher_censored":
             bad.append("readout_window_blocks (teacher_censored is pure by definition)")
+        if sched == "sequential":
+            bad.append("readout_window_blocks (the sequential schedule has "
+                       "no readout path; the window would be silently ignored)")
+        if cfg.train.conn_window <= 0:
+            # Owner hard stop 2026-07-04, enforced for EVERY run class: "not
+            # as a baseline, not as a repro reference, not under any
+            # subterfuge". Tail experiments belong to ../selfupdate_kd.
+            raise ValueError(
+                "tail-only window (readout_window_blocks > 0 with conn_window "
+                "0/absent) is banned for every run class; use the sanctioned "
+                "sliding conn_window/conn_stride: 1 or route the arm to "
+                "../selfupdate_kd")
+        if cfg.train.hidden_loss == "zero":
+            raise ValueError(
+                "readout_window_blocks with hidden_loss='zero' is a tail-only "
+                "arm in disguise (no body signal, readout-only gradient) — "
+                "banned for every run class")
         if is_method:
             if cfg.train.conn_window <= 0 or cfg.train.conn_stride != 1:
                 bad.append("readout_window_blocks without sanctioned sliding conn_window/conn_stride")

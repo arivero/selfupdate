@@ -113,7 +113,9 @@ def test_knob_schedule_refusal():
     with pytest.raises(ValueError, match="EXPLICITLY"):
         _validate_knob_schedule(cfg)
     cfg.train.readout_source = "reference_text"
-    with pytest.raises(ValueError, match="teacher_kl"):
+    # the tail-only ban (conn_window 0 + readout window) preempts the
+    # readout_source complaint — both are violations, the ban raises first
+    with pytest.raises(ValueError, match="every run class"):
         _validate_knob_schedule(cfg)
     cfg.train.readout_window_blocks = 0
     cfg.train.conn_window = 8
@@ -149,4 +151,54 @@ def test_knob_schedule_refusal():
     cfg.train.readout_source = "teacher_kl"
     cfg.train.moe_mode = "router_magic"
     with pytest.raises(ValueError, match="moe_mode"):
+        _validate_knob_schedule(cfg)
+
+
+def test_validation_perimeter_closes_silent_knob_holes():
+    """Review 2026-07-10 (H1-H4): a knob that would silently do nothing —
+    or a banned window shape hiding behind a non-method run_class — raises."""
+    from selfupdate.train.layerwise import _validate_knob_schedule
+
+    cfg = load_config("configs/base.yaml", None)
+    # H1: the anchor step is wired into summed only
+    cfg.train.schedule = "mixed"
+    cfg.train.anchor_kl_weight = 0.3
+    with pytest.raises(ValueError, match="anchor_kl_weight"):
+        _validate_knob_schedule(cfg)
+    cfg.train.schedule = "summed"
+    _validate_knob_schedule(cfg)
+    cfg.train.anchor_kl_weight = 0.0
+
+    # H2: conn_stride 2 would silently train DISJOINT credit assignment
+    cfg.train.conn_window = 8
+    cfg.train.conn_stride = 2
+    with pytest.raises(ValueError, match="conn_stride"):
+        _validate_knob_schedule(cfg)
+    cfg.train.conn_stride = 1
+
+    # H3: a readout weight with no window trains nothing yet classifies
+    # as a readout arm
+    cfg.train.readout_weight = 0.5
+    cfg.train.readout_window_blocks = 0
+    with pytest.raises(ValueError, match="readout_weight"):
+        _validate_knob_schedule(cfg)
+
+    # H4: tail-only is banned for EVERY run class, not only method
+    cfg.train.run_class = "ablation"
+    cfg.train.readout_window_blocks = 8
+    cfg.train.readout_source = "teacher_kl"
+    cfg.train.conn_window = 0
+    with pytest.raises(ValueError, match="every run class"):
+        _validate_knob_schedule(cfg)
+    cfg.train.conn_window = 8
+    cfg.train.hidden_loss = "zero"
+    with pytest.raises(ValueError, match="disguise"):
+        _validate_knob_schedule(cfg)
+    cfg.train.hidden_loss = "vocab_mse"
+    _validate_knob_schedule(cfg)  # sliding ablation stays legal
+
+    # sequential has no readout path
+    cfg.train.run_class = "method"
+    cfg.train.schedule = "sequential"
+    with pytest.raises(ValueError, match="sequential"):
         _validate_knob_schedule(cfg)
