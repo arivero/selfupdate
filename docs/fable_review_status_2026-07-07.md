@@ -11,13 +11,12 @@ battery.
 
 ## LEFT — build work
 
-- `scripts/model_matrix.py` — **missing** (cross-model comparison figure; data
-  already exists in `runs/corpus.csv`).
-- `scripts/conclusion_check.py` — **missing**.
-- `runs/conclusions.yaml` — **missing** (machine-readable conclusion ledger; seed
-  from `EXPERIMENTS.md`).
-- `evaluate.py --layer-residuals` — **absent** (checkpoint-time per-layer residual
-  eval: storage quality vs training loss; also C3 item #8).
+All four build items landed 2026-07-10: `scripts/model_matrix.py`
+(runs/model_matrix.{csv,png}), `scripts/conclusion_check.py`,
+`runs/conclusions.yaml` (13 claims, validates clean), and
+`evaluate.py --layer-residuals` (layer_residuals.{json,csv,png}; first
+profile on lw_r_s43_pinned shows the expected shallow-tight /
+deep-departing storage signature). Nothing left in this section.
 
 ## LEFT — speed / hardware (review §3)
 
@@ -28,20 +27,27 @@ memoization + a measured-negative prefetch, PP2 certification: certs/pp2 vs
 certs/pre plus the lw_q_pp2fix science repro at CER 0.011; TP2 probe-only by
 policy). See docs/runtime.md and issues.md 2026-07-10 notes. Remaining:
 
-- **Large-model batched measurements** — `train_batch_bench.py` numbers exist
-  at 0.6B only; collect 4B+ throughput and peak-memory points before H100
-  planning.
+- Large-model batched measurements: 4B LoRA landed 2026-07-10
+  (item 5.9 items/s @ 8.1 GB; padded B4 13.8 items/s @ 8.6 GB —
+  runs/bench_4b_*.json); 8B points queued the same day
+  (runs/bench_8b_*.json when landed). Nothing else left here.
 
 ## LEFT — open research gaps (review §4; science, not cleanup)
 
-- Crown **seed claim** still open (`lw_r_s43_pinned`).
-- **Disjoint-window** pinned evidence needed (`lw_r_disj_pinned`, C2-35).
+- ~~Crown seed claim~~ CLOSED 2026-07-10: `lw_r_s43_pinned` replicated the
+  crown (CER 0.0076 / 0.991 / intrusion 1.5%).
+- ~~Disjoint-window pinned evidence~~ CLOSED 2026-07-10: `lw_r_disj_pinned`
+  recalls clean (0.023 / 7% / non-destructive) — C2-35 resolved.
 - **Teacher-stream k-windows** not implemented (C3 #1).
-- **H100** throughput / memory / PP-TP evidence absent.
+- **H100** throughput / memory / PP-TP evidence absent (needs an H100
+  allocation; L40S evidence complete).
+- NEW: **1.7B cleanliness** — xs spectrum recalls but intrusion stays
+  22-40% at 1.7B (vs 1.5-2.5% at 0.6B).
 
 ## Count
 
-- Build work: **4** — `model_matrix.py`, `conclusion_check.py`, `conclusions.yaml`,
-  `evaluate --layer-residuals`.
-- Speed/H100: **1 evidence task** — batched large-model (4B+) measurements.
-- Research gaps: **4** — seed claim, disjoint pinned, teacher-stream k-windows, H100 evidence.
+- Build work: **0**.
+- Speed/H100: **0** on L40S; H100 evidence awaits hardware.
+- Research gaps: **3** — teacher-stream k-windows, H100 evidence, 1.7B
+  cleanliness (plus the crown17 owner decision recorded in
+  EXPERIMENTS.md).

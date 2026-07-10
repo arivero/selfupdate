@@ -1,0 +1,55 @@
+{
+  "model": "Qwen/Qwen3-4B",
+  "schedule": "summed",
+  "batching": "padded",
+  "micro_batch": 4,
+  "grad_accum": 8,
+  "hidden_loss": "nmse",
+  "conn_window": 0,
+  "readout_window_blocks": 0,
+  "load_seconds": 3.540341801941395,
+  "steps": [
+    {
+      "step": 0,
+      "items": 4,
+      "tokens": 801,
+      "max_seq": 206,
+      "pad_tokens": 23,
+      "seconds": 0.32658713310956955,
+      "items_per_second": 12.24787995140643,
+      "tokens_per_second": 2452.6379602691377
+    },
+    {
+      "step": 1,
+      "items": 4,
+      "tokens": 790,
+      "max_seq": 201,
+      "pad_tokens": 14,
+      "seconds": 0.24904832243919373,
+      "items_per_second": 16.06114010656152,
+      "tokens_per_second": 3172.0751710459003
+    },
+    {
+      "step": 2,
+      "items": 4,
+      "tokens": 808,
+      "max_seq": 208,
+      "pad_tokens": 24,
+      "seconds": 0.2509249933063984,
+      "items_per_second": 15.941018657777535,
+      "tokens_per_second": 3220.085768871062
+    },
+    {
+      "step": 3,
+      "items": 4,
+      "tokens": 892,
+      "max_seq": 316,
+      "pad_tokens": 372,
+      "seconds": 0.4222349524497986,
+      "items_per_second": 9.473398582452925,
+      "tokens_per_second": 2112.567883887002
+    }
+  ],
+  "vram_reserved_gb": 8.783,
+  "vram_allocated_gb": 8.569
+}

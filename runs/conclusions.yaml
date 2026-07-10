@@ -1,0 +1,96 @@
+# Machine-readable conclusion ledger (recommendations.md "Conclusion Ledger").
+# Seeded 2026-07-10 from EXPERIMENTS.md (THE LAWS OF CAMPAIGN 2 + ledger
+# corrections) and the post-budget inheritance verdicts read the same day.
+# Statuses: proven | replicated | single_seed | confounded | open | retracted
+#           | teacher_reference_only | archived
+# conclusion_check.py validates required_runs against runs/corpus.csv.
+
+- id: anchor_goodhart
+  status: replicated
+  claim: "Regularizers protect where anchored; diversify anchors or be fooled (C2-2/3)."
+  required_runs: [lw_m_anchordiv_s43_0p6b_rag, lw_m_combined_s43_0p6b_rag]
+  source: "EXPERIMENTS.md Law 1"
+
+- id: dilution
+  status: replicated
+  claim: "Co-residence is free; more content and more params-per-item lower intrusion; batching beats drilling (C2-6/8/9)."
+  required_runs: [clean_combined_slide8_vocab_0p6b_rag, clean_q_ch1_slide8_vocab_0p6b_rag]
+  source: "EXPERIMENTS.md Law 2"
+
+- id: mimicry
+  status: replicated
+  claim: "Matching the teacher's with-context trajectory near the readout installs the intrusion groove; mimicry-free windows are clean (C2-22)."
+  required_runs: [lw_r_slide8pure_0p6b_rag]
+  notes: "Replicated at 0.6B. The 1.7B extension (lw_r_crown17_pinned) never
+    ran: its config was deleted by the 2026-07-05 purge and the recipe's
+    task_label readout no longer exists in this branch's code — owner
+    decision needed (port under ablation flag, run in ../selfupdate_kd, or
+    drop). Scope of the claim here stays 0.6B."
+  source: "EXPERIMENTS.md Law 3"
+
+- id: connectivity_law
+  status: replicated
+  claim: "Uniform sliding k-windows: recall by k=4, cleanliness and hidden-primacy by k=8 (C2-26)."
+  required_runs: [lw_r_slide2_0p6b_rag, lw_r_slide4_0p6b_rag, lw_r_slide8_0p6b_rag]
+  notes: "1.7B spectrum (2026-07-10 verdicts): recall trend holds (xs_slide2
+    CER 0.043, xs_slide4 0.014) but intrusion stays high at 1.7B (22-40% vs
+    0.6B crown 1.5-2.5%) — cleanliness-at-scale is NOT yet replicated."
+  source: "EXPERIMENTS.md Law 4"
+
+- id: synergy
+  status: replicated
+  claim: "Trajectories store but can't speak; per-layer CE speaks but destroys; only the composition works (C2-28)."
+  required_runs: [lw_r_slide8pure_0p6b_rag]
+  source: "EXPERIMENTS.md Law 5"
+
+- id: reader_writer
+  status: replicated
+  claim: "The teacher is distilled as a reader; students exceed its writing 30-70x; ceilings flat in scale (C2-29)."
+  required_runs: [clean_q_ch1_slide8_vocab_0p6b_rag, lw_l_final_14b_rag]
+  source: "EXPERIMENTS.md Law 6"
+
+- id: loss_safety
+  status: replicated
+  claim: "Distribution-shaped hidden losses amplify intrusion grooves (fisher, lens_kl); vocab_mse/nmse safe; loss choice flattens under uniform windows (C2-17/23/31)."
+  required_runs: [lw_o_fisher_0p6b_rag, lw_s_slide8lenskl_0p6b_rag, lw_s_slide8nmse_0p6b_rag]
+  notes: "2026-07-10: xs_fisher_1p7b_rag lands CER 0.861 / intrusion 26% —
+    consistent at 1.7B."
+  source: "EXPERIMENTS.md Law 7"
+
+- id: premise_condition
+  status: replicated
+  claim: "teacher_kl transmits only what the teacher knows in context; premise-check per data mode (C2-32)."
+  required_runs: [lw_n_thinkselkl_0p6b_rag]
+  source: "EXPERIMENTS.md Law 8 (6th replication: think-KL)"
+
+- id: last_3pct
+  status: replicated
+  claim: "Pure distribution-matching converges to teacher fidelity exactly; verbatim recall lives in the residual the teacher lacks — bounded reference-CE is irreducible in the lab, transcript-CE-equivalent in deployment (C2-34; ~7 replications)."
+  required_runs: [lw_r_slide8kl_0p6b_rag, lw_r_slide8pure_0p6b_rag]
+  source: "EXPERIMENTS.md Law 9"
+
+- id: crown_recipe
+  status: replicated
+  claim: "slide8 + vocab_mse + anchor-KL + bounded task_label readout reaches CER ~0.007 / line-exact ~0.99 / intrusion ~2% at 0.6B."
+  required_runs: [lw_r_slide8pure_0p6b_rag, lw_r_s43_pinned]
+  notes: "Seed claim CLOSED 2026-07-10: lw_r_s43_pinned landed CER 0.0076 /
+    line-exact 0.991 / intrusion 1.5% (n=200) — matches seed 17."
+  source: "EXPERIMENTS.md CLOSING TABLE + 2026-07-10 verdict read"
+
+- id: disjoint_windows
+  status: single_seed
+  claim: "Pinned disjoint windows (conn_stride 0) recall well and stay clean (CER 0.023, intrusion 7% at n=200, non-destructive verdict): the C2-35 failure signature belonged to the config-default confound, not to disjointness; sliding overlap still wins on both axes (0.0076 / 1.5%)."
+  required_runs: [lw_r_disj_pinned]
+  source: "2026-07-10 verdict read + destruction eval (C2-35 follow-up)"
+
+- id: pp2_parallelism
+  status: replicated
+  claim: "PP2 training reproduces single-device results: lw_q_pp2fix CER 0.011 / line-exact 0.988; trainer certified under pipeline_split vs single-device references (certs/pp2, six variants)."
+  required_runs: [lw_q_pp2fix_0p6b_rag]
+  source: "EXPERIMENTS.md Law 10 (closed 2026-07-10) + certs/pp2"
+
+- id: router_modes
+  status: single_seed
+  claim: "gpt-oss-20B: blackbox 0.38 < router_aligned 0.49 < teacher_forced 0.57 ARC retained; routing supervision protects capability. Retention-only (recall floored at 0)."
+  required_runs: []
+  source: "EXPERIMENTS.md router-triple note; caveats apply"

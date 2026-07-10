@@ -1070,7 +1070,9 @@ spectrum configs. Consequences, honestly:
   CONFOUNDED with the teacher_kl readout (same signature as slide8kl
   0.801); whether overlap is load-bearing is UNRESOLVED. A pinned
   disjoint twin (lw_r_disj_pinned) is queued; C2-35 stands only as
-  "disjoint+teacher_kl fails" until it lands.
+  "disjoint+teacher_kl fails" until it lands. → LANDED 2026-07-10,
+  see "Inheritance verdicts" below: disjoint recalls (0.023) and is
+  clean (7%); the collapse belonged to the confound.
 - **Relabels**: slide6pure → k6-KL point (0.838, CLEAN 3.5% — the
   last-3% law replicates at k=6); s43 → slide8kl seed-43 replication
   (predict ~0.80; a SEED-STABILITY test of C2-34, not of the crown);
@@ -1078,7 +1080,8 @@ spectrum configs. Consequences, honestly:
   collapse); slide8pure_1p7b → slide8kl-1.7B (last-3% at scale — still
   novel, wrong question answered well).
 - **The crown's seed claim remains OPEN** — lw_r_s43_pinned queued
-  (post-budget inheritance).
+  (post-budget inheritance). → CLOSED 2026-07-10: replicated, see
+  "Inheritance verdicts" below.
 - **Tooling fix (this cannot recur)**: tail_ce_kind code default is now
   an UNSET sentinel; the validator refuses any windowed run without an
   explicit choice; base.yaml carries the doctrinal default EXPLICITLY;
@@ -1097,3 +1100,29 @@ PROSE, 7th replication (and mildly softer collapse: prose verbatim
 tolerance differs — C3 footnote). s43-KL eval running; pp2fix
 certification eval running — verdicts land unattended in
 runs/*/eval/recite.json; the scheduler owns the lanes now.
+
+### Inheritance verdicts read 2026-07-10 (C3 queue item 0)
+- **Seed claim REPLICATED**: lw_r_s43_pinned CER 0.0076 / line-exact
+  0.991 / intrusion 1.5% (n=200) — matches the seed-17 crown
+  (0.007/0.993/2.5%). Two seeds now carry the crown recipe.
+- **C2-35 RESOLVED**: lw_r_disj_pinned CER 0.023 / intrusion 7% /
+  non-destructive verdict — pinned disjoint windows recall AND stay
+  clean; the 0.810 collapse belonged to the teacher_kl confound.
+  Sliding overlap still wins on both axes; overlap is an optimization,
+  not a requirement.
+- **PP2 blocker CLOSED** (Law 10 updated in place): lw_q_pp2fix CER
+  0.011 / line-exact 0.988; trainer certified under pipeline_split
+  against single-device references (certs/pp2).
+- **xs 1.7B spectrum**: recall trend holds (slide2 0.043, slide4
+  0.014; fisher fails at 0.861 with 26% intrusion — loss-safety at
+  1.7B) BUT intrusion stays high across the spectrum (22.5-39.5% vs
+  0.6B crown 1.5-2.5%): cleanliness at 1.7B is NOT yet reproduced —
+  candidate C3 question (anchor breadth? window/params-per-item
+  scaling?). Verdict numbers in runs/xs_*/eval/destruction.json.
+- **lw_r_crown17_pinned NEVER RAN** (empty dir): its config YAML was
+  deleted by the 2026-07-05 purge before the scheduler reached it, and
+  the crown recipe's task_label readout no longer exists in this
+  branch's trainer — reconstructing it would reintroduce a
+  reference-text training term the branch law forbids. OWNER DECISION:
+  port under an explicit ablation flag, run it in ../selfupdate_kd, or
+  drop the 1.7B mimicry arm.

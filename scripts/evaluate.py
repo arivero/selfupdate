@@ -40,11 +40,109 @@ def _checkpoint_run_config(checkpoint: str | None) -> dict:
     return {}
 
 
+def layer_residuals(cfg, checkpoint: str, out_dir: Path,
+                    limit: int | None = None) -> dict:
+    """Checkpoint-time per-layer residuals against the frozen teacher —
+    storage QUALITY, separated from training loss (which conflates
+    optimization state with what the model stores). One teacher forward
+    (teacher_ids) + one student forward (student_ids) per item; per-layer
+    nmse / l2mse / vocab_mse / residual norm ratio on the aligned span.
+    Writes layer_residuals.{json,csv,png} next to recite.json."""
+    from selfupdate.data.dataset import DistillDataset
+    from selfupdate.train.blocks import BlockStack
+    from selfupdate.train.layerwise import OnlineTeacherSource
+    from selfupdate.train.losses import HiddenLoss, hidden_match
+
+    device = cfg.model.device
+    tok = AutoTokenizer.from_pretrained(cfg.model.name)
+    student_m = AutoModelForCausalLM.from_pretrained(checkpoint,
+                                                     dtype=torch.bfloat16)
+    if (Path(checkpoint) / "adapter_config.json").exists():
+        from peft import PeftModel
+
+        base = AutoModelForCausalLM.from_pretrained(cfg.model.name,
+                                                    dtype=torch.bfloat16)
+        student_m = PeftModel.from_pretrained(base, checkpoint).merge_and_unload()
+    student_m.to(device).eval().requires_grad_(False)
+    teacher_m = AutoModelForCausalLM.from_pretrained(cfg.model.name,
+                                                     dtype=torch.bfloat16)
+    teacher_m.to(device).eval().requires_grad_(False)
+    student = BlockStack(student_m)
+    teacher = OnlineTeacherSource(student, frozen_stack=BlockStack(teacher_m))
+
+    ds = DistillDataset(cfg.data.examples_path, None, tok, need_layers=[],
+                        rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
+                        with_teacher_ids=True)
+    n = student.n_layers
+    vocab_loss = HiddenLoss("vocab_mse", student.final_norm, student.lm_head)
+    sums = {m: torch.zeros(n, dtype=torch.float64)
+            for m in ("nmse", "l2mse", "vocab_mse", "norm_ratio")}
+    count = 0
+    with torch.no_grad():
+        for idx in range(len(ds) if limit is None else min(limit, len(ds))):
+            it = ds[idx]
+            targets = teacher.aligned_targets(it, device)
+            ids = it.student_ids.to(device)[None]
+            pos = it.position_ids.to(device)[None]
+            with torch.autocast(device, dtype=torch.bfloat16):
+                h = student.embed(ids)
+                pe = student.rope(h, pos)
+                for L in range(1, n + 1):
+                    h = student.run_block(L, h, pe)
+                    s = student.loss_view(L, h)[0, it.s0: it.s0 + it.A].float()
+                    t = targets[L].float()
+                    sums["nmse"][L - 1] += float(hidden_match(s, t, "nmse"))
+                    sums["l2mse"][L - 1] += float(hidden_match(s, t, "l2mse"))
+                    sums["vocab_mse"][L - 1] += float(
+                        vocab_loss(s, t, normed=(L == n), layer=L))
+                    sums["norm_ratio"][L - 1] += float(
+                        (s - t).norm() / t.norm().clamp_min(1e-8))
+            count += 1
+    per_layer = {m: [v / count for v in sums[m].tolist()] for m in sums}
+    result = {"model": cfg.model.name, "checkpoint": str(checkpoint),
+              "examples_path": cfg.data.examples_path, "n_items": count,
+              "n_layers": n, "per_layer": per_layer}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "layer_residuals.json").write_text(
+        json.dumps(result, indent=1) + "\n")
+    with (out_dir / "layer_residuals.csv").open("w") as f:
+        f.write("layer," + ",".join(per_layer) + "\n")
+        for L in range(n):
+            f.write(f"{L + 1}," + ",".join(f"{per_layer[m][L]:.6g}"
+                                           for m in per_layer) + "\n")
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(7, 4))
+        xs = range(1, n + 1)
+        for m in ("nmse", "l2mse", "vocab_mse", "norm_ratio"):
+            ax.plot(xs, per_layer[m], marker=".", label=m)
+        ax.set_yscale("log")
+        ax.set_xlabel("layer")
+        ax.set_ylabel("residual (log)")
+        ax.set_title(f"checkpoint residuals vs teacher — {Path(checkpoint).parent.name}")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(out_dir / "layer_residuals.png", dpi=120)
+        plt.close(fig)
+    except ImportError:
+        pass
+    print(f"wrote {out_dir / 'layer_residuals.json'} (n={count})")
+    return result
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
     ap.add_argument("--checkpoint", default=None)
+    ap.add_argument("--layer-residuals", action="store_true",
+                    help="checkpoint-time per-layer residuals vs the frozen "
+                         "teacher (storage quality); writes layer_residuals.* "
+                         "and skips the recitation eval")
     ap.add_argument("--base", action="store_true", help="evaluate the untrained base model")
     ap.add_argument("--out", default=None,
                     help="output dir override (multi-node: concurrent --base "
@@ -78,6 +176,12 @@ def main() -> None:
     src = cfg.model.name if args.base else args.checkpoint
     if not src:
         sys.exit("pass --checkpoint or --base")
+    if args.layer_residuals:
+        if args.base:
+            sys.exit("--layer-residuals compares a checkpoint to the teacher")
+        out_dir = Path(args.out) if args.out else Path(args.checkpoint).parent / "eval"
+        layer_residuals(cfg, args.checkpoint, out_dir, limit=args.limit)
+        return
     # 4-bit forces device_map=auto (bnb places shards itself); the .to(device)
     # move below is skipped because bnb 4-bit params cannot be re-placed.
     load_kw: dict = {}

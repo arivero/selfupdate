@@ -1,0 +1,10 @@
+model,run,method_runs,full_eval_cer,full_eval_line_exact,forgetting_delta_ce,hidden_share,train_min,vram_reserved_gb,items_seen
+Qwen/Qwen3-0.6B,q_ch1_ext_0p6b_rag,99,0.0,1.0,0.705148,,99.1,,0
+Qwen/Qwen3-1.7B,lw_m_combined_1p7b_rag,19,0.009031073518312366,0.9922819971870604,0.385476,,100.1,28.92,0
+Qwen/Qwen3-14B,lw_l_final_14b_rag,8,0.06606652122738549,0.92166968053044,0.543518,,236.3,,0
+Qwen/Qwen3-4B,lw_p_ft4b_rag,10,0.011454683842118608,0.9843374469367602,0.525475,,385.7,42.0,0
+Qwen/Qwen3-8B,lw_l_final_8b_av2_rag,6,0.14613873442664285,0.8725298874824191,0.355078,,179.9,18.71,0
+meta-llama/Llama-3.1-8B-Instruct,lw_j_llama8b_rag,1,0.2597268043373699,0.663913913913914,1.400804,,122.2,,0
+microsoft/Phi-4-mini-reasoning,lw_j_phi4mini_rag,1,0.9182876369841495,0.0,0.453421,,67.0,,0
+mistralai/Mistral-7B-Instruct-v0.1,lw_j_mistral7b_rag,1,0.05361114716141742,0.9273005148005149,0.929179,,95.4,,0
+openai/gpt-oss-20b,lw_k_gptoss_rag,1,1.0,0.0,1.131094,,33.7,,0

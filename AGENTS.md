@@ -307,12 +307,19 @@ signal-anatomy standard). Crown: slide8pure 0.007/99.3%/CLEAN
 (C2-34) has ~5 replications. NOTE the two silent-default confounds of
 2026-07-05 — tail_ce_kind is now an UNSET sentinel and every windowed
 config must choose explicitly.
-POST-BUDGET INHERITANCE (scheduler keeps draining): pinned crown twins
-lw_r_s43_pinned (seed claim — OPEN), lw_r_crown17_pinned (mimicry law
-at 1.7B), lw_r_disj_pinned (C2-35 resolution); xs_* 1.7B spectrum
-(pinned); pp2fix certification + TP probe chain. Read runs/*/eval/.
-C3 queue: (0) read inheritance verdicts; (1) teacher-stream k-windows;
+INHERITANCE VERDICTS READ 2026-07-10 (EXPERIMENTS.md "Inheritance
+verdicts" section): seed claim REPLICATED (s43 0.0076/0.991/1.5%);
+C2-35 RESOLVED (disjoint 0.023/7% clean — the collapse was the
+confound); PP2 blocker CLOSED (pp2fix 0.011 + certs/pp2); xs 1.7B
+spectrum recalls but is DIRTY (22-40% intrusion — cleanliness at 1.7B
+is an open C3 question); lw_r_crown17_pinned never ran and needs an
+OWNER DECISION (task_label readout no longer exists on this branch).
+Conclusion ledger: runs/conclusions.yaml (validate with
+scripts/conclusion_check.py); cross-model matrix: scripts/model_matrix.py.
+C3 queue: (1) teacher-stream k-windows;
 (2) premise-gated thinking teacher_kl; (3) Qwen3.6-27B bridge grid +
 Gemma4-E4B (embed-scaling adapter); (4) wide-channel ragchannel;
-(5) batching+sync hot-loop (4-6x); (6) reincarnation; (7) intrusion
-prompts already 200; (8) checkpoint-time layer-residuals eval mode.
+(5) DONE 2026-07-10 — trainer refactor (docs/runtime.md);
+(6) reincarnation; (7) intrusion prompts already 200; (8) DONE
+2026-07-10 — evaluate.py --layer-residuals; (9) NEW: 1.7B cleanliness
+question from the xs spectrum.
