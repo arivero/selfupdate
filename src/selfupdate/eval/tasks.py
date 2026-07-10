@@ -21,6 +21,8 @@ import re
 
 import torch
 
+from ..chatfmt import stop_token_id
+
 QUESTIONS = {
     "next_line": "¿Qué línea sigue inmediatamente a esta?\n«{x}»",
     "end_block": "Termina este párrafo, continuando exactamente el texto:\n«{x}»",
@@ -28,6 +30,17 @@ QUESTIONS = {
     "start_block": "Este es el final de un párrafo. Escribe exactamente su comienzo:\n«{x}»",
     "cloze": ("He borrado {n} palabras de este párrafo, marcadas con ___. "
               "Escribe únicamente las palabras que faltan, en orden:\n«{x}»"),
+}
+
+# Stable names for per-epoch training telemetry.  ``tasks_eval`` itself still
+# accepts any corpus path, but campaign configs use these names so a combined
+# run cannot silently monitor only its Machado half.
+RECALL_CORPUS_PATHS = {
+    "machado": "data/poem/raw.txt",
+    "quijote_ch1": "data/quijote/raw_ch1.txt",
+    "quijote_ch4": "data/quijote/raw_ch4.txt",
+    "quijote_ch8": "data/quijote/raw_ch8.txt",
+    "quijote_ch16": "data/quijote/raw_ch16.txt",
 }
 
 
@@ -126,51 +139,79 @@ def score(reference: str, answer: str) -> dict:
 @torch.no_grad()
 def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                n_per_task: int = 24, max_extra_tokens: int = 32,
-               keep_examples: int = 6) -> dict:
-    """Run the three-task battery; returns plain per-task accuracies."""
+               keep_examples: int = 6, with_context: bool = False) -> dict:
+    """Run the three-task battery; returns plain per-task accuracies.
+
+    ``with_context``: teacher/RAG ceiling mode (owner directive 2026-07-11).
+    The STUDENT battery never sets this — living without the passage in
+    context is the entire point of the student; this flag exists only for
+    the separate teacher-ceiling reference test, which measures the SAME
+    three tasks but with the full corpus file prepended as a retrieved
+    document, exactly like training's RAG mode
+    (``masking.render_rag``: "\\n\\nDocumento recuperado:\\n{passage}").
+    Same questions, same references, same scoring as the no-context battery
+    — only the prompt changes — so a teacher-ceiling score is directly
+    comparable to a checkpoint's plain ``tasks_eval`` score."""
     from .recite import greedy_generate_positions, strip_think
 
-    items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
-    eos = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    if eos is None or eos < 0:
-        eos = tokenizer.eos_token_id
-    device = next(model.parameters()).device
-    agg: dict[str, list[dict]] = {}
-    examples = []
-    for it in items:
-        q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
-        prompt = tokenizer.apply_chat_template(
-            [{"role": "user", "content": q}], tokenize=False,
-            add_generation_prompt=True, enable_thinking=False)
-        ids = torch.tensor([tokenizer.encode(prompt, add_special_tokens=False)],
-                           device=device)
-        budget = len(tokenizer.encode(it["reference"])) + max_extra_tokens
-        out = greedy_generate_positions(
-            model, ids, torch.arange(ids.shape[1], device=device)[None],
-            max_new_tokens=budget, eos_id=eos)
-        answer = strip_think(tokenizer.decode(out, skip_special_tokens=True))
-        s = score(it["reference"], answer)
-        s["n_deleted"] = it["n"]
-        agg.setdefault(it["task"], []).append(s)
-        if len(examples) < keep_examples:
-            examples.append({"kind": it["kind"], "q": q,
-                             "reference": it["reference"],
-                             "answer": answer.strip()[:200], **s})
-    result = {"seed": seed, "n_per_task": n_per_task, "tasks": {}}
-    for task, rows in agg.items():
-        result["tasks"][task] = {
-            "n": len(rows),
-            "exact": sum(r["exact"] for r in rows) / len(rows),
-            "word_acc": sum(r["word_acc"] for r in rows) / len(rows),
-        }
-    if "cloze" in agg:
-        by_n: dict[int, list] = {}
-        for r in agg["cloze"]:
-            by_n.setdefault(r["n_deleted"], []).append(r["word_acc"])
-        result["tasks"]["cloze"]["by_deletions"] = {
-            str(n): sum(v) / len(v) for n, v in sorted(by_n.items())}
-    result["overall_word_acc"] = (sum(r["word_acc"] for rows in agg.values()
-                                      for r in rows)
-                                  / max(1, sum(len(r) for r in agg.values())))
-    result["examples"] = examples
-    return result
+    # This public evaluator is called directly by scripts as well as between
+    # epochs by the trainer.  Dropout must never contaminate an evaluation,
+    # but a training caller must resume training mode afterwards.
+    was_training = model.training
+    model.eval()
+    try:
+        items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
+        context = None
+        if with_context:
+            with open(poem_path, encoding="utf-8") as f:
+                context = f.read()
+        # ``convert_tokens_to_ids('<|im_end|>')`` returns the unknown token id
+        # on SentencePiece models such as Mistral.  chatfmt knows whether a
+        # model actually has a single-token turn closer and otherwise returns
+        # its real EOS id.
+        eos = stop_token_id(tokenizer)
+        device = next(model.parameters()).device
+        agg: dict[str, list[dict]] = {}
+        examples = []
+        for it in items:
+            q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
+            content = (f"{q}\n\nDocumento recuperado:\n{context}"
+                      if context is not None else q)
+            prompt = tokenizer.apply_chat_template(
+                [{"role": "user", "content": content}], tokenize=False,
+                add_generation_prompt=True, enable_thinking=False)
+            ids = torch.tensor([tokenizer.encode(prompt, add_special_tokens=False)],
+                               device=device)
+            budget = len(tokenizer.encode(it["reference"])) + max_extra_tokens
+            out = greedy_generate_positions(
+                model, ids, torch.arange(ids.shape[1], device=device)[None],
+                max_new_tokens=budget, eos_id=eos)
+            answer = strip_think(tokenizer.decode(out, skip_special_tokens=True))
+            s = score(it["reference"], answer)
+            s["n_deleted"] = it["n"]
+            agg.setdefault(it["task"], []).append(s)
+            if len(examples) < keep_examples:
+                examples.append({"kind": it["kind"], "q": q,
+                                 "reference": it["reference"],
+                                 "answer": answer.strip()[:200], **s})
+        result = {"seed": seed, "n_per_task": n_per_task, "tasks": {}}
+        for task, rows in agg.items():
+            result["tasks"][task] = {
+                "n": len(rows),
+                "exact": sum(r["exact"] for r in rows) / len(rows),
+                "word_acc": sum(r["word_acc"] for r in rows) / len(rows),
+            }
+        if "cloze" in agg:
+            by_n: dict[int, list] = {}
+            for r in agg["cloze"]:
+                by_n.setdefault(r["n_deleted"], []).append(r["word_acc"])
+            result["tasks"]["cloze"]["by_deletions"] = {
+                str(n): sum(v) / len(v) for n, v in sorted(by_n.items())}
+        result["overall_word_acc"] = (sum(r["word_acc"] for rows in agg.values()
+                                          for r in rows)
+                                      / max(1, sum(len(r) for r in agg.values())))
+        result["examples"] = examples
+        return result
+    finally:
+        if was_training:
+            model.train()
