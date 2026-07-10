@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +96,68 @@ def audit_one(path: Path, base: Path = BASE) -> list[Issue]:
     return issues
 
 
+def _pending_queue_experiment_paths(root: Path = ROOT) -> set[Path]:
+    """--experiment paths referenced by rows the scheduler could still
+    dispatch: done_file not yet satisfied and not `#`-disabled
+    (gpu_scheduler.sh: `[ -e "$done" ] && continue` /
+    `case "$done" in \\#*) continue;; esac`). A row whose done_file already
+    exists is permanently skipped regardless of what its config contains —
+    flagging it would just make the audit fail on harmless history."""
+    paths: set[Path] = set()
+    for qpath in sorted(root.glob("scripts/queue*.tsv")):
+        for line in qpath.read_text().splitlines()[1:]:
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            done_file, _need, _after, cmd = parts[0], parts[1], parts[2], parts[3]
+            if done_file.startswith("#") or (root / done_file).exists():
+                continue
+            m = re.search(r"--experiment (\S+)", cmd)
+            if m:
+                paths.add(root / m.group(1))
+    return paths
+
+
+def audit_queue_snapshots(experiments: Path = EXPERIMENTS,
+                          root: Path = ROOT) -> list[Issue]:
+    """Queue TSVs can point --experiment at a run-dir config SNAPSHOT
+    (runs/<run>/config.yaml) instead of a configs/experiments/*.yaml file —
+    outside audit_all's scan perimeter. Restricted to rows the scheduler
+    could still dispatch (see _pending_queue_experiment_paths); the queue
+    is mostly a completed-campaign history and flagging harmless done rows
+    would just break the audit gate. load_config already fail-loud rejects
+    unknown keys at dispatch time (config.py), but that means a queued job
+    discovers a stale/renamed knob only when the scheduler actually reaches
+    it, mid-campaign. Catch it offline instead."""
+    issues: list[Issue] = []
+    for path in sorted(_pending_queue_experiment_paths(root)):
+        try:
+            if experiments in path.parents:
+                continue  # already covered by audit_all's own scan
+        except ValueError:
+            pass
+        if not path.exists():
+            issues.append(Issue(path, "queue references a missing --experiment path"))
+            continue
+        raw, raw_issues = _load_raw(path)
+        issues.extend(raw_issues)
+        if raw_issues:
+            continue
+        train = raw.get("train", {}) or {}
+        old = sorted(k for k in OLD_KEYS if k in train)
+        if old:
+            issues.append(Issue(
+                path, "queue-referenced snapshot carries old banned train "
+                     "keys (will fail loud at dispatch): " + ", ".join(old)))
+        if train.get("readout_source") == FORBIDDEN_REFERENCE_SOURCE:
+            issues.append(Issue(
+                path, "queue-referenced snapshot has a forbidden "
+                     "reference-text readout source"))
+    return issues
+
+
 def audit_all(base: Path = BASE, experiments: Path = EXPERIMENTS) -> list[Issue]:
     paths = [base] + sorted(experiments.glob("*.yaml"))
     issues: list[Issue] = []
@@ -116,6 +179,7 @@ def audit_all(base: Path = BASE, experiments: Path = EXPERIMENTS) -> list[Issue]
         if len(owners) > 1:
             joined = ", ".join(str(p) for p in owners)
             issues.append(Issue(owners[0], f"duplicate run_name {run!r}: {joined}"))
+    issues.extend(audit_queue_snapshots(experiments))
     return issues
 
 
