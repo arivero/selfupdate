@@ -7,9 +7,9 @@ student block to reproduce the teacher's hidden state at aligned token
 positions.
 
 The research target in this branch is layerwise forward distillation:
-block-local hidden-state learning, plus the smallest local readout auxiliary
-needed for free-run behavior. Whole-network logit distillation is not an active
-method in this tree.
+block-local hidden-state learning, plus a bounded sliding readout window
+with depth-uniform credit for free-run behavior. Whole-network logit
+distillation is not an active method in this tree.
 
 ## The Pierre Menard Program
 
@@ -43,9 +43,15 @@ tests/              alignment / cache / locality / layerwise hybrid tests
 - Teacher caches store per-layer hidden states only. Online-teacher LoRA runs
   skip the disk cache: adapters off is the frozen teacher, adapters on is the
   student.
-- The core loss is hidden matching (`nmse` or `l2mse`). The active behavioral
-  hybrids are local gold-token CE through the frozen readout: last-block CE,
-  per-block lens-CE, and tail-CE over a bounded top window.
+- The core loss is hidden matching (champion metric: `vocab_mse`, MSE in the
+  frozen vocabulary's coordinates; `nmse` matches it under uniform windows).
+  The behavioral term is a bounded sliding connected window (`conn_window` +
+  `conn_stride: 1`) — uniform k-deep credit for every block — whose top
+  window may carry a teacher-sourced readout (`readout_source: teacher_kl`).
+  Reference-text cross-entropy is never a training target on this branch
+  (eval against the reference text is correct and required); the embedding
+  and logits matrix are never trained (Frozen-Vocabulary Principle). Window
+  semantics: [docs/windows.md](docs/windows.md).
 
 See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 [docs/scaling.md](docs/scaling.md) for the large-model plan.
@@ -53,15 +59,24 @@ See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 ## Current Finding
 
 Storage and readout dissociate. Hidden matching writes distributed,
-redundant storage (best metric: `vocab_mse`, MSE in the frozen
-vocabulary's coordinates — portable across readouts); a bounded tail
-window turns it into behavior, and can even be trained as a second phase
-on a frozen fully-local body (`tail_only`). The readout is where the
+redundant storage; behavior comes from bounded sliding connected windows
+with uniform k-deep credit — recall arrives by k=4, a clean destruction
+battery by k=8 (the connectivity law). The readout is where the
 pathologies live: it is template-locked (cured by maieutic dialogue
-data) and intrudes on neighbor-genre text ("catastrophic remembering",
-halved by an anchor-KL to the base model). Final recipe and the full
-evidence chain: `EXPERIMENTS.md`. 0.6B recites the whole 715-verse
-romance self-chained with its first error at verse 708.
+data) and intrudes on neighbor-genre text ("catastrophic remembering").
+Matching the teacher's with-context trajectory near the output is what
+installs the intrusion groove; a mimicry-free top window removes it,
+and multi-genre anchor-KL plus content dilution keep it down. Pure
+distribution matching (`teacher_kl`) converges to the teacher's own
+~97% token fidelity; verbatim recall lives in the last ~3% the teacher
+definitionally lacks (the last-3% law), so the pre-law high-recall arms
+are recorded as labeled hybrid baselines, not the method.
+Distribution-shaped hidden losses (`lens_kl`, `vocab_fisher`) amplify
+the groove; `vocab_mse`/`nmse` are safe. Crown checkpoint (slide8pure,
+two seeds): 0.6B recites the whole 715-verse romance self-chained with
+its first error at verse 708 — CER 0.007 / 99.3% line-exact / 2.5%
+intrusion (n=200). Laws and the evidence chain: `EXPERIMENTS.md`;
+machine-readable claims: `runs/conclusions.yaml`.
 
 ## Bootstrap
 
