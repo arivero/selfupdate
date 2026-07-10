@@ -303,9 +303,15 @@ def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
     xs, ys, params = {}, {}, {}
     reports = []
     for L1 in range(L_start, last_body + 1):
-        # .detach() gives x its own autograd identity; h_traj stays a plain
-        # detached trajectory shared with the caller
-        x = h_traj[L1 - 1].detach().requires_grad_(True)
+        # .detach() gives x its own autograd identity (sharing storage);
+        # POPPING the trajectory ref makes the xs/ys last-use deletions
+        # below actually release that storage — otherwise the caller's dict
+        # keeps every state alive for the whole item and the documented
+        # W-block residency only holds for graphs, not activations
+        # (h_traj[last_body] stays: it is the caller's walk output)
+        root = (h_traj.pop(L1 - 1) if L1 - 1 != last_body
+                else h_traj[L1 - 1])
+        x = root.detach().requires_grad_(True)
         with torch.autocast(dev_type, dtype=torch.bfloat16, enabled=autocast):
             y = stack.run_block(L1, x, pos_emb)
             loss, report = compute_loss(L1, y)
@@ -816,6 +822,12 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                         batch, loss_fn, readout_w=0.0, L1=L1,
                     )
                     layer_losses.extend(win_losses)
+                    # trajectory lifetime: roots below the NEXT window's root
+                    # are done — keep residency at W states, not the full
+                    # depth (h_traj[last_body] survives as the walk's output)
+                    next_root = max(L - 1, L1 + 1 - W)
+                    for j in [j for j in h_traj if j < next_root and j != last_body]:
+                        del h_traj[j]
             h = h_traj[last_body]
             L = last_body + 1
             continue

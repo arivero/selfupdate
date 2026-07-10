@@ -143,6 +143,27 @@ and sampled-update tolerances. The PP2/TP2 hardware verdict remains open until
 matched JSON artifacts land; the old self-target/zero-update check is not
 certification evidence.
 
+NEGATIVE RESULT (2026-07-10, refactor session): async pinned-memory target
+prefetch (side CUDA stream, pin_memory + event-synced staging of layer L+1
+while block L computes) was implemented and MEASURED SLOWER on L40S at 0.6B:
+item mode -9%, slide8-dedup padded B4 -25%, no memory win. The per-tensor
+pin_memory cost exceeds what the async copy hides — the batched walk already
+covers these small (<5 MB/layer) pageable H2D copies. Do not rebuild without
+first measuring a pinned-POOL variant at 4B+ scale where targets are >20 MB
+per layer. The related real win that DID land: sliding-window trajectory
+states are now released at their last root use (activation residency W states
+instead of full depth; -180 MB at 0.6B slide8 B=8, scales with H*B*T*n).
+
+PP2 hook measurement (2026-07-10, L40S 0.6B seq600 fwd+bwd walk): single
+54-55 ms/item; PP2 with accelerate dispatch hooks 61-71; hooks stripped +
+explicit boundary moves 56-67 (~8% of the PP2 walk is hook dispatch — the
+Python pytree traversal, not redundant transfers: pre-moving inputs under
+intact hooks changes nothing). PP2 is SLOWER than single-GPU for this
+depth-sequential workload in every variant — PP is a memory technology here.
+Within a grad-accum window weights are frozen, so cross-item device overlap
+(item i+1 on partition 0 while item i runs partition 1) would be EXACT, not
+stale — the honest PP throughput move if ever needed.
+
 ## Missing instrument: per-layer residuals AT CHECKPOINTS (2026-07-05)
 Training-time per-layer losses are logged (metrics.jsonl per_layer) and
 now plotted per run (scripts/layer_loss_plots.py -> eval/layer_losses.png).
