@@ -367,7 +367,7 @@ class TrainingRuntime:
     def load_teacher(self, moe_load_kw: dict | None = None):
         """Online teacher (adapters-off LoRA base, or a resident frozen bf16
         copy for full-FT) — None when targets come from the disk cache."""
-        from .layerwise import OnlineTeacherSource
+        from .teacher_source import OnlineTeacherSource
 
         cfg = self.cfg
         if cfg.train.online_teacher and self.peft_model is None:

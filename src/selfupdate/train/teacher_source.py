@@ -1,0 +1,109 @@
+"""Online (per-step) teacher-state sources.
+
+The disk cache stores aligned slices only; schedules that need full-sequence
+or per-step teacher states (teacher_censored, mixed, online-LoRA summed)
+draw them from a frozen teacher resident in the same process. Construction
+belongs to ``TrainingRuntime.load_teacher``; this module only defines the
+source itself.
+"""
+
+from __future__ import annotations
+
+import contextlib
+
+import torch
+
+from ..data.dataset import Batch
+from .steps import _capture_block_components
+
+
+class OnlineTeacherSource:
+    """Frozen-teacher forwards for schedules that need per-step teacher
+    states. Two backends, exactly one active:
+
+    - ``peft_model``: adapters-off pass on the resident base (LoRA runs) —
+      the teacher is already resident, zero extra VRAM.
+    - ``frozen_stack``: a resident frozen bf16 copy of the base model — the
+      full-FT path (``train.frozen_teacher_copy``), ~1.2 GB at 0.6B.
+
+    ``full_states`` returns raw block outputs [h0..hn] over the full teacher
+    sequence (final norm applied by the consumer, matching the
+    teacher_censored convention). ``aligned_targets`` returns {L: [A, H]}
+    with the h_n post-norm convention — exactly what the disk cache stores.
+    """
+
+    def __init__(self, student_stack, peft_model=None, frozen_stack=None):
+        if (peft_model is None) == (frozen_stack is None):
+            raise ValueError("exactly one of peft_model / frozen_stack")
+        self.stack = frozen_stack if frozen_stack is not None else student_stack
+        self.peft_model = peft_model
+
+    def _ctx(self):
+        return (self.peft_model.disable_adapter() if self.peft_model
+                else contextlib.nullcontext())
+
+    @torch.no_grad()
+    def full_states(self, it, device) -> list[torch.Tensor]:
+        t_ids = it.teacher_ids.to(device)[None]
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None]
+        with self._ctx(), torch.autocast(device, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            states = [h]
+            for L in range(1, self.stack.n_layers + 1):
+                h = self.stack.run_block(L, h, pos_emb)
+                states.append(h)
+        return states
+
+    @torch.no_grad()
+    def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
+        states = self.full_states(it, device)
+        return {
+            L: self.stack.loss_view(L, states[L])[0, it.t0: it.t0 + it.A].detach()
+            for L in range(1, self.stack.n_layers + 1)
+        }
+
+    @torch.no_grad()
+    def aligned_targets_batch(self, batch: Batch, device,
+                              capture_components: bool = False) -> dict:
+        """Streamed: each layer's aligned rows are gathered as the block
+        runs, so a single full-sequence state is resident at a time instead
+        of all n+1 — the batched teacher costs one layer of VRAM, not a
+        stack. (full_states stays list-shaped for teacher_censored/mixed,
+        which genuinely consume every layer's full sequence.)"""
+        if batch.teacher_ids is None:
+            raise ValueError("online teacher batch needs teacher_ids")
+        if batch.t0 is None:
+            raise ValueError("online teacher batch needs t0")
+        t_ids = batch.teacher_ids.to(device)
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None].expand(
+            t_ids.shape[0], -1
+        )
+        B, Amax = batch.hidden_mask.shape
+        offsets = torch.arange(Amax, device=device)[None]
+        t0 = batch.t0.to(device)[:, None]
+        row = torch.arange(B, device=device)[:, None]
+        out: dict[int, torch.Tensor] = {}
+        with self._ctx(), torch.autocast(device, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            idx = (t0 + offsets).clamp_max(h.shape[1] - 1)
+            for L in range(1, self.stack.n_layers + 1):
+                if capture_components:
+                    with _capture_block_components(self.stack, L) as components:
+                        h = self.stack.run_block(L, h, pos_emb)
+                    for name in ("attn", "mlp"):
+                        value = components[name]
+                        out[(name, L)] = value[
+                            row.to(value.device), idx.to(value.device)].detach()
+                else:
+                    h = self.stack.run_block(L, h, pos_emb)
+                view = self.stack.loss_view(L, h)
+                view_device = view.device
+                out[L] = view[row.to(view_device), idx.to(view_device)].detach()
+        return out
+
+
+def _online_targets(stack, peft_model, it, device):
+    """Back-compat wrapper (scripts import this): adapters-off aligned targets."""
+    return OnlineTeacherSource(stack, peft_model=peft_model).aligned_targets(it, device)

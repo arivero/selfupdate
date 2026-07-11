@@ -142,6 +142,18 @@ class HiddenLoss:
     increment kind at a cache boundary selects its documented state fallback.
     """
 
+    @classmethod
+    def from_config(cls, train_cfg, stack) -> "HiddenLoss":
+        """The one construction path the schedule loops share: every knob
+        that selects or parameterizes the hidden objective comes from
+        ``cfg.train``; the frozen norm/head/embedding come from the stack."""
+        return cls(train_cfg.hidden_loss, stack.final_norm, stack.lm_head,
+                   tuned_lens_path=train_cfg.tuned_lens_path,
+                   jacobian_lens_path=train_cfg.jacobian_lens_path,
+                   input_embedding=stack.embed_tokens,
+                   mahalanobis_path=train_cfg.mahalanobis_path,
+                   multi_delta_scales=tuple(train_cfg.multi_delta_scales))
+
     def __init__(self, kind: str, final_norm=None, lm_head=None,
                  tuned_lens_path: str = "", jacobian_lens_path: str = "",
                  input_embedding=None, mahalanobis_path: str = "",
