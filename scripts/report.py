@@ -63,6 +63,264 @@ def _text_file_pages(pdf, title, path, fontsize=5, lines_per_page=18):
                    fontsize=fontsize)
 
 
+def _prose_page(pdf, title, sections):
+    """Readable introductory prose for non-specialist readers."""
+    fig = plt.figure(figsize=(8.27, 11.69))
+    fig.text(0.08, 0.94, title, fontsize=17, weight="bold")
+    y = 0.89
+    for heading, body in sections:
+        fig.text(0.08, y, heading, fontsize=11, weight="bold", va="top")
+        y -= 0.028
+        wrapped = "\n".join(textwrap.wrap(body, width=105))
+        fig.text(0.08, y, wrapped, fontsize=9, va="top", linespacing=1.35)
+        y -= 0.026 * (wrapped.count("\n") + 1) + 0.035
+    pdf.savefig(fig, dpi=180)
+    plt.close(fig)
+
+
+def lossgrid_guide_pages(pdf):
+    _prose_page(pdf, "How to read this loss-grid report (1/2)", [
+        ("Purpose",
+         "Each row is one Qwen3-1.7B student trained from the same-width frozen teacher. "
+         "The grid asks which layerwise objective learns Machado and two Don Quijote "
+         "recall sets while preserving ordinary knowledge and reasoning."),
+        ("Scorecard",
+         "M/Q1/Q4 are word accuracies for Machado, Quijote chapter 1, and Quijote "
+         "chapter 4. Epoch 0 is the untrained checkpoint reference; final is the full "
+         "post-training evaluation. Mean recall averages those three corpora, but the "
+         "separate values must be checked for coverage imbalance."),
+        ("Damage columns",
+         "Standard accuracy is the macro average of ARC-Easy, ARC-Challenge, and "
+         "HellaSwag. Standard delta is final minus the paired base-model score; worst "
+         "delta is the most negative task change. Positive recall with a strongly "
+         "negative worst delta is memorization bought by model damage."),
+        ("Slide and batching",
+         "Slide 1 is block-local credit. Slide 2 gives each layer uniform two-block "
+         "connected credit. Batch records the numerical execution regime; item and "
+         "bucketed runs use the same objective but different bf16 kernel shapes."),
+        ("Do not rank by training loss alone",
+         "Loss values are comparable across epochs and layers within one run. Different "
+         "loss families have different units and scales, so a smaller final loss does "
+         "not by itself mean a better model. Rank primarily by recall and damage."),
+    ])
+    _prose_page(pdf, "How to read this loss-grid report (2/2)", [
+        ("Layer-loss curves and heatmaps",
+         "Every curve is the epoch mean of the configured objective for one layer; the "
+         "vertical axis and heatmap colour are logarithmic. Heatmaps show layer on the "
+         "vertical axis and epoch horizontally. Falling loss means target fitting, not "
+         "necessarily useful recall. The separate recall-trajectory panels place a dot "
+         "at every evaluated epoch/checkpoint for each of the three corpora."),
+        ("Final-layer convention",
+         "Layers are 1-based. For layers 1-27 the cache stores raw block outputs. The "
+         "layer-28 target is post-final-normalization, so the student's layer-28 output "
+         "passes through the same frozen final norm before comparison. Vocabulary "
+         "metrics also pass earlier states through that frozen norm and frozen head. "
+         "A Jacobian artifact has no fitted final-normalized endpoint, so layer 28 uses "
+         "the stated ordinary fallback metric."),
+        ("Common normalizations",
+         "NMSE is mean squared student-teacher error divided by the teacher state's mean "
+         "squared activation. Cosine is one minus directional cosine. Huber and "
+         "Charbonnier divide residuals by teacher RMS. Vocabulary MSE is the relative "
+         "quadratic error induced by the frozen unembedding W (equivalently W-transpose "
+         "times W in hidden space). KL compares teacher and student frozen-head token "
+         "distributions. Composite losses average their documented components."),
+        ("Parameter modification",
+         "For each weight tensor the report computes ||trained-base||_F / ||base||_F, "
+         "then reports the RMS across modules in a layer. This says where training wrote "
+         "most strongly; it is not an activation loss and does not prove causality."),
+        ("Aggregate pages and frontier",
+         "Cross-run heatmaps are row-normalized: colour shows where each run concentrates "
+         "its own signal, not absolute magnitude between unlike losses. The frontier "
+         "plots mean recall against worst benchmark delta; desirable runs are high and "
+         "to the right."),
+    ])
+
+
+def lossgrid_table_pages(pdf, rows_per_page=12):
+    """Landscape, corpus-separated scorecard with repeated headers."""
+    path = RUNS / "lossgrid_report.csv"
+    if not path.exists():
+        _text_page(pdf, "Loss-grid scorecard", f"{path} is missing")
+        return
+    df = pd.read_csv(path)
+    prefix = "a_lossgrid_1p7b_combined_"
+    shown = pd.DataFrame({
+        "rank": range(1, len(df) + 1),
+        "run": df.run.str.replace(prefix, "", regex=False),
+        "loss": df.loss,
+        "slide": df.slide,
+        "batch": [(_run_cfg(RUNS / name).get("train", {}) or {}).get("batching", "?")
+                  for name in df.run],
+        "epoch-0 M/Q1/Q4": [f"{a:.3f}/{b:.3f}/{c:.3f}" for a, b, c in zip(
+            df.epoch0_machado, df.epoch0_quijote_ch1, df.epoch0_quijote_ch4)],
+        "final M/Q1/Q4": [f"{a:.3f}/{b:.3f}/{c:.3f}" for a, b, c in zip(
+            df.machado, df.quijote_ch1, df.quijote_ch4)],
+        "mean": df.recall_mean.map(lambda x: f"{x:.3f}"),
+        "std": df.standard_macro.map(lambda x: f"{x:.3f}"),
+        "std delta": df.standard_delta.map(lambda x: f"{x:+.3f}"),
+        "worst": df.standard_worst_delta.map(lambda x: f"{x:+.3f}"),
+    })
+    for start in range(0, len(shown), rows_per_page):
+        part = shown.iloc[start:start + rows_per_page]
+        fig, ax = plt.subplots(figsize=(11.69, 8.27))
+        ax.axis("off")
+        ax.set_title(f"1.7B loss-grid scorecard — ranked by mean recall "
+                     f"({start + 1}-{start + len(part)} of {len(shown)})",
+                     fontsize=14, weight="bold", pad=14)
+        table = ax.table(cellText=part.values, colLabels=part.columns,
+                         cellLoc="center", colLoc="center", loc="upper center",
+                         colWidths=[.035, .19, .11, .045, .06, .13, .13,
+                                    .055, .055, .065, .06])
+        table.auto_set_font_size(False)
+        table.set_fontsize(6.5)
+        table.scale(1, 1.65)
+        for (row, col), cell in table.get_celld().items():
+            cell.set_edgecolor("#cccccc")
+            if row == 0:
+                cell.set_facecolor("#26374a")
+                cell.set_text_props(color="white", weight="bold")
+            elif row % 2 == 0:
+                cell.set_facecolor("#eef3f7")
+            if col in (1, 2) and row > 0:
+                cell.set_text_props(ha="left")
+        fig.text(.02, .025,
+                 "Recall: word accuracy. std: ARC-Easy/ARC-Challenge/HellaSwag macro accuracy; "
+                 "deltas are versus the paired epoch-0/base reference.", fontsize=7)
+        fig.tight_layout(rect=(0.01, .05, .99, .96))
+        pdf.savefig(fig, dpi=180)
+        plt.close(fig)
+
+
+def lossgrid_recall_pages(pdf, rows_per_page=15):
+    """Every checkpoint exactly once; no top-k corpus-measurement filter."""
+    df = pd.read_csv(RUNS / "lossgrid_report.csv").sort_values(
+        "recall_mean", ascending=False).reset_index(drop=True)
+    prefix = "a_lossgrid_1p7b_combined_"
+    colours = {"machado": "#2878b5", "quijote_ch1": "#e07a25",
+               "quijote_ch4": "#3a9d5d"}
+    labels = {"machado": "Machado", "quijote_ch1": "Quijote 1",
+              "quijote_ch4": "Quijote 4"}
+    for start in range(0, len(df), rows_per_page):
+        part = df.iloc[start:start + rows_per_page]
+        fig, ax = plt.subplots(figsize=(11.69, 8.27))
+        y = list(range(len(part)))[::-1]
+        for corpus in ("machado", "quijote_ch1", "quijote_ch4"):
+            ax.scatter(part[corpus], y, s=28, color=colours[corpus],
+                       label=labels[corpus], zorder=3)
+        ax.scatter(part.epoch0_recall_mean, y, s=34, facecolors="none",
+                   edgecolors="#555555", marker="D", label="epoch-0 mean")
+        ax.set_yticks(y)
+        ax.set_yticklabels(part.run.str.replace(prefix, "", regex=False), fontsize=7)
+        ax.set_xlim(left=0)
+        ax.set_xlabel("word accuracy")
+        ax.set_title(f"All checkpoints: corpus-separated final recall "
+                     f"({start + 1}-{start + len(part)} of {len(df)})")
+        ax.grid(axis="x", alpha=.25)
+        ax.legend(ncol=4, fontsize=8, loc="lower right")
+        fig.tight_layout()
+        pdf.savefig(fig, dpi=180)
+        plt.close(fig)
+
+
+def lossgrid_coverage_pages(pdf, rows_per_page=18):
+    """Artifact ledger proving that every report section covers every run."""
+    score = pd.read_csv(RUNS / "lossgrid_report.csv")
+    rows = []
+    for name in score.run:
+        run = RUNS / name
+        metric_text = (run / "metrics.jsonl").read_text(errors="ignore") \
+            if (run / "metrics.jsonl").exists() else ""
+        rows.append({
+            "run": name.replace("a_lossgrid_1p7b_combined_", ""),
+            "full eval": (run / "eval/tasks.json").exists(),
+            "epoch 0": '"phase": "epoch0"' in metric_text,
+            "loss CSV": (run / "eval/layer_losses.csv").exists(),
+            "heatmap": (run / "eval/layer_losses_heatmap.png").exists(),
+            "line plot": (run / "eval/layer_losses.png").exists(),
+            "delta CSV": (run / "eval/weight_deltas.csv").exists(),
+            "delta plot": (run / "eval/weight_deltas.png").exists(),
+            "damage": (RUNS / "standard_damage" / f"{name}.json").exists(),
+        })
+    frame = pd.DataFrame(rows)
+    for start in range(0, len(frame), rows_per_page):
+        part = frame.iloc[start:start + rows_per_page].copy()
+        for col in part.columns[1:]:
+            part[col] = part[col].map({True: "YES", False: "MISSING"})
+        fig, ax = plt.subplots(figsize=(11.69, 8.27))
+        ax.axis("off")
+        ax.set_title(f"Report coverage ledger ({start + 1}-{start + len(part)} "
+                     f"of {len(frame)})", fontsize=14, weight="bold")
+        table = ax.table(cellText=part.values, colLabels=part.columns,
+                         cellLoc="center", colLoc="center", loc="upper center",
+                         colWidths=[.25, .075, .07, .075, .07, .075, .075, .075, .07])
+        table.auto_set_font_size(False)
+        table.set_fontsize(6.5)
+        table.scale(1, 1.45)
+        for (row, col), cell in table.get_celld().items():
+            cell.set_edgecolor("#cccccc")
+            if row == 0:
+                cell.set_facecolor("#26374a")
+                cell.set_text_props(color="white", weight="bold")
+            elif col == 0:
+                cell.set_text_props(ha="left")
+            elif cell.get_text().get_text() == "MISSING":
+                cell.set_facecolor("#f4b6b6")
+        fig.tight_layout(rect=(.01, .03, .99, .95))
+        pdf.savefig(fig, dpi=180)
+        plt.close(fig)
+
+
+def lossgrid_recall_trajectory_pages(pdf, per_page=6):
+    """Epoch/checkpoint recall dots from the in-training evaluation stream."""
+    score = pd.read_csv(RUNS / "lossgrid_report.csv")
+    records = []
+    for name in score.run:
+        points = []
+        path = RUNS / name / "metrics.jsonl"
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("kind") != "eval" or not row.get("recall"):
+                    continue
+                for corpus, value in row["recall"].items():
+                    if corpus in ("machado", "quijote_ch1", "quijote_ch4"):
+                        points.append((int(row.get("epoch", 0)), corpus,
+                                       value.get("overall_word_acc")))
+        records.append((name, points))
+    colours = {"machado": "#2878b5", "quijote_ch1": "#e07a25",
+               "quijote_ch4": "#3a9d5d"}
+    for start in range(0, len(records), per_page):
+        chunk = records[start:start + per_page]
+        fig, axes = plt.subplots(3, 2, figsize=(8.27, 11.69), squeeze=False)
+        fig.suptitle(f"Recall at every evaluated checkpoint "
+                     f"({start + 1}-{start + len(chunk)} of {len(records)})",
+                     fontsize=14, weight="bold")
+        for ax, (name, points) in zip(axes.ravel(), chunk):
+            point_df = pd.DataFrame(points, columns=["epoch", "corpus", "accuracy"])
+            for corpus in ("machado", "quijote_ch1", "quijote_ch4"):
+                group = point_df[point_df.corpus == corpus]
+                if not group.empty:
+                    ax.plot(group.epoch, group.accuracy, marker="o", ms=2.8,
+                            lw=.8, color=colours[corpus], label=corpus)
+            ax.set_title(name.replace("a_lossgrid_1p7b_combined_", ""), fontsize=7)
+            ax.set_xlabel("epoch", fontsize=7)
+            ax.set_ylabel("word accuracy", fontsize=7)
+            ax.tick_params(labelsize=6)
+            ax.grid(alpha=.2)
+        for ax in axes.ravel()[len(chunk):]:
+            ax.axis("off")
+        handles = [plt.Line2D([], [], color=colours[c], marker="o", lw=.8,
+                              label=c.replace("quijote_ch", "Quijote ").title())
+                   for c in colours]
+        fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=8)
+        fig.tight_layout(rect=(0, .025, 1, .965))
+        pdf.savefig(fig, dpi=180)
+        plt.close(fig)
+
+
 def _image_page(pdf, title, png):
     if not Path(png).exists():
         return
@@ -719,10 +977,11 @@ def main() -> None:
 
     with PdfPages(args.out) as pdf:
         if args.lossgrid_only:
-            _text_file_pages(pdf, "July 11 1.7B loss-grid checkpoint scorecard",
-                             RUNS / "lossgrid_report.md", fontsize=5)
-            _image_page(pdf, "July 11 a_/lw_ checkpoint recall",
-                        RUNS / "tasks_report.png")
+            lossgrid_guide_pages(pdf)
+            lossgrid_table_pages(pdf)
+            lossgrid_coverage_pages(pdf)
+            lossgrid_recall_pages(pdf)
+            lossgrid_recall_trajectory_pages(pdf)
             _image_grid_page(
                 pdf, "July 11 a_ loss by layer and epoch",
                 sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses_heatmap.png")),
@@ -738,8 +997,6 @@ def main() -> None:
                 sorted(RUNS.glob("a_lossgrid_*/eval/weight_deltas.png")),
                 per_page=6,
             )
-            _image_page(pdf, "Temporal layer-loss curves (x=epoch, y=loss)",
-                        RUNS / "lossgrid_temporal_layer_losses.png")
             _image_page(pdf, "Cross-run final layer-loss distribution",
                         RUNS / "lossgrid_final_layer_loss.png")
             _image_page(pdf, "Cross-run layer modification",
