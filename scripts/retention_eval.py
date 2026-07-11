@@ -16,7 +16,7 @@ only meaningful per-checkpoint cost is loading the model:
   RECALL (memorization of the corpus, an independent axis to recite-CER):
     - recall_cont_<corpus>  : exact continuation.  Given a prefix ending at a
                               line boundary, is the model's greedy (argmax)
-                              continuation token-exact over the whole gold span?
+                              continuation token-exact over the whole reference span?
     - recall_cloze_<corpus> : exact fill of a deleted interior word.  Given the
                               left context up to a removed content word, does
                               argmax reproduce the word token-exact?
@@ -89,7 +89,7 @@ RECALL_CORPORA = {
 # single-word cloze; prose (Cervantes) gets next-sentence continuation and a
 # multi-word "censor" fill (several interior content words blanked from each
 # large paragraph, scored as fraction of censored words recovered).  Each entry
-# is (scheme_kind, task_name); all three kinds are lists of {prompt, gold} and
+# is (scheme_kind, task_name); all three kinds are lists of {prompt, reference} and
 # share one teacher-forced exact-match scorer.
 RECALL_SCHEME = {
     "machado": [("cont", "recall_cont_machado"), ("cloze", "recall_cloze_machado")],
@@ -185,9 +185,9 @@ def _verse_cont_cloze(lines: list[str], n_cont: int, n_cloze: int):
     cont = []
     for i in _even_indices(len(lines) - 1, n_cont, lo=3):
         prefix = "\n".join(lines[max(0, i - 6):i + 1]) + "\n"
-        gold = lines[i + 1]
-        if gold:
-            cont.append({"prompt": prefix, "gold": gold})
+        reference = lines[i + 1]
+        if reference:
+            cont.append({"prompt": prefix, "reference": reference})
     cloze = []
     for i in _even_indices(len(lines), n_cloze, lo=3):
         line = lines[i]
@@ -197,7 +197,7 @@ def _verse_cont_cloze(lines: list[str], n_cont: int, n_cloze: int):
             continue
         m = interior[len(interior) // 2]
         prompt = "\n".join(lines[max(0, i - 6):i]) + ("\n" if i > 0 else "") + line[: m.start()]
-        cloze.append({"prompt": prompt, "gold": line[m.start():m.end()]})
+        cloze.append({"prompt": prompt, "reference": line[m.start():m.end()]})
     return {"cont": cont, "cloze": cloze}
 
 
@@ -211,10 +211,10 @@ def _prose_cont_censor(paras: list[str], n_cont: int, words_per_para: int):
     cont = []
     for i in _even_indices(len(paras) - 1, n_cont, lo=1):
         nxt = _SENT_END.split(paras[i + 1].strip())
-        gold = nxt[0].strip() if nxt else ""
-        if len(gold) >= 8:
+        reference = nxt[0].strip() if nxt else ""
+        if len(reference) >= 8:
             prompt = "\n\n".join(paras[max(0, i - 1):i + 1]) + "\n\n"
-            cont.append({"prompt": prompt, "gold": gold})
+            cont.append({"prompt": prompt, "reference": reference})
 
     censor = []
     for i, para in enumerate(paras):
@@ -227,7 +227,7 @@ def _prose_cont_censor(paras: list[str], n_cont: int, words_per_para: int):
         pick = [interior[j] for j in _even_indices(len(interior), words_per_para)]
         head = "\n\n".join(paras[max(0, i - 1):i]) + ("\n\n" if i > 0 else "")
         for m in pick:
-            censor.append({"prompt": head + para[: m.start()], "gold": para[m.start():m.end()]})
+            censor.append({"prompt": head + para[: m.start()], "reference": para[m.start():m.end()]})
     return {"cont": cont, "censor": censor}
 
 
@@ -248,7 +248,7 @@ def _build_recall_cache(corpus: str, n_cont: int, n_cloze: int) -> None:
         "corpus": corpus,
         "source": str(path.relative_to(REPO)),
         "kinds": kinds,
-        "subset_id": _subset_id([p["prompt"][-24:] + "|" + p["gold"] for p in all_probes]),
+        "subset_id": _subset_id([p["prompt"][-24:] + "|" + p["reference"] for p in all_probes]),
     }
     _recall_cache_path(corpus).write_text(json.dumps(payload, ensure_ascii=False, indent=1))
     summary = " + ".join(f"{len(v)} {k}" for k, v in kinds.items())
@@ -299,13 +299,13 @@ def _chunks(xs: list, n: int) -> Iterable[list]:
         yield xs[i:i + n]
 
 
-def _gold_span(prompt_ids: list[int], full_ids: list[int]) -> int:
-    """Token index where the gold continuation begins, by common prefix.
+def _reference_span(prompt_ids: list[int], full_ids: list[int]) -> int:
+    """Token index where the reference continuation begins, by common prefix.
 
     Re-encoding the prompt alone is unreliable: BPE merges a trailing space
-    (or newline) with the first gold word, so len(encode(prompt)) can land
-    inside or past the gold word.  The common prefix of encode(prompt) and
-    encode(prompt+gold) is the correct, tokenizer-agnostic boundary (the
+    (or newline) with the first reference word, so len(encode(prompt)) can land
+    inside or past the reference word.  The common prefix of encode(prompt) and
+    encode(prompt+reference) is the correct, tokenizer-agnostic boundary (the
     lm-eval-harness convention)."""
     n = 0
     m = min(len(prompt_ids), len(full_ids))
@@ -335,20 +335,20 @@ def _batched_by_tokens(items: list[dict], token_budget: int, max_rows: int):
 @torch.no_grad()
 def _teacher_forced_exact(model, tok, probes: list[dict], device: str,
                           token_budget: int, max_rows: int) -> float:
-    """Fraction of probes whose gold span is reproduced token-exact by argmax.
+    """Fraction of probes whose reference span is reproduced token-exact by argmax.
 
-    Each probe: {'prompt', 'gold'}.  We build ids = prompt + ' '+gold? No --
-    gold spacing is baked into the probe.  We locate the gold token span by the
-    length of prompt ids vs full ids, then compare argmax(logits) to gold ids
-    over that span.  All gold tokens must match for the probe to count."""
+    Each probe: {'prompt', 'reference'}.  We build ids = prompt + ' '+reference? No --
+    reference spacing is baked into the probe.  We locate the reference token span by the
+    length of prompt ids vs full ids, then compare argmax(logits) to reference ids
+    over that span.  All reference tokens must match for the probe to count."""
     pad = tok.pad_token_id if tok.pad_token_id is not None else tok.eos_token_id
     prepared = []
     for p in probes:
         prompt_ids = tok.encode(p["prompt"], add_special_tokens=False)
-        full_ids = tok.encode(p["prompt"] + p["gold"], add_special_tokens=False)
-        start = _gold_span(prompt_ids, full_ids)
+        full_ids = tok.encode(p["prompt"] + p["reference"], add_special_tokens=False)
+        start = _reference_span(prompt_ids, full_ids)
         if start < 1 or start >= len(full_ids):
-            continue  # need >=1 context token and a non-empty gold span
+            continue  # need >=1 context token and a non-empty reference span
         prepared.append({"ids": full_ids, "start": start, "_len": len(full_ids)})
     if not prepared:
         return float("nan")
@@ -366,8 +366,8 @@ def _teacher_forced_exact(model, tok, probes: list[dict], device: str,
         for j, r in enumerate(rows):
             s, e = r["start"], r["_len"]
             pred = logits[j, s - 1:e - 1].argmax(dim=-1)
-            gold = x[j, s:e]
-            if torch.equal(pred, gold):
+            reference = x[j, s:e]
+            if torch.equal(pred, reference):
                 correct += 1
     return correct / len(prepared)
 
@@ -381,7 +381,7 @@ def _score_arc(model, tok, items: list[dict], device: str,
         p_ids = tok.encode(ex["prompt"], add_special_tokens=False)
         for ch_i, choice in enumerate(ex["choices"]):
             full = tok.encode(ex["prompt"] + choice, add_special_tokens=False)
-            start = _gold_span(p_ids, full)
+            start = _reference_span(p_ids, full)
             if start < 1:
                 start = min(len(p_ids), len(full) - 1)
             flat.append({"ids": full, "start": start, "_len": len(full),

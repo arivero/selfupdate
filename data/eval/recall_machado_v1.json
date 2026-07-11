@@ -5,1245 +5,1245 @@
   "cont": [
    {
     "prompt": "Siendo mozo Alvargonzález,\ndueño de mediana hacienda,\nque en otras tierras se dice\nbienestar y aquí opulencia,\n",
-    "gold": "en la feria de Berlanga"
+    "reference": "en la feria de Berlanga"
    },
    {
     "prompt": "Siendo mozo Alvargonzález,\ndueño de mediana hacienda,\nque en otras tierras se dice\nbienestar y aquí opulencia,\nen la feria de Berlanga\nprendóse de una doncella,\ny la tomó por mujer\n",
-    "gold": "al año de conocerla."
+    "reference": "al año de conocerla."
    },
    {
     "prompt": "en la feria de Berlanga\nprendóse de una doncella,\ny la tomó por mujer\nal año de conocerla.\nMuy ricas las bodas fueron,\ny quien las vio las recuerda:\nsonadas las tornabodas\n",
-    "gold": "que hizo Alvar en su aldea;"
+    "reference": "que hizo Alvar en su aldea;"
    },
    {
     "prompt": "al año de conocerla.\nMuy ricas las bodas fueron,\ny quien las vio las recuerda:\nsonadas las tornabodas\nque hizo Alvar en su aldea;\nhubo gaitas, tamboriles,\nflauta, bandurria y vihuela,\n",
-    "gold": "fuegos a la valenciana"
+    "reference": "fuegos a la valenciana"
    },
    {
     "prompt": "que hizo Alvar en su aldea;\nhubo gaitas, tamboriles,\nflauta, bandurria y vihuela,\nfuegos a la valenciana\ny danza a la aragonesa.\nFeliz vivió Alvargonzález\nen el amor de su tierra.\n",
-    "gold": "Naciéronle tres varones,"
+    "reference": "Naciéronle tres varones,"
    },
    {
     "prompt": "fuegos a la valenciana\ny danza a la aragonesa.\nFeliz vivió Alvargonzález\nen el amor de su tierra.\nNaciéronle tres varones,\nque en el campo son riqueza,\ny, ya crecidos, los puso,\n",
-    "gold": "uno a cultivar la huerta,"
+    "reference": "uno a cultivar la huerta,"
    },
    {
     "prompt": "Naciéronle tres varones,\nque en el campo son riqueza,\ny, ya crecidos, los puso,\nuno a cultivar la huerta,\notro a cuidar los merinos,\ny dio el menor a la Iglesia.\nMucha sangre de Caín\n",
-    "gold": "tiene la gente labriega,"
+    "reference": "tiene la gente labriega,"
    },
    {
     "prompt": "uno a cultivar la huerta,\notro a cuidar los merinos,\ny dio el menor a la Iglesia.\nMucha sangre de Caín\ntiene la gente labriega,\ny en el hogar campesino\narmó la envidia pelea.\n",
-    "gold": "Casáronse los mayores;"
+    "reference": "Casáronse los mayores;"
    },
    {
     "prompt": "tiene la gente labriega,\ny en el hogar campesino\narmó la envidia pelea.\nCasáronse los mayores;\ntuvo Alvargonzález nueras,\nque le trajeron cizaña,\nantes que nietos le dieran.\n",
-    "gold": "La codicia de los campos"
+    "reference": "La codicia de los campos"
    },
    {
     "prompt": "Casáronse los mayores;\ntuvo Alvargonzález nueras,\nque le trajeron cizaña,\nantes que nietos le dieran.\nLa codicia de los campos\nve tras la muerte la herencia;\nno goza de lo que tiene\n",
-    "gold": "por ansia de lo que espera."
+    "reference": "por ansia de lo que espera."
    },
    {
     "prompt": "La codicia de los campos\nve tras la muerte la herencia;\nno goza de lo que tiene\npor ansia de lo que espera.\nEl menor, que a los latines\nprefería las doncellas\nhermosas y no gustaba\n",
-    "gold": "de vestir por la cabeza,"
+    "reference": "de vestir por la cabeza,"
    },
    {
     "prompt": "por ansia de lo que espera.\nEl menor, que a los latines\nprefería las doncellas\nhermosas y no gustaba\nde vestir por la cabeza,\ncolgó la sotana un día\ny partió a lejanas tierras.\n",
-    "gold": "La madre lloró, y el padre"
+    "reference": "La madre lloró, y el padre"
    },
    {
     "prompt": "de vestir por la cabeza,\ncolgó la sotana un día\ny partió a lejanas tierras.\nLa madre lloró, y el padre\ndiole bendición y herencia.\nAlvargonzález ya tiene\nla adusta frente arrugada;\n",
-    "gold": "por la barba le platea"
+    "reference": "por la barba le platea"
    },
    {
     "prompt": "La madre lloró, y el padre\ndiole bendición y herencia.\nAlvargonzález ya tiene\nla adusta frente arrugada;\npor la barba le platea\nla sombra azul de la cara.\nUna mañana de otoño\n",
-    "gold": "salió solo de su casa;"
+    "reference": "salió solo de su casa;"
    },
    {
     "prompt": "por la barba le platea\nla sombra azul de la cara.\nUna mañana de otoño\nsalió solo de su casa;\nno llevaba sus lebreles,\nagudos canes de caza;\niba triste y pensativo\n",
-    "gold": "por la alameda dorada;"
+    "reference": "por la alameda dorada;"
    },
    {
     "prompt": "no llevaba sus lebreles,\nagudos canes de caza;\niba triste y pensativo\npor la alameda dorada;\nanduvo largo camino\ny llegó a una fuente clara.\nEchóse en la tierra, puso\n",
-    "gold": "sobre una piedra la manta,"
+    "reference": "sobre una piedra la manta,"
    },
    {
     "prompt": "por la alameda dorada;\nanduvo largo camino\ny llegó a una fuente clara.\nEchóse en la tierra, puso\nsobre una piedra la manta,\ny a la vera de la fuente\ndurmió al arrullo del agua.\n",
-    "gold": "Y Alvargonzález veía,"
+    "reference": "Y Alvargonzález veía,"
    },
    {
     "prompt": "sobre una piedra la manta,\ny a la vera de la fuente\ndurmió al arrullo del agua.\nY Alvargonzález veía,\ncomo Jacob, una escala\nque iba de la tierra al cielo,\ny oyó una voz que le hablaba.\n",
-    "gold": "Mas las hadas hilanderas,"
+    "reference": "Mas las hadas hilanderas,"
    },
    {
     "prompt": "Y Alvargonzález veía,\ncomo Jacob, una escala\nque iba de la tierra al cielo,\ny oyó una voz que le hablaba.\nMas las hadas hilanderas,\nentre las vedijas blancas\ny vellones de oro, han puesto\n",
-    "gold": "un mechón de negra lana."
+    "reference": "un mechón de negra lana."
    },
    {
     "prompt": "Mas las hadas hilanderas,\nentre las vedijas blancas\ny vellones de oro, han puesto\nun mechón de negra lana.\nTres niños están jugando\na la puerta de su casa;\nentre los mayores brinca\n",
-    "gold": "un cuervo de negras alas."
+    "reference": "un cuervo de negras alas."
    },
    {
     "prompt": "un mechón de negra lana.\nTres niños están jugando\na la puerta de su casa;\nentre los mayores brinca\nun cuervo de negras alas.\nLa mujer vigila, cose\ny, a ratos, sonríe y canta.\n",
-    "gold": "—Hijos, ¿qué hacéis?—les pregunta."
+    "reference": "—Hijos, ¿qué hacéis?—les pregunta."
    },
    {
     "prompt": "un cuervo de negras alas.\nLa mujer vigila, cose\ny, a ratos, sonríe y canta.\n—Hijos, ¿qué hacéis?—les pregunta.\nEllos se miran y callan.\n—Subid al monte, hijos míos,\ny antes que la noche caiga,\n",
-    "gold": "con un brazado de estepas"
+    "reference": "con un brazado de estepas"
    },
    {
     "prompt": "—Hijos, ¿qué hacéis?—les pregunta.\nEllos se miran y callan.\n—Subid al monte, hijos míos,\ny antes que la noche caiga,\ncon un brazado de estepas\nhacedme una buena llama.\nSobre el lar de Alvargonzález\n",
-    "gold": "está la leña apilada;"
+    "reference": "está la leña apilada;"
    },
    {
     "prompt": "con un brazado de estepas\nhacedme una buena llama.\nSobre el lar de Alvargonzález\nestá la leña apilada;\nel mayor quiere encenderla,\npero no brota la llama.\n—Padre, la hoguera no prende,\n",
-    "gold": "está la estepa mojada."
+    "reference": "está la estepa mojada."
    },
    {
     "prompt": "está la leña apilada;\nel mayor quiere encenderla,\npero no brota la llama.\n—Padre, la hoguera no prende,\nestá la estepa mojada.\nSu hermano viene a ayudarle\ny arroja astillas y ramas\n",
-    "gold": "sobre los troncos de roble;"
+    "reference": "sobre los troncos de roble;"
    },
    {
     "prompt": "está la estepa mojada.\nSu hermano viene a ayudarle\ny arroja astillas y ramas\nsobre los troncos de roble;\npero el rescoldo se apaga.\nAcude el menor y enciende,\nbajo la negra campana\n",
-    "gold": "de la cocina, una hoguera"
+    "reference": "de la cocina, una hoguera"
    },
    {
     "prompt": "sobre los troncos de roble;\npero el rescoldo se apaga.\nAcude el menor y enciende,\nbajo la negra campana\nde la cocina, una hoguera\nque alumbra toda la casa.\nAlvargonzález levanta\n",
-    "gold": "en brazos al más pequeño"
+    "reference": "en brazos al más pequeño"
    },
    {
     "prompt": "de la cocina, una hoguera\nque alumbra toda la casa.\nAlvargonzález levanta\nen brazos al más pequeño\ny en sus rodillas lo sienta:\n—Tus manos hacen el fuego;\naunque el último naciste,\n",
-    "gold": "tú eres en mi amor primero."
+    "reference": "tú eres en mi amor primero."
    },
    {
     "prompt": "en brazos al más pequeño\ny en sus rodillas lo sienta:\n—Tus manos hacen el fuego;\naunque el último naciste,\ntú eres en mi amor primero.\nLos dos mayores se alejan\npor los rincones del sueño.\n",
-    "gold": "Entre los dos fugitivos"
+    "reference": "Entre los dos fugitivos"
    },
    {
     "prompt": "tú eres en mi amor primero.\nLos dos mayores se alejan\npor los rincones del sueño.\nEntre los dos fugitivos\nreluce un hacha de hierro.\nSobre los campos desnudos,\nla luna llena manchada\n",
-    "gold": "de un arrebol purpurino,"
+    "reference": "de un arrebol purpurino,"
    },
    {
     "prompt": "reluce un hacha de hierro.\nSobre los campos desnudos,\nla luna llena manchada\nde un arrebol purpurino,\nenorme globo, asomaba.\nLos hijos de Alvargonzález\nsilenciosos caminaban,\n",
-    "gold": "y han visto al padre dormido"
+    "reference": "y han visto al padre dormido"
    },
    {
     "prompt": "de un arrebol purpurino,\nenorme globo, asomaba.\nLos hijos de Alvargonzález\nsilenciosos caminaban,\ny han visto al padre dormido\njunto de la fuente clara.\nTiene el padre entre las cejas\n",
-    "gold": "un ceño que le aborrasca"
+    "reference": "un ceño que le aborrasca"
    },
    {
     "prompt": "y han visto al padre dormido\njunto de la fuente clara.\nTiene el padre entre las cejas\nun ceño que le aborrasca\nel rostro, un tachón sombrío\ncomo la huella de un hacha.\nSoñando está con sus hijos,\n",
-    "gold": "que sus hijos lo apuñalan,"
+    "reference": "que sus hijos lo apuñalan,"
    },
    {
     "prompt": "un ceño que le aborrasca\nel rostro, un tachón sombrío\ncomo la huella de un hacha.\nSoñando está con sus hijos,\nque sus hijos lo apuñalan,\ny cuando despierta mira\nque es cierto lo que soñaba.\n",
-    "gold": "A la vera de la fuente"
+    "reference": "A la vera de la fuente"
    },
    {
     "prompt": "que sus hijos lo apuñalan,\ny cuando despierta mira\nque es cierto lo que soñaba.\nA la vera de la fuente\nquedó Alvargonzález muerto.\nTiene cuatro puñaladas\nentre el costado y el pecho,\n",
-    "gold": "por donde la sangre brota,"
+    "reference": "por donde la sangre brota,"
    },
    {
     "prompt": "A la vera de la fuente\nquedó Alvargonzález muerto.\nTiene cuatro puñaladas\nentre el costado y el pecho,\npor donde la sangre brota,\nmás un hachazo en el cuello.\nCuenta la hazaña del campo\n",
-    "gold": "el agua clara corriendo,"
+    "reference": "el agua clara corriendo,"
    },
    {
     "prompt": "por donde la sangre brota,\nmás un hachazo en el cuello.\nCuenta la hazaña del campo\nel agua clara corriendo,\nmientras los dos asesinos\nhuyen hacia los hayedos.\nHasta la Laguna Negra,\n",
-    "gold": "bajo las fuentes del Duero,"
+    "reference": "bajo las fuentes del Duero,"
    },
    {
     "prompt": "el agua clara corriendo,\nmientras los dos asesinos\nhuyen hacia los hayedos.\nHasta la Laguna Negra,\nbajo las fuentes del Duero,\nllevan el muerto, dejando\ndetrás un rastro sangriento;\n",
-    "gold": "y en la laguna sin fondo,"
+    "reference": "y en la laguna sin fondo,"
    },
    {
     "prompt": "bajo las fuentes del Duero,\nllevan el muerto, dejando\ndetrás un rastro sangriento;\ny en la laguna sin fondo,\nque guarda bien los secretos,\ncon una piedra amarrada\na los pies, tumba le dieron.\n",
-    "gold": "Se encontró junto a la fuente"
+    "reference": "Se encontró junto a la fuente"
    },
    {
     "prompt": "y en la laguna sin fondo,\nque guarda bien los secretos,\ncon una piedra amarrada\na los pies, tumba le dieron.\nSe encontró junto a la fuente\nla manta de Alvargonzález,\ny camino del hayedo,\n",
-    "gold": "se vio un reguero de sangre."
+    "reference": "se vio un reguero de sangre."
    },
    {
     "prompt": "Se encontró junto a la fuente\nla manta de Alvargonzález,\ny camino del hayedo,\nse vio un reguero de sangre.\nNadie de la aldea ha osado\na la laguna acercarse,\ny el sondarla inútil fuera,\n",
-    "gold": "que es la laguna insondable."
+    "reference": "que es la laguna insondable."
    },
    {
     "prompt": "se vio un reguero de sangre.\nNadie de la aldea ha osado\na la laguna acercarse,\ny el sondarla inútil fuera,\nque es la laguna insondable.\nUn buhonero que cruzaba\naquellas tierras errante,\n",
-    "gold": "fue en Dauria acusado, preso"
+    "reference": "fue en Dauria acusado, preso"
    },
    {
     "prompt": "que es la laguna insondable.\nUn buhonero que cruzaba\naquellas tierras errante,\nfue en Dauria acusado, preso\ny muerto en garrote infame.\nPasados algunos meses,\nla madre murió de pena.\n",
-    "gold": "Los que muerta la encontraron"
+    "reference": "Los que muerta la encontraron"
    },
    {
     "prompt": "y muerto en garrote infame.\nPasados algunos meses,\nla madre murió de pena.\nLos que muerta la encontraron\ndicen que las manos yertas\nsobre su rostro tenía,\noculto el rostro con ellas.\n",
-    "gold": "Los hijos de Alvargonzález"
+    "reference": "Los hijos de Alvargonzález"
    },
    {
     "prompt": "Los que muerta la encontraron\ndicen que las manos yertas\nsobre su rostro tenía,\noculto el rostro con ellas.\nLos hijos de Alvargonzález\nya tienen majada y huerta,\ncampos de trigo y centeno\n",
-    "gold": "y prados de fina hierba;"
+    "reference": "y prados de fina hierba;"
    },
    {
     "prompt": "Los hijos de Alvargonzález\nya tienen majada y huerta,\ncampos de trigo y centeno\ny prados de fina hierba;\nen el olmo viejo, hendido\npor el rayo, la colmena,\ndos yuntas para el arado,\n",
-    "gold": "un mastín y mil ovejas."
+    "reference": "un mastín y mil ovejas."
    },
    {
     "prompt": "y prados de fina hierba;\nen el olmo viejo, hendido\npor el rayo, la colmena,\ndos yuntas para el arado,\nun mastín y mil ovejas.\nYa están las zarzas floridas\ny los ciruelos blanquean;\n",
-    "gold": "ya las abejas doradas"
+    "reference": "ya las abejas doradas"
    },
    {
     "prompt": "un mastín y mil ovejas.\nYa están las zarzas floridas\ny los ciruelos blanquean;\nya las abejas doradas\nliban para sus colmenas,\ny en los nidos, que coronan\nlas torres de las iglesias,\n",
-    "gold": "asoman los garabatos"
+    "reference": "asoman los garabatos"
    },
    {
     "prompt": "ya las abejas doradas\nliban para sus colmenas,\ny en los nidos, que coronan\nlas torres de las iglesias,\nasoman los garabatos\nganchudos de las cigüeñas.\nYa los olmos del camino\n",
-    "gold": "y chopos de las riberas"
+    "reference": "y chopos de las riberas"
    },
    {
     "prompt": "asoman los garabatos\nganchudos de las cigüeñas.\nYa los olmos del camino\ny chopos de las riberas\nde los arroyos, que buscan\nal padre Duero, verdean.\nEl cielo está azul, los montes\n",
-    "gold": "sin nieve son de violeta."
+    "reference": "sin nieve son de violeta."
    },
    {
     "prompt": "y chopos de las riberas\nde los arroyos, que buscan\nal padre Duero, verdean.\nEl cielo está azul, los montes\nsin nieve son de violeta.\nLa tierra de Alvargonzález se\ncolmará de riqueza;\n",
-    "gold": "muerto está quien la ha labrado,"
+    "reference": "muerto está quien la ha labrado,"
    },
    {
     "prompt": "sin nieve son de violeta.\nLa tierra de Alvargonzález se\ncolmará de riqueza;\nmuerto está quien la ha labrado,\nmas no le cubre la tierra.\nLa hermosa tierra de España,\nadusta, fina y guerrera\n",
-    "gold": "Castilla, de largos ríos,"
+    "reference": "Castilla, de largos ríos,"
    },
    {
     "prompt": "muerto está quien la ha labrado,\nmas no le cubre la tierra.\nLa hermosa tierra de España,\nadusta, fina y guerrera\nCastilla, de largos ríos,\ntiene un puñado de sierras\nentre Soria y Burgos como\n",
-    "gold": "reductos de fortaleza,"
+    "reference": "reductos de fortaleza,"
    },
    {
     "prompt": "Castilla, de largos ríos,\ntiene un puñado de sierras\nentre Soria y Burgos como\nreductos de fortaleza,\ncomo yelmos crestonados,\ny Urbión es una cimera.\nLos hijos de Alvargonzález,\n",
-    "gold": "por una empinada senda,"
+    "reference": "por una empinada senda,"
    },
    {
     "prompt": "reductos de fortaleza,\ncomo yelmos crestonados,\ny Urbión es una cimera.\nLos hijos de Alvargonzález,\npor una empinada senda,\npara tomar el camino\nde Salduero a Covaleda,\n",
-    "gold": "cabalgan en pardas mulas,"
+    "reference": "cabalgan en pardas mulas,"
    },
    {
     "prompt": "por una empinada senda,\npara tomar el camino\nde Salduero a Covaleda,\ncabalgan en pardas mulas,\nbajo el pinar de Vinuesa.\nVan en busca de ganado\ncon que volver, a su aldea,\n",
-    "gold": "y por tierra de pinares"
+    "reference": "y por tierra de pinares"
    },
    {
     "prompt": "cabalgan en pardas mulas,\nbajo el pinar de Vinuesa.\nVan en busca de ganado\ncon que volver, a su aldea,\ny por tierra de pinares\nlarga jornada comienzan.\nVan Duero arriba, dejando\n",
-    "gold": "atrás los arcos de piedra"
+    "reference": "atrás los arcos de piedra"
    },
    {
     "prompt": "y por tierra de pinares\nlarga jornada comienzan.\nVan Duero arriba, dejando\natrás los arcos de piedra\ndel puente y el caserío\nde la ociosa y opulenta\nvilla de indianos. El río,\n",
-    "gold": "al fondo del valle, suena,"
+    "reference": "al fondo del valle, suena,"
    },
    {
     "prompt": "del puente y el caserío\nde la ociosa y opulenta\nvilla de indianos. El río,\nal fondo del valle, suena,\ny de las cabalgaduras\nlos cascos baten las piedras.\nA la otra orilla del Duero\n",
-    "gold": "canta una voz lastimera:"
+    "reference": "canta una voz lastimera:"
    },
    {
     "prompt": "al fondo del valle, suena,\ny de las cabalgaduras\nlos cascos baten las piedras.\nA la otra orilla del Duero\ncanta una voz lastimera:\n«La tierra de Alvargonzález\nse colmará de riqueza,\n",
-    "gold": "y el que la tierra ha labrado"
+    "reference": "y el que la tierra ha labrado"
    },
    {
     "prompt": "canta una voz lastimera:\n«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme bajo la tierra.»\nLlegados son a un paraje\nen donde el pinar se espesa,\n",
-    "gold": "y el mayor, que abre la marcha,"
+    "reference": "y el mayor, que abre la marcha,"
    },
    {
     "prompt": "y el que la tierra ha labrado\nno duerme bajo la tierra.»\nLlegados son a un paraje\nen donde el pinar se espesa,\ny el mayor, que abre la marcha,\nsu parda mula espolea,\ndiciendo: —Démonos prisa;\n",
-    "gold": "porque son más de dos leguas"
+    "reference": "porque son más de dos leguas"
    },
    {
     "prompt": "y el mayor, que abre la marcha,\nsu parda mula espolea,\ndiciendo: —Démonos prisa;\nporque son más de dos leguas\nde pinar y hay que apurarlas\nantes que la noche venga.\nDos hijos del campo, hechos\n",
-    "gold": "a quebradas y asperezas,"
+    "reference": "a quebradas y asperezas,"
    },
    {
     "prompt": "porque son más de dos leguas\nde pinar y hay que apurarlas\nantes que la noche venga.\nDos hijos del campo, hechos\na quebradas y asperezas,\nporque recuerdan un día\nla tarde en el monte tiemblan.\n",
-    "gold": "Allá en lo espeso del bosque"
+    "reference": "Allá en lo espeso del bosque"
    },
    {
     "prompt": "a quebradas y asperezas,\nporque recuerdan un día\nla tarde en el monte tiemblan.\nAllá en lo espeso del bosque\notra vez la copla suena:\n«La tierra de Alvargonzález\nse colmará de riqueza,\n",
-    "gold": "y el que la tierra ha labrado"
+    "reference": "y el que la tierra ha labrado"
    },
    {
     "prompt": "Allá en lo espeso del bosque\notra vez la copla suena:\n«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme bajo la tierra.»\nDesde Salduero el camino\n",
-    "gold": "va al hilo de la ribera;"
+    "reference": "va al hilo de la ribera;"
    },
    {
     "prompt": "y el que la tierra ha labrado\nno duerme bajo la tierra.»\nDesde Salduero el camino\nva al hilo de la ribera;\na ambas márgenes del río\nel pinar crece y se eleva,\ny las rocas se aborrascan,\n",
-    "gold": "al par que el valle se estrecha."
+    "reference": "al par que el valle se estrecha."
    },
    {
     "prompt": "va al hilo de la ribera;\na ambas márgenes del río\nel pinar crece y se eleva,\ny las rocas se aborrascan,\nal par que el valle se estrecha.\nLos fuertes pinos del bosque,\ncon sus copas gigantescas\n",
-    "gold": "y sus desnudas raíces"
+    "reference": "y sus desnudas raíces"
    },
    {
     "prompt": "al par que el valle se estrecha.\nLos fuertes pinos del bosque,\ncon sus copas gigantescas\ny sus desnudas raíces\namarradas a las piedras;\nlos de troncos plateados\ncuyas frondas azulean,\n",
-    "gold": "pinos jóvenes; los viejos"
+    "reference": "pinos jóvenes; los viejos"
    },
    {
     "prompt": "y sus desnudas raíces\namarradas a las piedras;\nlos de troncos plateados\ncuyas frondas azulean,\npinos jóvenes; los viejos\ncubiertos de blanca lepra,\nmusgos y líquenes canos\n",
-    "gold": "que el grueso tronco rodean,"
+    "reference": "que el grueso tronco rodean,"
    },
    {
     "prompt": "pinos jóvenes; los viejos\ncubiertos de blanca lepra,\nmusgos y líquenes canos\nque el grueso tronco rodean,\ncolman el valle y se pierden\nrebasando ambas laderas.\nJuan, el mayor, dice:—Hermano,\n",
-    "gold": "si Blas Antonio apacienta"
+    "reference": "si Blas Antonio apacienta"
    },
    {
     "prompt": "que el grueso tronco rodean,\ncolman el valle y se pierden\nrebasando ambas laderas.\nJuan, el mayor, dice:—Hermano,\nsi Blas Antonio apacienta\ncerca de Urbión su vacada,\nlargo camino nos queda.\n",
-    "gold": "—Cuanto hacia Urbión alarguemos"
+    "reference": "—Cuanto hacia Urbión alarguemos"
    },
    {
     "prompt": "si Blas Antonio apacienta\ncerca de Urbión su vacada,\nlargo camino nos queda.\n—Cuanto hacia Urbión alarguemos\nse puede acortar de vuelta,\ntomando por el atajo,\nhacia la Laguna Negra,\n",
-    "gold": "y bajando por el puerto"
+    "reference": "y bajando por el puerto"
    },
    {
     "prompt": "se puede acortar de vuelta,\ntomando por el atajo,\nhacia la Laguna Negra,\ny bajando por el puerto\nde Santa Inés a Vinuesa.\n—Mala tierra y peor camino.\nTe juro que no quisiera\n",
-    "gold": "verlos otra vez. Cerremos"
+    "reference": "verlos otra vez. Cerremos"
    },
    {
     "prompt": "y bajando por el puerto\nde Santa Inés a Vinuesa.\n—Mala tierra y peor camino.\nTe juro que no quisiera\nverlos otra vez. Cerremos\nlos tratos en Covaleda;\nhagamos noche y, al alba,\n",
-    "gold": "volvámonos a la aldea"
+    "reference": "volvámonos a la aldea"
    },
    {
     "prompt": "verlos otra vez. Cerremos\nlos tratos en Covaleda;\nhagamos noche y, al alba,\nvolvámonos a la aldea\npor este valle, que, a veces,\nquien piensa atajar rodea.\nCerca del río cabalgan\n",
-    "gold": "los hermanos, y contemplan"
+    "reference": "los hermanos, y contemplan"
    },
    {
     "prompt": "volvámonos a la aldea\npor este valle, que, a veces,\nquien piensa atajar rodea.\nCerca del río cabalgan\nlos hermanos, y contemplan\ncómo el bosque centenario,\nal par que avanzan, aumenta,\n",
-    "gold": "y los peñascos del monte"
+    "reference": "y los peñascos del monte"
    },
    {
     "prompt": "los hermanos, y contemplan\ncómo el bosque centenario,\nal par que avanzan, aumenta,\ny los peñascos del monte\nel horizonte les cierran.\nEl agua que va saltando,\nparece que canta o cuenta;\n",
-    "gold": "«La tierra de Alvargonzález"
+    "reference": "«La tierra de Alvargonzález"
    },
    {
     "prompt": "y los peñascos del monte\nel horizonte les cierran.\nEl agua que va saltando,\nparece que canta o cuenta;\n«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\n",
-    "gold": "no duerme bajo la tierra.»"
+    "reference": "no duerme bajo la tierra.»"
    },
    {
     "prompt": "«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme bajo la tierra.»\nAunque la codicia tiene\nredil que encierre la oveja,\ntrojes que guardan el trigo,\n",
-    "gold": "bolsas para la moneda,"
+    "reference": "bolsas para la moneda,"
    },
    {
     "prompt": "no duerme bajo la tierra.»\nAunque la codicia tiene\nredil que encierre la oveja,\ntrojes que guardan el trigo,\nbolsas para la moneda,\ny, garras, no tiene manos\nque sepan labrar la tierra.\n",
-    "gold": "Así, a un año de abundancia"
+    "reference": "Así, a un año de abundancia"
    },
    {
     "prompt": "bolsas para la moneda,\ny, garras, no tiene manos\nque sepan labrar la tierra.\nAsí, a un año de abundancia\nsiguió un año de pobreza.\nEn los sembrados crecieron\nlas amapolas sangrientas;\n",
-    "gold": "pudrió el tizón las espigas"
+    "reference": "pudrió el tizón las espigas"
    },
    {
     "prompt": "Así, a un año de abundancia\nsiguió un año de pobreza.\nEn los sembrados crecieron\nlas amapolas sangrientas;\npudrió el tizón las espigas\nde trigales y de avenas;\nhielos tardíos mataron\n",
-    "gold": "en flor la fruta en la huerta,"
+    "reference": "en flor la fruta en la huerta,"
    },
    {
     "prompt": "pudrió el tizón las espigas\nde trigales y de avenas;\nhielos tardíos mataron\nen flor la fruta en la huerta,\ny una mala hechicería\nhizo enfermar las ovejas.\nA los dos Alvargonzález\n",
-    "gold": "maldijo Dios en sus tierras,"
+    "reference": "maldijo Dios en sus tierras,"
    },
    {
     "prompt": "en flor la fruta en la huerta,\ny una mala hechicería\nhizo enfermar las ovejas.\nA los dos Alvargonzález\nmaldijo Dios en sus tierras,\ny al año pobre siguieron\nluengos años de miseria.\n",
-    "gold": "Es una noche de invierno."
+    "reference": "Es una noche de invierno."
    },
    {
     "prompt": "maldijo Dios en sus tierras,\ny al año pobre siguieron\nluengos años de miseria.\nEs una noche de invierno.\nCae la nieve en remolinos.\nLos Alvargonzález velan\nun fuego casi extinguido.\n",
-    "gold": "El pensamiento amarrado"
+    "reference": "El pensamiento amarrado"
    },
    {
     "prompt": "Cae la nieve en remolinos.\nLos Alvargonzález velan\nun fuego casi extinguido.\nEl pensamiento amarrado\ntienen a un recuerdo mismo,\ny en las ascuas mortecinas\ndel hogar los ojos fijos.\n",
-    "gold": "No tienen leña ni sueño."
+    "reference": "No tienen leña ni sueño."
    },
    {
     "prompt": "El pensamiento amarrado\ntienen a un recuerdo mismo,\ny en las ascuas mortecinas\ndel hogar los ojos fijos.\nNo tienen leña ni sueño.\nLarga es la noche y el frío\nmucho. Un candilejo humea\n",
-    "gold": "en el muro ennegrecido."
+    "reference": "en el muro ennegrecido."
    },
    {
     "prompt": "No tienen leña ni sueño.\nLarga es la noche y el frío\nmucho. Un candilejo humea\nen el muro ennegrecido.\nEl aire agita la llama,\nque pone un fulgor rojizo\nsobre entrambas pensativas\n",
-    "gold": "testas de los asesinos."
+    "reference": "testas de los asesinos."
    },
    {
     "prompt": "en el muro ennegrecido.\nEl aire agita la llama,\nque pone un fulgor rojizo\nsobre entrambas pensativas\ntestas de los asesinos.\nEl mayor de Alvargonzález,\nlanzando un ronco suspiro,\n",
-    "gold": "rompe el silencio, exclamando:"
+    "reference": "rompe el silencio, exclamando:"
    },
    {
     "prompt": "testas de los asesinos.\nEl mayor de Alvargonzález,\nlanzando un ronco suspiro,\nrompe el silencio, exclamando:\n—Hermano, ¡qué mal hicimos!\nEl viento la puerta bate,\nhace temblar el postigo,\n",
-    "gold": "y suena en la chimenea"
+    "reference": "y suena en la chimenea"
    },
    {
     "prompt": "rompe el silencio, exclamando:\n—Hermano, ¡qué mal hicimos!\nEl viento la puerta bate,\nhace temblar el postigo,\ny suena en la chimenea\ncon hueco y largo bramido.\nDespués el silencio vuelve,\n",
-    "gold": "y a intervalos el pabilo"
+    "reference": "y a intervalos el pabilo"
    },
    {
     "prompt": "y suena en la chimenea\ncon hueco y largo bramido.\nDespués el silencio vuelve,\ny a intervalos el pabilo\ndel candil chisporrotea\nen el aire aterecido.\nEl segundo dijo: —¡Hermano,\n",
-    "gold": "demos lo viejo al olvido!"
+    "reference": "demos lo viejo al olvido!"
    },
    {
     "prompt": "y a intervalos el pabilo\ndel candil chisporrotea\nen el aire aterecido.\nEl segundo dijo: —¡Hermano,\ndemos lo viejo al olvido!\nEs una noche de invierno.\nAzota el viento las ramas\n",
-    "gold": "de los álamos. La nieve"
+    "reference": "de los álamos. La nieve"
    },
    {
     "prompt": "demos lo viejo al olvido!\nEs una noche de invierno.\nAzota el viento las ramas\nde los álamos. La nieve\nha puesto la tierra blanca.\nBajo la nevada, un hombre\npor el camino cabalga;\n",
-    "gold": "va cubierto hasta los ojos,"
+    "reference": "va cubierto hasta los ojos,"
    },
    {
     "prompt": "de los álamos. La nieve\nha puesto la tierra blanca.\nBajo la nevada, un hombre\npor el camino cabalga;\nva cubierto hasta los ojos,\nembozado en negra capa.\nEntrado en la aldea, busca\n",
-    "gold": "de Alvargonzález la casa,"
+    "reference": "de Alvargonzález la casa,"
    },
    {
     "prompt": "va cubierto hasta los ojos,\nembozado en negra capa.\nEntrado en la aldea, busca\nde Alvargonzález la casa,\ny ante su puerta llegado,\nsin echar pie a tierra, llama.\nLos dos hermanos oyeron\n",
-    "gold": "una aldaba a la puerta,"
+    "reference": "una aldaba a la puerta,"
    },
    {
     "prompt": "de Alvargonzález la casa,\ny ante su puerta llegado,\nsin echar pie a tierra, llama.\nLos dos hermanos oyeron\nuna aldaba a la puerta,\ny de una cabalgadura\nlos cascos sobre las piedras.\n",
-    "gold": "Ambos los ojos alzaron"
+    "reference": "Ambos los ojos alzaron"
    },
    {
     "prompt": "una aldaba a la puerta,\ny de una cabalgadura\nlos cascos sobre las piedras.\nAmbos los ojos alzaron\nllenos de espanto y sorpresa.\n—¿Quién es?, responda—gritaron.\n—Miguel—respondieron fuera.\n",
-    "gold": "Era la voz del viajero"
+    "reference": "Era la voz del viajero"
    },
    {
     "prompt": "Ambos los ojos alzaron\nllenos de espanto y sorpresa.\n—¿Quién es?, responda—gritaron.\n—Miguel—respondieron fuera.\nEra la voz del viajero\nque partió a lejanas tierras.\nAbierto el portón, entróse\n",
-    "gold": "a caballo el caballero"
+    "reference": "a caballo el caballero"
    },
    {
     "prompt": "Era la voz del viajero\nque partió a lejanas tierras.\nAbierto el portón, entróse\na caballo el caballero\ny echó pie a tierra. Venía\ntodo de nieve cubierto.\nEn brazos de sus hermanos\n",
-    "gold": "lloró algún rato en silencio."
+    "reference": "lloró algún rato en silencio."
    },
    {
     "prompt": "y echó pie a tierra. Venía\ntodo de nieve cubierto.\nEn brazos de sus hermanos\nlloró algún rato en silencio.\nDespués dio el caballo al uno,\nal otro capa y sombrero,\ny en la estancia campesina\n",
-    "gold": "buscó el arrimo del fuego."
+    "reference": "buscó el arrimo del fuego."
    },
    {
     "prompt": "lloró algún rato en silencio.\nDespués dio el caballo al uno,\nal otro capa y sombrero,\ny en la estancia campesina\nbuscó el arrimo del fuego.\nEl menor de los hermanos,\nque niño y aventurero\n",
-    "gold": "fue más allá de los mares"
+    "reference": "fue más allá de los mares"
    },
    {
     "prompt": "buscó el arrimo del fuego.\nEl menor de los hermanos,\nque niño y aventurero\nfue más allá de los mares\ny hoy torna indiano opulento,\nvestía con negro traje\nde peludo terciopelo,\n",
-    "gold": "ajustado a la cintura"
+    "reference": "ajustado a la cintura"
    },
    {
     "prompt": "fue más allá de los mares\ny hoy torna indiano opulento,\nvestía con negro traje\nde peludo terciopelo,\najustado a la cintura\npor ancho cinto de cuero.\nGruesa cadena formaba\n",
-    "gold": "un bucle de oro en su pecho."
+    "reference": "un bucle de oro en su pecho."
    },
    {
     "prompt": "ajustado a la cintura\npor ancho cinto de cuero.\nGruesa cadena formaba\nun bucle de oro en su pecho.\nEra un hombre alto y robusto,\ncon ojos grandes y negros\nllenos de melancolía;\n",
-    "gold": "la tez, de color moreno,"
+    "reference": "la tez, de color moreno,"
    },
    {
     "prompt": "un bucle de oro en su pecho.\nEra un hombre alto y robusto,\ncon ojos grandes y negros\nllenos de melancolía;\nla tez, de color moreno,\ny sobre la frente comba\nenmarañados cabellos;\n",
-    "gold": "el hijo que saca porte"
+    "reference": "el hijo que saca porte"
    },
    {
     "prompt": "la tez, de color moreno,\ny sobre la frente comba\nenmarañados cabellos;\nel hijo que saca porte\nseñor de padre labriego,\na quien fortuna le debe\namor, poder y dinero.\n",
-    "gold": "De los tres Alvargonzález"
+    "reference": "De los tres Alvargonzález"
    },
    {
     "prompt": "el hijo que saca porte\nseñor de padre labriego,\na quien fortuna le debe\namor, poder y dinero.\nDe los tres Alvargonzález\nera Miguel el más bello;\nporque al mayor afeaba\n",
-    "gold": "el muy poblado entrecejo"
+    "reference": "el muy poblado entrecejo"
    },
    {
     "prompt": "De los tres Alvargonzález\nera Miguel el más bello;\nporque al mayor afeaba\nel muy poblado entrecejo\nbajo la frente mezquina;\ny al segundo, los inquietos\nojos que mirar no saben\n",
-    "gold": "de frente, torvos y fieros."
+    "reference": "de frente, torvos y fieros."
    },
    {
     "prompt": "el muy poblado entrecejo\nbajo la frente mezquina;\ny al segundo, los inquietos\nojos que mirar no saben\nde frente, torvos y fieros.\nLos tres hermanos contemplan\nel triste hogar en silencio;\n",
-    "gold": "y con la noche cerrada"
+    "reference": "y con la noche cerrada"
    },
    {
     "prompt": "de frente, torvos y fieros.\nLos tres hermanos contemplan\nel triste hogar en silencio;\ny con la noche cerrada\narrecia el frío y el viento.\n—Hermanos, ¿no tenéis leña?\n—dice Miguel.\n",
-    "gold": "—responde el mayor."
+    "reference": "—responde el mayor."
    },
    {
     "prompt": "y con la noche cerrada\narrecia el frío y el viento.\n—Hermanos, ¿no tenéis leña?\n—dice Miguel.\n—responde el mayor.\nmilagrosamente, ha abierto\nla gruesa puerta cerrada\n",
-    "gold": "con doble barra de hierro."
+    "reference": "con doble barra de hierro."
    },
    {
     "prompt": "—responde el mayor.\nmilagrosamente, ha abierto\nla gruesa puerta cerrada\ncon doble barra de hierro.\nEl hombre que ha entrado tiene\nel rostro del padre muerto.\nUn halo de luz dorada\n",
-    "gold": "orla sus blancos cabellos."
+    "reference": "orla sus blancos cabellos."
    },
    {
     "prompt": "con doble barra de hierro.\nEl hombre que ha entrado tiene\nel rostro del padre muerto.\nUn halo de luz dorada\norla sus blancos cabellos.\nLleva un haz de leña al hombro\ny empuña un hacha de hierro.\n",
-    "gold": "De aquellos campos malditos,"
+    "reference": "De aquellos campos malditos,"
    },
    {
     "prompt": "orla sus blancos cabellos.\nLleva un haz de leña al hombro\ny empuña un hacha de hierro.\nDe aquellos campos malditos,\nMiguel a sus dos hermanos\ncompró una parte, que mucho\ncaudal de América trajo,\n",
-    "gold": "y aun en tierra mala, el oro"
+    "reference": "y aun en tierra mala, el oro"
    },
    {
     "prompt": "Miguel a sus dos hermanos\ncompró una parte, que mucho\ncaudal de América trajo,\ny aun en tierra mala, el oro\nluce mejor que enterrado,\ny más en mano de pobres\nque oculto en orza de barro.\n",
-    "gold": "Diose a trabajar la tierra"
+    "reference": "Diose a trabajar la tierra"
    },
    {
     "prompt": "y aun en tierra mala, el oro\nluce mejor que enterrado,\ny más en mano de pobres\nque oculto en orza de barro.\nDiose a trabajar la tierra\ncon fe y tesón el indiano,\ny a laborar los mayores\n",
-    "gold": "sus pegujales tornaron."
+    "reference": "sus pegujales tornaron."
    },
    {
     "prompt": "Diose a trabajar la tierra\ncon fe y tesón el indiano,\ny a laborar los mayores\nsus pegujales tornaron.\nYa con macizas espigas,\npreñadas de rubios granos,\na los campos de Miguel\n",
-    "gold": "tornó el fecundo verano;"
+    "reference": "tornó el fecundo verano;"
    },
    {
     "prompt": "sus pegujales tornaron.\nYa con macizas espigas,\npreñadas de rubios granos,\na los campos de Miguel\ntornó el fecundo verano;\ny ya de aldea en aldea\nse cuenta como un milagro\n",
-    "gold": "que los asesinos tienen"
+    "reference": "que los asesinos tienen"
    },
    {
     "prompt": "tornó el fecundo verano;\ny ya de aldea en aldea\nse cuenta como un milagro\nque los asesinos tienen\nla maldición en sus campos.\nYa el pueblo canta una copla\nque narra el crimen pasado:\n",
-    "gold": "«A la orilla de la fuente"
+    "reference": "«A la orilla de la fuente"
    },
    {
     "prompt": "que los asesinos tienen\nla maldición en sus campos.\nYa el pueblo canta una copla\nque narra el crimen pasado:\n«A la orilla de la fuente\nlo asesinaron.\n¡Qué mala muerte le dieron\n",
-    "gold": "los hijos malos!"
+    "reference": "los hijos malos!"
    },
    {
     "prompt": "«A la orilla de la fuente\nlo asesinaron.\n¡Qué mala muerte le dieron\nlos hijos malos!\nEn la laguna sin fondo\nal padre muerto arrojaron.\nNo duerme bajo la tierra\n",
-    "gold": "el que la tierra ha labrado.»"
+    "reference": "el que la tierra ha labrado.»"
    },
    {
     "prompt": "los hijos malos!\nEn la laguna sin fondo\nal padre muerto arrojaron.\nNo duerme bajo la tierra\nel que la tierra ha labrado.»\nMiguel, con sus dos lebreles\ny armado de su escopeta,\n",
-    "gold": "hacia el azul de los montes,"
+    "reference": "hacia el azul de los montes,"
    },
    {
     "prompt": "el que la tierra ha labrado.»\nMiguel, con sus dos lebreles\ny armado de su escopeta,\nhacia el azul de los montes,\nen una tarde serena,\ncaminaba entre los verdes\nchopos de la carretera,\n",
-    "gold": "y oyó una voz que cantaba:"
+    "reference": "y oyó una voz que cantaba:"
    },
    {
     "prompt": "hacia el azul de los montes,\nen una tarde serena,\ncaminaba entre los verdes\nchopos de la carretera,\ny oyó una voz que cantaba:\n«No tiene tumba en la tierra.\nEntre los pinos del valle\n",
-    "gold": "del Revinuesa,"
+    "reference": "del Revinuesa,"
    },
    {
     "prompt": "y oyó una voz que cantaba:\n«No tiene tumba en la tierra.\nEntre los pinos del valle\ndel Revinuesa,\nal padre muerto llevaron\nhasta la Laguna Negra».\nLa casa de Alvargonzález\n",
-    "gold": "era una casona vieja,"
+    "reference": "era una casona vieja,"
    },
    {
     "prompt": "del Revinuesa,\nal padre muerto llevaron\nhasta la Laguna Negra».\nLa casa de Alvargonzález\nera una casona vieja,\ncon cuatro estrechas ventanas,\nseparada de la aldea\n",
-    "gold": "cien pasos y entre dos olmos"
+    "reference": "cien pasos y entre dos olmos"
    },
    {
     "prompt": "era una casona vieja,\ncon cuatro estrechas ventanas,\nseparada de la aldea\ncien pasos y entre dos olmos\nque, gigantes centinelas,\nsombra le dan en verano\ny en el otoño hojas secas.\n",
-    "gold": "Es casa de labradores,"
+    "reference": "Es casa de labradores,"
    },
    {
     "prompt": "que, gigantes centinelas,\nsombra le dan en verano\ny en el otoño hojas secas.\nEs casa de labradores,\ngente, aunque rica, plebeya,\ndonde el hogar humeante\ncon sus escaños de piedra\n",
-    "gold": "se ve sin entrar, si tiene"
+    "reference": "se ve sin entrar, si tiene"
    },
    {
     "prompt": "Es casa de labradores,\ngente, aunque rica, plebeya,\ndonde el hogar humeante\ncon sus escaños de piedra\nse ve sin entrar, si tiene\nabierta al campo la puerta.\nAl arrimo del rescoldo\n",
-    "gold": "del hogar borbollonean"
+    "reference": "del hogar borbollonean"
    },
    {
     "prompt": "se ve sin entrar, si tiene\nabierta al campo la puerta.\nAl arrimo del rescoldo\ndel hogar borbollonean\ndos pucherillos de barro,\nque a dos familias sustentan.\nA diestra mano, la cuadra\n",
-    "gold": "y el corral; a la siniestra,"
+    "reference": "y el corral; a la siniestra,"
    },
    {
     "prompt": "del hogar borbollonean\ndos pucherillos de barro,\nque a dos familias sustentan.\nA diestra mano, la cuadra\ny el corral; a la siniestra,\nhuerto y abejar, y al fondo,\nuna gastada escalera,\n",
-    "gold": "que va a las habitaciones"
+    "reference": "que va a las habitaciones"
    },
    {
     "prompt": "y el corral; a la siniestra,\nhuerto y abejar, y al fondo,\nuna gastada escalera,\nque va a las habitaciones\npartidas en dos viviendas.\nLos Alvargonzález moran\ncon sus mujeres en ellas.\n",
-    "gold": "A ambas parejas, que hubieron,"
+    "reference": "A ambas parejas, que hubieron,"
    },
    {
     "prompt": "que va a las habitaciones\npartidas en dos viviendas.\nLos Alvargonzález moran\ncon sus mujeres en ellas.\nA ambas parejas, que hubieron,\nsin que lograrse pudieran,\ndos hijos, sobrado espacio\n",
-    "gold": "les da la casa paterna."
+    "reference": "les da la casa paterna."
    },
    {
     "prompt": "A ambas parejas, que hubieron,\nsin que lograrse pudieran,\ndos hijos, sobrado espacio\nles da la casa paterna.\nEn una estancia que tiene\nluz al huerto, hay una mesa\ncon gruesa tabla de roble,\n",
-    "gold": "dos sillones de vaqueta,"
+    "reference": "dos sillones de vaqueta,"
    },
    {
     "prompt": "les da la casa paterna.\nEn una estancia que tiene\nluz al huerto, hay una mesa\ncon gruesa tabla de roble,\ndos sillones de vaqueta,\ncolgado en el muro un negro\nábaco de enormes cuentas,\n",
-    "gold": "y unas espuelas mohosas"
+    "reference": "y unas espuelas mohosas"
    },
    {
     "prompt": "dos sillones de vaqueta,\ncolgado en el muro un negro\nábaco de enormes cuentas,\ny unas espuelas mohosas\nsobre un arcón de madera.\nEra una estancia olvidada\ndonde hoy Miguel se aposenta.\n",
-    "gold": "Y era allí donde los padres"
+    "reference": "Y era allí donde los padres"
    },
    {
     "prompt": "y unas espuelas mohosas\nsobre un arcón de madera.\nEra una estancia olvidada\ndonde hoy Miguel se aposenta.\nY era allí donde los padres\nveían en primavera\nel huerto en flor, y en el cielo\n",
-    "gold": "de mayo, azul, la cigüeña"
+    "reference": "de mayo, azul, la cigüeña"
    },
    {
     "prompt": "Y era allí donde los padres\nveían en primavera\nel huerto en flor, y en el cielo\nde mayo, azul, la cigüeña\n—cuando las rosas se abren\ny los zarzales blanquean—\nque enseñaba a sus hijuelos\n",
-    "gold": "a usar de las alas lentas."
+    "reference": "a usar de las alas lentas."
    },
    {
     "prompt": "de mayo, azul, la cigüeña\n—cuando las rosas se abren\ny los zarzales blanquean—\nque enseñaba a sus hijuelos\na usar de las alas lentas.\nY en las noches del verano,\ncuando la calor desvela,\n",
-    "gold": "desde la ventana al dulce"
+    "reference": "desde la ventana al dulce"
    },
    {
     "prompt": "a usar de las alas lentas.\nY en las noches del verano,\ncuando la calor desvela,\ndesde la ventana al dulce\nruiseñor cantar oyeran.\nFue allí donde Alvargonzález,\ndel orgullo de su huerta\n",
-    "gold": "y del amor de los suyos,"
+    "reference": "y del amor de los suyos,"
    },
    {
     "prompt": "desde la ventana al dulce\nruiseñor cantar oyeran.\nFue allí donde Alvargonzález,\ndel orgullo de su huerta\ny del amor de los suyos,\nsacó sueños de grandeza.\nCuando en brazos de la madre\n",
-    "gold": "vio la figura risueña"
+    "reference": "vio la figura risueña"
    },
    {
     "prompt": "y del amor de los suyos,\nsacó sueños de grandeza.\nCuando en brazos de la madre\nvio la figura risueña\ndel primer hijo, bruñida\nde rubio sol la cabeza\ndel niño que levantaba\n",
-    "gold": "las codiciosas, pequeñas"
+    "reference": "las codiciosas, pequeñas"
    },
    {
     "prompt": "del primer hijo, bruñida\nde rubio sol la cabeza\ndel niño que levantaba\nlas codiciosas, pequeñas\nmanos a las rojas guindas\ny a las moradas ciruelas,\no aquella tarde de otoño\n",
-    "gold": "dorada, plácida y buena,"
+    "reference": "dorada, plácida y buena,"
    },
    {
     "prompt": "las codiciosas, pequeñas\nmanos a las rojas guindas\ny a las moradas ciruelas,\no aquella tarde de otoño\ndorada, plácida y buena,\nél pensó que ser podría\nfeliz el hombre en la tierra.\n",
-    "gold": "Hoy canta el pueblo una copla"
+    "reference": "Hoy canta el pueblo una copla"
    },
    {
     "prompt": "dorada, plácida y buena,\nél pensó que ser podría\nfeliz el hombre en la tierra.\nHoy canta el pueblo una copla\nque va de aldea en aldea:\n«¡Oh casa de Alvargonzález,\nqué malos días te esperan;\n",
-    "gold": "casa de los asesinos,"
+    "reference": "casa de los asesinos,"
    },
    {
     "prompt": "Hoy canta el pueblo una copla\nque va de aldea en aldea:\n«¡Oh casa de Alvargonzález,\nqué malos días te esperan;\ncasa de los asesinos,\nque nadie llame a tu puerta!»\nEs una tarde de otoño.\n",
-    "gold": "En la alameda dorada"
+    "reference": "En la alameda dorada"
    },
    {
     "prompt": "casa de los asesinos,\nque nadie llame a tu puerta!»\nEs una tarde de otoño.\nEn la alameda dorada\nno quedan ya ruiseñores;\nenmudeció la cigarra.\nLas últimas golondrinas\n",
-    "gold": "que no emprendieron la marcha,"
+    "reference": "que no emprendieron la marcha,"
    },
    {
     "prompt": "En la alameda dorada\nno quedan ya ruiseñores;\nenmudeció la cigarra.\nLas últimas golondrinas\nque no emprendieron la marcha,\nmorirán, y las cigüeñas,\nde sus nidos de retamas\n",
-    "gold": "en torres y campanarios,"
+    "reference": "en torres y campanarios,"
    },
    {
     "prompt": "que no emprendieron la marcha,\nmorirán, y las cigüeñas,\nde sus nidos de retamas\nen torres y campanarios,\nSobre la casa\nde Alvargonzález, los olmos\nsus hojas, que el viento arranca,\n",
-    "gold": "van dejando. Todavía"
+    "reference": "van dejando. Todavía"
    },
    {
     "prompt": "en torres y campanarios,\nSobre la casa\nde Alvargonzález, los olmos\nsus hojas, que el viento arranca,\nvan dejando. Todavía\nlas tres redondas acacias,\nen el atrio de la iglesia,\n",
-    "gold": "conservan verdes sus ramas,"
+    "reference": "conservan verdes sus ramas,"
    },
    {
     "prompt": "van dejando. Todavía\nlas tres redondas acacias,\nen el atrio de la iglesia,\nconservan verdes sus ramas,\ny las castañas de Indias\na intervalos se desgajan\ncubiertas de sus erizos;\n",
-    "gold": "tiene el rosal rosas grana"
+    "reference": "tiene el rosal rosas grana"
    },
    {
     "prompt": "conservan verdes sus ramas,\ny las castañas de Indias\na intervalos se desgajan\ncubiertas de sus erizos;\ntiene el rosal rosas grana\notra vez, y en las praderas\nbrilla la alegre otoñada.\n",
-    "gold": "En laderas y en alcores,"
+    "reference": "En laderas y en alcores,"
    },
    {
     "prompt": "tiene el rosal rosas grana\notra vez, y en las praderas\nbrilla la alegre otoñada.\nEn laderas y en alcores,\nen ribazos y en cañadas,\nel verde nuevo y la hierba,\naún del estío quemada,\n",
-    "gold": "alternan; los serrijones"
+    "reference": "alternan; los serrijones"
    },
    {
     "prompt": "En laderas y en alcores,\nen ribazos y en cañadas,\nel verde nuevo y la hierba,\naún del estío quemada,\nalternan; los serrijones\npelados, las lomas calvas,\nse coronan de plomizas\n",
-    "gold": "nubes apelotonadas;"
+    "reference": "nubes apelotonadas;"
    },
    {
     "prompt": "alternan; los serrijones\npelados, las lomas calvas,\nse coronan de plomizas\nnubes apelotonadas;\ny bajo el pinar gigante,\nentre las marchitas zarzas\ny amarillentos helechos,\n",
-    "gold": "corren las crecidas aguas"
+    "reference": "corren las crecidas aguas"
    },
    {
     "prompt": "nubes apelotonadas;\ny bajo el pinar gigante,\nentre las marchitas zarzas\ny amarillentos helechos,\ncorren las crecidas aguas\na engrosar el padre río\npor canchales y barrancas.\n",
-    "gold": "Abunda en la tierra un gris"
+    "reference": "Abunda en la tierra un gris"
    },
    {
     "prompt": "corren las crecidas aguas\na engrosar el padre río\npor canchales y barrancas.\nAbunda en la tierra un gris\nde plomo y azul de plata,\ncon manchas de roja herrumbre,\ntodo envuelto en luz violada.\n",
-    "gold": "¡Oh tierras de Alvargonzález,"
+    "reference": "¡Oh tierras de Alvargonzález,"
    },
    {
     "prompt": "de plomo y azul de plata,\ncon manchas de roja herrumbre,\ntodo envuelto en luz violada.\n¡Oh tierras de Alvargonzález,\nen el corazón de España,\ntierras pobres, tierras tristes,\ntan tristes que tienen alma!\n",
-    "gold": "Páramo que cruza el lobo"
+    "reference": "Páramo que cruza el lobo"
    },
    {
     "prompt": "¡Oh tierras de Alvargonzález,\nen el corazón de España,\ntierras pobres, tierras tristes,\ntan tristes que tienen alma!\nPáramo que cruza el lobo\naullando a la luna clara\nde bosque a bosque, baldíos\n",
-    "gold": "llenos de peñas rodadas,"
+    "reference": "llenos de peñas rodadas,"
    },
    {
     "prompt": "Páramo que cruza el lobo\naullando a la luna clara\nde bosque a bosque, baldíos\nllenos de peñas rodadas,\ndonde roída de buitres\nbrilla una osamenta blanca;\npobres campos solitarios\n",
-    "gold": "sin caminos ni posadas,"
+    "reference": "sin caminos ni posadas,"
    },
    {
     "prompt": "llenos de peñas rodadas,\ndonde roída de buitres\nbrilla una osamenta blanca;\npobres campos solitarios\nsin caminos ni posadas,\n¡oh pobres campos malditos,\npobres campos de mi patria!\n",
-    "gold": "Una mañana de otoño,"
+    "reference": "Una mañana de otoño,"
    },
    {
     "prompt": "sin caminos ni posadas,\n¡oh pobres campos malditos,\npobres campos de mi patria!\nUna mañana de otoño,\nJuan y el indiano aparejan\nlas dos yuntas de la casa.\nMartín se quedó en el huerto\n",
-    "gold": "arrancando hierbas malas."
+    "reference": "arrancando hierbas malas."
    },
    {
     "prompt": "Una mañana de otoño,\nJuan y el indiano aparejan\nlas dos yuntas de la casa.\nMartín se quedó en el huerto\narrancando hierbas malas.\nUna mañana de otoño,\ncuando los campos se aran,\n",
-    "gold": "sobre un otero, que tiene"
+    "reference": "sobre un otero, que tiene"
    },
    {
     "prompt": "arrancando hierbas malas.\nUna mañana de otoño,\ncuando los campos se aran,\nsobre un otero, que tiene\nel cielo de la mañana\npor fondo, la parda yunta\nde Juan lentamente avanza.\n",
-    "gold": "Cardos, lampazos y abrojos,"
+    "reference": "Cardos, lampazos y abrojos,"
    },
    {
     "prompt": "sobre un otero, que tiene\nel cielo de la mañana\npor fondo, la parda yunta\nde Juan lentamente avanza.\nCardos, lampazos y abrojos,\navena loca y cizaña\nllenan la tierra maldita,\n",
-    "gold": "tenaz a pico y escarda."
+    "reference": "tenaz a pico y escarda."
    },
    {
     "prompt": "Cardos, lampazos y abrojos,\navena loca y cizaña\nllenan la tierra maldita,\ntenaz a pico y escarda.\nDel corvo arado de roble\nla hundida reja trabaja\ncon vano esfuerzo; parece\n",
-    "gold": "que al par que hiende la entraña"
+    "reference": "que al par que hiende la entraña"
    },
    {
     "prompt": "tenaz a pico y escarda.\nDel corvo arado de roble\nla hundida reja trabaja\ncon vano esfuerzo; parece\nque al par que hiende la entraña\ndel campo y hace camino,\nse cierra otra vez la zanja.\n",
-    "gold": "“Cuando el asesino labre"
+    "reference": "“Cuando el asesino labre"
    },
    {
     "prompt": "que al par que hiende la entraña\ndel campo y hace camino,\nse cierra otra vez la zanja.\n“Cuando el asesino labre\nserá su labor pesada;\nantes que un surco en la tierra,\ntendrá una arruga en la cara”.\n",
-    "gold": "Martín, que estaba en la huerta"
+    "reference": "Martín, que estaba en la huerta"
    },
    {
     "prompt": "“Cuando el asesino labre\nserá su labor pesada;\nantes que un surco en la tierra,\ntendrá una arruga en la cara”.\nMartín, que estaba en la huerta\ncavando, sobre su azada\nquedó apoyado un momento;\n",
-    "gold": "frío sudor le bañaba"
+    "reference": "frío sudor le bañaba"
    },
    {
     "prompt": "Martín, que estaba en la huerta\ncavando, sobre su azada\nquedó apoyado un momento;\nfrío sudor le bañaba\nPor el oriente,\nla luna llena, manchada\nde un arrebol purpurino,\n",
-    "gold": "lucía tras de la tapia"
+    "reference": "lucía tras de la tapia"
    },
    {
     "prompt": "Por el oriente,\nla luna llena, manchada\nde un arrebol purpurino,\nlucía tras de la tapia\nMartín tenía\nla sangre de horror helada.\nLa azada que hundió en la tierra\n",
-    "gold": "teñida de sangre estaba."
+    "reference": "teñida de sangre estaba."
    },
    {
     "prompt": "lucía tras de la tapia\nMartín tenía\nla sangre de horror helada.\nLa azada que hundió en la tierra\nteñida de sangre estaba.\nEn la tierra en que ha nacido\nsupo afincar el indiano;\n",
-    "gold": "por mujer a una doncella"
+    "reference": "por mujer a una doncella"
    },
    {
     "prompt": "teñida de sangre estaba.\nEn la tierra en que ha nacido\nsupo afincar el indiano;\npor mujer a una doncella\nrica y hermosa ha tomado.\nLa hacienda de Alvargonzález\nya es suya, que sus hermanos\n",
-    "gold": "todo le vendieron: casa,"
+    "reference": "todo le vendieron: casa,"
    },
    {
     "prompt": "por mujer a una doncella\nrica y hermosa ha tomado.\nLa hacienda de Alvargonzález\nya es suya, que sus hermanos\ntodo le vendieron: casa,\nhuerto, colmenar y campo.\nJuan y Martín, los mayores\n",
-    "gold": "de Alvargonzález, un día"
+    "reference": "de Alvargonzález, un día"
    },
    {
     "prompt": "todo le vendieron: casa,\nhuerto, colmenar y campo.\nJuan y Martín, los mayores\nde Alvargonzález, un día\npesada marcha emprendieron\ncon el alba, Duero arriba.\nLa estrella de la mañana\n",
-    "gold": "en el alto azul ardía."
+    "reference": "en el alto azul ardía."
    },
    {
     "prompt": "de Alvargonzález, un día\npesada marcha emprendieron\ncon el alba, Duero arriba.\nLa estrella de la mañana\nen el alto azul ardía.\nSe iba tiñendo de rosa\nla espesa y blanca neblina\n",
-    "gold": "de los valles y barrancos,"
+    "reference": "de los valles y barrancos,"
    },
    {
     "prompt": "en el alto azul ardía.\nSe iba tiñendo de rosa\nla espesa y blanca neblina\nde los valles y barrancos,\ny algunas nubes plomizas\na Urbión, donde el Duero nace,\ncomo un turbante ponían.\n",
-    "gold": "Se acercaban a la fuente."
+    "reference": "Se acercaban a la fuente."
    },
    {
     "prompt": "de los valles y barrancos,\ny algunas nubes plomizas\na Urbión, donde el Duero nace,\ncomo un turbante ponían.\nSe acercaban a la fuente.\nEl agua clara corría,\nsonando cual si contara\n",
-    "gold": "una vieja historia dicha"
+    "reference": "una vieja historia dicha"
    },
    {
     "prompt": "Se acercaban a la fuente.\nEl agua clara corría,\nsonando cual si contara\nuna vieja historia dicha\nmil veces y que tuviera\nmil veces que repetirla.\nAgua que corre en el campo\n",
-    "gold": "dice en su monotonía:"
+    "reference": "dice en su monotonía:"
    },
    {
     "prompt": "una vieja historia dicha\nmil veces y que tuviera\nmil veces que repetirla.\nAgua que corre en el campo\ndice en su monotonía:\n«Yo sé el crimen; ¿no es un crimen,\ncerca del agua, la vida?»\n",
-    "gold": "Al pasar los dos hermanos"
+    "reference": "Al pasar los dos hermanos"
    },
    {
     "prompt": "dice en su monotonía:\n«Yo sé el crimen; ¿no es un crimen,\ncerca del agua, la vida?»\nAl pasar los dos hermanos\nrelataba el agua limpia:\n«A la vera de la fuente\nAlvargonzález dormía.»\n",
-    "gold": "—Anoche, cuando volvía"
+    "reference": "—Anoche, cuando volvía"
    },
    {
     "prompt": "Al pasar los dos hermanos\nrelataba el agua limpia:\n«A la vera de la fuente\nAlvargonzález dormía.»\n—Anoche, cuando volvía\na casa—Juan a su hermano\ndijo—, a la luz de la luna\n",
-    "gold": "era la huerta un milagro."
+    "reference": "era la huerta un milagro."
    },
    {
     "prompt": "—Anoche, cuando volvía\na casa—Juan a su hermano\ndijo—, a la luz de la luna\nera la huerta un milagro.\nLejos, entre los rosales,\ndivisé un hombre inclinado\nhacia la tierra; brillaba\n",
-    "gold": "una hoz de plata en su mano."
+    "reference": "una hoz de plata en su mano."
    },
    {
     "prompt": "era la huerta un milagro.\nLejos, entre los rosales,\ndivisé un hombre inclinado\nhacia la tierra; brillaba\nuna hoz de plata en su mano.\nDespués irguióse y, volviendo\nel rostro, dio algunos pasos\n",
-    "gold": "por el huerto, sin mirarme,"
+    "reference": "por el huerto, sin mirarme,"
    },
    {
     "prompt": "una hoz de plata en su mano.\nDespués irguióse y, volviendo\nel rostro, dio algunos pasos\npor el huerto, sin mirarme,\ny a poco lo vi encorvado\notra vez sobre la tierra.\nTenía el cabello blanco.\n",
-    "gold": "La luna llena brillaba,"
+    "reference": "La luna llena brillaba,"
    },
    {
     "prompt": "y a poco lo vi encorvado\notra vez sobre la tierra.\nTenía el cabello blanco.\nLa luna llena brillaba,\ny era la huerta un milagro.\nPasado habían el puerto\nde Santa Inés, ya mediada\n",
-    "gold": "la tarde, una tarde triste"
+    "reference": "la tarde, una tarde triste"
    },
    {
     "prompt": "La luna llena brillaba,\ny era la huerta un milagro.\nPasado habían el puerto\nde Santa Inés, ya mediada\nla tarde, una tarde triste\nde noviembre, fría y parda.\nHacia la Laguna Negra\n",
-    "gold": "silenciosos caminaban."
+    "reference": "silenciosos caminaban."
    },
    {
     "prompt": "la tarde, una tarde triste\nde noviembre, fría y parda.\nHacia la Laguna Negra\nsilenciosos caminaban.\nCuando la tarde caía,\nentre las vetustas hayas\ny los pinos centenarios,\n",
-    "gold": "un rojo sol se filtraba."
+    "reference": "un rojo sol se filtraba."
    },
    {
     "prompt": "silenciosos caminaban.\nCuando la tarde caía,\nentre las vetustas hayas\ny los pinos centenarios,\nun rojo sol se filtraba.\nEra un paraje de bosque\ny peñas aborrascadas;\n",
-    "gold": "aquí bocas que bostezan"
+    "reference": "aquí bocas que bostezan"
    },
    {
     "prompt": "un rojo sol se filtraba.\nEra un paraje de bosque\ny peñas aborrascadas;\naquí bocas que bostezan\no monstruos de fieras garras;\nallí una informe joroba,\nallá una grotesca panza,\n",
-    "gold": "torvos hocicos de fieras"
+    "reference": "torvos hocicos de fieras"
    },
    {
     "prompt": "aquí bocas que bostezan\no monstruos de fieras garras;\nallí una informe joroba,\nallá una grotesca panza,\ntorvos hocicos de fieras\ny dentaduras melladas,\nrocas y rocas, y troncos\n",
-    "gold": "y troncos, ramas y ramas."
+    "reference": "y troncos, ramas y ramas."
    },
    {
     "prompt": "torvos hocicos de fieras\ny dentaduras melladas,\nrocas y rocas, y troncos\ny troncos, ramas y ramas.\nEn el hondón del barranco,\nla noche, el miedo y el agua.\nUn lobo surgió; sus ojos\n",
-    "gold": "lucían como dos ascuas."
+    "reference": "lucían como dos ascuas."
    },
    {
     "prompt": "y troncos, ramas y ramas.\nEn el hondón del barranco,\nla noche, el miedo y el agua.\nUn lobo surgió; sus ojos\nlucían como dos ascuas.\nEra la noche, una noche\nhúmeda, oscura y cerrada.\n",
-    "gold": "Los dos hermanos quisieron"
+    "reference": "Los dos hermanos quisieron"
    },
    {
     "prompt": "lucían como dos ascuas.\nEra la noche, una noche\nhúmeda, oscura y cerrada.\nLos dos hermanos quisieron\nvolver. La selva ululaba.\nCien ojos fieros ardían\nen la selva, a sus espaldas.\n",
-    "gold": "Llegaron los asesinos"
+    "reference": "Llegaron los asesinos"
    },
    {
     "prompt": "Los dos hermanos quisieron\nvolver. La selva ululaba.\nCien ojos fieros ardían\nen la selva, a sus espaldas.\nLlegaron los asesinos\nhasta la Laguna Negra,\nagua transparente y muda\n",
-    "gold": "que enorme muro de piedra,"
+    "reference": "que enorme muro de piedra,"
    },
    {
     "prompt": "Llegaron los asesinos\nhasta la Laguna Negra,\nagua transparente y muda\nque enorme muro de piedra,\ndonde los buitres anidan\ny el eco duerme, rodea;\nagua clara donde beben\n",
-    "gold": "las águilas de la sierra,"
+    "reference": "las águilas de la sierra,"
    },
    {
     "prompt": "que enorme muro de piedra,\ndonde los buitres anidan\ny el eco duerme, rodea;\nagua clara donde beben\nlas águilas de la sierra,\ndonde el jabalí del monte\ny el ciervo y el corzo abrevan;\n",
-    "gold": "agua pura y silenciosa"
+    "reference": "agua pura y silenciosa"
    },
    {
     "prompt": "las águilas de la sierra,\ndonde el jabalí del monte\ny el ciervo y el corzo abrevan;\nagua pura y silenciosa\nque copia cosas eternas;\nagua impasible que guarda\nen su seno las estrellas.\n",
-    "gold": "—¡Padre! —gritaron; al fondo"
+    "reference": "—¡Padre! —gritaron; al fondo"
    }
   ],
   "cloze": [
    {
     "prompt": "Siendo mozo Alvargonzález,\ndueño de mediana hacienda,\nque en otras tierras se dice\nbienestar y ",
-    "gold": "aquí"
+    "reference": "aquí"
    },
    {
     "prompt": "al año de conocerla.\nMuy ricas las bodas fueron,\ny quien las vio las recuerda:\nsonadas las tornabodas\nque hizo Alvar en su aldea;\nhubo gaitas, tamboriles,\nflauta, ",
-    "gold": "bandurria"
+    "reference": "bandurria"
    },
    {
     "prompt": "Naciéronle tres varones,\nque en el campo son riqueza,\ny, ya crecidos, los puso,\nuno a cultivar la huerta,\notro a cuidar los merinos,\ny dio el menor a la Iglesia.\nMucha ",
-    "gold": "sangre"
+    "reference": "sangre"
    },
    {
     "prompt": "uno a cultivar la huerta,\notro a cuidar los merinos,\ny dio el menor a la Iglesia.\nMucha sangre de Caín\ntiene la gente labriega,\ny en el hogar campesino\narmó la ",
-    "gold": "envidia"
+    "reference": "envidia"
    },
    {
     "prompt": "tiene la gente labriega,\ny en el hogar campesino\narmó la envidia pelea.\nCasáronse los mayores;\ntuvo Alvargonzález nueras,\nque le trajeron cizaña,\nantes que ",
-    "gold": "nietos"
+    "reference": "nietos"
    },
    {
     "prompt": "por ansia de lo que espera.\nEl menor, que a los latines\nprefería las doncellas\nhermosas y no gustaba\nde vestir por la cabeza,\ncolgó la sotana un día\ny partió a ",
-    "gold": "lejanas"
+    "reference": "lejanas"
    },
    {
     "prompt": "de vestir por la cabeza,\ncolgó la sotana un día\ny partió a lejanas tierras.\nLa madre lloró, y el padre\ndiole bendición y herencia.\nAlvargonzález ya tiene\nla adusta ",
-    "gold": "frente"
+    "reference": "frente"
    },
    {
     "prompt": "diole bendición y herencia.\nAlvargonzález ya tiene\nla adusta frente arrugada;\npor la barba le platea\nla sombra azul de la cara.\nUna mañana de otoño\nsalió ",
-    "gold": "solo"
+    "reference": "solo"
    },
    {
     "prompt": "no llevaba sus lebreles,\nagudos canes de caza;\niba triste y pensativo\npor la alameda dorada;\nanduvo largo camino\ny llegó a una fuente clara.\nEchóse en la ",
-    "gold": "tierra"
+    "reference": "tierra"
    },
    {
     "prompt": "por la alameda dorada;\nanduvo largo camino\ny llegó a una fuente clara.\nEchóse en la tierra, puso\nsobre una piedra la manta,\ny a la vera de la fuente\ndurmió al ",
-    "gold": "arrullo"
+    "reference": "arrullo"
    },
    {
     "prompt": "Mas las hadas hilanderas,\nentre las vedijas blancas\ny vellones de oro, han puesto\nun mechón de negra lana.\nTres niños están jugando\na la puerta de su casa;\nentre los ",
-    "gold": "mayores"
+    "reference": "mayores"
    },
    {
     "prompt": "un mechón de negra lana.\nTres niños están jugando\na la puerta de su casa;\nentre los mayores brinca\nun cuervo de negras alas.\nLa mujer vigila, cose\ny, a ratos, ",
-    "gold": "sonríe"
+    "reference": "sonríe"
    },
    {
     "prompt": "un cuervo de negras alas.\nLa mujer vigila, cose\ny, a ratos, sonríe y canta.\n—Hijos, ¿qué hacéis?—les pregunta.\nEllos se miran y callan.\n—Subid al monte, hijos míos,\ny antes que la ",
-    "gold": "noche"
+    "reference": "noche"
    },
    {
     "prompt": "con un brazado de estepas\nhacedme una buena llama.\nSobre el lar de Alvargonzález\nestá la leña apilada;\nel mayor quiere encenderla,\npero no brota la llama.\n—Padre, la ",
-    "gold": "hoguera"
+    "reference": "hoguera"
    },
    {
     "prompt": "está la leña apilada;\nel mayor quiere encenderla,\npero no brota la llama.\n—Padre, la hoguera no prende,\nestá la estepa mojada.\nSu hermano viene a ayudarle\ny arroja ",
-    "gold": "astillas"
+    "reference": "astillas"
    },
    {
     "prompt": "está la estepa mojada.\nSu hermano viene a ayudarle\ny arroja astillas y ramas\nsobre los troncos de roble;\npero el rescoldo se apaga.\nAcude el menor y enciende,\nbajo la ",
-    "gold": "negra"
+    "reference": "negra"
    },
    {
     "prompt": "de la cocina, una hoguera\nque alumbra toda la casa.\nAlvargonzález levanta\nen brazos al más pequeño\ny en sus rodillas lo sienta:\n—Tus manos hacen el fuego;\naunque el ",
-    "gold": "último"
+    "reference": "último"
    },
    {
     "prompt": "tú eres en mi amor primero.\nLos dos mayores se alejan\npor los rincones del sueño.\nEntre los dos fugitivos\nreluce un hacha de hierro.\nSobre los campos desnudos,\nla luna ",
-    "gold": "llena"
+    "reference": "llena"
    },
    {
     "prompt": "de un arrebol purpurino,\nenorme globo, asomaba.\nLos hijos de Alvargonzález\nsilenciosos caminaban,\ny han visto al padre dormido\njunto de la fuente clara.\nTiene el padre ",
-    "gold": "entre"
+    "reference": "entre"
    },
    {
     "prompt": "y han visto al padre dormido\njunto de la fuente clara.\nTiene el padre entre las cejas\nun ceño que le aborrasca\nel rostro, un tachón sombrío\ncomo la huella de un hacha.\nSoñando ",
-    "gold": "está"
+    "reference": "está"
    },
    {
     "prompt": "que sus hijos lo apuñalan,\ny cuando despierta mira\nque es cierto lo que soñaba.\nA la vera de la fuente\nquedó Alvargonzález muerto.\nTiene cuatro puñaladas\nentre el ",
-    "gold": "costado"
+    "reference": "costado"
    },
    {
     "prompt": "A la vera de la fuente\nquedó Alvargonzález muerto.\nTiene cuatro puñaladas\nentre el costado y el pecho,\npor donde la sangre brota,\nmás un hachazo en el cuello.\nCuenta la ",
-    "gold": "hazaña"
+    "reference": "hazaña"
    },
    {
     "prompt": "por donde la sangre brota,\nmás un hachazo en el cuello.\nCuenta la hazaña del campo\nel agua clara corriendo,\nmientras los dos asesinos\nhuyen hacia los hayedos.\nHasta la ",
-    "gold": "Laguna"
+    "reference": "Laguna"
    },
    {
     "prompt": "el agua clara corriendo,\nmientras los dos asesinos\nhuyen hacia los hayedos.\nHasta la Laguna Negra,\nbajo las fuentes del Duero,\nllevan el muerto, dejando\ndetrás un ",
-    "gold": "rastro"
+    "reference": "rastro"
    },
    {
     "prompt": "bajo las fuentes del Duero,\nllevan el muerto, dejando\ndetrás un rastro sangriento;\ny en la laguna sin fondo,\nque guarda bien los secretos,\ncon una piedra amarrada\na los pies, ",
-    "gold": "tumba"
+    "reference": "tumba"
    },
    {
     "prompt": "Se encontró junto a la fuente\nla manta de Alvargonzález,\ny camino del hayedo,\nse vio un reguero de sangre.\nNadie de la aldea ha osado\na la laguna acercarse,\ny el sondarla ",
-    "gold": "inútil"
+    "reference": "inútil"
    },
    {
     "prompt": "Nadie de la aldea ha osado\na la laguna acercarse,\ny el sondarla inútil fuera,\nque es la laguna insondable.\nUn buhonero que cruzaba\naquellas tierras errante,\nfue en Dauria ",
-    "gold": "acusado"
+    "reference": "acusado"
    },
    {
     "prompt": "que es la laguna insondable.\nUn buhonero que cruzaba\naquellas tierras errante,\nfue en Dauria acusado, preso\ny muerto en garrote infame.\nPasados algunos meses,\nla madre ",
-    "gold": "murió"
+    "reference": "murió"
    },
    {
     "prompt": "y muerto en garrote infame.\nPasados algunos meses,\nla madre murió de pena.\nLos que muerta la encontraron\ndicen que las manos yertas\nsobre su rostro tenía,\noculto el ",
-    "gold": "rostro"
+    "reference": "rostro"
    },
    {
     "prompt": "Los que muerta la encontraron\ndicen que las manos yertas\nsobre su rostro tenía,\noculto el rostro con ellas.\nLos hijos de Alvargonzález\nya tienen majada y huerta,\ncampos de ",
-    "gold": "trigo"
+    "reference": "trigo"
    },
    {
     "prompt": "Los hijos de Alvargonzález\nya tienen majada y huerta,\ncampos de trigo y centeno\ny prados de fina hierba;\nen el olmo viejo, hendido\npor el rayo, la colmena,\ndos yuntas ",
-    "gold": "para"
+    "reference": "para"
    },
    {
     "prompt": "asoman los garabatos\nganchudos de las cigüeñas.\nYa los olmos del camino\ny chopos de las riberas\nde los arroyos, que buscan\nal padre Duero, verdean.\nEl cielo está ",
-    "gold": "azul"
+    "reference": "azul"
    },
    {
     "prompt": "de los arroyos, que buscan\nal padre Duero, verdean.\nEl cielo está azul, los montes\nsin nieve son de violeta.\nLa tierra de Alvargonzález se\ncolmará de riqueza;\nmuerto está ",
-    "gold": "quien"
+    "reference": "quien"
    },
    {
     "prompt": "sin nieve son de violeta.\nLa tierra de Alvargonzález se\ncolmará de riqueza;\nmuerto está quien la ha labrado,\nmas no le cubre la tierra.\nLa hermosa tierra de España,\nadusta, ",
-    "gold": "fina"
+    "reference": "fina"
    },
    {
     "prompt": "como yelmos crestonados,\ny Urbión es una cimera.\nLos hijos de Alvargonzález,\npor una empinada senda,\npara tomar el camino\nde Salduero a Covaleda,\ncabalgan en ",
-    "gold": "pardas"
+    "reference": "pardas"
    },
    {
     "prompt": "bajo el pinar de Vinuesa.\nVan en busca de ganado\ncon que volver, a su aldea,\ny por tierra de pinares\nlarga jornada comienzan.\nVan Duero arriba, dejando\natrás los ",
-    "gold": "arcos"
+    "reference": "arcos"
    },
    {
     "prompt": "del puente y el caserío\nde la ociosa y opulenta\nvilla de indianos. El río,\nal fondo del valle, suena,\ny de las cabalgaduras\nlos cascos baten las piedras.\nA la otra ",
-    "gold": "orilla"
+    "reference": "orilla"
    },
    {
     "prompt": "canta una voz lastimera:\n«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme bajo la tierra.»\nLlegados son a un paraje\nen donde el ",
-    "gold": "pinar"
+    "reference": "pinar"
    },
    {
     "prompt": "y el que la tierra ha labrado\nno duerme bajo la tierra.»\nLlegados son a un paraje\nen donde el pinar se espesa,\ny el mayor, que abre la marcha,\nsu parda mula espolea,\ndiciendo: —",
-    "gold": "Démonos"
+    "reference": "Démonos"
    },
    {
     "prompt": "y el mayor, que abre la marcha,\nsu parda mula espolea,\ndiciendo: —Démonos prisa;\nporque son más de dos leguas\nde pinar y hay que apurarlas\nantes que la noche venga.\nDos hijos del ",
-    "gold": "campo"
+    "reference": "campo"
    },
    {
     "prompt": "de pinar y hay que apurarlas\nantes que la noche venga.\nDos hijos del campo, hechos\na quebradas y asperezas,\nporque recuerdan un día\nla tarde en el monte tiemblan.\nAllá en lo ",
-    "gold": "espeso"
+    "reference": "espeso"
    },
    {
     "prompt": "al par que el valle se estrecha.\nLos fuertes pinos del bosque,\ncon sus copas gigantescas\ny sus desnudas raíces\namarradas a las piedras;\nlos de troncos plateados\ncuyas ",
-    "gold": "frondas"
+    "reference": "frondas"
    },
    {
     "prompt": "amarradas a las piedras;\nlos de troncos plateados\ncuyas frondas azulean,\npinos jóvenes; los viejos\ncubiertos de blanca lepra,\nmusgos y líquenes canos\nque el grueso ",
-    "gold": "tronco"
+    "reference": "tronco"
    },
    {
     "prompt": "pinos jóvenes; los viejos\ncubiertos de blanca lepra,\nmusgos y líquenes canos\nque el grueso tronco rodean,\ncolman el valle y se pierden\nrebasando ambas laderas.\nJuan, el mayor, ",
-    "gold": "dice"
+    "reference": "dice"
    },
    {
     "prompt": "colman el valle y se pierden\nrebasando ambas laderas.\nJuan, el mayor, dice:—Hermano,\nsi Blas Antonio apacienta\ncerca de Urbión su vacada,\nlargo camino nos queda.\n—Cuanto hacia ",
-    "gold": "Urbión"
+    "reference": "Urbión"
    },
    {
     "prompt": "si Blas Antonio apacienta\ncerca de Urbión su vacada,\nlargo camino nos queda.\n—Cuanto hacia Urbión alarguemos\nse puede acortar de vuelta,\ntomando por el atajo,\nhacia la ",
-    "gold": "Laguna"
+    "reference": "Laguna"
    },
    {
     "prompt": "y bajando por el puerto\nde Santa Inés a Vinuesa.\n—Mala tierra y peor camino.\nTe juro que no quisiera\nverlos otra vez. Cerremos\nlos tratos en Covaleda;\nhagamos ",
-    "gold": "noche"
+    "reference": "noche"
    },
    {
     "prompt": "los hermanos, y contemplan\ncómo el bosque centenario,\nal par que avanzan, aumenta,\ny los peñascos del monte\nel horizonte les cierran.\nEl agua que va saltando,\nparece que ",
-    "gold": "canta"
+    "reference": "canta"
    },
    {
     "prompt": "el horizonte les cierran.\nEl agua que va saltando,\nparece que canta o cuenta;\n«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme ",
-    "gold": "bajo"
+    "reference": "bajo"
    },
    {
     "prompt": "«La tierra de Alvargonzález\nse colmará de riqueza,\ny el que la tierra ha labrado\nno duerme bajo la tierra.»\nAunque la codicia tiene\nredil que encierre la oveja,\ntrojes que ",
-    "gold": "guardan"
+    "reference": "guardan"
    },
    {
     "prompt": "siguió un año de pobreza.\nEn los sembrados crecieron\nlas amapolas sangrientas;\npudrió el tizón las espigas\nde trigales y de avenas;\nhielos tardíos mataron\nen flor la ",
-    "gold": "fruta"
+    "reference": "fruta"
    },
    {
     "prompt": "maldijo Dios en sus tierras,\ny al año pobre siguieron\nluengos años de miseria.\nEs una noche de invierno.\nCae la nieve en remolinos.\nLos Alvargonzález velan\nun fuego ",
-    "gold": "casi"
+    "reference": "casi"
    },
    {
     "prompt": "Cae la nieve en remolinos.\nLos Alvargonzález velan\nun fuego casi extinguido.\nEl pensamiento amarrado\ntienen a un recuerdo mismo,\ny en las ascuas mortecinas\ndel hogar los ",
-    "gold": "ojos"
+    "reference": "ojos"
    },
    {
     "prompt": "El pensamiento amarrado\ntienen a un recuerdo mismo,\ny en las ascuas mortecinas\ndel hogar los ojos fijos.\nNo tienen leña ni sueño.\nLarga es la noche y el frío\nmucho. Un ",
-    "gold": "candilejo"
+    "reference": "candilejo"
    },
    {
     "prompt": "No tienen leña ni sueño.\nLarga es la noche y el frío\nmucho. Un candilejo humea\nen el muro ennegrecido.\nEl aire agita la llama,\nque pone un fulgor rojizo\nsobre ",
-    "gold": "entrambas"
+    "reference": "entrambas"
    },
    {
     "prompt": "El aire agita la llama,\nque pone un fulgor rojizo\nsobre entrambas pensativas\ntestas de los asesinos.\nEl mayor de Alvargonzález,\nlanzando un ronco suspiro,\nrompe el ",
-    "gold": "silencio"
+    "reference": "silencio"
    },
    {
     "prompt": "testas de los asesinos.\nEl mayor de Alvargonzález,\nlanzando un ronco suspiro,\nrompe el silencio, exclamando:\n—Hermano, ¡qué mal hicimos!\nEl viento la puerta bate,\nhace ",
-    "gold": "temblar"
+    "reference": "temblar"
    },
    {
     "prompt": "y suena en la chimenea\ncon hueco y largo bramido.\nDespués el silencio vuelve,\ny a intervalos el pabilo\ndel candil chisporrotea\nen el aire aterecido.\nEl segundo ",
-    "gold": "dijo"
+    "reference": "dijo"
    },
    {
     "prompt": "y ante su puerta llegado,\nsin echar pie a tierra, llama.\nLos dos hermanos oyeron\nuna aldaba a la puerta,\ny de una cabalgadura\nlos cascos sobre las piedras.\nAmbos los ",
-    "gold": "ojos"
+    "reference": "ojos"
    },
    {
     "prompt": "una aldaba a la puerta,\ny de una cabalgadura\nlos cascos sobre las piedras.\nAmbos los ojos alzaron\nllenos de espanto y sorpresa.\n—¿Quién es?, responda—gritaron.\n—Miguel—",
-    "gold": "respondieron"
+    "reference": "respondieron"
    },
    {
     "prompt": "que partió a lejanas tierras.\nAbierto el portón, entróse\na caballo el caballero\ny echó pie a tierra. Venía\ntodo de nieve cubierto.\nEn brazos de sus hermanos\nlloró algún ",
-    "gold": "rato"
+    "reference": "rato"
    },
    {
     "prompt": "Era un hombre alto y robusto,\ncon ojos grandes y negros\nllenos de melancolía;\nla tez, de color moreno,\ny sobre la frente comba\nenmarañados cabellos;\nel hijo que ",
-    "gold": "saca"
+    "reference": "saca"
    },
    {
     "prompt": "la tez, de color moreno,\ny sobre la frente comba\nenmarañados cabellos;\nel hijo que saca porte\nseñor de padre labriego,\na quien fortuna le debe\namor, ",
-    "gold": "poder"
+    "reference": "poder"
    },
    {
     "prompt": "De los tres Alvargonzález\nera Miguel el más bello;\nporque al mayor afeaba\nel muy poblado entrecejo\nbajo la frente mezquina;\ny al segundo, los inquietos\nojos que ",
-    "gold": "mirar"
+    "reference": "mirar"
    },
    {
     "prompt": "arrecia el frío y el viento.\n—Hermanos, ¿no tenéis leña?\n—dice Miguel.\n—responde el mayor.\nmilagrosamente, ha abierto\nla gruesa puerta cerrada\ncon doble ",
-    "gold": "barra"
+    "reference": "barra"
    },
    {
     "prompt": "milagrosamente, ha abierto\nla gruesa puerta cerrada\ncon doble barra de hierro.\nEl hombre que ha entrado tiene\nel rostro del padre muerto.\nUn halo de luz dorada\norla sus ",
-    "gold": "blancos"
+    "reference": "blancos"
    },
    {
     "prompt": "El hombre que ha entrado tiene\nel rostro del padre muerto.\nUn halo de luz dorada\norla sus blancos cabellos.\nLleva un haz de leña al hombro\ny empuña un hacha de hierro.\nDe aquellos ",
-    "gold": "campos"
+    "reference": "campos"
    },
    {
     "prompt": "Miguel a sus dos hermanos\ncompró una parte, que mucho\ncaudal de América trajo,\ny aun en tierra mala, el oro\nluce mejor que enterrado,\ny más en mano de pobres\nque oculto en ",
-    "gold": "orza"
+    "reference": "orza"
    },
    {
     "prompt": "tornó el fecundo verano;\ny ya de aldea en aldea\nse cuenta como un milagro\nque los asesinos tienen\nla maldición en sus campos.\nYa el pueblo canta una copla\nque narra el ",
-    "gold": "crimen"
+    "reference": "crimen"
    },
    {
     "prompt": "«A la orilla de la fuente\nlo asesinaron.\n¡Qué mala muerte le dieron\nlos hijos malos!\nEn la laguna sin fondo\nal padre muerto arrojaron.\nNo duerme ",
-    "gold": "bajo"
+    "reference": "bajo"
    },
    {
     "prompt": "En la laguna sin fondo\nal padre muerto arrojaron.\nNo duerme bajo la tierra\nel que la tierra ha labrado.»\nMiguel, con sus dos lebreles\ny armado de su escopeta,\nhacia el ",
-    "gold": "azul"
+    "reference": "azul"
    },
    {
     "prompt": "al padre muerto llevaron\nhasta la Laguna Negra».\nLa casa de Alvargonzález\nera una casona vieja,\ncon cuatro estrechas ventanas,\nseparada de la aldea\ncien pasos y ",
-    "gold": "entre"
+    "reference": "entre"
    },
    {
     "prompt": "se ve sin entrar, si tiene\nabierta al campo la puerta.\nAl arrimo del rescoldo\ndel hogar borbollonean\ndos pucherillos de barro,\nque a dos familias sustentan.\nA diestra ",
-    "gold": "mano"
+    "reference": "mano"
    },
    {
     "prompt": "A ambas parejas, que hubieron,\nsin que lograrse pudieran,\ndos hijos, sobrado espacio\nles da la casa paterna.\nEn una estancia que tiene\nluz al huerto, hay una mesa\ncon gruesa ",
-    "gold": "tabla"
+    "reference": "tabla"
    },
    {
     "prompt": "En una estancia que tiene\nluz al huerto, hay una mesa\ncon gruesa tabla de roble,\ndos sillones de vaqueta,\ncolgado en el muro un negro\nábaco de enormes cuentas,\ny unas ",
-    "gold": "espuelas"
+    "reference": "espuelas"
    },
    {
     "prompt": "dos sillones de vaqueta,\ncolgado en el muro un negro\nábaco de enormes cuentas,\ny unas espuelas mohosas\nsobre un arcón de madera.\nEra una estancia olvidada\ndonde hoy ",
-    "gold": "Miguel"
+    "reference": "Miguel"
    },
    {
     "prompt": "sobre un arcón de madera.\nEra una estancia olvidada\ndonde hoy Miguel se aposenta.\nY era allí donde los padres\nveían en primavera\nel huerto en flor, y en el cielo\nde mayo, ",
-    "gold": "azul"
+    "reference": "azul"
    },
    {
     "prompt": "veían en primavera\nel huerto en flor, y en el cielo\nde mayo, azul, la cigüeña\n—cuando las rosas se abren\ny los zarzales blanquean—\nque enseñaba a sus hijuelos\na usar de las ",
-    "gold": "alas"
+    "reference": "alas"
    },
    {
     "prompt": "—cuando las rosas se abren\ny los zarzales blanquean—\nque enseñaba a sus hijuelos\na usar de las alas lentas.\nY en las noches del verano,\ncuando la calor desvela,\ndesde la ",
-    "gold": "ventana"
+    "reference": "ventana"
    },
    {
     "prompt": "del primer hijo, bruñida\nde rubio sol la cabeza\ndel niño que levantaba\nlas codiciosas, pequeñas\nmanos a las rojas guindas\ny a las moradas ciruelas,\no aquella ",
-    "gold": "tarde"
+    "reference": "tarde"
    },
    {
     "prompt": "manos a las rojas guindas\ny a las moradas ciruelas,\no aquella tarde de otoño\ndorada, plácida y buena,\nél pensó que ser podría\nfeliz el hombre en la tierra.\nHoy canta el ",
-    "gold": "pueblo"
+    "reference": "pueblo"
    },
    {
     "prompt": "dorada, plácida y buena,\nél pensó que ser podría\nfeliz el hombre en la tierra.\nHoy canta el pueblo una copla\nque va de aldea en aldea:\n«¡Oh casa de Alvargonzález,\nqué malos ",
-    "gold": "días"
+    "reference": "días"
    },
    {
     "prompt": "Sobre la casa\nde Alvargonzález, los olmos\nsus hojas, que el viento arranca,\nvan dejando. Todavía\nlas tres redondas acacias,\nen el atrio de la iglesia,\nconservan ",
-    "gold": "verdes"
+    "reference": "verdes"
    },
    {
     "prompt": "las tres redondas acacias,\nen el atrio de la iglesia,\nconservan verdes sus ramas,\ny las castañas de Indias\na intervalos se desgajan\ncubiertas de sus erizos;\ntiene el rosal ",
-    "gold": "rosas"
+    "reference": "rosas"
    },
    {
     "prompt": "pelados, las lomas calvas,\nse coronan de plomizas\nnubes apelotonadas;\ny bajo el pinar gigante,\nentre las marchitas zarzas\ny amarillentos helechos,\ncorren las ",
-    "gold": "crecidas"
+    "reference": "crecidas"
    },
    {
     "prompt": "y bajo el pinar gigante,\nentre las marchitas zarzas\ny amarillentos helechos,\ncorren las crecidas aguas\na engrosar el padre río\npor canchales y barrancas.\nAbunda en la ",
-    "gold": "tierra"
+    "reference": "tierra"
    },
    {
     "prompt": "de plomo y azul de plata,\ncon manchas de roja herrumbre,\ntodo envuelto en luz violada.\n¡Oh tierras de Alvargonzález,\nen el corazón de España,\ntierras pobres, tierras tristes,\ntan tristes que ",
-    "gold": "tienen"
+    "reference": "tienen"
    },
    {
     "prompt": "en el corazón de España,\ntierras pobres, tierras tristes,\ntan tristes que tienen alma!\nPáramo que cruza el lobo\naullando a la luna clara\nde bosque a bosque, baldíos\nllenos de ",
-    "gold": "peñas"
+    "reference": "peñas"
    },
    {
     "prompt": "Páramo que cruza el lobo\naullando a la luna clara\nde bosque a bosque, baldíos\nllenos de peñas rodadas,\ndonde roída de buitres\nbrilla una osamenta blanca;\npobres ",
-    "gold": "campos"
+    "reference": "campos"
    },
    {
     "prompt": "¡oh pobres campos malditos,\npobres campos de mi patria!\nUna mañana de otoño,\nJuan y el indiano aparejan\nlas dos yuntas de la casa.\nMartín se quedó en el huerto\narrancando ",
-    "gold": "hierbas"
+    "reference": "hierbas"
    },
    {
     "prompt": "Juan y el indiano aparejan\nlas dos yuntas de la casa.\nMartín se quedó en el huerto\narrancando hierbas malas.\nUna mañana de otoño,\ncuando los campos se aran,\nsobre un ",
-    "gold": "otero"
+    "reference": "otero"
    },
    {
     "prompt": "Una mañana de otoño,\ncuando los campos se aran,\nsobre un otero, que tiene\nel cielo de la mañana\npor fondo, la parda yunta\nde Juan lentamente avanza.\nCardos, ",
-    "gold": "lampazos"
+    "reference": "lampazos"
    },
    {
     "prompt": "el cielo de la mañana\npor fondo, la parda yunta\nde Juan lentamente avanza.\nCardos, lampazos y abrojos,\navena loca y cizaña\nllenan la tierra maldita,\ntenaz a ",
-    "gold": "pico"
+    "reference": "pico"
    },
    {
     "prompt": "Del corvo arado de roble\nla hundida reja trabaja\ncon vano esfuerzo; parece\nque al par que hiende la entraña\ndel campo y hace camino,\nse cierra otra vez la zanja.\n“Cuando el ",
-    "gold": "asesino"
+    "reference": "asesino"
    },
    {
     "prompt": "del campo y hace camino,\nse cierra otra vez la zanja.\n“Cuando el asesino labre\nserá su labor pesada;\nantes que un surco en la tierra,\ntendrá una arruga en la cara”.\nMartín, que ",
-    "gold": "estaba"
+    "reference": "estaba"
    },
    {
     "prompt": "será su labor pesada;\nantes que un surco en la tierra,\ntendrá una arruga en la cara”.\nMartín, que estaba en la huerta\ncavando, sobre su azada\nquedó apoyado un momento;\nfrío ",
-    "gold": "sudor"
+    "reference": "sudor"
    },
    {
     "prompt": "cavando, sobre su azada\nquedó apoyado un momento;\nfrío sudor le bañaba\nPor el oriente,\nla luna llena, manchada\nde un arrebol purpurino,\nlucía ",
-    "gold": "tras"
+    "reference": "tras"
    },
    {
     "prompt": "Por el oriente,\nla luna llena, manchada\nde un arrebol purpurino,\nlucía tras de la tapia\nMartín tenía\nla sangre de horror helada.\nLa azada que ",
-    "gold": "hundió"
+    "reference": "hundió"
    },
    {
     "prompt": "huerto, colmenar y campo.\nJuan y Martín, los mayores\nde Alvargonzález, un día\npesada marcha emprendieron\ncon el alba, Duero arriba.\nLa estrella de la mañana\nen el alto ",
-    "gold": "azul"
+    "reference": "azul"
    },
    {
     "prompt": "y algunas nubes plomizas\na Urbión, donde el Duero nace,\ncomo un turbante ponían.\nSe acercaban a la fuente.\nEl agua clara corría,\nsonando cual si contara\nuna vieja ",
-    "gold": "historia"
+    "reference": "historia"
    },
    {
     "prompt": "«Yo sé el crimen; ¿no es un crimen,\ncerca del agua, la vida?»\nAl pasar los dos hermanos\nrelataba el agua limpia:\n«A la vera de la fuente\nAlvargonzález dormía.»\n—Anoche, ",
-    "gold": "cuando"
+    "reference": "cuando"
    },
    {
     "prompt": "Después irguióse y, volviendo\nel rostro, dio algunos pasos\npor el huerto, sin mirarme,\ny a poco lo vi encorvado\notra vez sobre la tierra.\nTenía el cabello blanco.\nLa luna ",
-    "gold": "llena"
+    "reference": "llena"
    },
    {
     "prompt": "y a poco lo vi encorvado\notra vez sobre la tierra.\nTenía el cabello blanco.\nLa luna llena brillaba,\ny era la huerta un milagro.\nPasado habían el puerto\nde Santa ",
-    "gold": "Inés"
+    "reference": "Inés"
    },
    {
     "prompt": "Cuando la tarde caía,\nentre las vetustas hayas\ny los pinos centenarios,\nun rojo sol se filtraba.\nEra un paraje de bosque\ny peñas aborrascadas;\naquí ",
-    "gold": "bocas"
+    "reference": "bocas"
    },
    {
     "prompt": "Era un paraje de bosque\ny peñas aborrascadas;\naquí bocas que bostezan\no monstruos de fieras garras;\nallí una informe joroba,\nallá una grotesca panza,\ntorvos ",
-    "gold": "hocicos"
+    "reference": "hocicos"
    },
    {
     "prompt": "o monstruos de fieras garras;\nallí una informe joroba,\nallá una grotesca panza,\ntorvos hocicos de fieras\ny dentaduras melladas,\nrocas y rocas, y troncos\ny troncos, ",
-    "gold": "ramas"
+    "reference": "ramas"
    },
    {
     "prompt": "y dentaduras melladas,\nrocas y rocas, y troncos\ny troncos, ramas y ramas.\nEn el hondón del barranco,\nla noche, el miedo y el agua.\nUn lobo surgió; sus ojos\nlucían ",
-    "gold": "como"
+    "reference": "como"
    },
    {
     "prompt": "volver. La selva ululaba.\nCien ojos fieros ardían\nen la selva, a sus espaldas.\nLlegaron los asesinos\nhasta la Laguna Negra,\nagua transparente y muda\nque enorme ",
-    "gold": "muro"
+    "reference": "muro"
    },
    {
     "prompt": "donde los buitres anidan\ny el eco duerme, rodea;\nagua clara donde beben\nlas águilas de la sierra,\ndonde el jabalí del monte\ny el ciervo y el corzo abrevan;\nagua ",
-    "gold": "pura"
+    "reference": "pura"
    },
    {
     "prompt": "donde el jabalí del monte\ny el ciervo y el corzo abrevan;\nagua pura y silenciosa\nque copia cosas eternas;\nagua impasible que guarda\nen su seno las estrellas.\n—¡Padre! —",
-    "gold": "gritaron"
+    "reference": "gritaron"
    }
   ]
  },
