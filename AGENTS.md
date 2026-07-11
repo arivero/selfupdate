@@ -97,7 +97,12 @@ Execution concerns live in `src/selfupdate/train/runtime.py`
 (TrainingRuntime: loading/placement/teacher/tripwire/save; OptimizerPlan:
 `lora_fused` / `full_resident` / `full_offload` with streamed pinned-CPU
 paging). Schedule loops in `layerwise.py` never construct models or
-optimizers. One batched walk: `batching: item` is a B=1 padded batch,
+optimizers. Since the 2026-07-11 factorisation the trainer package is one
+module per concern — schedules (`layerwise.py`), step primitives
+(`steps.py`), knob validation (`validate.py`), telemetry (`telemetry.py`),
+teacher states (`teacher_source.py`), anchor (`anchor.py`) — module map in
+docs/runtime.md; `layerwise.py` re-exports the historical names.
+One batched walk: `batching: item` is a B=1 padded batch,
 bit-exact vs the historical item loop. Read `docs/runtime.md` before
 touching execution machinery, and note the measured NEGATIVE results in
 issues.md (async target prefetch; PP2 throughput) before "optimizing".

@@ -7,8 +7,23 @@ executes.)*
 ## Separation of concerns
 
 `src/selfupdate/train/runtime.py` owns the executable side of a run;
-`layerwise.py` owns WHAT is trained. The schedule loops never touch
-`from_pretrained`, device maps, or optimizer construction:
+`layerwise.py` owns WHAT is trained. Since the 2026-07-11 factorisation
+the trainer package is one module per concern (layerwise.py re-exports
+the historical names for older scripts):
+
+| module | concern |
+|---|---|
+| `layerwise.py` | schedules (summed / teacher_censored / mixed / sequential) + dispatcher |
+| `steps.py` | block/window forward+backward primitives; detach discipline |
+| `runtime.py` | TrainingRuntime + OptimizerPlan (below) |
+| `teacher_source.py` | per-step frozen-teacher states (OnlineTeacherSource) |
+| `validate.py` | dispatch-time knob-flow validation (audit_configs sweeps it) |
+| `telemetry.py` | loss aggregation, epoch recall, standard-damage probes |
+| `anchor.py` | anti-intrusion anchor regularizer |
+| `losses.py` | hidden-match objectives (`HiddenLoss.from_config` is the one construction path) |
+
+The schedule loops never touch `from_pretrained`, device maps, or
+optimizer construction:
 
 - **TrainingRuntime** — model loading (causal/ITT fallback), placement
   (single device / `device_map=auto` / explicit pipeline map), LoRA attach,
