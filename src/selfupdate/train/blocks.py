@@ -57,7 +57,6 @@ class BlockStack:
         self.final_norm = inner.norm
         self.lm_head = model.lm_head
         self.n_layers = len(self.blocks)
-        self._shared_kv_states = None
         # Hook-free walk (explicit pipeline placement only): call each
         # block's pre-hook forward and do the boundary moves ourselves —
         # accelerate's per-call dispatch is ~8% of the PP2 walk (issues.md
@@ -110,7 +109,10 @@ class BlockStack:
         self.lm_head.requires_grad_(False)
 
     def embed(self, input_ids: torch.Tensor) -> torch.Tensor:
-        self._shared_kv_states = {}
+        # KV sharing across layer types (gemma4-class) lives in the per-call
+        # rope() bundle (a fresh UserDict each walk), never on the instance —
+        # instance state here once risked stale wrong-length teacher KV
+        # across items (2026-07-10 review, latent).
         with torch.no_grad():
             return self.embed_tokens(input_ids)
 

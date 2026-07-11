@@ -317,6 +317,9 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
             if readout_source == "teacher_kl":
                 teacher_rows = (batch.readout_index.to(targets[n].device)
                                 - batch.s0.to(targets[n].device).unsqueeze(1))
+                # clamp absorbs the ZERO pad rows of readout_index only;
+                # a real pre-span readout row is rejected at collate
+                # (dataset.py: ans0 <= s0 guard), keeping this sync-free.
                 teacher_rows = teacher_rows.clamp_min(0)
                 teacher_h = _gather_batch_rows(targets[n], teacher_rows)
                 with torch.no_grad():
@@ -492,6 +495,10 @@ def _validate_knob_schedule(cfg) -> None:
                    "train without the anchor)")
     if cfg.train.scramble_targets and sched != "summed":
         bad.append("scramble_targets")
+    if sched == "teacher_censored" and _uses_pipeline_map(cfg):
+        bad.append("pipeline placement (teacher_censored walks stationary "
+                   "teacher-stream inputs and crashes cross-device at item 1; "
+                   "the combo is unimplemented — fail here, not mid-run)")
     if cfg.train.window_dedup and (cfg.train.conn_window <= 1
                                    or cfg.train.conn_stride != 1):
         bad.append("window_dedup (needs faithful sliding windows: "
@@ -559,6 +566,16 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     moe_load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
     rt = TrainingRuntime(cfg).load(moe_load_kw)
     tok, stack = rt.tokenizer, rt.stack
+    # Depth-dependent window checks live here, not in the config validator:
+    # n_layers is only known once the model is loaded. Oversized windows
+    # previously KeyError'd deep in the walk (readout0 < 1 indexes a
+    # nonexistent layer) instead of naming the misconfiguration.
+    for knob in ("conn_window", "readout_window_blocks"):
+        val = getattr(cfg.train, knob)
+        if val > stack.n_layers:
+            raise ValueError(
+                f"train.{knob}={val} exceeds the model's {stack.n_layers} "
+                f"blocks ({cfg.model.name})")
     teacher = rt.load_teacher(moe_load_kw)
     online = teacher is not None
     cache = None if online else rt.load_cache()

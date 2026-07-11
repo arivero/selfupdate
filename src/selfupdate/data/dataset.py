@@ -202,6 +202,17 @@ def collate_padded_items(items: list[Item]) -> Batch:
             hidden[L][i, :it.A] = it.hidden[L]
         rlen = ans_lens[i]
         if rlen > 0:
+            if it.ans0 <= it.s0:
+                # The trainer maps readout rows to teacher rows via
+                # (readout_index - s0).clamp_min(0); the clamp exists for the
+                # zero pad rows below, but a REAL first readout row before s0
+                # (empty mid) would be silently retargeted to teacher row 0.
+                # Masking guarantees a nonempty mid — enforce it where the
+                # rows are built, on CPU, not with a sync in the hot loop.
+                raise ValueError(
+                    f"example {it.example_id}: ans0 ({it.ans0}) <= s0 "
+                    f"({it.s0}) — readout row precedes the aligned span "
+                    "(empty mid); rebuild the dataset")
             readout_index[i, :rlen] = torch.arange(it.ans0 - 1, it.s0 + it.A - 1)
             readout_mask[i, :rlen] = True
         if teacher_ids is not None:
