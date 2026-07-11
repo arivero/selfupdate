@@ -704,6 +704,8 @@ def main() -> None:
         if args.lossgrid_only:
             _text_page(pdf, "July 11 1.7B loss-grid checkpoint scorecard",
                        _markdown_text(RUNS / "lossgrid_report.md"), fontsize=5)
+            _image_page(pdf, "July 11 a_/lw_ checkpoint recall",
+                        RUNS / "tasks_report.png")
             print(f"wrote {args.out}")
             return
         coverage_matrix_page(pdf)
