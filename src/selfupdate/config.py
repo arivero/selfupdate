@@ -47,6 +47,21 @@ class DataConfig:
     catechism: bool = False
     maieutic: bool = False  # dialogue-framed elicitation specs (maieutic v4)
     corpus_style: str = "verse"  # verse | prose_quijote (question phrasing + system prompt)
+    # -- v5 question-only datasets (owner, 2026-07-12) ----------------------
+    # The jsonl carries questions + master-RAG passages, NO answers: the
+    # teacher generates the answer at the teacher stage and the student
+    # trains on its forward hidden states (src/selfupdate/data/questions.py).
+    question_set: str = "legacy"  # legacy | v5
+    # multi-corpus emission: [{poem_path, corpus_style, prefix}, ...];
+    # empty = single corpus from poem_path/corpus_style above
+    corpora: list = field(default_factory=list)
+    rag_scope: str = "window"  # chapter | window (master-RAG granularity)
+    rag_window_lines: int = 4  # window scope: target span ± this many lines
+    v5_next_windows: list = field(default_factory=lambda: [1, 3, 6])
+    v5_prev_stride: int = 3
+    v5_cloze_block: int = 4
+    v5_cloze_deletions: list = field(default_factory=lambda: [1, 2, 4, 8])
+    v5_seed: int = 20260712
 
 
 @dataclass

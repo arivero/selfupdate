@@ -147,12 +147,17 @@ def render_rag_tool(
     answer: str,
     system: str = DEFAULT_SYSTEM,
     student_stub: str = "",
+    open_answer: bool = False,
 ) -> SegmentedExample:
     """RAG via Qwen3's NATIVE tool protocol: the retrieved passage arrives as
     a Hermes-style <tool_response> block in its own tool turn (how the model
     saw retrieval during training). The entire tool turn is the privileged
     segment, so the student's censored view is a canonical no-tool
-    conversation — same alignment contract as render_rag."""
+    conversation — same alignment contract as render_rag.
+
+    ``open_answer=True`` (v5 question-only records) leaves the answer
+    segment EMPTY — no text, no ``<|im_end|>``: the teacher stage appends
+    its own generation plus the terminator."""
     prefix = (
         f"{IM_START}system\n{system}{IM_END}\n"
         f"{IM_START}user\n{question}{IM_END}\n"
@@ -163,7 +168,8 @@ def render_rag_tool(
     )
     mid = f"{IM_START}assistant\n{EMPTY_THINK}"
     return SegmentedExample(
-        example_id, prefix, privileged, mid, f"{answer}{IM_END}", student_stub
+        example_id, prefix, privileged, mid,
+        "" if open_answer else f"{answer}{IM_END}", student_stub
     )
 
 

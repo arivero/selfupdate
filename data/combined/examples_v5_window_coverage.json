@@ -1,0 +1,26 @@
+{
+ "mach": {
+  "n_specs": 1490,
+  "kinds": {
+   "next": 1072,
+   "prev": 239,
+   "cloze": 179
+  },
+  "n_lines": 716,
+  "covered_lines": 716,
+  "uncovered_lines": [],
+  "poem_path": "data/poem/raw.txt"
+ },
+ "quij": {
+  "n_specs": 581,
+  "kinds": {
+   "next": 418,
+   "prev": 93,
+   "cloze": 70
+  },
+  "n_lines": 280,
+  "covered_lines": 280,
+  "uncovered_lines": [],
+  "poem_path": "data/quijote/raw_ch4.txt"
+ }
+}

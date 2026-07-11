@@ -1,0 +1,16 @@
+# v5 question-only dataset, CHAPTER-scope master RAG: the retrieval tool
+# always returns the whole containing chapter (named part for the Machado
+# verse corpus, capítulo for Quijote prose). Paired with the window-scope
+# build; NOTE issues.md 2026-07-12: full-document copying is NOT reliable
+# for the base model, so the per-scope teacher ceiling must be reported.
+run_name: data_v5_chapter
+data:
+  question_set: v5
+  examples_path: data/combined/examples_v5_chapter.jsonl
+  rag_scope: chapter
+  corpora:
+    - {poem_path: data/poem/raw.txt, corpus_style: verse, prefix: mach}
+    - {poem_path: data/quijote/raw_ch4.txt, corpus_style: prose_quijote, prefix: quij}
+mask:
+  mode: rag_tool
+  compaction: remove

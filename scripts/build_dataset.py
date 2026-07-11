@@ -19,12 +19,90 @@ from selfupdate.data.poem import STYLES, load_poem, make_specs
 from selfupdate.masking import RAG_STUB, THINK_STUB, render_rag, render_rag_tool
 
 
+def build_v5(cfg) -> None:
+    """v5 question-only build: multi-corpus conversational questions with a
+    master-RAG tool turn and NO answers (the teacher generates them at the
+    teacher stage; see src/selfupdate/data/questions.py). Coverage of every
+    corpus line is a build invariant; the manifest lands next to the jsonl."""
+    from selfupdate.data.questions import coverage_report, make_v5_specs
+
+    if cfg.mask.mode != "rag_tool":
+        sys.exit("question_set=v5 requires mask.mode=rag_tool "
+                 "(the master RAG is a retrieval-tool turn)")
+    corpora = cfg.data.corpora or [{
+        "poem_path": cfg.data.poem_path,
+        "corpus_style": cfg.data.corpus_style,
+        "prefix": "",
+    }]
+    records, manifest = [], {}
+    for corpus in corpora:
+        style_name = corpus["corpus_style"]
+        style = STYLES[style_name]
+        verses = load_poem(corpus["poem_path"])
+        specs = make_v5_specs(
+            verses,
+            style=style,
+            corpus_style=style_name,
+            rag_scope=cfg.data.rag_scope,
+            rag_window_lines=cfg.data.rag_window_lines,
+            next_windows=tuple(cfg.data.v5_next_windows),
+            prev_stride=cfg.data.v5_prev_stride,
+            cloze_block=cfg.data.v5_cloze_block,
+            cloze_deletions=tuple(cfg.data.v5_cloze_deletions),
+            seed=cfg.data.v5_seed,
+        )
+        prefix = corpus.get("prefix", "")
+        report = coverage_report(specs, len(verses))
+        report["poem_path"] = corpus["poem_path"]
+        manifest[prefix or style_name] = report
+        if report["uncovered_lines"]:
+            sys.exit(f"v5 coverage hole in {corpus['poem_path']}: lines "
+                     f"{report['uncovered_lines'][:10]}...")
+        for s in specs:
+            ex = render_rag_tool(
+                f"{prefix}-{s.task_id}" if prefix else s.task_id,
+                s.question, s.passage, answer="", system=style.system,
+                open_answer=True,
+            )
+            records.append({
+                **ex.to_json(),
+                "question": s.question,
+                "answer_text": "",
+                "kind": s.kind,
+                "target_lines": list(s.target_lines),
+                "expected_answer_chars": s.expected_answer_chars,
+                "rag_scope": s.rag_scope,
+                "corpus": prefix or style_name,
+            })
+
+    out = Path(cfg.data.examples_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    coverage_path = out.with_name(out.stem + "_coverage.json")
+    coverage_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8")
+    kinds = {}
+    for r in records:
+        kinds[r["kind"]] = kinds.get(r["kind"], 0) + 1
+    print(f"wrote {len(records)} v5 question records "
+          f"({cfg.data.rag_scope}-scope RAG; {kinds}) to {out}; "
+          f"coverage manifest {coverage_path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+
+    if cfg.data.question_set == "v5":
+        build_v5(cfg)
+        return
+    if cfg.data.question_set != "legacy":
+        sys.exit(f"unknown data.question_set {cfg.data.question_set!r}")
 
     specs = make_specs(
         load_poem(cfg.data.poem_path),
