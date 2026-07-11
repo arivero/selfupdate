@@ -1,0 +1,6 @@
+run_name: a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl
+train:
+  hidden_loss: jacobian_lens_kl
+  jacobian_lens_path: ../jacobian-lens/out/lenses/Qwen3-1.7B_jacobian_lens_n466.pt
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

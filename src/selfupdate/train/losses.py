@@ -19,6 +19,9 @@ Three families of hidden-match kinds:
 - increment (``delta_nmse``, ``delta_cosine``, ``delta_vocab_cos``): compare
   the raw residual update made by an interior block rather than its inherited
   absolute state. Cache boundaries use the paired absolute-state metric.
+- Jacobian-pullback (``jacobian_vocab_mse``, ``jacobian_lens_kl``): first
+  transport each layer through a frozen, corpus-fitted downstream Jacobian,
+  then compare the transported states with the named frozen-head metric.
 
 Whitened/CKA-style losses are deliberately absent: items are batch-1
 ``[A, H]`` slices with A often below H, so per-batch covariances are
@@ -40,6 +43,11 @@ VOCAB_KINDS = ("vocab_mse", "lens_kl", "tuned_lens_kl", "vocab_fisher")
 # (2 <= L < n); L=1 and h_n use the paired state fallback below because the
 # disk cache has no h0 and h_n is post-final-norm.
 DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos")
+JACOBIAN_KINDS = ("jacobian_vocab_mse", "jacobian_lens_kl")
+JACOBIAN_STATE_FALLBACKS = {
+    "jacobian_vocab_mse": "vocab_mse",
+    "jacobian_lens_kl": "lens_kl",
+}
 DELTA_STATE_FALLBACKS = {
     "delta_nmse": "nmse",
     "delta_cosine": "cosine",
@@ -96,27 +104,68 @@ class HiddenLoss:
     increment kind at a cache boundary selects its documented state fallback.
     """
 
-    def __init__(self, kind: str, final_norm=None, lm_head=None, tuned_lens_path: str = ""):
-        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS:
+    def __init__(self, kind: str, final_norm=None, lm_head=None,
+                 tuned_lens_path: str = "", jacobian_lens_path: str = ""):
+        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
-        if kind in VOCAB_KINDS and (final_norm is None or lm_head is None):
+        if kind in VOCAB_KINDS + JACOBIAN_KINDS and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
         if kind == "delta_vocab_cos" and (final_norm is None or lm_head is None):
             raise ValueError("hidden loss 'delta_vocab_cos' needs final_norm and lm_head")
         if kind == "tuned_lens_kl" and not tuned_lens_path:
             raise ValueError("hidden loss 'tuned_lens_kl' needs train.tuned_lens_path")
+        if kind in JACOBIAN_KINDS and not jacobian_lens_path:
+            raise ValueError(f"hidden loss {kind!r} needs train.jacobian_lens_path")
         self.kind = kind
         self.final_norm = final_norm
         self.lm_head = lm_head
         self._gram: torch.Tensor | None = None
         self._centered_gram: torch.Tensor | None = None
         self.translators = None
+        self._jacobians_cpu: dict[int, torch.Tensor] = {}
+        self._jacobian_cache: dict[tuple[int, torch.device, torch.dtype], torch.Tensor] = {}
+        self.jacobian_metadata: dict[str, object] = {}
         if kind == "tuned_lens_kl":
             from .tuned_lens import load_translators
 
             self.translators = load_translators(tuned_lens_path, device=lm_head.weight.device)
             self.translators.eval()
             self.translators.requires_grad_(False)
+        if kind in JACOBIAN_KINDS:
+            artifact = torch.load(jacobian_lens_path, map_location="cpu", weights_only=True)
+            required = {"J", "source_layers", "d_model", "n_prompts"}
+            if not isinstance(artifact, dict) or not required.issubset(artifact):
+                raise ValueError(
+                    f"invalid Jacobian lens {jacobian_lens_path!r}: needs keys {sorted(required)}")
+            width = int(artifact["d_model"])
+            if width != int(lm_head.weight.shape[1]):
+                raise ValueError(
+                    f"Jacobian lens width {width} != model hidden width {lm_head.weight.shape[1]}")
+            matrices = artifact["J"]
+            source_layers = [int(x) for x in artifact["source_layers"]]
+            if not isinstance(matrices, dict) or set(map(int, matrices)) != set(source_layers):
+                raise ValueError("Jacobian lens J/source_layers coverage is inconsistent")
+            for source in source_layers:
+                J = matrices[source].detach().contiguous()
+                if J.shape != (width, width) or not torch.isfinite(J).all():
+                    raise ValueError(f"invalid Jacobian matrix for source layer {source}")
+                self._jacobians_cpu[source] = J
+            self.jacobian_metadata = {
+                "path": jacobian_lens_path,
+                "d_model": width,
+                "n_prompts": int(artifact["n_prompts"]),
+                "source_layers": source_layers,
+            }
+
+    def _jacobian(self, source: int, like: torch.Tensor) -> torch.Tensor | None:
+        """Lazily retain each frozen transport on the layer's device."""
+        J = self._jacobians_cpu.get(source)
+        if J is None:
+            return None
+        key = (source, like.device, like.dtype)
+        if key not in self._jacobian_cache:
+            self._jacobian_cache[key] = J.to(device=like.device, dtype=like.dtype)
+        return self._jacobian_cache[key]
 
     def _gram_matrix(self) -> torch.Tensor:
         """M = WᵀW of the frozen unembedding, fp32, chunked over vocab rows."""
@@ -162,6 +211,17 @@ class HiddenLoss:
         # (cuda:0) while upper blocks live on cuda:1; .to() is differentiable
         teacher_h = teacher_h.to(student_h.device)
         kind = self.state_fallback_kind
+        if kind in JACOBIAN_KINDS:
+            if layer is None:
+                raise ValueError(f"{kind} needs a 1-based layer index")
+            source = layer - 1
+            J = self._jacobian(source, student_h)
+            kind = JACOBIAN_STATE_FALLBACKS[kind]
+            if J is not None:
+                student_h = student_h @ J.T
+                with torch.no_grad():
+                    teacher_h = teacher_h.to(J.dtype) @ J.T
+                normed = False
         if kind in GEOMETRIC_KINDS:
             return hidden_match(student_h, teacher_h, kind)
         if kind == "tuned_lens_kl":

@@ -124,11 +124,14 @@ class TrainConfig:
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (absolute-state geometric) | vocab_mse
     # | lens_kl | tuned_lens_kl | vocab_fisher (absolute-state frozen-vocabulary)
+    # | jacobian_vocab_mse | jacobian_lens_kl (frozen downstream transport,
+    # then the corresponding vocabulary metric; needs jacobian_lens_path)
     # | delta_nmse | delta_cosine | delta_vocab_cos (successive raw block
     # increments; L=1/h_n use the paired state fallback because the cache has
     # no h0 and h_n is post-final-norm).  See losses.py / docs/hidden_loss.md.
     hidden_loss: str = "nmse"
     tuned_lens_path: str = ""
+    jacobian_lens_path: str = ""
     # Top readout term attached ONLY to sanctioned sliding windows:
     # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
     # The connected graph is still a gradient-isolation unit rooted at a

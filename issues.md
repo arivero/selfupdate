@@ -52,8 +52,8 @@ implementation commitment.
    because delta-only admits accumulated drift: all increments can be slightly
    wrong while their local losses remain small.
 
-2. **Frozen Jacobian-pullback matching (`jacobian_*`) — READY FOR AN
-   INTEGRATION SPIKE.** The sibling `../jacobian-lens` checkout already holds
+2. **Frozen Jacobian-pullback matching (`jacobian_*`) — IMPLEMENTED AND
+   QUEUED (2026-07-11).** The sibling `../jacobian-lens` checkout holds
    Qwen3-1.7B (466 generic WikiText prompts) and Qwen3-14B Jacobian lenses.
    For an interior layer, its frozen base/teacher matrix `J_L` transports a
    residual into the pre-final residual basis: `z = J_L h`. Match either
@@ -93,6 +93,19 @@ implementation commitment.
    student of a changed width; same-width fine-tunes share a basis but should
    still receive a post-hoc separate-lens comparison if we claim transport
    preservation.
+
+   Implementation: `HiddenLoss` now provides `jacobian_vocab_mse` and
+   `jacobian_lens_kl`, both configured by the explicit
+   `train.jacobian_lens_path`. Loading validates the artifact schema, hidden
+   width, finite square matrices, and exact declared source-layer coverage.
+   Matrices remain frozen on CPU and are copied lazily in the active hidden
+   dtype to the device that owns each source layer; the per-device copy is
+   retained to avoid a PCIe transfer per training item. Layer `L` uses source
+   matrix `L-1`; the final normalized endpoint has no fitted matrix and falls
+   back to `vocab_mse` or `lens_kl` respectively. The paired slide-1/slide-2
+   arms use the same Qwen3-1.7B, 466-prompt artifact and are prioritized ahead
+   of the remaining delta-loss queue. Their normal epoch-zero/every-epoch
+   three-corpus recall and standard-benchmark damage telemetry applies.
 
 3. **Multi-scale/cumulative trajectory matching**. Match short finite
    differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the

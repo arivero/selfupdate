@@ -425,6 +425,22 @@ def _validate_knob_schedule(cfg) -> None:
         raise ValueError("eval.every_epochs must be positive")
     if cfg.eval.standard_damage_every_epochs < 0:
         raise ValueError("eval.standard_damage_every_epochs must be >= 0")
+    jacobian_kind = cfg.train.hidden_loss in (
+        "jacobian_vocab_mse", "jacobian_lens_kl",
+    )
+    if jacobian_kind:
+        if not cfg.train.jacobian_lens_path:
+            raise ValueError(
+                f"hidden_loss={cfg.train.hidden_loss!r} requires "
+                "train.jacobian_lens_path")
+        if not Path(cfg.train.jacobian_lens_path).is_file():
+            raise ValueError(
+                f"Jacobian lens artifact does not exist: "
+                f"{cfg.train.jacobian_lens_path}")
+    elif cfg.train.jacobian_lens_path:
+        raise ValueError(
+            "train.jacobian_lens_path is set but hidden_loss is not a "
+            "jacobian_* objective")
     if cfg.eval.standard_damage_every_epochs:
         if cfg.eval.standard_damage_limit <= 0:
             raise ValueError("eval.standard_damage_limit must be positive")
@@ -848,7 +864,8 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
-                         tuned_lens_path=cfg.train.tuned_lens_path)
+                         tuned_lens_path=cfg.train.tuned_lens_path,
+                         jacobian_lens_path=cfg.train.jacobian_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     loader = _loader(cfg, ds)
     opts = {
@@ -1084,7 +1101,8 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
-                         tuned_lens_path=cfg.train.tuned_lens_path)
+                         tuned_lens_path=cfg.train.tuned_lens_path,
+                         jacobian_lens_path=cfg.train.jacobian_lens_path)
     anchor = _make_anchor(cfg, tok, teacher)
     online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
@@ -1279,7 +1297,8 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
-                         tuned_lens_path=cfg.train.tuned_lens_path)
+                         tuned_lens_path=cfg.train.tuned_lens_path,
+                         jacobian_lens_path=cfg.train.jacobian_lens_path)
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     loader = _loader(cfg, ds)
     opts = {
@@ -1397,7 +1416,8 @@ def _train_sequential(cfg, stack, cache, tok, log):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
-                         tuned_lens_path=cfg.train.tuned_lens_path)
+                         tuned_lens_path=cfg.train.tuned_lens_path,
+                         jacobian_lens_path=cfg.train.jacobian_lens_path)
     act_cache = StudentActCache()
     t0 = time.time()
 
