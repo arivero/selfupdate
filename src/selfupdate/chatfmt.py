@@ -172,9 +172,22 @@ def _matches(record: dict, p: TemplatePieces) -> bool:
             record["shared_prefix"].startswith(p.pre + record["question"])
             and record["answer"] == record["answer_text"] + p.answer_close
         )
+    prefix = record["shared_prefix"]
+    exact_prefix = p.pre + record["question"]
+    if prefix != exact_prefix:
+        # A combined corpus can deliberately choose a different *system
+        # message* per source corpus (Machado: poetry; Quijote: literature).
+        # That is still native rendering for one tokenizer.  Check the fixed
+        # framing around DEFAULT_SYSTEM and permit only the system-message
+        # payload itself to differ; do not mistake this for a foreign template.
+        before, marker, after = p.pre.partition(DEFAULT_SYSTEM)
+        if not marker or not (
+            prefix.startswith(before)
+            and prefix.endswith(after + record["question"])
+        ):
+            return False
     return (
-        record["shared_prefix"] == p.pre + record["question"]
-        and record["shared_mid"] == p.mid
+        record["shared_mid"] == p.mid
         and record["answer"] == record["answer_text"] + p.answer_close
     )
 
