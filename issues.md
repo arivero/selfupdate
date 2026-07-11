@@ -228,7 +228,8 @@ implementation commitment.
 
 ### Low-priority bound checks (not expected winners)
 
-13. **Reverse or symmetric teacher-distribution divergence**. Reverse KL
+13. **Reverse or symmetric teacher-distribution divergence — `lens_js`
+    IMPLEMENTED 2026-07-11; awaiting one bounded-control arm.** Reverse KL
     `KL(student || teacher)` is mode-seeking; Jensen-Shannon and temperature-
     softened symmetric KL are bounded/more balanced. These remain shaped by the
     teacher vocabulary distribution and therefore inherit the measured groove

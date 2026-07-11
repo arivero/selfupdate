@@ -123,7 +123,9 @@ class TrainConfig:
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (absolute-state geometric) | vocab_mse
-    # | lens_kl | tuned_lens_kl | vocab_fisher (absolute-state frozen-vocabulary)
+    # | lens_kl | lens_js | tuned_lens_kl | vocab_fisher
+    #   (absolute-state frozen-vocabulary; lens_js is the bounded symmetric
+    #   Jensen-Shannon control)
     # | jacobian_nmse (pure frozen JᵀJ transport metric)
     # | jacobian_vocab_mse | jacobian_lens_kl (frozen downstream transport,
     # then the corresponding vocabulary metric; all need jacobian_lens_path)

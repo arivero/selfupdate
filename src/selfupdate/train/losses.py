@@ -10,7 +10,7 @@ Three families of hidden-match kinds:
 
 - geometric (``nmse``, ``l2mse``, ``cosine``, ``huber``): compare hidden
   vectors directly, in the residual-stream metric.
-- vocabulary-metric (``vocab_mse``, ``lens_kl``, ``tuned_lens_kl``): compare hidden vectors as
+- vocabulary-metric (``vocab_mse``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
   the FROZEN vocabulary sees them (docs/hidden_loss.md, Frozen-Vocabulary
   Principle). ``vocab_mse`` is MSE in logit space, computed cheaply through
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
@@ -38,7 +38,7 @@ import torch
 import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "zero")
-VOCAB_KINDS = ("vocab_mse", "lens_kl", "tuned_lens_kl", "vocab_fisher")
+VOCAB_KINDS = ("vocab_mse", "lens_kl", "lens_js", "tuned_lens_kl", "vocab_fisher")
 # Match what a block *adds* rather than repeatedly charging it for inherited
 # state error.  The trainer applies these only to interior raw block outputs
 # (2 <= L < n); L=1 and h_n use the paired state fallback below because the
@@ -279,7 +279,10 @@ class HiddenLoss:
                 num = (p * proj.pow(2)).sum(-1).mean()
                 denom = (p * tproj.pow(2)).sum(-1).mean().clamp_min(1e-8)
                 return num / denom
-        # lens_kl / tuned_lens_kl: KL(teacher || student) over the frozen
+        # lens_kl / lens_js / tuned_lens_kl: vocabulary divergences over the
+        # frozen logit lens.  JS is the bounded symmetric control: the teacher
+        # distribution is detached, while gradients flow only through the
+        # student distribution and their midpoint.
         # logit lens. tuned_lens_kl first maps each layer through its frozen
         # per-layer affine translator so middle layers are compared in a
         # calibrated decode geometry.
@@ -288,6 +291,17 @@ class HiddenLoss:
         s_logits = self.lm_head(student_h)
         with torch.no_grad():
             t_logits = self.lm_head(teacher_h)
+        if kind == "lens_js":
+            s_logp = F.log_softmax(s_logits.float(), dim=-1)
+            t_logp = F.log_softmax(t_logits.float(), dim=-1)
+            s_p = s_logp.exp()
+            with torch.no_grad():
+                t_p = t_logp.exp()
+            log_m = (0.5 * (s_p + t_p)).log()
+            teacher_to_mid = F.kl_div(log_m, t_logp, log_target=True,
+                                      reduction="batchmean")
+            student_to_mid = (s_p * (s_logp - log_m)).sum(-1).mean()
+            return 0.5 * (teacher_to_mid + student_to_mid)
         return F.kl_div(
             F.log_softmax(s_logits.float(), dim=-1),
             F.log_softmax(t_logits.float(), dim=-1),
