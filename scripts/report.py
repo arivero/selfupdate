@@ -707,6 +707,8 @@ def main() -> None:
                    summary_text())
         cross_checkout_pages(pdf)
         results_page(pdf)
+        _text_page(pdf, "1.7B loss-grid checkpoint scorecard",
+                   _markdown_text(RUNS / "lossgrid_report.md"), fontsize=5)
         corpus_page(pdf)
         _image_page(pdf, "Accuracy Aspects", RUNS / "accuracy_aspects.png")
         _image_page(pdf, "Destruction Aspects", RUNS / "destruction_aspects.png")

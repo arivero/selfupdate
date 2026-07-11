@@ -3,6 +3,7 @@
 # scheduler lives, and once more after it exits.
 cd "$(dirname "$0")/.." || exit 1
 refresh() {
+    .venv/bin/python scripts/lossgrid_report.py >/dev/null 2>&1
     .venv/bin/python scripts/analyze.py >/dev/null 2>&1
     .venv/bin/python scripts/report.py >/dev/null 2>&1
 }

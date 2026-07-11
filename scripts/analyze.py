@@ -54,8 +54,11 @@ def results_table() -> pd.DataFrame:
         full_cer = line_exact = forget = None
         if full.exists():
             r = json.loads(full.read_text())
-            full_cer = r["cer"]
-            line_exact = r["line_exact"]
+            # Schema v2 task evaluations report recall rather than the
+            # retired character-error-rate field.  Keep the legacy columns
+            # blank instead of treating a task recall as CER.
+            full_cer = r.get("cer")
+            line_exact = r.get("line_exact")
             model_base = base_ce.get(cfg.get("model", {}).get("name", "Qwen/Qwen3-0.6B"))
             if model_base and "general" in r:
                 forget = round(r["general"]["mean_ce"] - model_base, 3)
@@ -75,7 +78,7 @@ def results_table() -> pd.DataFrame:
             "lora": train_cfg["lora"]["enabled"],
             "mode": cfg["mask"]["mode"],
             "compaction": cfg["mask"]["compaction"],
-            "last_train_cer": evals[-1]["cer"] if evals else None,
+            "last_train_cer": evals[-1].get("cer") if evals else None,
             "full_eval_cer": full_cer,
             "line_exact": line_exact,
             "forgetting_dCE": forget,  # general-CE rise vs base model
@@ -205,8 +208,9 @@ def training_curves() -> None:
             ii = list(range(0, len(xs), step))
             axes[row][0].plot([xs[i] for i in ii], [trains[i]["loss"] for i in ii],
                               label=d.name, alpha=0.8, linewidth=1, **st)
-        if evals:
-            axes[row][1].plot([m["epoch"] for m in evals], [m["cer"] for m in evals],
+        cer_evals = [m for m in evals if "cer" in m]
+        if cer_evals:
+            axes[row][1].plot([m["epoch"] for m in cer_evals], [m["cer"] for m in cer_evals],
                               marker="o", label=d.name, alpha=0.8, **st)
         # per-epoch forgetting (gen_ce logged at eval epochs since 2026-07-03;
         # older runs lack it): the reference for how long each model+method
