@@ -249,44 +249,6 @@ order for the first matrix: `delta_vocab_cos`, state+delta, relational+state,
 attention-output matching, then offline-whitened NMSE. Do not sweep Fisher-like
 or reverse-KL variants until those geometry-based candidates have been tested.
 
-## Test-suite economics (2026-07-10; owner: "token sinkholes")
-
-Suite: 126 tests, ~51 s warm / ~149 s cold. No single hog (slowest test
-4.7 s) — the cost is structural: ~10 GPU test modules EACH load
-Qwen3-0.6B separately (module-scoped fixtures, no session sharing), so
-most wall-clock is repeated model loads, not assertions. Worst
-offenders by measurement: test_online_teacher (3 of the 4 slowest tests
-+ 14 torch.jit deprecation warnings — `jit.script_method` removal risk
-on the next torch bump), test_anchor, test_mixed_schedule,
-test_position_invariance. Proposals:
-- session-scoped shared 0.6B BlockStack fixture (tests freeze
-  non-blocks; give mutating tests function-scoped adapters/deepcopies);
-- `-m slow` marker on GPU-model tests so the certify gate can run a
-  fast lane first;
-- replace the torch.jit usage in the online-teacher path/tests before
-  torch removes it.
-
-## Open review findings (multi-agent review 2026-07-10)
-
-Fixed same-day: ALIA left-pad scoring corruption (+ artifacts
-regenerated), quijote rung conflation (rung-level corpora everywhere),
-validator holes H1-H4 (anchor/stride/readout-weight/tail-only-per-class
-+ hidden_loss=zero disguise). Still open, priority order:
-
-1. `find_poem_spans`: no word-boundary anchors (mid-word censor starts);
-   single-punctuation deviation escapes whole-verse censoring
-   (thinking_selective arms).
-2. Minors: poem.py window ranges never reach the last verse (fix in
-   v-next dataset gen; v1 is byte-guarded); config merge is one-level
-   (nested dict override resets siblings); 4 dead PENDING rows in
-   scripts/queue.tsv reference deleted configs; analyze.py reads retired
-   "general" key unguarded; dead CLI flags on evaluate.py (--batch-size
-   etc. silently ignored post-retirement); "gold" → "reference" rename
-   pending in retention_eval.py / surprise_probe.py / cross_report.py /
-   make_figs.py; /tmp eval staging never cleaned (~170 GB/node at full
-   fleet); audit_configs does not scan queue TSVs and its OLD_KEYS blacklist
-   is name-based.
-
 ## Campaign roadmap beyond C2 (sketched 2026-07-04, owner question)
 
 - **C3 — conversations (Stage B):** conversation-to-weights (privileged =
@@ -432,12 +394,13 @@ from training loss.
 The three review docs (`FableReviewBy55xh.md` 2026-07-05,
 `docs/fable_review_2026-07-10.md`, `docs/fable_review_status_2026-07-07.md`)
 were removed 2026-07-11; their full finding records remain in git history.
-The abbreviated "Open review findings" section above kept only the headline
-items — this is the COMPLETE still-open list distilled from the deleted
-2026-07-10 four-agent review plus the 2026-07-05 research gaps, so nothing is
-lost with the docs gone. (`recommendations.md` was NOT a review and is kept —
-it self-declares as the standing experiment-corpus SPEC, all worklist items
-COMPLETE, live work delegated here and to EXPERIMENTS.md.)
+This is the COMPLETE still-open list distilled from the deleted 2026-07-10
+four-agent review plus the 2026-07-05 research gaps (the old abbreviated
+"Open review findings" summary and the moot test-suite-economics section
+were removed 2026-07-11 — tests are gone, fd7138d).
+(`recommendations.md` was NOT a review and is kept — it self-declares as
+the standing experiment-corpus SPEC, all worklist items COMPLETE, live work
+delegated here and to EXPERIMENTS.md.)
 
 Fixed since the reviews (do NOT re-file): `find_poem_spans` word boundaries
 (b213afc); 15 dead `queue.tsv` rows disabled (5c75662); `audit_configs` now
@@ -446,13 +409,18 @@ surprise_probe/cross_report/make_figs (2bb29a7); validator holes H1-H4
 (anchor/stride/readout-weight/tail-only-per-class + `hidden_loss=zero`
 disguise, 723e7af); ALIA left-pad scoring + quijote rung conflation
 (0cdd526 / 800e546); `teacher_ceiling.py` stale-CER retirement + `tasks_eval`
-`with_context` (c2ebf06). By the concurrent eval-integrity agent (uncommitted
-working tree — VERIFY before re-filing): `tasks_eval` now calls `model.eval()`
-and restores training mode; `tasks.py` EOS via `chatfmt.stop_token_id`
-(SentencePiece/Mistral stop fix); cache-dtype (`test_cache_dtype.py`) and
-`--layer-residuals` config adoption appear in progress.
+`with_context` (c2ebf06). VERIFIED LANDED 2026-07-11 (concurrent
+eval-integrity agent, committed): `tasks_eval` calls `model.eval()` and
+restores training mode; `tasks.py` EOS via `chatfmt.stop_token_id`
+(SentencePiece/Mistral stop fix); `cache.hidden_dtype` honored by the
+writer with dtype validation + legacy-cache handling (correct fp16 caches
+kept, historical bad-bf16 hashes invalidated); `--layer-residuals`
+checkpoint config adoption.
 
 STILL OPEN — trainer / compliance:
+- Online-teacher path still uses deprecated torch.jit
+  (`jit.script_method` removal risk on the next torch bump) — replace
+  before any torch upgrade.
 - `audit_configs` `OLD_KEYS` blacklist is name-based, not structural — a
   renamed banned knob would slip through.
 - The "gold"→"reference" lexicon purge is unenforced by any guard, and still
