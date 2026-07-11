@@ -35,17 +35,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-_cpu_threads = os.environ.get("SELFUPDATE_CPU_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "8"))
-_cpu_threads = str(max(1, min(22, int(_cpu_threads))))
-for _key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
-    os.environ[_key] = _cpu_threads
-os.environ["RAYON_NUM_THREADS"] = os.environ.get("RAYON_NUM_THREADS", "1")
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+from selfupdate.utils.env import cap_cpu_threads  # noqa: E402
+
+cap_cpu_threads()
 
 import torch  # noqa: E402
-
-torch.set_num_threads(int(_cpu_threads))
-torch.set_num_interop_threads(1)
 
 import yaml  # noqa: E402
 
