@@ -31,7 +31,26 @@ alternancy), embeddings/head remain frozen, and connected credit remains a
 sanctioned sliding window with `conn_stride: 1`. This is an idea ledger, not an
 implementation commitment.
 
-### Priority A — best scientific bets
+### Implementation order (active work only)
+
+1. **State + `delta_vocab_cos`**, with raw/weighted per-layer telemetry and
+   matched update norm. This is the next clean objective after the running
+   delta-only grid.
+2. **Base-anchored trajectory preservation**, alternating recall and general
+   anchor batches. Highest-priority destruction-tax intervention for 1.7B.
+3. **Attention-output + MLP-output contribution matching**, starting from
+   recombined sublayer outputs rather than attention probabilities.
+4. **Relational token geometry + absolute state**, never relational alone.
+5. **Offline-whitened NMSE**, after a frozen covariance artifact and condition-
+   number report exist.
+6. **Multi-scale delta**, initially `k={1,2,4}` only. It differs from sliding
+   connectivity but is partially redundant, hence below state+delta.
+
+Diagnostics are prioritized separately in `docs/lens_diagnostics_ideas.md`:
+intrusion/commitment depth, write spectrum, the expiring batching-regime
+control, and retrospective epoch prediction precede another trainer loss.
+
+### Candidate catalogue and scientific rationale
 
 1. **Successive block-increment matching (`delta_*`) — IMPLEMENTED 2026-07-11,
    awaiting the controlled loss-grid campaign.** For block `L`, match
@@ -110,7 +129,7 @@ implementation commitment.
    normalized `JᵀJ` geometry, with no final norm or vocabulary unembedding,
    isolating whether the frozen-head metric was responsible for the KL result.
 
-3. **Multi-scale/cumulative trajectory matching**. Match short finite
+3. **Multi-scale/cumulative trajectory matching — ACTIVE PRIORITY 6.** Match short finite
    differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the
    current sanctioned window), or cumulative change `h_L-h_0`, using normalized
    MSE or centered vocabulary-score cosine. This interpolates between local
@@ -122,7 +141,8 @@ implementation commitment.
    share per scale and compare at matched update norm, not merely equal nominal
    weights.
 
-4. **Relational token-geometry distillation**. Instead of requiring every
+4. **Relational token-geometry distillation — ACTIVE PRIORITY 4, only beside
+   an absolute state term.** Instead of requiring every
    hidden coordinate to coincide, match teacher/student relations among aligned
    token rows: pairwise cosine matrix, normalized squared-distance matrix, or
    centered Gram matrix. Example:
@@ -136,7 +156,7 @@ implementation commitment.
    auxiliary beside `nmse` or `vocab_mse`, never alone. Include distance and
    angle variants separately; they encode different invariances.
 
-5. **Attention-route distillation**. Match causal attention distributions for
+5. **Attention-route distillation — DEFERRED CONTROL.** Match causal attention distributions for
    each head and query at the aligned answer positions:
    `mean KL(A_t || A_s)` over valid keys, optionally with a Jensen-Shannon or
    squared-logit alternative. This targets the hypothesized mechanism directly:
@@ -150,7 +170,7 @@ implementation commitment.
    fused/flash kernels may not expose attention probabilities, and hybrid
    attention/GatedDeltaNet models need a separate state-transition target.
 
-6. **Value/output contribution matching**. Attention weights alone do not say
+6. **Value/output contribution matching — ACTIVE PRIORITY 3.** Attention weights alone do not say
    what is written. Match each block's attention contribution after value and
    output projection (`O_L`, before residual addition), or separately match
    per-head value-weighted context vectors. Use normalized MSE/cosine and, where
@@ -162,9 +182,9 @@ implementation commitment.
    output. Keep the MLP contribution as a parallel target/control to determine
    whether retrieval or transformation is the limiting writer.
 
-### Priority B — useful controls or higher-risk candidates
+### Useful controls or higher-risk candidates
 
-7. **Offline-whitened/Mahalanobis hidden matching**. Estimate a regularized
+7. **Offline-whitened/Mahalanobis hidden matching — ACTIVE PRIORITY 5.** Estimate a regularized
    activation covariance `Sigma_L` from a broad, frozen base-model calibration
    corpus, then minimize
    `(h_s-h_t)^T (Sigma_L + lambda I)^(-alpha) (h_s-h_t)` with
@@ -176,7 +196,7 @@ implementation commitment.
    layer. Clip inverse eigenvalues and report condition numbers. A low-rank
    eigensystem plus isotropic remainder avoids an `H x H` device buffer.
 
-8. **Base-anchored trajectory preservation at every layer**. On general anchor
+8. **Base-anchored trajectory preservation at every layer — ACTIVE PRIORITY 2.** On general anchor
    text, match the trained student's states to the frozen base model using
    `nmse` or `vocab_mse` at every layer, while recall items retain the teacher
    trajectory objective. Output anchor-KL only observes final behavior; this
@@ -229,7 +249,7 @@ implementation commitment.
 ### Low-priority bound checks (not expected winners)
 
 13. **Reverse or symmetric teacher-distribution divergence — `lens_js`
-    IMPLEMENTED 2026-07-11; awaiting one bounded-control arm.** Reverse KL
+    IMPLEMENTED 2026-07-11; do not implement again.** Reverse KL
     `KL(student || teacher)` is mode-seeking; Jensen-Shannon and temperature-
     softened symmetric KL are bounded/more balanced. These remain shaped by the
     teacher vocabulary distribution and therefore inherit the measured groove
@@ -249,8 +269,8 @@ epoch 0 and every epoch. Persist raw and weighted loss, gradient norm/share,
 update norm, and per-layer values for every epoch. Continue past 12,000 items
 only while recall is improving without crossing the predeclared destruction
 budget; a falling proxy loss alone is not evidence of useful learning. Priority
-order for the first matrix: `delta_vocab_cos`, state+delta, relational+state,
-attention-output matching, then offline-whitened NMSE. Do not sweep Fisher-like
+order after the running matrix: state+delta, base-anchored trajectory,
+attention-output matching, relational+state, then offline-whitened NMSE. Do not sweep Fisher-like
 or reverse-KL variants until those geometry-based candidates have been tested.
 
 ## Campaign roadmap beyond C2 (sketched 2026-07-04, owner question)

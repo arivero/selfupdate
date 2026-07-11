@@ -8,7 +8,7 @@ does **not** import `selfupdate`, and is a reference/diagnostic scaffold — not
 drop-in trainer for this branch. Read this note before importing any of it as a
 training loss: several of its objects are diagnostics that would become
 **forbidden disguises** if wired into the layerwise objective (see the naming
-contract in `CLAUDE.md`).
+contract in `AGENTS.md`).
 
 ## The one idea to internalize: scores ≠ logits ≠ pseudo-distribution
 
@@ -28,7 +28,7 @@ but never wrote down:
 This directly types our own vocabulary: `lens_kl` is a *lens-induced* divergence,
 and `vocab_mse` is a score-**vector** distance (no softmax). The frozen head is a
 per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
-`CLAUDE.md`. Two hygiene rules from the file we should adopt verbatim:
+`AGENTS.md`. Two hygiene rules from the file we should adopt verbatim:
 
 1. **Bias belongs to state readouts, not to vector contributions.** When you
    project a full hidden state, include the head bias; when you project a *delta*
@@ -37,11 +37,95 @@ per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
 2. **Center vocabulary scores before cosine / L2, softmax before KL/JS.** Never
    feed a raw contribution into a KL.
 
-## Ideas, sorted by whether this branch may TRAIN on them
+## Implementation order (live)
+
+This is the actionable queue. The catalogues below preserve scientific
+reasoning; they are not priority lists.
+
+### P0 — implement now from existing artifacts
+
+1. **Intrusion depth-localization.** Add recall, anchor, and intrusion prompt
+   groups to one teacher↔student layer-grid instrument. Report Jensen–Shannon
+   (JS), centered score cosine, and commitment depth. This directly attacks the
+   open 1.7B cleanliness question using current checkpoints.
+2. **Write-energy and write-direction spectrum.** From cached raw block
+   outputs, report `||C W_U Δh_L||`, teacher/student direction cosine, and
+   cumulative discrepancy. This is the diagnostic counterpart to the live
+   delta-loss experiment and requires no new training.
+3. **Execution-regime comparator.** Compare matched item-B1 and bucketed-B4
+   checkpoints while that accidental control still exists. Report same-depth
+   state, write, and pseudo-distribution drift; label it a numerical-regime
+   study, not a loss result.
+4. **Retrospective epoch predictor.** Test whether early lens observables
+   predict final recall and standard-benchmark damage. This may support a
+   future continuation rule, but cannot override the 12,000-item minimum
+   without a separate owner decision.
+
+### P1 — next trainer objectives
+
+1. **State + increment loss.** Combine an absolute coordinate-compatible
+   state term with `delta_vocab_cos`, logging raw and weighted components per
+   layer. This is the cleanest test of delta matching versus accumulated drift.
+2. **Base-anchored trajectory preservation.** Alternate recall batches with
+   general-anchor batches whose hidden states remain close to epoch 0. This is
+   the most targeted candidate for reducing the 1.7B destruction tax.
+3. **Attention-output + MLP-output contribution matching.** Match recombined
+   writes before the residual add, beginning with one architecture and avoiding
+   per-head caches. Attention-route KL alone is underdetermined.
+4. **Relational + state loss.** Add a small token-geometry term beside an
+   absolute metric. Never run the rotation-invariant relational term alone.
+5. **Offline-whitened NMSE.** Use frozen, shrinkage-regularized per-layer
+   covariance statistics as the mechanistic control for vocabulary geometry.
+
+### P2 — useful after P0/P1 evidence
+
+1. **Multi-scale deltas** for `k={1,2,4}` inside the connected window. Sliding
+   width already gives multi-block *credit*, so this is lower priority; it is
+   still a distinct target because slide-k does not compare `h_L-h_{L-k}`.
+2. **Same-depth dynamic-time-warping drift**, then cross-depth alignment for
+   genuinely unequal-depth teacher/student pairs.
+3. **Token-transport coverage** before cross-tokenizer score divergence.
+4. **Contrastive and cross-layer-flow losses** only after false-negative and
+   coordinate-compatibility controls exist.
+
+### Implemented, running, or rejected
+
+- **DONE / running:** `delta_nmse`, `delta_cosine`, `delta_vocab_cos`;
+  `jacobian_nmse`, `jacobian_vocab_mse`, `jacobian_lens_kl`; local and
+  Anthropic Jacobian fits; slide-1/slide-2 arms.
+- **DONE:** `tuned_lens_kl` loading/training path and a first strict run. New
+  work is evaluation/calibration, not another implementation.
+- **DONE / low-priority control:** bounded symmetric `lens_js`, with slide-1
+  and slide-2 configs. Run at most the declared control pair.
+- **REJECTED for training:** tail-only lens losses, depth-increasing weights,
+  reference-text targets, and the source file's combined tail objective.
+- **SCAFFOLD ONLY:** divergence matrices, local transport JVP, and monotone
+  alignment exist in `docs/lens_diagnostics.py` but are not wired into reports.
+
+### Additional proposals from this review
+
+- **Lens calibration envelope (P0).** Bootstrap prompts and lens fits, then
+  attach confidence intervals to layer rankings. A conclusion that changes
+  under prompt resampling is lens variance, not model mechanism.
+- **Sensitivity-spectrum decomposition (P0).** Use randomized SVD of the
+  frozen metric (`WᵀCW` or `JᵀJ`) and report student error in high-, mid-, and
+  low-sensitivity bands. This separates behaviorally visible error from large
+  but inert hidden drift without inventing a sharp vocabulary nullspace.
+- **Causal residual-write patching (P1 diagnostic).** Patch a teacher block
+  write into the student, and vice versa, at selected layers/positions; measure
+  final recall and damage. Require this intervention before calling an
+  observationally high-energy layer causally responsible.
+- **Loss-gradient agreement (P1 telemetry).** At sparse calibration steps,
+  measure cosine and norm ratio between candidate hidden-loss gradients,
+  teacher-readout gradients, and anchor-preservation gradients. Persistent
+  opposition is a direct destruction-tax signal and supports fixed weighting.
+
+## Status catalogue: whether this branch may TRAIN on them
 
 ### ✅ Legal layerwise-loss candidates (depth-uniform, teacher-sourced)
 
-- **`successive_delta_score_matching_loss` — per-layer *contribution* matching.**
+- **`successive_delta_score_matching_loss` — IMPLEMENTED as per-layer
+  *contribution* matching.**
   Project each residual write `Δh_i = h_{i+1} − h_i` through the frozen head to a
   vocabulary **score vector**, and match teacher↔student with centered cosine or
   L2 — **not** KL. This is a new member of the safe family: it is score-vector
@@ -54,7 +138,8 @@ per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
 - **`cumulative_hidden_delta` variant (`h_i − h_0`)** — same treatment on the
   running residual sum instead of the per-step write. Cheaper credit assignment,
   same legality. Worth an A/B against the successive form.
-- **Tuned-lens-translated per-layer KL** — the file is the reference scaffold for
+- **Tuned-lens-translated per-layer KL — IMPLEMENTED.** The file is the
+  reference scaffold for
   the `tuned_lens_kl` / `tuned_lens_path` knobs already added to `config.py` this
   session (see the pending diff). A *frozen* per-layer tuned-lens translator
   (Belrose et al. 2023) makes intermediate lens distributions trustworthy
@@ -123,27 +208,27 @@ per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
   undefined without a token transport map. Any teacher with a different tokenizer
   (a real risk in the cross-model bridge grids) needs a transport map first.
 
-## Concrete next steps (bankable)
+## Historical next steps (status only; use the live queue above)
 
 1. ~~Prototype `delta_vocab_cos`~~ **DONE 2026-07-11**: `delta_nmse` /
    `delta_cosine` / `delta_vocab_cos` are implemented and running in the 1.7B
    loss-grid campaign; `jacobian_vocab_mse` / `jacobian_lens_kl` (the frozen
    Jacobian-pullback family, next section of issues.md) are implemented and
    queued in the same grid.
-2. Wire `monotone_alignment_path` into the C3 cross-depth bridge grids so
-   teacher→student layer supervision is chosen, not assumed.
-3. Keep `tail_logit_lens_divergence_matrix` and `local_transport_jvp_*` as report
-   probes for the "what to memorize" pages — measurement, not gradient.
-4. Finish the `tuned_lens_kl` path (knobs already in `config.py`): train frozen
-   per-layer tuned-lens translators, then apply `lens_kl` uniformly across depth.
+2. `monotone_alignment_path` remains scaffold-only; same-depth drift is ahead
+   of cross-depth bridge integration.
+3. `tail_logit_lens_divergence_matrix` and `local_transport_jvp_*` remain report
+   probes, never training losses.
+4. ~~Finish `tuned_lens_kl`~~ **DONE**; further work is calibration and matched
+   evaluation.
 
-## Further ideas (2026-07-11 review pass)
+## Evaluated diagnostic proposals (2026-07-11 review pass)
 
 All 🔬 diagnostic-only unless marked; each stays inside the type system above
 (scores centered before cosine/L2, softmax only for KL/JS, bias only on state
 readouts).
 
-- 🔬 **Regime-fork lens comparator (free control, time-limited).** The
+- 🔬 **P0 — Regime-fork lens comparator (free control, time-limited).** The
   2026-07-11 speed flip left the live loss grid with a LABELED fork: same
   losses, same data, `item` B=1 vs `bucketed` B=4 (bf16 kernel-shape
   numerics + bucket order differ). A checkpoint↔checkpoint lens-divergence
@@ -151,15 +236,16 @@ readouts).
   between matched arms would measure how much execution-regime drift
   becomes REPRESENTATIONAL drift at matched budget. This is the
   cheapest-ever measurement of "does bf16 batching noise matter
-  scientifically" — and it expires when the B=1 arms stop being refreshed.
-- 🔬 **Intrusion depth-localization (targets open C3 #9).** Run the lens
+  scientifically"; prioritize it before code/data drift complicates the
+  natural control.
+- 🔬 **P0 — Intrusion depth-localization (targets open C3 #9).** Run the lens
   JS grid on the 200 intrusion prompts, teacher vs trained student, per
   layer: WHERE in depth does intrusion first appear? The 1.7B cleanliness
   question (22-40% intrusion vs 1.5-2.5% at 0.6B) currently has only an
   output-level number; the loss-safety law predicts distribution-shaped
   training writes the groove mid-stack. If 1.7B intrusion has a depth
   signature 0.6B lacks, that is the first mechanistic handle on it.
-- 🔬 **Commitment-depth profile (storage vs readout instrument).** Per
+- 🔬 **P0, fold into intrusion grid — Commitment-depth profile.** Per
   prompt, the depth at which the lens pseudo-distribution's argmax first
   equals the model's final token and stays. Teacher-vs-student on recall
   vs anchor prompts: does layerwise training move commitment EARLIER
@@ -167,19 +253,20 @@ readouts).
   per prompt from machinery we already have; directly instruments the
   last-3% law's claim that storage succeeds while readout lags — students
   that commit early but recite wrong localize the failure to late layers.
-- 🔬 **Write-energy spectrum.** `||W_U C Δh_i||` per layer over aligned
+- 🔬 **P0 — Write-energy spectrum.** `||W_U C Δh_i||` per layer over aligned
   spans (centered, bias-free — a contribution), teacher vs student.
   States can match while the PATH of writes differs; this is the
   measurement companion to the delta-vs-state question the grid is
   testing, computable from the cached hidden states with no new GPU work.
-- 🔬 **Same-depth DTW drift probe.** The doc proposes DTW for cross-depth
+- 🔬 **P2 — Same-depth DTW drift probe.** The doc proposes DTW for cross-depth
   bridges; run it teacher-vs-trained-student at SAME depth too. Deviations
   from the diagonal localize where training re-timed computation (cf.
   "context integration peaked near layer 7") — a re-timing probe the
   layer-residuals instrument cannot see (it compares same-index layers by
   construction).
-- 🔬 **Retrospective early-abort validation (uses data we already have).**
-  46 completed grid arms carry per-epoch telemetry. Test on THAT record:
+- 🔬 **P0 analysis, not an abort gate — Retrospective continuation validation
+  (uses data we already have).**
+  Completed grid arms carry per-epoch telemetry. Test on that record:
   does a depth-uniform lens-JS (or the epoch-3 recall trajectory) predict
   final word_acc well enough to justify an early-abort gate for FUTURE
   sweeps? The never-abort-before-12k-items rule exists because early
@@ -187,14 +274,14 @@ readouts).
   lens-observable separates "plateau, still storing" from "dead arm" —
   validation first, gate later, and only with owner sign-off since it
   touches the 12k law.
-- ✅ **Bias/centering hygiene as a runtime tripwire (engineering,
-  trainer-adjacent).** Rule #1/#2 of the type system are prose; make
+- ✅ **P1 engineering — Bias/centering hygiene as a runtime tripwire
+  (trainer-adjacent).** Rule #1/#2 of the type system are prose; make
   `HiddenLoss` construction assert them: delta-kind losses must project
   bias-free, state-kind readouts must include the head bias when the
   family has one. Identity for Qwen3 (no head bias) — load-bearing the
   day a bias-ful family enters the bridge grids, and exactly the
   silent-knob bug class this branch keeps closing.
-- 🔬 **Token-transport coverage report (bridge-blocking number).** The
+- 🔬 **P2 bridge prerequisite — Token-transport coverage report.** The
   vocab-size guard says cross-tokenizer lens comparison is undefined
   without a transport map; the constructive version: build the map once
   (exact string pairs + subword-decomposition fallback), then REPORT the
