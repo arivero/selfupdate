@@ -37,10 +37,13 @@ per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
 2. **Center vocabulary scores before cosine / L2, softmax before KL/JS.** Never
    feed a raw contribution into a KL.
 
-## Implementation order (live)
+## Layerwise-lens implementation order (live)
 
-This is the actionable queue. The catalogues below preserve scientific
-reasoning; they are not priority lists.
+Scope: every item here is defined by a frozen per-layer measurement map from a
+hidden state or residual contribution into a score space, pseudo-distribution,
+or downstream sensitivity space. General layerwise losses and interventions
+belong in `issues.md`, even when they operate at every layer. The catalogues
+below preserve scientific reasoning; they are not priority lists.
 
 ### P0 — implement now from existing artifacts
 
@@ -52,46 +55,39 @@ reasoning; they are not priority lists.
    outputs, report `||C W_U Δh_L||`, teacher/student direction cosine, and
    cumulative discrepancy. This is the diagnostic counterpart to the live
    delta-loss experiment and requires no new training.
-3. **Execution-regime comparator.** Compare matched item-B1 and bucketed-B4
-   checkpoints while that accidental control still exists. Report same-depth
-   state, write, and pseudo-distribution drift; label it a numerical-regime
+3. **Execution-regime lens comparator.** Compare matched item-B1 and
+   bucketed-B4 checkpoints while that accidental control still exists. Report
+   centered score and pseudo-distribution drift; label it a numerical-regime
    study, not a loss result.
 4. **Retrospective epoch predictor.** Test whether early lens observables
    predict final recall and standard-benchmark damage. This may support a
    future continuation rule, but cannot override the 12,000-item minimum
    without a separate owner decision.
 
-### P1 — next trainer objectives
+### P1 — next layerwise-lens objectives
 
-1. **State + increment loss.** Combine an absolute coordinate-compatible
-   state term with `delta_vocab_cos`, logging raw and weighted components per
-   layer. This is the cleanest test of delta matching versus accumulated drift.
-2. **Base-anchored trajectory preservation.** Alternate recall batches with
-   general-anchor batches whose hidden states remain close to epoch 0. This is
-   the most targeted candidate for reducing the 1.7B destruction tax.
-3. **Attention-output + MLP-output contribution matching.** Match recombined
-   writes before the residual add, beginning with one architecture and avoiding
-   per-head caches. Attention-route KL alone is underdetermined.
-4. **Relational + state loss.** Add a small token-geometry term beside an
-   absolute metric. Never run the rotation-invariant relational term alone.
-5. **Offline-whitened NMSE.** Use frozen, shrinkage-regularized per-layer
-   covariance statistics as the mechanistic control for vocabulary geometry.
+1. **Absolute-score + increment-score loss.** Combine `vocab_mse` with
+   `delta_vocab_cos`, logging raw and weighted components per layer. Both terms
+   are measurements through the frozen vocabulary lens; the absolute term
+   constrains accumulated drift.
+2. **Multi-scale contribution lens.** Compare centered vocabulary scores of
+   `h_L-h_{L-k}` for `k={1,2,4}` within the sanctioned connected window,
+   normalized by teacher score energy.
+3. **Cumulative contribution lens.** Compare centered scores of `h_L-h_0` as
+   the low-cost long-range control against the multi-scale form.
 
 ### P2 — useful after P0/P1 evidence
 
-1. **Multi-scale deltas** for `k={1,2,4}` inside the connected window. Sliding
-   width already gives multi-block *credit*, so this is lower priority; it is
-   still a distinct target because slide-k does not compare `h_L-h_{L-k}`.
-2. **Same-depth dynamic-time-warping drift**, then cross-depth alignment for
+1. **Same-depth dynamic-time-warping drift**, then cross-depth alignment for
    genuinely unequal-depth teacher/student pairs.
-3. **Token-transport coverage** before cross-tokenizer score divergence.
-4. **Contrastive and cross-layer-flow losses** only after false-negative and
-   coordinate-compatibility controls exist.
+2. **Token-transport coverage** before cross-tokenizer score divergence.
+3. **Prompt-local transport JVP integration** after the cheaper frozen-average
+   Jacobian diagnostics establish which layers and positions merit the cost.
 
 ### Implemented, running, or rejected
 
-- **DONE / running:** `delta_nmse`, `delta_cosine`, `delta_vocab_cos`;
-  `jacobian_nmse`, `jacobian_vocab_mse`, `jacobian_lens_kl`; local and
+- **DONE / running:** `delta_vocab_cos`; `jacobian_nmse`,
+  `jacobian_vocab_mse`, `jacobian_lens_kl`; local and
   Anthropic Jacobian fits; slide-1/slide-2 arms.
 - **DONE:** `tuned_lens_kl` loading/training path and a first strict run. New
   work is evaluation/calibration, not another implementation.
@@ -111,14 +107,6 @@ reasoning; they are not priority lists.
   frozen metric (`WᵀCW` or `JᵀJ`) and report student error in high-, mid-, and
   low-sensitivity bands. This separates behaviorally visible error from large
   but inert hidden drift without inventing a sharp vocabulary nullspace.
-- **Causal residual-write patching (P1 diagnostic).** Patch a teacher block
-  write into the student, and vice versa, at selected layers/positions; measure
-  final recall and damage. Require this intervention before calling an
-  observationally high-energy layer causally responsible.
-- **Loss-gradient agreement (P1 telemetry).** At sparse calibration steps,
-  measure cosine and norm ratio between candidate hidden-loss gradients,
-  teacher-readout gradients, and anchor-preservation gradients. Persistent
-  opposition is a direct destruction-tax signal and supports fixed weighting.
 
 ## Status catalogue: whether this branch may TRAIN on them
 
@@ -210,8 +198,7 @@ reasoning; they are not priority lists.
 
 ## Historical next steps (status only; use the live queue above)
 
-1. ~~Prototype `delta_vocab_cos`~~ **DONE 2026-07-11**: `delta_nmse` /
-   `delta_cosine` / `delta_vocab_cos` are implemented and running in the 1.7B
+1. ~~Prototype `delta_vocab_cos`~~ **DONE 2026-07-11** and running in the 1.7B
    loss-grid campaign; `jacobian_vocab_mse` / `jacobian_lens_kl` (the frozen
    Jacobian-pullback family, next section of issues.md) are implemented and
    queued in the same grid.

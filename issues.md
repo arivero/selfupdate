@@ -50,6 +50,19 @@ Diagnostics are prioritized separately in `docs/lens_diagnostics_ideas.md`:
 intrusion/commitment depth, write spectrum, the expiring batching-regime
 control, and retrospective epoch prediction precede another trainer loss.
 
+General mechanism/telemetry proposals kept here rather than in the lens
+document:
+
+- **Causal residual-write patching.** Patch a teacher block write into the
+  student, and vice versa, at selected layers/positions; measure final recall
+  and standard-benchmark damage. Observational write energy can nominate
+  layers, but intervention is required before claiming causal responsibility.
+- **Loss-gradient agreement.** At sparse calibration steps, measure cosine and
+  norm ratio among the candidate hidden-loss, teacher-readout, and anchor-
+  preservation gradients. Persistent opposition directly measures the
+  destruction tax and can justify fixed global loss weights without learning a
+  depth-biased weighting scheme.
+
 ### Candidate catalogue and scientific rationale
 
 1. **Successive block-increment matching (`delta_*`) — IMPLEMENTED 2026-07-11,
