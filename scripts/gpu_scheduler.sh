@@ -75,6 +75,22 @@ budget_free_mb() {
 
 lock_name() { echo "$1" | sed 's|[/ ]|_|g'; }
 
+dependency_running() {
+    # A path can appear before its producing job has finished publishing it
+    # (notably a checkpoint directory while save_pretrained is still writing
+    # shards/tokenizer files).  The producing job's live lock is the stronger
+    # readiness signal: wait for both the artifact and producer completion.
+    local after="$1" lk pid
+    lk="$SCHED/$(lock_name "$after").lock"
+    [ -e "$lk" ] || return 1
+    read -r pid _ < "$lk" || return 1
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$lk"
+    return 1
+}
+
 running_on() {  # count live jobs assigned to device $1 (devset may be "0,1")
     local n=0 d pid dev
     for d in "$SCHED"/*.lock; do
@@ -121,7 +137,10 @@ while :; do
                 [ -z "$done" ] && continue
                 case "$done" in \#*) continue;; esac
                 [ -e "$done" ] && continue
-                [ "$after" != "-" ] && [ ! -e "$after" ] && continue
+                if [ "$after" != "-" ]; then
+                    [ -e "$after" ] || continue
+                    dependency_running "$after" && continue
+                fi
                 [ "$need" -gt "$fm" ] && continue
                 ngpu="${ngpu:-1}"
                 devset="$dev"
