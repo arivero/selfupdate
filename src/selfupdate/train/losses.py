@@ -19,9 +19,10 @@ Three families of hidden-match kinds:
 - increment (``delta_nmse``, ``delta_cosine``, ``delta_vocab_cos``): compare
   the raw residual update made by an interior block rather than its inherited
   absolute state. Cache boundaries use the paired absolute-state metric.
-- Jacobian-pullback (``jacobian_vocab_mse``, ``jacobian_lens_kl``): first
-  transport each layer through a frozen, corpus-fitted downstream Jacobian,
-  then compare the transported states with the named frozen-head metric.
+- Jacobian-pullback (``jacobian_nmse``, ``jacobian_vocab_mse``,
+  ``jacobian_lens_kl``): first transport each layer through a frozen,
+  corpus-fitted downstream Jacobian. ``jacobian_nmse`` is the pure induced
+  ``JᵀJ`` metric; the other two then use the named frozen-head metric.
 
 Whitened/CKA-style losses are deliberately absent: items are batch-1
 ``[A, H]`` slices with A often below H, so per-batch covariances are
@@ -43,8 +44,9 @@ VOCAB_KINDS = ("vocab_mse", "lens_kl", "tuned_lens_kl", "vocab_fisher")
 # (2 <= L < n); L=1 and h_n use the paired state fallback below because the
 # disk cache has no h0 and h_n is post-final-norm.
 DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos")
-JACOBIAN_KINDS = ("jacobian_vocab_mse", "jacobian_lens_kl")
+JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_lens_kl")
 JACOBIAN_STATE_FALLBACKS = {
+    "jacobian_nmse": "nmse",
     "jacobian_vocab_mse": "vocab_mse",
     "jacobian_lens_kl": "lens_kl",
 }
@@ -108,8 +110,10 @@ class HiddenLoss:
                  tuned_lens_path: str = "", jacobian_lens_path: str = ""):
         if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
-        if kind in VOCAB_KINDS + JACOBIAN_KINDS and (final_norm is None or lm_head is None):
+        if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
+        if kind == "jacobian_nmse" and lm_head is None:
+            raise ValueError("hidden loss 'jacobian_nmse' needs lm_head for width validation")
         if kind == "delta_vocab_cos" and (final_norm is None or lm_head is None):
             raise ValueError("hidden loss 'delta_vocab_cos' needs final_norm and lm_head")
         if kind == "tuned_lens_kl" and not tuned_lens_path:

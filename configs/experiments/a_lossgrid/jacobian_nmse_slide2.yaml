@@ -1,0 +1,10 @@
+run_name: a_lossgrid_1p7b_combined_slide2_jacobian_nmse
+train:
+  # Pure downstream-transport metric: ||J(h_s-h_t)||² / ||J h_t||².
+  # No frozen final norm or unembedding participates in the loss.
+  hidden_loss: jacobian_nmse
+  jacobian_lens_path: ../jacobian-lens/out/lenses/Qwen3-1.7B_jacobian_lens_n466.pt
+  conn_window: 2
+  readout_window_blocks: 2
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

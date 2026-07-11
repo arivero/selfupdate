@@ -429,7 +429,7 @@ def _validate_knob_schedule(cfg) -> None:
     if cfg.eval.standard_damage_every_epochs < 0:
         raise ValueError("eval.standard_damage_every_epochs must be >= 0")
     jacobian_kind = cfg.train.hidden_loss in (
-        "jacobian_vocab_mse", "jacobian_lens_kl",
+        "jacobian_nmse", "jacobian_vocab_mse", "jacobian_lens_kl",
     )
     if jacobian_kind:
         if not cfg.train.jacobian_lens_path:

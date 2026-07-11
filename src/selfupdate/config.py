@@ -124,8 +124,9 @@ class TrainConfig:
     max_steps: int = 0  # 0 = no cap
     # nmse | l2mse | cosine | huber (absolute-state geometric) | vocab_mse
     # | lens_kl | tuned_lens_kl | vocab_fisher (absolute-state frozen-vocabulary)
+    # | jacobian_nmse (pure frozen JᵀJ transport metric)
     # | jacobian_vocab_mse | jacobian_lens_kl (frozen downstream transport,
-    # then the corresponding vocabulary metric; needs jacobian_lens_path)
+    # then the corresponding vocabulary metric; all need jacobian_lens_path)
     # | delta_nmse | delta_cosine | delta_vocab_cos (successive raw block
     # increments; L=1/h_n use the paired state fallback because the cache has
     # no h0 and h_n is post-final-norm).  See losses.py / docs/hidden_loss.md.

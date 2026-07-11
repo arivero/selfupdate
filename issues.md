@@ -94,8 +94,8 @@ implementation commitment.
    still receive a post-hoc separate-lens comparison if we claim transport
    preservation.
 
-   Implementation: `HiddenLoss` now provides `jacobian_vocab_mse` and
-   `jacobian_lens_kl`, both configured by the explicit
+   Implementation: `HiddenLoss` now provides `jacobian_nmse`,
+   `jacobian_vocab_mse`, and `jacobian_lens_kl`, all configured by the explicit
    `train.jacobian_lens_path`. Loading validates the artifact schema, hidden
    width, finite square matrices, and exact declared source-layer coverage.
    Matrices remain frozen on CPU and are copied lazily in the active hidden
@@ -105,7 +105,10 @@ implementation commitment.
    back to `vocab_mse` or `lens_kl` respectively. The paired slide-1/slide-2
    arms use the same Qwen3-1.7B, 466-prompt artifact and are prioritized ahead
    of the remaining delta-loss queue. Their normal epoch-zero/every-epoch
-   three-corpus recall and standard-benchmark damage telemetry applies.
+   three-corpus recall and standard-benchmark damage telemetry applies. The
+   pure `jacobian_nmse` ablation is queued afterward: it measures exactly the
+   normalized `JᵀJ` geometry, with no final norm or vocabulary unembedding,
+   isolating whether the frozen-head metric was responsible for the KL result.
 
 3. **Multi-scale/cumulative trajectory matching**. Match short finite
    differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the
