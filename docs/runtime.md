@@ -76,6 +76,16 @@ overlap (item i+1 on partition 0 while item i finishes partition 1) would
 be EXACT — the honest PP throughput move if it is ever needed; not
 implemented.
 
+## Checkpoint publication
+
+`runs/<name>/checkpoint` is a scheduler dependency, hence a public completion
+signal rather than a scratch directory. `TrainingRuntime.save_checkpoint`
+writes the model and tokenizer to a sibling `.checkpoint.incomplete-*`
+directory and atomically renames it to `checkpoint` only after both save
+successfully. A failed save removes its staging directory and exposes no
+checkpoint. This prevents dependent recall or standard-damage evaluation from
+loading a directory while it is still being populated on Lustre.
+
 ## Certification vs benchmarking
 
 - `scripts/train_certify.py` — "is this the same experiment?": runs the

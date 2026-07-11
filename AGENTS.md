@@ -297,6 +297,14 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Operational Conventions
 
+- **Agent-owned supervision (owner, 2026-07-11):** the agent—not a watcher,
+  scheduler, or status script—owns a live campaign. While campaign work is
+  running, personally review fresh worker/scheduler logs, liveness, checkpoint
+  and evaluation completion, and scientific telemetry at least every 30
+  minutes. Monitoring scripts only prepare compact evidence for that review.
+  Investigate every new error and promptly patch confirmed code or queue
+  defects; never treat a healthy-looking GPU or a log line as a substitute for
+  active supervision.
 - Never abort a training run before it has seen at least 12,000 training items.
   Early noisy plateaus have recovered in the layerwise tail runs, and matched
   item budget is needed for comparisons.

@@ -11,6 +11,38 @@ cd "$(dirname "$0")/.." || exit 1
 OUT="${OUT:-runs/lossgrid_health.log}"
 INTERVAL="${INTERVAL:-1800}"
 STALE_AFTER="${STALE_AFTER:-2100}"  # 35 min: longer than one expected epoch.
+STATE_DIR="${STATE_DIR:-runs/.lossgrid_health_state}"
+
+# Print only error-shaped lines appended since the previous sample.  The agent
+# reviews these candidates; this script does not try to decide whether an
+# exception is transient, a scheduler race, or a scientific-integrity fault.
+error_deltas() {
+    local log key cursor size prior delta matches
+    mkdir -p "$STATE_DIR"
+    for log in runs/pipeline_sched_a_lossgrid_*.log runs/a_lossgrid_joblogs/*.log; do
+        [ -f "$log" ] || continue
+        key="$(printf '%s' "$log" | tr '/.' '__')"
+        cursor="$STATE_DIR/$key.offset"
+        size="$(stat -c %s "$log")"
+        if [ ! -f "$cursor" ]; then
+            printf '%s\n' "$size" > "$cursor"
+            continue
+        fi
+        prior="$(cat "$cursor")"
+        case "$prior" in *[!0-9]*|'') prior=0;; esac
+        [ "$size" -lt "$prior" ] && prior=0
+        if [ "$size" -gt "$prior" ]; then
+            delta="$(tail -c "+$((prior + 1))" "$log")"
+            matches="$(printf '%s\n' "$delta" | grep -E -i \
+                'traceback|exception|error:|cuda.*out of memory|segmentation|fatal|sched: fail' || true)"
+            if [ -n "$matches" ]; then
+                printf 'new error candidates: %s\n' "$log"
+                printf '%s\n' "$matches" | tail -n 40
+            fi
+        fi
+        printf '%s\n' "$size" > "$cursor"
+    done
+}
 
 snapshot() {
     local now mtime age state line epoch items loss checkpoint evals run
@@ -42,6 +74,7 @@ snapshot() {
             "${run#runs/}" "$state" "$age" "${epoch:--}" "${items:--}" \
             "${loss:--}" "$checkpoint" "$evals"
     done
+    error_deltas
 }
 
 while true; do

@@ -22,6 +22,8 @@ is part of the experiment, not of the execution policy.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -420,10 +422,28 @@ class TrainingRuntime:
         }
 
     def save_checkpoint(self, run_dir: Path) -> None:
+        """Publish a complete checkpoint atomically to queue consumers.
+
+        The scheduler treats ``run_dir/checkpoint`` as its completion signal.
+        Saving directly there lets a dependent evaluator see the directory
+        after the first file but before the tokenizer/model is complete.  Write
+        a sibling staging directory, then rename it on the same filesystem so
+        the signal means a loadable checkpoint, not merely an in-progress save.
+        """
         self.check_vocab_frozen()
-        if self.peft_model is not None:
-            self.peft_model.save_pretrained(run_dir / "checkpoint")
-        else:
-            self.model.to(torch.bfloat16)
-            self.model.save_pretrained(run_dir / "checkpoint")
-        self.tokenizer.save_pretrained(run_dir / "checkpoint")
+        target = run_dir / "checkpoint"
+        if target.exists():
+            raise FileExistsError(
+                f"refusing to replace existing checkpoint publication: {target}")
+        staging = Path(tempfile.mkdtemp(prefix=".checkpoint.incomplete-", dir=run_dir))
+        try:
+            if self.peft_model is not None:
+                self.peft_model.save_pretrained(staging)
+            else:
+                self.model.to(torch.bfloat16)
+                self.model.save_pretrained(staging)
+            self.tokenizer.save_pretrained(staging)
+            staging.rename(target)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
