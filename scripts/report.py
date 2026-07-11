@@ -706,6 +706,11 @@ def main() -> None:
                        _markdown_text(RUNS / "lossgrid_report.md"), fontsize=5)
             _image_page(pdf, "July 11 a_/lw_ checkpoint recall",
                         RUNS / "tasks_report.png")
+            _image_grid_page(
+                pdf, "July 11 a_ loss by layer and epoch",
+                sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses_heatmap.png")),
+                per_page=6,
+            )
             print(f"wrote {args.out}")
             return
         coverage_matrix_page(pdf)
