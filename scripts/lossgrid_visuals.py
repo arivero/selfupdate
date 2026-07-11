@@ -49,6 +49,35 @@ def main():
     heatmap(loss_rows, "Final per-layer training loss", "lossgrid_final_layer_loss.png")
     heatmap(delta_rows, "Per-layer parameter modification", "lossgrid_layer_modification.png")
 
+    # Compact campaign-wide temporal appendix. Each panel preserves the
+    # requested axes (x=epoch, y=loss) and one trace per layer without making
+    # the PDF builder decode dozens of large PNGs simultaneously.
+    temporal = []
+    for run in sorted(RUNS.glob("a_lossgrid_*")):
+        lp = run / "eval/layer_losses.csv"
+        if lp.exists():
+            temporal.append((run.name, pd.read_csv(lp)))
+    if temporal:
+        cols = 3
+        rows = (len(temporal) + cols - 1) // cols
+        fig, axes = plt.subplots(rows, cols, figsize=(12, max(4, 2.4 * rows)),
+                                 squeeze=False)
+        for ax, (name, df) in zip(axes.ravel(), temporal):
+            for _, group in df.groupby("layer"):
+                ax.plot(group.epoch, group.loss, alpha=.45, lw=.6)
+            ax.set_yscale("log")
+            ax.set_title(name.replace("a_lossgrid_1p7b_combined_", ""), fontsize=7)
+            ax.set_xlabel("epoch", fontsize=7)
+            ax.set_ylabel("loss", fontsize=7)
+            ax.tick_params(labelsize=6)
+            ax.grid(alpha=.15)
+        for ax in axes.ravel()[len(temporal):]:
+            ax.axis("off")
+        fig.suptitle("Per-layer temporal loss curves (one trace per layer)")
+        fig.tight_layout()
+        fig.savefig(RUNS / "lossgrid_temporal_layer_losses.png", dpi=180)
+        plt.close(fig)
+
     score = RUNS / "lossgrid_report.csv"
     if score.exists():
         df = pd.read_csv(score)

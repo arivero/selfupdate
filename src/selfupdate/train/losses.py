@@ -38,7 +38,7 @@ import torch
 import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
-                   "clipped_nmse", "contrastive", "zero")
+                   "clipped_nmse", "contrastive", "relational_state", "zero")
 VOCAB_KINDS = ("vocab_mse", "lens_kl", "lens_js", "tuned_lens_kl", "vocab_fisher")
 # Match what a block *adds* rather than repeatedly charging it for inherited
 # state error.  The trainer applies these only to interior raw block outputs
@@ -46,11 +46,14 @@ VOCAB_KINDS = ("vocab_mse", "lens_kl", "lens_js", "tuned_lens_kl", "vocab_fisher
 # disk cache has no h0 and h_n is post-final-norm.
 DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos", "flow_nmse",
                "state_delta_nmse", "state_delta_charbonnier")
-SPECIAL_KINDS = ("embedding_mse", "mahalanobis", "multi_delta_nmse")
-JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_lens_kl")
+SPECIAL_KINDS = ("embedding_mse", "mahalanobis", "multi_delta_nmse",
+                 "component_nmse")
+JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_cosine",
+                  "jacobian_lens_kl")
 JACOBIAN_STATE_FALLBACKS = {
     "jacobian_nmse": "nmse",
     "jacobian_vocab_mse": "vocab_mse",
+    "jacobian_cosine": "cosine",
     "jacobian_lens_kl": "lens_kl",
 }
 DELTA_STATE_FALLBACKS = {
@@ -111,6 +114,16 @@ def hidden_match(
             return (student_h - teacher_h).pow(2).mean() * 0.0
         return F.cross_entropy((s @ t.T) / 0.1,
                                torch.arange(s.shape[0], device=s.device))
+    if kind == "relational_state":
+        # Rotation-invariant token geometry is deliberately paired with an
+        # absolute coordinate term: the next frozen block/head requires the
+        # teacher basis, so a Gram-only objective is not a legal standalone
+        # loss on this branch.
+        absolute = hidden_match(student_h, teacher_h, "nmse")
+        s = F.normalize(student_h, dim=-1)
+        t = F.normalize(teacher_h, dim=-1)
+        relational = F.mse_loss(s @ s.T, t @ t.T)
+        return 0.5 * (absolute + relational)
     raise ValueError(f"unknown hidden loss kind {kind!r}")
 
 
@@ -163,6 +176,7 @@ class HiddenLoss:
         self.translators = None
         self._jacobians_cpu: dict[int, torch.Tensor] = {}
         self._jacobian_cache: dict[tuple[int, torch.device, torch.dtype], torch.Tensor] = {}
+        self._jacobian_trace_cache: dict[tuple[int, str, torch.device], torch.Tensor] = {}
         self.jacobian_metadata: dict[str, object] = {}
         if kind == "tuned_lens_kl":
             from .tuned_lens import load_translators
@@ -281,6 +295,10 @@ class HiddenLoss:
             J = self._jacobian(source, student_h)
             kind = JACOBIAN_STATE_FALLBACKS[kind]
             if J is not None:
+                if self.kind in ("jacobian_nmse", "jacobian_vocab_mse"):
+                    return self._jacobian_mse(
+                        student_h, teacher_h, J, source,
+                        vocab=self.kind == "jacobian_vocab_mse")
                 student_h = student_h @ J.T
                 with torch.no_grad():
                     teacher_h = teacher_h.to(J.dtype) @ J.T
@@ -378,6 +396,34 @@ class HiddenLoss:
             F.log_softmax(t_logits.float(), dim=-1),
             log_target=True, reduction="batchmean",
         )
+
+    def _jacobian_mse(self, student_h, teacher_h, J, source: int, *, vocab: bool):
+        """Scale-calibrated quadratic pullback on ``J (h_s - h_t)``.
+
+        A Jacobian transports a perturbation, not an absolute state.  Applying
+        final_norm to ``J h`` invents a missing affine intercept and made the
+        sole non-Jacobian final layer dominate the old MSE arms.  The trace
+        denominator is the expected transported energy for an isotropic error
+        with the teacher state's per-coordinate variance; it removes arbitrary
+        layer-to-layer operator scale without erasing J's directional metric.
+        """
+        with torch.autocast(student_h.device.type, enabled=False):
+            d = student_h.float() - teacher_h.to(student_h.device).float()
+            Jf = J.float()
+            z = d @ Jf.T
+            teacher_energy = teacher_h.float().pow(2).mean().to(z.device).clamp_min(1e-8)
+            if vocab:
+                M = self._gram_matrix().to(z.device)
+                numerator = (z @ M * z).sum(-1).mean()
+                key = (source, "vocab", z.device)
+                if key not in self._jacobian_trace_cache:
+                    self._jacobian_trace_cache[key] = (M @ Jf * Jf).sum().detach()
+            else:
+                numerator = z.pow(2).sum(-1).mean()
+                key = (source, "plain", z.device)
+                if key not in self._jacobian_trace_cache:
+                    self._jacobian_trace_cache[key] = Jf.pow(2).sum().detach()
+            return numerator / (teacher_energy * self._jacobian_trace_cache[key].clamp_min(1e-8))
 
     def delta(self, student_h: torch.Tensor, student_prev: torch.Tensor,
               teacher_h: torch.Tensor, teacher_prev: torch.Tensor) -> torch.Tensor:

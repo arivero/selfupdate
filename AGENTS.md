@@ -300,7 +300,9 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - **Scientific report completeness (owner, 2026-07-11):** a report is not
   complete if it contains only endpoint recall/damage tables. Before issuing
   or committing `runs/report.pdf`, regenerate and include, for every in-scope
-  completed run: (1) per-layer loss by epoch plus a cross-run layer summary;
+  completed run: (1) per-layer loss by epoch as BOTH a heatmap and a temporal
+  line plot (horizontal axis = epoch, vertical axis = loss, one trace per
+  layer), plus a cross-run layer summary;
   (2) per-layer parameter modification versus epoch 0/base; (3) recall by
   corpus including epoch 0; (4) standard-benchmark damage and the recall-vs-
   damage frontier; and (5) an explicit coverage/provenance page naming missing

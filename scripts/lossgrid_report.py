@@ -176,13 +176,13 @@ def write(rows: list[dict]) -> None:
         "standard_macro", "standard_delta", "standard_worst_delta",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fields)
+        writer = csv.DictWriter(f, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
     lines = [
         "# 1.7B Loss-Grid Live Report", "",
-        f"Generated {datetime.now(timezone.utc).isoformat(timespec='seconds')}. ",
+        f"Generated {datetime.now(timezone.utc).isoformat(timespec='seconds')}.",
         "Recall columns are deliberately corpus-separated. A `fast epoch probe` "
         "uses the fixed in-training subset; `full checkpoint eval` is the "
         "post-training evaluation. Standard deltas are paired within their "

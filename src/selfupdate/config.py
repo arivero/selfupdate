@@ -180,6 +180,9 @@ class TrainConfig:
     # anchor-KL: KL(teacher/base || student) on anchor fragments through the
     # top readout window. Needs an online teacher for base logits.
     anchor_kl_weight: float = 0.0
+    # Depth-uniform, block-local preservation of frozen-base hidden states on
+    # generic anchor fragments (separate from output anchor KL).
+    anchor_hidden_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"
     # sequential schedule
     plateau_patience: int = 3

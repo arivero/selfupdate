@@ -78,7 +78,10 @@ def _image_grid_page(pdf, title, pngs, per_page=6):
         for ax in axes[len(chunk):]:
             ax.axis("off")
         fig.tight_layout(rect=(0, 0, 1, 0.96))
-        pdf.savefig(fig, dpi=300)
+        # Source PNGs are already 220-240 dpi. Re-rasterising six of them at
+        # 300 dpi makes the campaign appendix needlessly large and has killed
+        # long report builds; 150 dpi remains legible on an A4 grid.
+        pdf.savefig(fig, dpi=150)
         plt.close(fig)
 
 
@@ -711,6 +714,8 @@ def main() -> None:
                 sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses_heatmap.png")),
                 per_page=6,
             )
+            _image_page(pdf, "Temporal layer-loss curves (x=epoch, y=loss)",
+                        RUNS / "lossgrid_temporal_layer_losses.png")
             _image_page(pdf, "Cross-run final layer-loss distribution",
                         RUNS / "lossgrid_final_layer_loss.png")
             _image_page(pdf, "Cross-run layer modification",

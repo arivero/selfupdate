@@ -1,6 +1,6 @@
 # 1.7B Loss-Grid Live Report
 
-Generated 2026-07-11T12:50:41+00:00. 
+Generated 2026-07-11T13:13:12+00:00.
 Recall columns are deliberately corpus-separated. A `fast epoch probe` uses the fixed in-training subset; `full checkpoint eval` is the post-training evaluation. Standard deltas are paired within their stated source: fast epoch-0 subset or full pinned Qwen3-1.7B reference on ARC-Easy, ARC-Challenge, and HellaSwag.
 
 | run | loss | slide | status | items | epoch | source | epoch-0 M/Q1/Q4 | final M/Q1/Q4 | e0 mean | final mean | e0 standard | standard Δ | worst Δ |
@@ -24,14 +24,16 @@ Recall columns are deliberately corpus-separated. A `fast epoch probe` uses the 
 | a_lossgrid_1p7b_combined_slide2_delta_cosine | delta_cosine | 2 | complete | 12312 | 24 | full checkpoint eval | 0.106/0.157/0.205 | 0.141/0.166/0.141 | 0.156 | 0.150 | 0.562 | -0.090 | -0.280 |
 | a_lossgrid_1p7b_combined_slide1_delta_cosine | delta_cosine | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.154/0.152/0.143 | 0.132 | 0.150 | 0.562 | -0.013 | -0.020 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_nmse | jacobian_nmse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.149/0.151/0.148 | 0.132 | 0.149 | 0.562 | -0.013 | -0.040 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse_anthropic | jacobian_nmse | 2 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.153/0.144/0.138 | 0.132 | 0.145 | 0.562 | 0.010 | -0.020 |
 | a_lossgrid_1p7b_combined_slide1_delta_nmse | delta_nmse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.143/0.137/0.153 | 0.132 | 0.145 | 0.562 | -0.007 | -0.020 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_nmse_anthropic | jacobian_nmse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.133/0.156/0.128 | 0.132 | 0.139 | 0.562 | -0.010 | -0.050 |
 | a_lossgrid_1p7b_combined_slide1_delta_vocab_cos | delta_vocab_cos | 1 | complete | 12312 | 24 | full checkpoint eval | 0.106/0.157/0.205 | 0.156/0.136/0.116 | 0.156 | 0.136 | 0.562 | -0.020 | -0.050 |
 | a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse | jacobian_vocab_mse | 2 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.136/0.154/0.116 | 0.132 | 0.135 | 0.562 | 0.010 | -0.030 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse | jacobian_nmse | 2 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.139/0.146/0.121 | 0.132 | 0.135 | 0.562 | 0.007 | -0.020 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse | jacobian_vocab_mse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.132/0.135/0.129 | 0.132 | 0.132 | 0.562 | -0.027 | -0.070 |
 | a_lossgrid_1p7b_combined_slide1_l2mse | l2mse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/0.166 | 0.113/0.141/0.132 | 0.132 | 0.129 | 0.562 | -0.007 | -0.030 |
 | a_lossgrid_1p7b_combined_slide1_vocab | vocab_mse | 1 | complete | 12312 | 24 | full checkpoint eval | 0.081/0.150/— | 0.125/0.129/0.127 | 0.115 | 0.127 | 0.562 | 0.000 | -0.040 |
-| a_lossgrid_1p7b_combined_slide2_jacobian_nmse_anthropic | jacobian_nmse | 2 | training | 10288 | 20 | fast epoch probe | 0.081/0.150/0.166 | 0.086/0.147/0.135 | 0.132 | 0.123 | 0.562 | -0.021 | -0.062 |
-| a_lossgrid_1p7b_combined_slide2_jacobian_nmse | jacobian_nmse | 2 | training | 10472 | 20 | fast epoch probe | 0.081/0.150/0.166 | 0.086/0.128/0.127 | 0.132 | 0.114 | 0.562 | -0.021 | -0.062 |
-| a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse_anthropic | jacobian_vocab_mse | 2 | training | 872 | 1 | fast epoch probe | 0.081/0.150/0.166 | 0.079/0.113/0.147 | 0.132 | 0.113 | 0.562 | -0.062 | -0.125 |
-| a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse_anthropic | jacobian_vocab_mse | 1 | training | 1200 | 2 | fast epoch probe | 0.081/0.150/0.166 | 0.075/0.090/0.151 | 0.132 | 0.105 | 0.562 | -0.062 | -0.125 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_lens_kl_anthropic | jacobian_lens_kl | 2 | training | 464 | — | fast epoch probe | 0.081/0.150/0.166 | 0.081/0.150/0.166 | 0.132 | 0.132 | 0.562 | 0.000 | 0.000 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl_anthropic | jacobian_lens_kl | 1 | training | 584 | 1 | fast epoch probe | 0.081/0.150/0.166 | 0.062/0.116/0.135 | 0.132 | 0.104 | 0.562 | -0.042 | -0.125 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse_anthropic | jacobian_vocab_mse | 2 | training | 4424 | 8 | fast epoch probe | 0.081/0.150/0.166 | 0.072/0.107/0.132 | 0.132 | 0.104 | 0.562 | 0.021 | -0.062 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse_anthropic | jacobian_vocab_mse | 1 | training | 6280 | 12 | fast epoch probe | 0.081/0.150/0.166 | 0.072/0.114/0.112 | 0.132 | 0.099 | 0.562 | 0.021 | -0.062 |

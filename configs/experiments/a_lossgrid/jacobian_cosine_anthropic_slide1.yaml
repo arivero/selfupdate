@@ -1,0 +1,6 @@
+run_name: a_lossgrid_1p7b_combined_slide1_jacobian_cosine_anthropic
+train:
+  hidden_loss: jacobian_cosine
+  jacobian_lens_path: ../jacobian-lens/out/reference_lenses/qwen3-1.7b__jlens__Salesforce-wikitext__Qwen3-1.7B_jacobian_lens.pt
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

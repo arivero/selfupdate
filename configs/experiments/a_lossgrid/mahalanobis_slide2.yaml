@@ -1,0 +1,10 @@
+run_name: a_lossgrid_1p7b_combined_slide2_mahalanobis
+train:
+  hidden_loss: mahalanobis
+  mahalanobis_path: runs/calibration/qwen3_1p7b_mahalanobis.pt
+  conn_window: 2
+  conn_stride: 1
+  readout_window_blocks: 2
+  readout_source: teacher_kl
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

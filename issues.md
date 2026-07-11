@@ -31,20 +31,15 @@ alternancy), embeddings/head remain frozen, and connected credit remains a
 sanctioned sliding window with `conn_stride: 1`. This is an idea ledger, not an
 implementation commitment.
 
-### Implementation order (active work only)
+### Implementation status (active work only)
 
-1. **State + `delta_vocab_cos`**, with raw/weighted per-layer telemetry and
-   matched update norm. This is the next clean objective after the running
-   delta-only grid.
-2. **Base-anchored trajectory preservation**, alternating recall and general
-   anchor batches. Highest-priority destruction-tax intervention for 1.7B.
-3. **Attention-output + MLP-output contribution matching**, starting from
-   recombined sublayer outputs rather than attention probabilities.
-4. **Relational token geometry + absolute state**, never relational alone.
-5. **Offline-whitened NMSE**, after a frozen covariance artifact and condition-
-   number report exist.
-6. **Multi-scale delta**, initially `k={1,2,4}` only. It differs from sliding
-   connectivity but is partially redundant, hence below state+delta.
+The state+delta, base-anchor trajectory, recombined attention/MLP contribution,
+relational+absolute, offline Mahalanobis calibration/objective, and raw
+multi-scale delta implementations are now in tree and queued (2026-07-11).
+The only catalogue item intentionally not promoted to a trainer objective is
+attention-probability/route distillation: it remains the explicit deferred
+control below because fused and hybrid architectures do not expose one common,
+honest target.
 
 Diagnostics are prioritized separately in `docs/lens_diagnostics_ideas.md`:
 intrusion/commitment depth, write spectrum, the expiring batching-regime
@@ -126,6 +121,22 @@ document:
    still receive a post-hoc separate-lens comparison if we claim transport
    preservation.
 
+   **MSE post-mortem / discarded objective (2026-07-11):** the first MSE implementation incorrectly
+   treated `J h` as an absolute transported state, applied nonlinear final
+   normalization to it, and normalized by `J h_teacher`. Epoch-0 layer losses
+   exposed a ~300x L1-to-L28 scale imbalance, with L28 the sole ordinary
+   fallback because fitted source coverage ends at 26. The corrected
+   `jacobian_nmse` / `jacobian_vocab_mse` objectives operate on the transported
+   perturbation `J(h_s-h_t)` and divide by the pullback operator's trace energy
+   times teacher coordinate energy. This preserves the directional `JᵀJ`
+   metric while making its expected scale depth-comparable. A direct numerical
+   check confirms `WᵀW` matches explicit vocabulary-logit squared error in
+   both value and gradient, so matrix orientation is not the defect. Even so,
+   the owner discarded Jacobian MSE as a campaign objective: the KL arm remains
+   unchanged and four Jacobian-cosine arms (two fits x slide 1/2) are queued as
+   the verification. Old MSE checkpoints are invalidated and must not be used
+   as corrected-loss evidence.
+
    Implementation: `HiddenLoss` now provides `jacobian_nmse`,
    `jacobian_vocab_mse`, and `jacobian_lens_kl`, all configured by the explicit
    `train.jacobian_lens_path`. Loading validates the artifact schema, hidden
@@ -142,7 +153,7 @@ document:
    normalized `JᵀJ` geometry, with no final norm or vocabulary unembedding,
    isolating whether the frozen-head metric was responsible for the KL result.
 
-3. **Multi-scale/cumulative trajectory matching — ACTIVE PRIORITY 6.** Match short finite
+3. **Multi-scale/cumulative trajectory matching — IMPLEMENTED AND QUEUED 2026-07-11.** Match short finite
    differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the
    current sanctioned window), or cumulative change `h_L-h_0`, using normalized
    MSE or centered vocabulary-score cosine. This interpolates between local
@@ -154,7 +165,7 @@ document:
    share per scale and compare at matched update norm, not merely equal nominal
    weights.
 
-4. **Relational token-geometry distillation — ACTIVE PRIORITY 4, only beside
+4. **Relational token-geometry distillation — IMPLEMENTED AND QUEUED 2026-07-11, only beside
    an absolute state term.** Instead of requiring every
    hidden coordinate to coincide, match teacher/student relations among aligned
    token rows: pairwise cosine matrix, normalized squared-distance matrix, or
@@ -183,7 +194,7 @@ document:
    fused/flash kernels may not expose attention probabilities, and hybrid
    attention/GatedDeltaNet models need a separate state-transition target.
 
-6. **Value/output contribution matching — ACTIVE PRIORITY 3.** Attention weights alone do not say
+6. **Value/output contribution matching — IMPLEMENTED AND QUEUED 2026-07-11.** Attention weights alone do not say
    what is written. Match each block's attention contribution after value and
    output projection (`O_L`, before residual addition), or separately match
    per-head value-weighted context vectors. Use normalized MSE/cosine and, where
@@ -197,7 +208,7 @@ document:
 
 ### Useful controls or higher-risk candidates
 
-7. **Offline-whitened/Mahalanobis hidden matching — ACTIVE PRIORITY 5.** Estimate a regularized
+7. **Offline-whitened/Mahalanobis hidden matching — IMPLEMENTED AND QUEUED 2026-07-11.** Estimate a regularized
    activation covariance `Sigma_L` from a broad, frozen base-model calibration
    corpus, then minimize
    `(h_s-h_t)^T (Sigma_L + lambda I)^(-alpha) (h_s-h_t)` with
@@ -209,7 +220,7 @@ document:
    layer. Clip inverse eigenvalues and report condition numbers. A low-rank
    eigensystem plus isotropic remainder avoids an `H x H` device buffer.
 
-8. **Base-anchored trajectory preservation at every layer — ACTIVE PRIORITY 2.** On general anchor
+8. **Base-anchored trajectory preservation at every layer — IMPLEMENTED AND QUEUED 2026-07-11.** On general anchor
    text, match the trained student's states to the frozen base model using
    `nmse` or `vocab_mse` at every layer, while recall items retain the teacher
    trajectory objective. Output anchor-KL only observes final behavior; this
@@ -220,7 +231,7 @@ document:
    anchor weight with depth; compare destruction, recall, and parameter-update
    norm at matched item budgets.
 
-9. **Cross-layer relational/flow loss**. Match teacher and student similarities
+9. **Cross-layer relational/flow loss — IMPLEMENTED AND QUEUED 2026-07-11.** Match teacher and student similarities
    between successive layer representations for the same tokens, e.g. the
    cosine matrix between `h_{L-1}` and `h_L`, or the normalized change in token
    Gram matrices. This supervises how geometry evolves without insisting that
@@ -230,7 +241,7 @@ document:
    coordinate-anchoring term. Only adjacent or uniformly sampled fixed offsets
    are legal—an output-biased layer pairing would violate the naming contract.
 
-10. **Contrastive trajectory loss (InfoNCE / soft nearest-neighbor)**. Treat the
+10. **Contrastive trajectory loss (InfoNCE / soft nearest-neighbor) — IMPLEMENTED AND QUEUED 2026-07-11.** Treat the
    same token and layer in teacher/student as the positive and other positions
    (preferably other examples) as negatives. This may retain token identity and
    prevent collapsed direction-only solutions. In-sequence negatives are often
@@ -240,7 +251,7 @@ document:
    audit, and always combine with an absolute metric because contrastive
    alignment does not guarantee frozen-head compatibility.
 
-11. **Untied input-embedding metric**. On models whose input embedding and
+11. **Untied input-embedding metric — IMPLEMENTED AND QUEUED 2026-07-11.** On models whose input embedding and
     unembedding are genuinely untied, define the quadratic metric induced by
     the frozen input embedding, analogous to `vocab_mse`, or compare centered
     scores under that matrix. It supplies an independent semantic geometry and
@@ -250,7 +261,7 @@ document:
     and verify orientation/scaling because model families implement tied and
     untied heads differently.
 
-12. **Robust/adaptive combinations**. Existing Huber is fixed-scale. Untested
+12. **Robust/adaptive combinations — IMPLEMENTED AND QUEUED 2026-07-11.** Existing Huber is fixed-scale. Untested
     robust choices include per-token pseudo-Huber/Charbonnier, clipped NMSE,
     and an uncertainty-balanced sum of state, delta, and relational losses.
     These may stop a few high-error tokens/layers from setting the update.

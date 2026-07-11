@@ -1,0 +1,12 @@
+run_name: a_lossgrid_1p7b_combined_slide1_component
+train:
+  # Equal NMSE on the recombined attention write and the MLP write at every
+  # layer. This deliberately matches contributions, not attention maps.
+  hidden_loss: component_nmse
+  conn_window: 1
+  conn_stride: 1
+  readout_window_blocks: 1
+  readout_source: teacher_kl
+  frozen_teacher_copy: true
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

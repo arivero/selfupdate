@@ -51,7 +51,7 @@ from ..data.dataset import (
 from ..eval.tasks import RECALL_CORPUS_PATHS, tasks_eval
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
-from .losses import HiddenLoss
+from .losses import HiddenLoss, hidden_match
 from .moe import MoEController, dequantize_overrides, pending_router_loss
 from .runtime import (  # noqa: F401  (underscore names re-exported for tests/scripts)
     OptimizerPlan,
@@ -204,10 +204,17 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
     """
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
-        h_out = stack.run_block(L, h_in, pos_emb)
-        losses = _layer_loss_per_example(
-            loss_fn, stack, L, h_out, h_in, target, previous_target, batch,
-        )
+        if loss_fn.kind == "component_nmse":
+            state_target, attn_target, mlp_target = target
+            with _capture_block_components(stack, L) as components:
+                h_out = stack.run_block(L, h_in, pos_emb)
+            losses = _component_loss_per_example(
+                components, attn_target, mlp_target, batch)
+        else:
+            h_out = stack.run_block(L, h_in, pos_emb)
+            losses = _layer_loss_per_example(
+                loss_fn, stack, L, h_out, h_in, target, previous_target, batch,
+            )
         total = losses.sum()
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
@@ -219,6 +226,16 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
     n = stack.n_layers
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
+        if loss_fn.kind == "component_nmse":
+            _, attn_target, mlp_target = target
+            with _capture_block_components(stack, n) as components:
+                h_out = stack.run_block(n, h_in, pos_emb)
+            losses = _component_loss_per_example(
+                components, attn_target, mlp_target, batch)
+            total = losses.sum()
+            extra = pending_router_loss()
+            (total if extra is None else total + extra).backward()
+            return losses.detach(), h_out.detach()
         h_out = stack.run_block(n, h_in, pos_emb)
         normed = stack.final_norm(h_out)
         aligned = _gather_batch_rows(normed, batch.aligned_index)
@@ -230,6 +247,39 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
+
+
+@contextlib.contextmanager
+def _capture_block_components(stack, L):
+    """Capture recombined attention and MLP writes, never probabilities."""
+    block = stack.blocks[L - 1]
+    modules = (getattr(block, "self_attn", None), getattr(block, "mlp", None))
+    if any(module is None for module in modules):
+        raise ValueError(f"component_nmse unsupported by block {L}: needs self_attn and mlp")
+    got = {}
+    def save(name):
+        def hook(_module, _args, output):
+            got[name] = output[0] if isinstance(output, tuple) else output
+        return hook
+    handles = [modules[0].register_forward_hook(save("attn")),
+               modules[1].register_forward_hook(save("mlp"))]
+    try:
+        yield got
+    finally:
+        for handle in handles:
+            handle.remove()
+    if set(got) != {"attn", "mlp"}:
+        raise RuntimeError(f"component hooks did not fire at layer {L}: {sorted(got)}")
+
+
+def _component_loss_per_example(components, attn_target, mlp_target, batch):
+    attn = _gather_batch_rows(components["attn"], batch.aligned_index)
+    mlp = _gather_batch_rows(components["mlp"], batch.aligned_index)
+    metric = HiddenLoss("nmse")
+    return 0.5 * (
+        _hidden_loss_per_example(metric, attn, attn_target, batch.A.tolist(), normed=False)
+        + _hidden_loss_per_example(metric, mlp, mlp_target, batch.A.tolist(), normed=False)
+    )
 
 
 def _span_batch(s0: int, A: int, ans0: int) -> Batch:
@@ -297,10 +347,18 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
         losses = []
         for L in range(L0, L1 + 1):
             h_prev = h
-            h = stack.run_block(L, h, pos_emb)
+            if loss_fn.kind == "component_nmse" and L in targets:
+                with _capture_block_components(stack, L) as components:
+                    h = stack.run_block(L, h, pos_emb)
+            else:
+                h = stack.run_block(L, h, pos_emb)
             raw_states[L] = h
             if L in targets:
-                if loss_fn.is_multiscale:
+                if loss_fn.kind == "component_nmse":
+                    losses.append(_component_loss_per_example(
+                        components, all_targets[("attn", L)],
+                        all_targets[("mlp", L)], batch))
+                elif loss_fn.is_multiscale:
                     vals = []
                     aligned = _gather_batch_rows(h, batch.aligned_index)
                     for i, k in enumerate(batch.A.tolist()):
@@ -448,7 +506,7 @@ def _validate_knob_schedule(cfg) -> None:
     if cfg.eval.standard_damage_every_epochs < 0:
         raise ValueError("eval.standard_damage_every_epochs must be >= 0")
     jacobian_kind = cfg.train.hidden_loss in (
-        "jacobian_nmse", "jacobian_vocab_mse", "jacobian_lens_kl",
+        "jacobian_nmse", "jacobian_vocab_mse", "jacobian_cosine", "jacobian_lens_kl",
     )
     if jacobian_kind:
         if not cfg.train.jacobian_lens_path:
@@ -508,6 +566,11 @@ def _validate_knob_schedule(cfg) -> None:
             bad.append("multi_delta_nmse (needs a faithful connected window)")
         if max(cfg.train.multi_delta_scales, default=0) >= cfg.train.conn_window:
             bad.append("multi_delta_scales (each offset must be < conn_window)")
+    if cfg.train.hidden_loss == "component_nmse":
+        if sched != "summed" or cfg.train.conn_window != 1:
+            bad.append("component_nmse (currently certified only for summed slide-1 local blocks)")
+        if not (cfg.train.online_teacher or cfg.train.frozen_teacher_copy):
+            bad.append("component_nmse (needs online frozen-teacher component targets)")
     if cfg.train.hidden_loss == "mahalanobis":
         if not cfg.train.mahalanobis_path or not Path(cfg.train.mahalanobis_path).is_file():
             bad.append("mahalanobis_path (needs a frozen precision artifact)")
@@ -516,8 +579,8 @@ def _validate_knob_schedule(cfg) -> None:
                    "docs/windows.md; any other value would silently fall "
                    "into the disjoint branch and train different credit "
                    "assignment than intended)")
-    if cfg.train.anchor_kl_weight > 0 and sched != "summed":
-        bad.append("anchor_kl_weight (the anchor step is wired into the "
+    if (cfg.train.anchor_kl_weight > 0 or cfg.train.anchor_hidden_weight > 0) and sched != "summed":
+        bad.append("anchor weights (the anchor step is wired into the "
                    "summed schedule only; other schedules would silently "
                    "train without the anchor)")
     if cfg.train.scramble_targets and sched != "summed":
@@ -861,7 +924,8 @@ class OnlineTeacherSource:
         }
 
     @torch.no_grad()
-    def aligned_targets_batch(self, batch: Batch, device) -> dict[int, torch.Tensor]:
+    def aligned_targets_batch(self, batch: Batch, device,
+                              capture_components: bool = False) -> dict:
         """Streamed: each layer's aligned rows are gathered as the block
         runs, so a single full-sequence state is resident at a time instead
         of all n+1 — the batched teacher costs one layer of VRAM, not a
@@ -885,7 +949,15 @@ class OnlineTeacherSource:
             pos_emb = self.stack.rope(h, t_pos)
             idx = (t0 + offsets).clamp_max(h.shape[1] - 1)
             for L in range(1, self.stack.n_layers + 1):
-                h = self.stack.run_block(L, h, pos_emb)
+                if capture_components:
+                    with _capture_block_components(self.stack, L) as components:
+                        h = self.stack.run_block(L, h, pos_emb)
+                    for name in ("attn", "mlp"):
+                        value = components[name]
+                        out[(name, L)] = value[
+                            row.to(value.device), idx.to(value.device)].detach()
+                else:
+                    h = self.stack.run_block(L, h, pos_emb)
                 view = self.stack.loss_view(L, h)
                 view_device = view.device
                 out[L] = view[row.to(view_device), idx.to(view_device)].detach()
@@ -1123,12 +1195,16 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
             L = L1 + 1
             continue
         if L == n:
+            target = ((targets[L], targets[("attn", L)], targets[("mlp", L)])
+                      if loss_fn.kind == "component_nmse" else targets[L])
             loss_vals, h = last_block_step_batch(
-                stack, h.detach(), pos_emb, targets[L], batch, loss_fn,
+                stack, h.detach(), pos_emb, target, batch, loss_fn,
             )
         else:
+            target = ((targets[L], targets[("attn", L)], targets[("mlp", L)])
+                      if loss_fn.kind == "component_nmse" else targets[L])
             loss_vals, h = local_block_step_batch(
-                stack, L, h.detach(), pos_emb, targets[L],
+                stack, L, h.detach(), pos_emb, target,
                 batch, loss_fn, previous_target=targets.get(L - 1),
             )
         layer_losses.append(loss_vals)
@@ -1186,7 +1262,9 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                 # teacher stage: aligned targets from the online teacher or
                 # the collated disk-cache slices
                 with (moe.teacher_phase() if moe else contextlib.nullcontext()):
-                    targets = (teacher.aligned_targets_batch(batch, device)
+                    targets = (teacher.aligned_targets_batch(
+                                   batch, device,
+                                   capture_components=(cfg.train.hidden_loss == "component_nmse"))
                                if online else batch.hidden)
                 if cfg.train.scramble_targets:
                     # audit control: layer-permuted targets (see config)
@@ -1214,9 +1292,14 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                                      **({"router_overlap": moe.overlap_flush()}
                                         if moe else {}))
                     if anchor is not None:
-                        a_ids, a_base = anchor[0].next()
-                        anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
-                                    a_ids, anchor[1], base_logits=a_base)
+                        a_ids, a_logits, a_states = anchor[0].next()
+                        if cfg.train.anchor_kl_weight > 0:
+                            anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
+                                        a_ids, cfg.train.anchor_kl_weight,
+                                        base_logits=a_logits)
+                        if cfg.train.anchor_hidden_weight > 0:
+                            anchor_trajectory_step(stack, a_ids, a_states,
+                                                   cfg.train.anchor_hidden_weight)
                     plan.step()
                     step += 1
                     next_step += cfg.train.grad_accum
@@ -1251,6 +1334,7 @@ class AnchorBank:
         self.ids = [torch.tensor(tok.encode(t, add_special_tokens=False)[:max_tokens],
                                  device=device) for t in texts]
         self.base_logits: list[torch.Tensor] | None = None
+        self.base_states: list[dict[int, torch.Tensor]] | None = None
         self.i = 0
 
     @torch.no_grad()
@@ -1259,22 +1343,49 @@ class AnchorBank:
         through the frozen teacher (adapters-off or frozen copy)."""
         st = teacher.stack
         device = self.ids[0].device
-        outs = []
+        outs, all_states = [], []
         with teacher._ctx(), torch.autocast(device.type, dtype=torch.bfloat16):
             for ids in self.ids:
                 pos = torch.arange(len(ids), device=device)[None]
                 h = st.embed(ids[None])
                 pe = st.rope(h, pos)
+                states = {}
                 for L in range(1, st.n_layers + 1):
                     h = st.run_block(L, h, pe)
+                    states[L] = st.loss_view(L, h)[0].detach().cpu()
                 outs.append(st.lm_head(st.final_norm(h))[0].detach())
+                all_states.append(states)
         self.base_logits = outs
+        self.base_states = all_states
 
-    def next(self) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def next(self):
         j = self.i % len(self.ids)
         self.i += 1
         base = self.base_logits[j] if self.base_logits is not None else None
-        return self.ids[j], base
+        states = self.base_states[j] if self.base_states is not None else None
+        return self.ids[j], base, states
+
+
+def anchor_trajectory_step(stack, ids, base_states, w, autocast=True):
+    """Depth-uniform frozen-base preservation with strictly local backward."""
+    if base_states is None:
+        raise ValueError("anchor trajectory needs frozen base hidden states")
+    device = ids.device
+    pos = torch.arange(len(ids), device=device)[None]
+    with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16,
+                                         enabled=autocast):
+        h = stack.embed(ids[None])
+        pos_emb = stack.rope(h, pos)
+    losses = []
+    for L in range(1, stack.n_layers + 1):
+        h = h.detach()
+        with torch.autocast(h.device.type, dtype=torch.bfloat16, enabled=autocast):
+            h = stack.run_block(L, h, pos_emb)
+            view = stack.loss_view(L, h)[0]
+            loss = hidden_match(view, base_states[L].to(view.device), "nmse")
+        (w * loss).backward()
+        losses.append(loss.detach().to(device))
+    return torch.stack(losses)
 
 
 def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
@@ -1311,21 +1422,19 @@ def anchor_step(stack, L0, ids, w, base_logits=None, autocast=True):
 
 
 def _make_anchor(cfg, tok, teacher=None):
-    """Returns (bank, weight) or None. Anchor regularization is teacher KL."""
-    w = cfg.train.anchor_kl_weight
-    if w <= 0:
+    """Build frozen-base targets for output and/or trajectory preservation."""
+    if cfg.train.anchor_kl_weight <= 0 and cfg.train.anchor_hidden_weight <= 0:
         return None
-    if cfg.train.readout_window_blocks <= 0:
+    if cfg.train.anchor_kl_weight > 0 and cfg.train.readout_window_blocks <= 0:
         raise ValueError("anchor weights need readout_window_blocks > 0 "
                          "(the anchor regularizes the top readout window)")
     bank = AnchorBank(cfg.train.anchor_path, tok, cfg.model.device)
-    if cfg.train.anchor_kl_weight > 0:
-        if teacher is None:
-            raise ValueError("anchor_kl_weight needs an online teacher for "
-                             "base logits: enable train.frozen_teacher_copy "
-                             "or LoRA + train.online_teacher")
-        bank.precompute_base_logits(teacher)
-    return bank, w
+    if teacher is None:
+        raise ValueError("anchor regularization needs an online teacher for "
+                         "frozen base targets: enable train.frozen_teacher_copy "
+                         "or LoRA + train.online_teacher")
+    bank.precompute_base_logits(teacher)
+    return bank, max(cfg.train.anchor_kl_weight, cfg.train.anchor_hidden_weight)
 
 
 
