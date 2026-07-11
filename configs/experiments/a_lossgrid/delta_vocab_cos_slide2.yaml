@@ -3,5 +3,10 @@ train:
   hidden_loss: delta_vocab_cos
   conn_window: 2
   readout_window_blocks: 2
+  # speed regime flip 2026-07-11 (owner decision: not-yet-started
+  # arms only): bucketed B4 measured 2.7x item B1 at 30.6 GB on L40S.
+  batching: bucketed
+  micro_batch: 4
 eval:
   recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  generation_batch: 8

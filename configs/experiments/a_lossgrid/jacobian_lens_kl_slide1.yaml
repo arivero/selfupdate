@@ -2,5 +2,10 @@ run_name: a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl
 train:
   hidden_loss: jacobian_lens_kl
   jacobian_lens_path: ../jacobian-lens/out/lenses/Qwen3-1.7B_jacobian_lens_n466.pt
+  # speed regime flip 2026-07-11 (owner decision: not-yet-started
+  # arms only): bucketed B4 measured 2.7x item B1 at 30.6 GB on L40S.
+  batching: bucketed
+  micro_batch: 4
 eval:
   recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  generation_batch: 8

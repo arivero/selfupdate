@@ -101,6 +101,28 @@ def plot_run(run_dir: Path, out: Path) -> bool:
     return True
 
 
+def _regime(run_dir):
+    """Batching-regime label from the run's own config snapshot.
+
+    The 2026-07-11 speed flip (owner decision) forked the live loss grid:
+    completed arms ran `item` B=1, later arms `bucketed` B=4 with batched
+    eval — bf16 kernel-shape numerics differ slightly across regimes, so
+    every cross-arm table must carry the label; a silent regime column is
+    exactly the confound class this repo keeps re-learning.
+    """
+    try:
+        import yaml
+
+        raw = yaml.safe_load((run_dir / "config.yaml").read_text()) or {}
+        train = raw.get("train", {}) or {}
+        ev = raw.get("eval", {}) or {}
+        return (f"{train.get('batching', 'item')}"
+                f"_b{train.get('micro_batch', 1)}"
+                f"_evalb{ev.get('generation_batch', 1)}")
+    except Exception:  # noqa: BLE001 - manifest stays best-effort
+        return "unknown"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="*")
@@ -122,6 +144,7 @@ def main():
                     finite = last["loss"].dropna()
                     manifest.append({
                         "run": run_dir.name,
+                        "regime": _regime(run_dir),
                         "epochs": int(df["epoch"].max()),
                         "layers": int(df["layer"].max()),
                         "rows": len(df),
@@ -142,6 +165,7 @@ def main():
             finite = last["loss"].dropna()
             manifest.append({
                 "run": run_dir.name,
+                "regime": _regime(run_dir),
                 "epochs": int(df["epoch"].max()),
                 "layers": int(df["layer"].max()),
                 "rows": len(df),
