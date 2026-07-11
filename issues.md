@@ -417,6 +417,31 @@ writer with dtype validation + legacy-cache handling (correct fp16 caches
 kept, historical bad-bf16 hashes invalidated); `--layer-residuals`
 checkpoint config adoption.
 
+SPEED (attack-plan Phase 1, measured + landed 2026-07-11, agpul04):
+- Root cause of the slow L40S queue was measured from live metrics: the
+  loss-grid arms train at item B=1 (3.08 items/s on the bench config) AND
+  pay ~1.4 min of B=1 eval at every epoch boundary — eval was 42-56% of
+  arm wall time.
+- Train regimes benched (1.7B slide2 vocab, frozen_teacher_copy, weights
+  staged to node-local /tmp — cf05b66): item B1 3.08 items/s / 27.7 GB;
+  padded B2 4.99 / 28.1 (22% pad); padded B4 5.86 / 30.0 (36.5% pad);
+  bucketed B4 8.32 / 30.6 (7.6% pad) = 2.7x. Bucketed reorders items
+  within an epoch (seeded length buckets) — part of the regime label.
+- tasks_eval gained a wired generation_batch knob (fb615f0): B8 = 3.08x
+  at 0.6B / 2.77x at 1.7B. NOT bit-identical to B1 (bf16 argmax
+  tie-flips: overall_word_acc +0.0035/+0.0094 at n_per_task=8, cloze
+  identical) — telemetry arms may batch; science evals (evaluate.py,
+  teacher_ceiling.py) keep the B=1 default.
+- Owner decision: flip ONLY not-yet-started grid arms. 5 arms flipped
+  (8813185): jacobian_lens_kl s1+s2, delta_cosine_s2, delta_vocab_cos
+  s1+s2 → bucketed B4 + eval B8 (~101 → ~39 min/arm). The regime fork is
+  labeled: layer_loss_manifest now carries a `regime` column from each
+  run's config snapshot.
+- Remaining speed items (bench-gated, per plan): pinned-POOL prefetch
+  only at 4B+ (>20 MB/layer targets); cross-item PP overlap only if PP
+  lanes become throughput-relevant; card-packing via offload_adam not
+  useful while arms are compute-saturated (91-98% util at B=1).
+
 STILL OPEN — trainer / compliance:
 - Online-teacher path still uses deprecated torch.jit
   (`jit.script_method` removal risk on the next torch bump) — replace
