@@ -711,6 +711,12 @@ def main() -> None:
                 sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses_heatmap.png")),
                 per_page=6,
             )
+            _image_page(pdf, "Cross-run final layer-loss distribution",
+                        RUNS / "lossgrid_final_layer_loss.png")
+            _image_page(pdf, "Cross-run layer modification",
+                        RUNS / "lossgrid_layer_modification.png")
+            _image_page(pdf, "Recall–damage frontier",
+                        RUNS / "lossgrid_recall_damage_frontier.png")
             print(f"wrote {args.out}")
             return
         coverage_matrix_page(pdf)

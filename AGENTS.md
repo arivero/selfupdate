@@ -297,6 +297,22 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Operational Conventions
 
+- **Scientific report completeness (owner, 2026-07-11):** a report is not
+  complete if it contains only endpoint recall/damage tables. Before issuing
+  or committing `runs/report.pdf`, regenerate and include, for every in-scope
+  completed run: (1) per-layer loss by epoch plus a cross-run layer summary;
+  (2) per-layer parameter modification versus epoch 0/base; (3) recall by
+  corpus including epoch 0; (4) standard-benchmark damage and the recall-vs-
+  damage frontier; and (5) an explicit coverage/provenance page naming missing
+  artifacts, batching regime, loss kind, connected-window width, and evaluation
+  source. Never silently omit a run because one artifact is absent: show it as
+  missing and queue the calculation. Reports for a named campaign must filter
+  to that campaign and must not ingest historical runs merely because an old
+  directory was touched or re-evaluated recently. At minimum run
+  `scripts/layer_loss_plots.py`, `scripts/delta_profiles.py`, the campaign
+  report builder, and the report PDF builder in that order. The agent owns
+  verifying that the resulting PDF visibly contains these pages.
+
 - **Agent-owned supervision (owner, 2026-07-11):** the agent—not a watcher,
   scheduler, or status script—owns a live campaign. While campaign work is
   running, personally review fresh worker/scheduler logs, liveness, checkpoint

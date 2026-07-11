@@ -53,6 +53,11 @@ def _last(rows: list[dict], kind: str) -> dict:
     return next((row for row in reversed(rows) if row.get("kind") == kind), {})
 
 
+def _epoch0(rows: list[dict], kind: str) -> dict:
+    return next((row for row in rows
+                 if row.get("kind") == kind and row.get("phase") == "epoch0"), {})
+
+
 def _run_config(run_dir: Path) -> dict:
     try:
         return yaml.safe_load((run_dir / "config.yaml").read_text()) or {}
@@ -85,6 +90,8 @@ def collect() -> list[dict]:
         train, fast_eval, fast_standard = (
             _last(metrics, "train"), _last(metrics, "eval"), _last(metrics, "standard_eval")
         )
+        epoch0_eval = _epoch0(metrics, "eval")
+        epoch0_standard = _epoch0(metrics, "standard_eval")
         final_recall = _json(run_dir / "eval" / "tasks.json")
         final_standard = _json(STANDARD / f"{run_dir.name}.json")
         recall = {}
@@ -126,6 +133,12 @@ def collect() -> list[dict]:
 
         values = [recall.get(corpus) for corpus in CORPORA]
         values = [value for value in values if value is not None]
+        epoch0_recall = {
+            corpus: result.get("overall_word_acc")
+            for corpus, result in epoch0_eval.get("recall", {}).items()
+        }
+        epoch0_values = [epoch0_recall.get(corpus) for corpus in CORPORA]
+        epoch0_values = [value for value in epoch0_values if value is not None]
         status = ("complete" if final_recall and final_standard else "training")
         rows.append({
             "run": run_dir.name,
@@ -135,9 +148,13 @@ def collect() -> list[dict]:
             "items_seen": train.get("items_seen"),
             "latest_epoch": fast_eval.get("epoch"),
             "recall_source": recall_source,
+            **{f"epoch0_{corpus}": epoch0_recall.get(corpus) for corpus in CORPORA},
+            "epoch0_recall_mean": (sum(epoch0_values) / len(epoch0_values)
+                                   if epoch0_values else None),
             **{corpus: recall.get(corpus) for corpus in CORPORA},
             "recall_mean": sum(values) / len(values) if values else None,
             "standard_source": "full checkpoint eval" if final_standard else "fast epoch probe",
+            "epoch0_standard_macro": epoch0_standard.get("standard_macro_accuracy"),
             "standard_macro": standard_macro,
             "standard_delta": damage_delta,
             "standard_worst_delta": damage_worst,
@@ -154,7 +171,8 @@ def write(rows: list[dict]) -> None:
     md_path = RUNS / "lossgrid_report.md"
     fields = [
         "run", "loss", "slide", "status", "items_seen", "latest_epoch",
-        "recall_source", *CORPORA, "recall_mean", "standard_source",
+        "recall_source", *(f"epoch0_{c}" for c in CORPORA), "epoch0_recall_mean",
+        *CORPORA, "recall_mean", "standard_source", "epoch0_standard_macro",
         "standard_macro", "standard_delta", "standard_worst_delta",
     ]
     with csv_path.open("w", newline="", encoding="utf-8") as f:
@@ -171,16 +189,18 @@ def write(rows: list[dict]) -> None:
         "stated source: fast epoch-0 subset or full pinned Qwen3-1.7B reference "
         "on ARC-Easy, ARC-Challenge, and HellaSwag.",
         "",
-        "| run | loss | slide | status | items | epoch | recall source | Machado | Quijote 1 | Quijote 4 | mean | standard Δ | worst Δ |",
-        "|---|---|---:|---|---:|---:|---|---:|---:|---:|---:|---:|---:|",
+        "| run | loss | slide | status | items | epoch | source | epoch-0 M/Q1/Q4 | final M/Q1/Q4 | e0 mean | final mean | e0 standard | standard Δ | worst Δ |",
+        "|---|---|---:|---|---:|---:|---|---|---|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         lines.append(
             f"| {row['run']} | {row['loss']} | {row['slide']} | {row['status']} | "
             f"{row['items_seen'] or '—'} | {row['latest_epoch'] or '—'} | "
-            f"{row['recall_source']} | {_score(row, 'machado')} | "
-            f"{_score(row, 'quijote_ch1')} | {_score(row, 'quijote_ch4')} | "
-            f"{_score(row, 'recall_mean')} | {_score(row, 'standard_delta')} | "
+            f"{row['recall_source']} | {_score(row, 'epoch0_machado')}/"
+            f"{_score(row, 'epoch0_quijote_ch1')}/{_score(row, 'epoch0_quijote_ch4')} | "
+            f"{_score(row, 'machado')}/{_score(row, 'quijote_ch1')}/{_score(row, 'quijote_ch4')} | "
+            f"{_score(row, 'epoch0_recall_mean')} | {_score(row, 'recall_mean')} | "
+            f"{_score(row, 'epoch0_standard_macro')} | {_score(row, 'standard_delta')} | "
             f"{_score(row, 'standard_worst_delta')} |"
         )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
