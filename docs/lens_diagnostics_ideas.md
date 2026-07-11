@@ -125,13 +125,79 @@ per-layer *measurement device* — exactly the Frozen-Vocabulary framing in
 
 ## Concrete next steps (bankable)
 
-1. Prototype `delta_vocab_cos` as a new `hidden_loss` kind in
-   `train/losses.py`, depth-uniform, teacher-sourced; A/B it against `vocab_mse`
-   at matched item budget, and report gradient-share attribution next to it
-   (`scripts/signal_attribution.py`), per the naming contract.
+1. ~~Prototype `delta_vocab_cos`~~ **DONE 2026-07-11**: `delta_nmse` /
+   `delta_cosine` / `delta_vocab_cos` are implemented and running in the 1.7B
+   loss-grid campaign; `jacobian_vocab_mse` / `jacobian_lens_kl` (the frozen
+   Jacobian-pullback family, next section of issues.md) are implemented and
+   queued in the same grid.
 2. Wire `monotone_alignment_path` into the C3 cross-depth bridge grids so
    teacher→student layer supervision is chosen, not assumed.
 3. Keep `tail_logit_lens_divergence_matrix` and `local_transport_jvp_*` as report
    probes for the "what to memorize" pages — measurement, not gradient.
 4. Finish the `tuned_lens_kl` path (knobs already in `config.py`): train frozen
    per-layer tuned-lens translators, then apply `lens_kl` uniformly across depth.
+
+## Further ideas (2026-07-11 review pass)
+
+All 🔬 diagnostic-only unless marked; each stays inside the type system above
+(scores centered before cosine/L2, softmax only for KL/JS, bias only on state
+readouts).
+
+- 🔬 **Regime-fork lens comparator (free control, time-limited).** The
+  2026-07-11 speed flip left the live loss grid with a LABELED fork: same
+  losses, same data, `item` B=1 vs `bucketed` B=4 (bf16 kernel-shape
+  numerics + bucket order differ). A checkpoint↔checkpoint lens-divergence
+  grid (student-vs-student — everything so far is teacher-vs-student)
+  between matched arms would measure how much execution-regime drift
+  becomes REPRESENTATIONAL drift at matched budget. This is the
+  cheapest-ever measurement of "does bf16 batching noise matter
+  scientifically" — and it expires when the B=1 arms stop being refreshed.
+- 🔬 **Intrusion depth-localization (targets open C3 #9).** Run the lens
+  JS grid on the 200 intrusion prompts, teacher vs trained student, per
+  layer: WHERE in depth does intrusion first appear? The 1.7B cleanliness
+  question (22-40% intrusion vs 1.5-2.5% at 0.6B) currently has only an
+  output-level number; the loss-safety law predicts distribution-shaped
+  training writes the groove mid-stack. If 1.7B intrusion has a depth
+  signature 0.6B lacks, that is the first mechanistic handle on it.
+- 🔬 **Commitment-depth profile (storage vs readout instrument).** Per
+  prompt, the depth at which the lens pseudo-distribution's argmax first
+  equals the model's final token and stays. Teacher-vs-student on recall
+  vs anchor prompts: does layerwise training move commitment EARLIER
+  (memorization signature) or preserve the teacher's profile? One scalar
+  per prompt from machinery we already have; directly instruments the
+  last-3% law's claim that storage succeeds while readout lags — students
+  that commit early but recite wrong localize the failure to late layers.
+- 🔬 **Write-energy spectrum.** `||W_U C Δh_i||` per layer over aligned
+  spans (centered, bias-free — a contribution), teacher vs student.
+  States can match while the PATH of writes differs; this is the
+  measurement companion to the delta-vs-state question the grid is
+  testing, computable from the cached hidden states with no new GPU work.
+- 🔬 **Same-depth DTW drift probe.** The doc proposes DTW for cross-depth
+  bridges; run it teacher-vs-trained-student at SAME depth too. Deviations
+  from the diagonal localize where training re-timed computation (cf.
+  "context integration peaked near layer 7") — a re-timing probe the
+  layer-residuals instrument cannot see (it compares same-index layers by
+  construction).
+- 🔬 **Retrospective early-abort validation (uses data we already have).**
+  46 completed grid arms carry per-epoch telemetry. Test on THAT record:
+  does a depth-uniform lens-JS (or the epoch-3 recall trajectory) predict
+  final word_acc well enough to justify an early-abort gate for FUTURE
+  sweeps? The never-abort-before-12k-items rule exists because early
+  plateaus recovered; this is the cheap way to learn whether a
+  lens-observable separates "plateau, still storing" from "dead arm" —
+  validation first, gate later, and only with owner sign-off since it
+  touches the 12k law.
+- ✅ **Bias/centering hygiene as a runtime tripwire (engineering,
+  trainer-adjacent).** Rule #1/#2 of the type system are prose; make
+  `HiddenLoss` construction assert them: delta-kind losses must project
+  bias-free, state-kind readouts must include the head bias when the
+  family has one. Identity for Qwen3 (no head bias) — load-bearing the
+  day a bias-ful family enters the bridge grids, and exactly the
+  silent-knob bug class this branch keeps closing.
+- 🔬 **Token-transport coverage report (bridge-blocking number).** The
+  vocab-size guard says cross-tokenizer lens comparison is undefined
+  without a transport map; the constructive version: build the map once
+  (exact string pairs + subword-decomposition fallback), then REPORT the
+  untransportable probability mass per corpus. That single number decides
+  whether cross-family bridge-grid lens comparisons (Gemma-4, ALIA) mean
+  anything before anyone plots them.
