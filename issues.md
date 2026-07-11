@@ -418,16 +418,14 @@ STILL OPEN — trainer / compliance:
 - `docs/runtime.md` overstates sliding-path activation-residency (peak
   detached-state residency is full depth).
 
-STILL OPEN — eval stack:
-- Dead CLI flags silently ignored on `evaluate.py` AND `teacher_ceiling.py`
-  (`--batch-size`/`--score-workers`/`--shuffle-seed`/`--bucket-by-length`: no
-  batching exists in `tasks_eval`) — the branch's own knob-flow law; clean the
-  queue rows and reject, or warn loudly.
+STILL OPEN — eval stack (three items CLOSED 2026-07-11 fc011f5: dead CLI
+flags now warn loudly on any non-default value, --max-extra-tokens wired
+with default 48→32 preserving effective behavior; training_scope emitted
+only when inferred, with corpora_measured + corpus_selection always
+present; analyze.py:31 "general" read guarded — build_corpus_index.py's
+reads were already guarded, review finding partially stale):
 - `_stage_source` mkdir-lock has no stale-owner detection; a killed copy job
   wedges lanes silently.
-- `training_scope` field mislabeled under the `--recall-corpora` override.
-- schema v2 dropped the "general" key but `analyze.py:31` and
-  `build_corpus_index.py` still read it unguarded.
 - Only ARC-Easy is repo-pinned; hellaswag/arc_challenge/wikitext float on HF
   revisions (a pinned wikitext file exists but is ignored).
 - `/tmp` eval staging is never cleaned (~170 GB/node at full fleet).
