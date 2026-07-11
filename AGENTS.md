@@ -301,7 +301,10 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
   scheduler, or status script—owns a live campaign. While campaign work is
   running, personally review fresh worker/scheduler logs, liveness, checkpoint
   and evaluation completion, and scientific telemetry at least every 30
-  minutes. Monitoring scripts only prepare compact evidence for that review.
+  minutes. When Codex Scheduled work / a task heartbeat is available, use its
+  recurring task-in-thread facility for this cadence; do not emulate agent
+  supervision by holding a shell sleep loop open. Monitoring scripts only
+  prepare compact evidence for that review.
   Investigate every new error and promptly patch confirmed code or queue
   defects; never treat a healthy-looking GPU or a log line as a substitute for
   active supervision.
