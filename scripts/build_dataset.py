@@ -54,8 +54,13 @@ def main() -> None:
             for s in specs
         ]
     elif cfg.mask.mode == "rag_tool":
+        # system was silently dropped here and in the thinking harvest below
+        # (fell back to DEFAULT_SYSTEM) — identity for verse datasets, wrong
+        # for prose_quijote. v5 fix; v4 artifacts stay byte-guarded.
         examples = [
-            render_rag_tool(s.task_id, s.question, s.passage, s.answer, student_stub=stub)
+            render_rag_tool(s.task_id, s.question, s.passage, s.answer,
+                            student_stub=stub,
+                            system=STYLES[cfg.data.corpus_style].system)
             for s in specs
         ]
     elif cfg.mask.mode in ("thinking", "thinking_selective"):
@@ -76,6 +81,7 @@ def main() -> None:
         examples = harvest_traces(
             model, tok, specs,
             max_think_tokens=cfg.mask.max_think_tokens, student_stub=stub,
+            system=STYLES[cfg.data.corpus_style].system,
             # RAG-in-prompt makes the trace actually QUOTE the passage, so
             # selective censoring has verse spans to remove
             rag_in_prompt=selective, selective_verses=verses,

@@ -217,7 +217,11 @@ def make_maieutic(
     recitation eval are unchanged."""
     texts = [v.text for v in verses]
     specs = []
-    for j, i in enumerate(range(0, len(texts) - window - 1, stride)):
+    # stop = len - window (v5 fix 2026-07-11): the old `- window - 1`
+    # made the LAST verse unreachable in any continuation/maieutic
+    # answer (exposure hole). v4 artifacts are byte-guarded; this
+    # changes only future regenerations.
+    for j, i in enumerate(range(0, len(texts) - window, stride)):
         cue = texts[i]
         lo, hi = max(0, i - context_pad), min(len(texts), i + 1 + window + context_pad)
         tpls = (style or VERSE_STYLE).maieutic_templates
@@ -383,7 +387,8 @@ def make_specs(
                     )
                 )
 
-    for i in range(0, len(texts) - window - 1, stride):
+    # stop = len - window: same last-verse-unreachable fix as make_maieutic.
+    for i in range(0, len(texts) - window, stride):
         cue = texts[i]
         answer_lines = texts[i + 1 : i + 1 + window]
         lo = max(0, i - context_pad)
