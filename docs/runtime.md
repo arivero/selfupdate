@@ -36,9 +36,13 @@ shapes; verified empirically on L40S). B>1 padded batches differ from B=1
 only by bf16 kernel-shape rounding (up to ~3e-2 max-relative at deep
 layers; tolerances in tests/test_online_teacher.py document this).
 
-Sliding-window trajectory states are released at their last root use, so
-activation residency follows the window width W instead of the full depth
-(the graphs always did; the activations only do since 2026-07-10).
+Sliding-window trajectory states are released at their last root use.
+Precisely (2026-07-11 correction of an overstated claim): the per-window
+GRAPH activations follow the window width W, and each detached trajectory
+state is freed once no remaining window roots at it — but peak
+detached-state residency is still FULL DEPTH (every h_L exists while the
+walk crosses it; the -180 MB measured at 0.6B slide8 B=8 comes from the
+early releases, not from a W-bounded envelope).
 
 ## Streamed optimizer offload
 

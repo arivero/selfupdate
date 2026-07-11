@@ -98,7 +98,17 @@ class DistillDataset(Dataset):
             pair = masker.build(SegmentedExample.from_record(r))
             if cache is not None:
                 span = cache.span(pair.example_id)
-                assert span["A"] == pair.aligned_len and span["s0"] == pair.s_aligned.start, (
+                # t0/position_gap have always been written by the cache
+                # builder but were never read back — checking them is free
+                # and narrows the tokenizer-drift window (a re-tokenized
+                # prefix can move t0 while A and s0 stay equal). .get keeps
+                # any pre-field cache index readable.
+                assert (span["A"] == pair.aligned_len
+                        and span["s0"] == pair.s_aligned.start
+                        and span.get("t0", pair.t_aligned.start)
+                            == pair.t_aligned.start
+                        and span.get("position_gap", pair.position_gap)
+                            == pair.position_gap), (
                     f"cache/examples mismatch for {pair.example_id}; rebuild the cache"
                 )
             self.pairs.append(pair)

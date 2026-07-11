@@ -9,6 +9,8 @@ into examples.jsonl for reproducibility.
 
 from __future__ import annotations
 
+import sys
+
 import torch
 from tqdm import tqdm
 
@@ -61,9 +63,21 @@ def harvest_traces(
                 pad_token_id=tokenizer.eos_token_id,
             )
         gen = out[0, len(prompt_ids):].tolist()
-        if gen and gen[-1] == think_end:
+        terminated = bool(gen) and gen[-1] == think_end
+        if terminated:
             gen = gen[:-1]
         trace = tokenizer.decode(gen).strip()
+        # A trace that never closed its think block (budget exhausted) or
+        # that contains chat-control markers would freeze turn-boundary
+        # text INSIDE the privileged block — silently, since everything
+        # here becomes frozen dataset content. Warn per record.
+        if not terminated or "<|im_" in trace:
+            reason = ("no </think> within max_think_tokens"
+                      if not terminated else "chat-control tokens inside trace")
+            print(f"WARNING: {spec.task_id}: malformed think trace "
+                  f"({reason}); turn-boundary text may be frozen into the "
+                  "privileged block — inspect the record or raise "
+                  "mask.max_think_tokens", file=sys.stderr)
         if selective_verses is not None:
             examples.append(
                 render_thinking_selective(

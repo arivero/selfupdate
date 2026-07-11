@@ -43,6 +43,24 @@ OLD_KEYS = {
 }
 FORBIDDEN_REFERENCE_SOURCE = "task" + "_label"
 
+# Structural companion to the name-based OLD_KEYS list (2026-07-10 review:
+# a RENAMED banned knob slips past an exact-name blacklist).  The banned
+# concepts have a shape — cross-entropy terms, label targeting, the purged
+# word — so any train key matching these patterns is flagged for explicit
+# review rather than silently accepted.
+_BANNED_KEY_PATTERNS = (
+    re.compile(r"(^|_)ce(_|$)"),  # ..._ce_..., ce_weight, tail_ce
+    re.compile("label"),
+    re.compile("gold"),           # purged lexicon (owner 2026-07-05)
+)
+
+
+def _pattern_banned_keys(train: dict) -> list[str]:
+    return sorted(
+        k for k in train
+        if k not in OLD_KEYS and any(p.search(k) for p in _BANNED_KEY_PATTERNS)
+    )
+
 
 @dataclass
 class Issue:
@@ -67,6 +85,11 @@ def audit_one(path: Path, base: Path = BASE) -> list[Issue]:
     old = sorted(k for k in OLD_KEYS if k in train)
     if old:
         issues.append(Issue(path, "old banned train keys present: " + ", ".join(old)))
+    shaped = _pattern_banned_keys(train)
+    if shaped:
+        issues.append(Issue(
+            path, "train keys match banned-concept patterns (ce/label/gold) "
+                  "and need explicit review: " + ", ".join(shaped)))
     if train.get("readout_source") == FORBIDDEN_REFERENCE_SOURCE:
         issues.append(Issue(path, "forbidden reference-text readout source"))
     if path == base and "readout_source" in train:

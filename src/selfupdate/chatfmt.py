@@ -158,6 +158,11 @@ def render_rag_for(
 
 
 def _matches(record: dict, p: TemplatePieces) -> bool:
+    # Legacy records may lack the raw question/answer_text fields: treat
+    # them as non-matching so adapt_records' curated "rebuild examples.jsonl"
+    # error fires, instead of a bare KeyError from the comparisons below.
+    if "question" not in record or "answer_text" not in record:
+        return False
     if record.get("shared_prefix", "").rstrip().endswith("<think>"):
         # thinking-mode record: prefix = pre + question + turn-close +
         # assistant open + "<think>\n", mid = "\n</think>\n\n". Native for
@@ -186,6 +191,20 @@ def adapt_records(
         return records
     p = template_pieces(tokenizer, system)
     if _matches(records[0], p):
+        # The identity fast path must not hide a mixed-template jsonl: a file
+        # whose FIRST record is native but whose later records were harvested
+        # under another family (or predate the raw fields) would train those
+        # records on the wrong format silently. Homogeneity is a handful of
+        # string compares per record — check the whole file.
+        bad = next((i for i, r in enumerate(records)
+                    if not _matches(r, p)), None)
+        if bad is not None:
+            raise ValueError(
+                f"mixed-template examples.jsonl: record 0 matches this "
+                f"tokenizer's template but record {bad} "
+                f"({records[bad].get('example_id')!r}) does not (foreign "
+                "rendering or missing raw fields) — rebuild the dataset for "
+                "one family (scripts/build_dataset.py)")
         return records
 
     adapted = []
