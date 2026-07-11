@@ -1,0 +1,10 @@
+# v5 pipeline smoke: 24-record subset, 0.6B, window/remove. NOT a science
+# run — proves generation->cache->train->eval mechanics end to end.
+run_name: v5smoke_cache_0p6b
+model:
+  name: Qwen/Qwen3-0.6B
+data:
+  examples_path: data/combined/examples_v5_smoke.jsonl
+mask:
+  mode: rag_tool
+  compaction: remove
