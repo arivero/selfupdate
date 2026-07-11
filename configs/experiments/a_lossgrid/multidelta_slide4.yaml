@@ -1,0 +1,10 @@
+run_name: a_lossgrid_1p7b_combined_slide4_multidelta
+train:
+  hidden_loss: multi_delta_nmse
+  conn_window: 4
+  conn_stride: 1
+  readout_window_blocks: 4
+  readout_source: teacher_kl
+  multi_delta_scales: [1, 2]
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

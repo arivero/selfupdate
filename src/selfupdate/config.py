@@ -135,6 +135,11 @@ class TrainConfig:
     hidden_loss: str = "nmse"
     tuned_lens_path: str = ""
     jacobian_lens_path: str = ""
+    # Frozen offline per-layer precision matrices for mahalanobis hidden loss.
+    mahalanobis_path: str = ""
+    # Raw multi-layer displacement offsets; legal only inside a faithful
+    # connected window and averaged uniformly across eligible offsets.
+    multi_delta_scales: list[int] = field(default_factory=lambda: [1, 2, 4])
     # Top readout term attached ONLY to sanctioned sliding windows:
     # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
     # The connected graph is still a gradient-isolation unit rooted at a

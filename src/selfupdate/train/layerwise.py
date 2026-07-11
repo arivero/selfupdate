@@ -293,15 +293,34 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
     all_targets = targets if all_targets is None else all_targets
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h = h_in
+        raw_states = {L0 - 1: h_in}
         losses = []
         for L in range(L0, L1 + 1):
             h_prev = h
             h = stack.run_block(L, h, pos_emb)
+            raw_states[L] = h
             if L in targets:
-                losses.append(_layer_loss_per_example(
-                    loss_fn, stack, L, h, h_prev, targets[L],
-                    all_targets.get(L - 1), batch,
-                ))
+                if loss_fn.is_multiscale:
+                    vals = []
+                    aligned = _gather_batch_rows(h, batch.aligned_index)
+                    for i, k in enumerate(batch.A.tolist()):
+                        student_history = {
+                            depth: _gather_batch_rows(state, batch.aligned_index)[i, :k]
+                            for depth, state in raw_states.items()
+                        }
+                        teacher_history = {
+                            depth: value[i, :k]
+                            for depth, value in all_targets.items()
+                        }
+                        vals.append(loss_fn.multiscale_delta(
+                            aligned[i, :k], student_history, targets[L][i, :k],
+                            teacher_history, L))
+                    losses.append(torch.stack(vals))
+                else:
+                    losses.append(_layer_loss_per_example(
+                        loss_fn, stack, L, h, h_prev, targets[L],
+                        all_targets.get(L - 1), batch,
+                    ))
         if losses:
             # under pipeline parallel a tied-vocab model computes the L == n
             # loss on the vocab card while in-window losses live on a block
@@ -484,6 +503,14 @@ def _validate_knob_schedule(cfg) -> None:
     is_method = run_class == "method"
     if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
         bad.append("conn_window")
+    if cfg.train.hidden_loss == "multi_delta_nmse":
+        if cfg.train.conn_window <= 1 or cfg.train.conn_stride != 1:
+            bad.append("multi_delta_nmse (needs a faithful connected window)")
+        if max(cfg.train.multi_delta_scales, default=0) >= cfg.train.conn_window:
+            bad.append("multi_delta_scales (each offset must be < conn_window)")
+    if cfg.train.hidden_loss == "mahalanobis":
+        if not cfg.train.mahalanobis_path or not Path(cfg.train.mahalanobis_path).is_file():
+            bad.append("mahalanobis_path (needs a frozen precision artifact)")
     if cfg.train.conn_stride not in (0, 1):
         bad.append("conn_stride (only 0 = disjoint and 1 = sliding exist — "
                    "docs/windows.md; any other value would silently fall "
@@ -883,7 +910,10 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path,
-                         jacobian_lens_path=cfg.train.jacobian_lens_path)
+                         jacobian_lens_path=cfg.train.jacobian_lens_path,
+                         input_embedding=stack.embed_tokens,
+                         mahalanobis_path=cfg.train.mahalanobis_path,
+                         multi_delta_scales=tuple(cfg.train.multi_delta_scales))
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     loader = _loader(cfg, ds)
     opts = {
@@ -1120,7 +1150,10 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path,
-                         jacobian_lens_path=cfg.train.jacobian_lens_path)
+                         jacobian_lens_path=cfg.train.jacobian_lens_path,
+                         input_embedding=stack.embed_tokens,
+                         mahalanobis_path=cfg.train.mahalanobis_path,
+                         multi_delta_scales=tuple(cfg.train.multi_delta_scales))
     anchor = _make_anchor(cfg, tok, teacher)
     online = teacher is not None
     ds = _make_dataset(cfg, cache, tok,
@@ -1316,7 +1349,10 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path,
-                         jacobian_lens_path=cfg.train.jacobian_lens_path)
+                         jacobian_lens_path=cfg.train.jacobian_lens_path,
+                         input_embedding=stack.embed_tokens,
+                         mahalanobis_path=cfg.train.mahalanobis_path,
+                         multi_delta_scales=tuple(cfg.train.multi_delta_scales))
     ds = _make_dataset(cfg, None, tok, [], with_teacher_ids=True)
     loader = _loader(cfg, ds)
     opts = {
@@ -1435,7 +1471,10 @@ def _train_sequential(cfg, stack, cache, tok, log):
     n = stack.n_layers
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head,
                          tuned_lens_path=cfg.train.tuned_lens_path,
-                         jacobian_lens_path=cfg.train.jacobian_lens_path)
+                         jacobian_lens_path=cfg.train.jacobian_lens_path,
+                         input_embedding=stack.embed_tokens,
+                         mahalanobis_path=cfg.train.mahalanobis_path,
+                         multi_delta_scales=tuple(cfg.train.multi_delta_scales))
     act_cache = StudentActCache()
     t0 = time.time()
 

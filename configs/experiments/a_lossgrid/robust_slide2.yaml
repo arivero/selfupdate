@@ -1,0 +1,9 @@
+run_name: a_lossgrid_1p7b_combined_slide2_robust
+train:
+  # Fixed equal state/increment Charbonnier combination; no learned weights.
+  hidden_loss: state_delta_charbonnier
+  conn_window: 2
+  readout_window_blocks: 2
+  readout_source: teacher_kl
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

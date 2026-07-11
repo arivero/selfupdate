@@ -37,13 +37,16 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "zero")
+GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
+                   "clipped_nmse", "contrastive", "zero")
 VOCAB_KINDS = ("vocab_mse", "lens_kl", "lens_js", "tuned_lens_kl", "vocab_fisher")
 # Match what a block *adds* rather than repeatedly charging it for inherited
 # state error.  The trainer applies these only to interior raw block outputs
 # (2 <= L < n); L=1 and h_n use the paired state fallback below because the
 # disk cache has no h0 and h_n is post-final-norm.
-DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos")
+DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos", "flow_nmse",
+               "state_delta_nmse", "state_delta_charbonnier")
+SPECIAL_KINDS = ("embedding_mse", "mahalanobis", "multi_delta_nmse")
 JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_lens_kl")
 JACOBIAN_STATE_FALLBACKS = {
     "jacobian_nmse": "nmse",
@@ -54,6 +57,9 @@ DELTA_STATE_FALLBACKS = {
     "delta_nmse": "nmse",
     "delta_cosine": "cosine",
     "delta_vocab_cos": "vocab_mse",
+    "flow_nmse": "nmse",
+    "state_delta_nmse": "nmse",
+    "state_delta_charbonnier": "charbonnier",
 }
 
 FISHER_TOPK = 64
@@ -88,6 +94,23 @@ def hidden_match(
     if kind == "huber":
         scale = teacher_h.pow(2).mean().sqrt().clamp_min(1e-8)
         return F.smooth_l1_loss(student_h / scale, teacher_h / scale, beta=1.0)
+    if kind == "charbonnier":
+        scale = teacher_h.pow(2).mean().sqrt().clamp_min(1e-8)
+        return (torch.sqrt(((student_h - teacher_h) / scale).pow(2) + 1e-6) - 1e-3).mean()
+    if kind == "clipped_nmse":
+        d2 = (student_h - teacher_h).pow(2).mean(-1)
+        cap = teacher_h.pow(2).mean(-1).median().detach().clamp_min(1e-8) * 4
+        return d2.clamp_max(cap).mean() / teacher_h.pow(2).mean().clamp_min(1e-8)
+    if kind == "contrastive":
+        # In-sequence teacher rows are negatives; this is deliberately
+        # batch-local and therefore has no stale queue or cross-item state.
+        s = F.normalize(student_h, dim=-1)
+        with torch.no_grad():
+            t = F.normalize(teacher_h, dim=-1)
+        if s.shape[0] < 2:
+            return (student_h - teacher_h).pow(2).mean() * 0.0
+        return F.cross_entropy((s @ t.T) / 0.1,
+                               torch.arange(s.shape[0], device=s.device))
     raise ValueError(f"unknown hidden loss kind {kind!r}")
 
 
@@ -107,8 +130,10 @@ class HiddenLoss:
     """
 
     def __init__(self, kind: str, final_norm=None, lm_head=None,
-                 tuned_lens_path: str = "", jacobian_lens_path: str = ""):
-        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS:
+                 tuned_lens_path: str = "", jacobian_lens_path: str = "",
+                 input_embedding=None, mahalanobis_path: str = "",
+                 multi_delta_scales: tuple[int, ...] = (1,)):
+        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
@@ -120,9 +145,19 @@ class HiddenLoss:
             raise ValueError("hidden loss 'tuned_lens_kl' needs train.tuned_lens_path")
         if kind in JACOBIAN_KINDS and not jacobian_lens_path:
             raise ValueError(f"hidden loss {kind!r} needs train.jacobian_lens_path")
+        if kind == "embedding_mse" and input_embedding is None:
+            raise ValueError("hidden loss 'embedding_mse' needs the frozen input embedding")
+        if kind == "mahalanobis" and not mahalanobis_path:
+            raise ValueError("hidden loss 'mahalanobis' needs train.mahalanobis_path")
         self.kind = kind
         self.final_norm = final_norm
         self.lm_head = lm_head
+        self.input_embedding = input_embedding
+        self.multi_delta_scales = tuple(sorted(set(int(k) for k in multi_delta_scales)))
+        if not self.multi_delta_scales or self.multi_delta_scales[0] < 1:
+            raise ValueError("multi_delta_scales must contain positive offsets")
+        self._precision_cpu: dict[int, torch.Tensor] = {}
+        self._precision_cache: dict[tuple[int, torch.device], torch.Tensor] = {}
         self._gram: torch.Tensor | None = None
         self._centered_gram: torch.Tensor | None = None
         self.translators = None
@@ -160,6 +195,17 @@ class HiddenLoss:
                 "n_prompts": int(artifact["n_prompts"]),
                 "source_layers": source_layers,
             }
+        if kind == "mahalanobis":
+            artifact = torch.load(mahalanobis_path, map_location="cpu", weights_only=True)
+            matrices = artifact.get("precision") if isinstance(artifact, dict) else None
+            if not isinstance(matrices, dict):
+                raise ValueError("Mahalanobis artifact needs a per-layer 'precision' mapping")
+            width = lm_head.weight.shape[1]
+            for layer, P in matrices.items():
+                P = P.detach().float().contiguous()
+                if P.shape != (width, width) or not torch.isfinite(P).all():
+                    raise ValueError(f"invalid Mahalanobis precision for layer {layer}")
+                self._precision_cpu[int(layer)] = P
 
     def _jacobian(self, source: int, like: torch.Tensor) -> torch.Tensor | None:
         """Lazily retain each frozen transport on the layer's device."""
@@ -170,6 +216,15 @@ class HiddenLoss:
         if key not in self._jacobian_cache:
             self._jacobian_cache[key] = J.to(device=like.device, dtype=like.dtype)
         return self._jacobian_cache[key]
+
+    def _precision(self, layer: int, like: torch.Tensor) -> torch.Tensor:
+        P = self._precision_cpu.get(layer)
+        if P is None:
+            raise ValueError(f"Mahalanobis artifact has no precision for layer {layer}")
+        key = (layer, like.device)
+        if key not in self._precision_cache:
+            self._precision_cache[key] = P.to(like.device)
+        return self._precision_cache[key]
 
     def _gram_matrix(self) -> torch.Tensor:
         """M = WᵀW of the frozen unembedding, fp32, chunked over vocab rows."""
@@ -204,6 +259,10 @@ class HiddenLoss:
         return self.kind in DELTA_KINDS
 
     @property
+    def is_multiscale(self) -> bool:
+        return self.kind == "multi_delta_nmse"
+
+    @property
     def state_fallback_kind(self) -> str:
         """Absolute-state metric used where a raw adjacent difference is
         unavailable (the embedding boundary and cached post-norm endpoint)."""
@@ -228,6 +287,18 @@ class HiddenLoss:
                 normed = False
         if kind in GEOMETRIC_KINDS:
             return hidden_match(student_h, teacher_h, kind)
+        if kind == "embedding_mse":
+            E = self.input_embedding.weight.detach().float()
+            d = student_h.float() - teacher_h.float()
+            num = (d @ (E.T @ E) * d).sum(-1).mean()
+            den = (teacher_h.float() @ (E.T @ E) * teacher_h.float()).sum(-1).mean().clamp_min(1e-8)
+            return num / den
+        if kind == "mahalanobis":
+            if layer is None:
+                raise ValueError("mahalanobis needs a layer index")
+            d = student_h.float() - teacher_h.float()
+            P = self._precision(layer, d)
+            return (d @ P * d).sum(-1).mean() / (teacher_h.float() @ P * teacher_h.float()).sum(-1).mean().clamp_min(1e-8)
         if kind == "tuned_lens_kl":
             if layer is None:
                 raise ValueError("tuned_lens_kl needs a layer index")
@@ -330,6 +401,24 @@ class HiddenLoss:
         if self.kind == "delta_cosine":
             return hidden_match(student_h - student_prev,
                                 teacher_h - teacher_prev, "cosine")
+        if self.kind == "flow_nmse":
+            # Cross-layer token flow: relation between the preceding and new
+            # token geometry, not either state in isolation.
+            sp = F.normalize(student_prev.float(), dim=-1)
+            so = F.normalize(student_h.float(), dim=-1)
+            tp = F.normalize(teacher_prev.float(), dim=-1)
+            to = F.normalize(teacher_h.float(), dim=-1)
+            return F.mse_loss(sp @ so.T, tp @ to.T)
+        if self.kind == "state_delta_nmse":
+            return 0.5 * (
+                hidden_match(student_h, teacher_h, "nmse")
+                + hidden_match(student_h - student_prev,
+                               teacher_h - teacher_prev, "nmse"))
+        if self.kind == "state_delta_charbonnier":
+            return 0.5 * (
+                hidden_match(student_h, teacher_h, "charbonnier")
+                + hidden_match(student_h - student_prev,
+                               teacher_h - teacher_prev, "charbonnier"))
 
         # ``delta_vocab_cos``: cosine of *centred* frozen-vocabulary score
         # changes.  Wᵀ C W avoids a V-wide score tensor while exactly matching
@@ -347,3 +436,18 @@ class HiddenLoss:
             ds_norm = (ds_M * ds).sum(-1).clamp_min(0).sqrt()
             dt_norm = (dt_M * dt).sum(-1).clamp_min(0).sqrt()
             return 1.0 - (dot / (ds_norm * dt_norm).clamp_min(1e-8)).mean()
+
+    def multiscale_delta(self, student_h: torch.Tensor, student_history: dict[int, torch.Tensor],
+                         teacher_h: torch.Tensor, teacher_history: dict[int, torch.Tensor],
+                         layer: int) -> torch.Tensor:
+        """Uniform average of available raw k-layer displacements."""
+        losses = []
+        for k in self.multi_delta_scales:
+            anchor = layer - k
+            if anchor not in student_history or anchor not in teacher_history:
+                continue
+            losses.append(hidden_match(student_h - student_history[anchor].detach().to(student_h.device),
+                                       teacher_h - teacher_history[anchor].to(student_h.device), "nmse"))
+        if not losses:
+            return hidden_match(student_h, teacher_h, "nmse")
+        return torch.stack(losses).mean()
