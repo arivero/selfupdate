@@ -424,6 +424,16 @@ with default 48→32 preserving effective behavior; training_scope emitted
 only when inferred, with corpora_measured + corpus_selection always
 present; analyze.py:31 "general" read guarded — build_corpus_index.py's
 reads were already guarded, review finding partially stale):
+- `tasks_eval` generates item-by-item (B=1). Fine at the current battery
+  size (72 short answers vs the old engine's ~600 full recitations — the
+  batching flags died WITH their workload), but two spots may want real
+  batched generation later: big-teacher ceilings (27B-120B) where
+  `with_context=True` pays a full corpus-length prefill per item, and any
+  future n_per_task increase. If it bites, implement batching INSIDE
+  tasks_eval as a real knob — do not resurrect the retired recite-era
+  flags. (KV prefix-sharing across items would need context-BEFORE-question
+  prompt order, which breaks the render_rag convention students trained
+  on — measurement comparability beats speed there.)
 - `_stage_source` mkdir-lock has no stale-owner detection; a killed copy job
   wedges lanes silently.
 - Only ARC-Easy is repo-pinned; hellaswag/arc_challenge/wikitext float on HF

@@ -81,11 +81,15 @@ implemented.
 - `scripts/train_certify.py` — "is this the same experiment?": runs the
   real `train_layerwise` on 13 tiny variants covering every
   schedule/batching/window/optimizer path; fingerprints per-step losses,
-  per-tensor checkpoint signatures, VRAM peaks. References live in
-  `certs/pre/` (pre-refactor revision). The comparison keys on a semantic
-  config hash that EXCLUDES placement knobs, so one single-device reference
-  certifies PP runs; `--override model.pipeline_split=14` runs the same
-  variants under PP.
+  per-tensor checkpoint signatures, VRAM peaks. NO references are stored
+  in the repo (owner decision 2026-07-11: stored fingerprints act as a
+  frozen-numerics specification; the pre-refactor `certs/pre` and PP2
+  `certs/pp2` sets are in git history). Use it as an on-demand A/B
+  instrument: record on HEAD (`--all --out-dir /tmp/$USER/certify_head`),
+  apply the change, compare (`--all --reference-dir ...`), discard. The
+  comparison keys on a semantic config hash that EXCLUDES placement knobs,
+  so one single-device recording certifies PP runs;
+  `--override model.pipeline_split=14` runs the same variants under PP.
 - `scripts/train_batch_bench.py` — "how fast?": the real summed path,
   timing and memory JSON, no checkpoint.
 - `scripts/memory_plan.py` — "will it fit?": meta-device instantiation +
@@ -94,5 +98,7 @@ implemented.
   variables). Predictions exclude loss-head workspace — apply ~25% margin
   for vocab-metric losses.
 
-Any trainer change must pass `train_certify.py --all --reference-dir
-certs/pre` (plus the full pytest suite) before it lands.
+There is no standing gate (tests and stored references deleted
+2026-07-11; the runtime validators and tripwires in the code are the
+enforcement). For a trainer change intended to be numerics-preserving,
+run the record-on-HEAD → change → compare cycle above before it lands.

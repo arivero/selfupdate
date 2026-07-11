@@ -19,8 +19,9 @@ Everything needed lives in this repo. Do not depend on host-local agent memory.
 (cloning a venv on Lustre is all small-file metadata cost — don't). The
 shared venv carries **no** editable install of `selfupdate`: a bare
 `import selfupdate` fails loudly by design. Every entry point pins its own
-tree instead — `scripts/*.py` via `sys.path.insert(0, <repo>/src)` and
-pytest via `tests/conftest.py`. Keep that guard in any new script; never
+tree instead — `scripts/*.py` via `sys.path.insert(0, <repo>/src)`
+(`tests/` and its conftest were deleted 2026-07-11, see Training Runtime
+section). Keep that guard in any new script; never
 `pip install -e .` into the shared venv (it would silently route imports
 across checkouts). The bootstrap's `pip install -e .` applies only to a
 fresh per-tree venv.
@@ -101,20 +102,32 @@ bit-exact vs the historical item loop. Read `docs/runtime.md` before
 touching execution machinery, and note the measured NEGATIVE results in
 issues.md (async target prefetch; PP2 throughput) before "optimizing".
 
-Any trainer change must pass BOTH:
+There is NO stored test or certification gate (owner decision 2026-07-11:
+tests and stored fingerprints act as specifications that agents ossify
+around; both were deleted — `tests/` in fd7138d, `certs/pre`+`certs/pp2`
+in this pass; git history keeps them). The specification is the prose laws
+in this file plus the RUNTIME enforcement in the code: `_validate_knob_schedule`
+raises at dispatch, the frozen-vocab fingerprint tripwire at save, the
+graph-leak/MoE tripwires in the walk, `scripts/audit_configs.py`.
+
+For a trainer change that is INTENDED to be numerics-preserving, use
+`scripts/train_certify.py` as an on-demand A/B instrument — record fresh
+fingerprints on current HEAD, apply the change, compare, discard:
 
 ```bash
-.venv/bin/python -m pytest tests/ -q
-python scripts/train_certify.py --all --reference-dir certs/pre
+python scripts/train_certify.py --all --out-dir /tmp/$USER/certify_head
+# ... apply the change ...
+python scripts/train_certify.py --all --reference-dir /tmp/$USER/certify_head
 ```
 
-`certs/pre/` holds pre-refactor reference fingerprints (losses, checkpoint
-signatures, VRAM) for 13 tiny variants covering every trainer path; the
-compare keys on a semantic config hash that excludes placement knobs, so
-`--override model.pipeline_split=14` certifies PP against the same
-references. `scripts/memory_plan.py` (meta-device + one measured block)
-recommends micro-batch/window/optimizer-placement/splits BEFORE loading
-weights — advisory only.
+References are always minted from HEAD, never stored in the repo — there
+is no frozen numerics doctrine, only a per-diff "did this change anything?"
+measurement (~minutes; 13 tiny variants; semantic config hash excludes
+placement knobs, so `--override model.pipeline_split=14` compares PP
+against the same single-device fingerprints; calibration in
+`certs/README.md`). `scripts/memory_plan.py` (meta-device + one measured
+block) recommends micro-batch/window/optimizer-placement/splits BEFORE
+loading weights — advisory only.
 
 ## Branch Focus
 
@@ -256,11 +269,11 @@ GPUS="0 1 2 3" MAX_PER_GPU=3 nohup setsid bash scripts/gpu_scheduler.sh >> runs/
 
 ```bash
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e . && .venv/bin/pip install pytest
+.venv/bin/pip install -e .
 .venv/bin/python scripts/fetch_poem.py
 .venv/bin/python scripts/build_dataset.py
 .venv/bin/python scripts/build_teacher_cache.py
-.venv/bin/python -m pytest tests/ -q
+.venv/bin/python scripts/audit_configs.py
 ```
 
 Always set this before training:
