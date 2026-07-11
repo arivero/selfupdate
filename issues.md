@@ -57,12 +57,27 @@ implementation commitment.
    Qwen3-1.7B (466 generic WikiText prompts) and Qwen3-14B Jacobian lenses.
    For an interior layer, its frozen base/teacher matrix `J_L` transports a
    residual into the pre-final residual basis: `z = J_L h`. Match either
-   `||J_L(h_s-h_t)||^2 / ||J_L h_t||^2` (`jacobian_nmse`) or, more usefully,
-   `vocab_mse(final_norm(J_L h_s), final_norm(J_L h_t))`
-   (`jacobian_vocab_mse`). This weights an error direction by its estimated
-   downstream effect instead of treating all coordinates equally; it is the
-   teacher-state analogue of the Jacobian lens's "what this residual is
-   disposed to make the model say" readout. `J_L` is frozen, applied only as
+   `||J_L(h_s-h_t)||^2 / ||J_L h_t||^2` (`jacobian_nmse`). The decisive
+   comparison should use the same Jacobian-lens representation in two
+   frozen-head forms:
+
+   ```text
+   z_s = final_norm(J_L h_s),  z_t = final_norm(J_L h_t)
+   jacobian_vocab_mse = ||W(z_s-z_t)||^2 / ||W z_t||^2
+   jacobian_lens_kl  = KL(softmax(W z_t) || softmax(W z_s))
+   ```
+
+   This is the exact MSE-versus-KL question for the *same* downstream-aware
+   lens, rather than a comparison of two unrelated losses. The MSE version is
+   its flat frozen-vocabulary geometry; the KL version weights errors by the
+   teacher lens distribution and can favour sharp, behaviorally decisive
+   token distinctions. It may also repeat the known full-vocabulary KL
+   brittleness, so run both with identical prompt/layer coverage, loss weight,
+   update norm, epoch telemetry, and standard-damage budget. This weights an
+   error direction by its estimated downstream effect instead of treating all
+   coordinates equally; it is the teacher-state analogue of the Jacobian
+   lens's "what this residual is disposed to make the model say" readout.
+   `J_L` is frozen, applied only as
    a matrix inside the current local loss, and therefore neither creates a
    long backward path nor introduces reference-text supervision. Map our
    1-based `L` to the lens's 0-based block output `L-1`; retain the ordinary
