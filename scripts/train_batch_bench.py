@@ -88,7 +88,19 @@ def bench(args) -> dict:
     stack.freeze_non_blocks()
     if cfg.train.online_teacher and peft_model is None:
         raise ValueError("train.online_teacher requires train.lora.enabled")
-    teacher = OnlineTeacherSource(stack, peft_model=peft_model) if cfg.train.online_teacher else None
+    teacher = None
+    if cfg.train.online_teacher:
+        teacher = OnlineTeacherSource(stack, peft_model=peft_model)
+    elif cfg.train.frozen_teacher_copy:
+        # Mirror TrainingRuntime.load_teacher: a resident frozen bf16 copy
+        # computes targets on the fly (the loss-grid arms' configuration).
+        # Without this branch the bench silently fell to the disk-cache path
+        # and measured a different workload than the arms it advises on.
+        t_model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=torch.bfloat16)
+        t_model.to(args.device)
+        t_model.eval().requires_grad_(False)
+        teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
     cache = None
     if teacher is None:
         cache_root, chash = resolve_cache_dir(cfg)
