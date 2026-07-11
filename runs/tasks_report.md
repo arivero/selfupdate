@@ -1,6 +1,6 @@
 # Checkpoint re-evaluation: recall and model damage
 
-Recall artifacts exist for 41/41 checkpoints; 41/41 cover every corpus in the declared training scope. Paired standard-capability results exist for 41/41 checkpoints. There are 19 corpus-specific recall base references.
+Recall artifacts exist for 62/62 checkpoints; 62/62 cover every corpus in the declared training scope. Paired standard-capability results exist for 62/62 checkpoints. There are 19 corpus-specific recall base references.
 
 Recall word accuracy is the fraction of reference words recovered in order, averaged over next, previous, and cloze prompts. Each Δ uses the epoch-zero model on the same corpus. A dash means that corpus/reference has not been evaluated; it is never imputed from the other author.
 
@@ -30,30 +30,51 @@ Recall word accuracy is the fraction of reference words recovered in order, aver
 
 | run | model | Machado | epoch 0 | Δ | Quijote ch1 | epoch 0 | Δ |
 |---|---|---:|---:|---:|---:|---:|---:|
+| a_lossgrid_1p7b_combined_slide1_component | Qwen3-1.7B | 0.12 | 0.11 | +0.02 | 0.13 | 0.14 | -0.01 |
 | a_lossgrid_1p7b_combined_slide1_cosine | Qwen3-1.7B | 0.14 | 0.11 | +0.03 | 0.17 | 0.14 | +0.04 |
 | a_lossgrid_1p7b_combined_slide1_delta_cosine | Qwen3-1.7B | 0.15 | 0.11 | +0.05 | 0.15 | 0.14 | +0.02 |
 | a_lossgrid_1p7b_combined_slide1_delta_nmse | Qwen3-1.7B | 0.14 | 0.11 | +0.04 | 0.14 | 0.14 | +0.00 |
 | a_lossgrid_1p7b_combined_slide1_delta_vocab_cos | Qwen3-1.7B | 0.16 | 0.11 | +0.05 | 0.14 | 0.14 | -0.00 |
 | a_lossgrid_1p7b_combined_slide1_huber | Qwen3-1.7B | 0.17 | 0.11 | +0.06 | 0.16 | 0.14 | +0.02 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_cosine | Qwen3-1.7B | 0.13 | 0.11 | +0.02 | 0.17 | 0.14 | +0.03 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_cosine_anthropic | Qwen3-1.7B | 0.15 | 0.11 | +0.04 | 0.15 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl | Qwen3-1.7B | 0.25 | 0.11 | +0.14 | 0.23 | 0.14 | +0.10 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl_anthropic | Qwen3-1.7B | 0.25 | 0.11 | +0.14 | 0.18 | 0.14 | +0.05 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_nmse | Qwen3-1.7B | 0.15 | 0.11 | +0.04 | 0.15 | 0.14 | +0.01 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_nmse_anthropic | Qwen3-1.7B | 0.13 | 0.11 | +0.03 | 0.16 | 0.14 | +0.02 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse | Qwen3-1.7B | 0.13 | 0.11 | +0.03 | 0.13 | 0.14 | -0.00 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse_anthropic | Qwen3-1.7B | 0.11 | 0.11 | +0.01 | 0.15 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide1_l2mse | Qwen3-1.7B | 0.11 | 0.11 | +0.01 | 0.14 | 0.14 | +0.00 |
 | a_lossgrid_1p7b_combined_slide1_lenskl | Qwen3-1.7B | 0.22 | 0.11 | +0.11 | 0.22 | 0.14 | +0.08 |
 | a_lossgrid_1p7b_combined_slide1_nmse | Qwen3-1.7B | 0.16 | 0.11 | +0.05 | 0.18 | 0.14 | +0.04 |
 | a_lossgrid_1p7b_combined_slide1_vocab | Qwen3-1.7B | 0.12 | 0.11 | +0.02 | 0.13 | 0.14 | -0.01 |
 | a_lossgrid_1p7b_combined_slide1_vocabfisher | Qwen3-1.7B | 0.15 | 0.11 | +0.05 | 0.16 | 0.14 | +0.02 |
+| a_lossgrid_1p7b_combined_slide2_anchor_trajectory | Qwen3-1.7B | 0.20 | 0.11 | +0.10 | 0.20 | 0.14 | +0.06 |
+| a_lossgrid_1p7b_combined_slide2_contrastive | Qwen3-1.7B | 0.15 | 0.11 | +0.04 | 0.13 | 0.14 | -0.00 |
 | a_lossgrid_1p7b_combined_slide2_cosine | Qwen3-1.7B | 0.22 | 0.11 | +0.12 | 0.16 | 0.14 | +0.02 |
 | a_lossgrid_1p7b_combined_slide2_delta_cosine | Qwen3-1.7B | 0.14 | 0.11 | +0.04 | 0.17 | 0.14 | +0.03 |
 | a_lossgrid_1p7b_combined_slide2_delta_nmse | Qwen3-1.7B | 0.19 | 0.11 | +0.09 | 0.18 | 0.14 | +0.04 |
 | a_lossgrid_1p7b_combined_slide2_delta_vocab_cos | Qwen3-1.7B | 0.21 | 0.11 | +0.10 | 0.17 | 0.14 | +0.04 |
+| a_lossgrid_1p7b_combined_slide2_embedding | Qwen3-1.7B | 0.14 | 0.11 | +0.04 | 0.16 | 0.14 | +0.02 |
+| a_lossgrid_1p7b_combined_slide2_flow | Qwen3-1.7B | 0.16 | 0.11 | +0.06 | 0.14 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide2_huber | Qwen3-1.7B | 0.24 | 0.11 | +0.14 | 0.18 | 0.14 | +0.04 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_cosine | Qwen3-1.7B | 0.12 | 0.11 | +0.01 | 0.13 | 0.14 | -0.01 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_cosine_anthropic | Qwen3-1.7B | 0.16 | 0.11 | +0.05 | 0.14 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide2_jacobian_lens_kl | Qwen3-1.7B | 0.18 | 0.11 | +0.08 | 0.19 | 0.14 | +0.05 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_lens_kl_anthropic | Qwen3-1.7B | 0.21 | 0.11 | +0.10 | 0.16 | 0.14 | +0.03 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse | Qwen3-1.7B | 0.14 | 0.11 | +0.03 | 0.15 | 0.14 | +0.01 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse_anthropic | Qwen3-1.7B | 0.15 | 0.11 | +0.05 | 0.14 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse | Qwen3-1.7B | 0.14 | 0.11 | +0.03 | 0.15 | 0.14 | +0.02 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse_anthropic | Qwen3-1.7B | 0.14 | 0.11 | +0.03 | 0.15 | 0.14 | +0.01 |
 | a_lossgrid_1p7b_combined_slide2_l2mse | Qwen3-1.7B | 0.15 | 0.11 | +0.05 | 0.17 | 0.14 | +0.03 |
 | a_lossgrid_1p7b_combined_slide2_lenskl | Qwen3-1.7B | 0.19 | 0.11 | +0.09 | 0.22 | 0.14 | +0.08 |
+| a_lossgrid_1p7b_combined_slide2_mahalanobis | Qwen3-1.7B | 0.20 | 0.11 | +0.09 | 0.16 | 0.14 | +0.02 |
 | a_lossgrid_1p7b_combined_slide2_nmse | Qwen3-1.7B | 0.21 | 0.11 | +0.10 | 0.18 | 0.14 | +0.04 |
+| a_lossgrid_1p7b_combined_slide2_relational_state | Qwen3-1.7B | 0.21 | 0.11 | +0.10 | 0.16 | 0.14 | +0.03 |
+| a_lossgrid_1p7b_combined_slide2_robust | Qwen3-1.7B | 0.13 | 0.11 | +0.03 | 0.16 | 0.14 | +0.03 |
 | a_lossgrid_1p7b_combined_slide2_vocab | Qwen3-1.7B | 0.16 | 0.11 | +0.05 | 0.16 | 0.14 | +0.02 |
 | a_lossgrid_1p7b_combined_slide2_vocabfisher | Qwen3-1.7B | 0.14 | 0.11 | +0.04 | 0.19 | 0.14 | +0.05 |
+| a_lossgrid_1p7b_combined_slide4_multidelta | Qwen3-1.7B | 0.13 | 0.11 | +0.03 | 0.12 | 0.14 | -0.02 |
 
 ## Model damage: fixed standard benchmark subsets
 
@@ -78,30 +99,51 @@ This is the capability check. Accuracy and Δ are paired means over the standard
 | lw_s_lenskluni_0p6b_rag | Qwen3-0.6B | 3/3 | 0.41 | 0.46 | -0.05 | arc_easy -0.09 |
 | lw_s_tcmodern_0p6b_rag | Qwen3-0.6B | 3/3 | 0.38 | 0.46 | -0.08 | arc_easy -0.16 |
 | lw_l_tailonly_4b_rag | Qwen3-4B | 3/3 | 0.58 | 0.58 | +0.00 | arc_easy -0.01 |
+| a_lossgrid_1p7b_combined_slide1_component | Qwen3-1.7B | 3/3 | 0.51 | 0.52 | -0.02 | arc_challenge -0.07 |
 | a_lossgrid_1p7b_combined_slide1_cosine | Qwen3-1.7B | 3/3 | 0.49 | 0.52 | -0.04 | hellaswag -0.04 |
 | a_lossgrid_1p7b_combined_slide1_delta_cosine | Qwen3-1.7B | 3/3 | 0.51 | 0.52 | -0.01 | hellaswag -0.02 |
 | a_lossgrid_1p7b_combined_slide1_delta_nmse | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.02 |
 | a_lossgrid_1p7b_combined_slide1_delta_vocab_cos | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.02 | arc_challenge -0.05 |
 | a_lossgrid_1p7b_combined_slide1_huber | Qwen3-1.7B | 3/3 | 0.49 | 0.52 | -0.03 | hellaswag -0.04 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_cosine | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.02 | arc_easy -0.06 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_cosine_anthropic | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.03 | arc_challenge -0.08 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.06 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_lens_kl_anthropic | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.03 | arc_challenge -0.09 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_nmse | Qwen3-1.7B | 3/3 | 0.51 | 0.52 | -0.01 | arc_challenge -0.04 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_nmse_anthropic | Qwen3-1.7B | 3/3 | 0.51 | 0.52 | -0.01 | arc_challenge -0.05 |
 | a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.03 | arc_challenge -0.07 |
+| a_lossgrid_1p7b_combined_slide1_jacobian_vocab_mse_anthropic | Qwen3-1.7B | 3/3 | 0.49 | 0.52 | -0.04 | arc_challenge -0.09 |
 | a_lossgrid_1p7b_combined_slide1_l2mse | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.03 |
 | a_lossgrid_1p7b_combined_slide1_lenskl | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.00 | arc_challenge -0.04 |
 | a_lossgrid_1p7b_combined_slide1_nmse | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.02 | hellaswag -0.03 |
 | a_lossgrid_1p7b_combined_slide1_vocab | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | +0.00 | arc_easy -0.04 |
 | a_lossgrid_1p7b_combined_slide1_vocabfisher | Qwen3-1.7B | 3/3 | 0.47 | 0.52 | -0.05 | arc_easy -0.15 |
+| a_lossgrid_1p7b_combined_slide2_anchor_trajectory | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | +0.00 | arc_challenge -0.01 |
+| a_lossgrid_1p7b_combined_slide2_contrastive | Qwen3-1.7B | 3/3 | 0.29 | 0.52 | -0.23 | arc_easy -0.37 |
 | a_lossgrid_1p7b_combined_slide2_cosine | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.00 | arc_easy -0.04 |
 | a_lossgrid_1p7b_combined_slide2_delta_cosine | Qwen3-1.7B | 3/3 | 0.43 | 0.52 | -0.09 | arc_easy -0.28 |
 | a_lossgrid_1p7b_combined_slide2_delta_nmse | Qwen3-1.7B | 3/3 | 0.49 | 0.52 | -0.03 | hellaswag -0.04 |
 | a_lossgrid_1p7b_combined_slide2_delta_vocab_cos | Qwen3-1.7B | 3/3 | 0.50 | 0.52 | -0.03 | arc_easy -0.09 |
+| a_lossgrid_1p7b_combined_slide2_embedding | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.01 | arc_easy -0.02 |
+| a_lossgrid_1p7b_combined_slide2_flow | Qwen3-1.7B | 3/3 | 0.48 | 0.52 | -0.04 | arc_easy -0.08 |
 | a_lossgrid_1p7b_combined_slide2_huber | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.03 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_cosine | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.01 | arc_challenge -0.01 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_cosine_anthropic | Qwen3-1.7B | 3/3 | 0.54 | 0.52 | +0.01 | arc_challenge +0.00 |
 | a_lossgrid_1p7b_combined_slide2_jacobian_lens_kl | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.00 | arc_challenge -0.02 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_lens_kl_anthropic | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | +0.00 | arc_challenge -0.04 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.01 | arc_challenge -0.02 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_nmse_anthropic | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.01 | arc_challenge -0.02 |
 | a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.01 | arc_challenge -0.03 |
+| a_lossgrid_1p7b_combined_slide2_jacobian_vocab_mse_anthropic | Qwen3-1.7B | 3/3 | 0.54 | 0.52 | +0.01 | arc_easy -0.03 |
 | a_lossgrid_1p7b_combined_slide2_l2mse | Qwen3-1.7B | 3/3 | 0.54 | 0.52 | +0.02 | arc_easy +0.00 |
 | a_lossgrid_1p7b_combined_slide2_lenskl | Qwen3-1.7B | 3/3 | 0.54 | 0.52 | +0.02 | arc_challenge -0.05 |
+| a_lossgrid_1p7b_combined_slide2_mahalanobis | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.02 |
 | a_lossgrid_1p7b_combined_slide2_nmse | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | +0.00 | arc_easy -0.01 |
+| a_lossgrid_1p7b_combined_slide2_relational_state | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_easy -0.04 |
+| a_lossgrid_1p7b_combined_slide2_robust | Qwen3-1.7B | 3/3 | 0.53 | 0.52 | +0.00 | arc_challenge -0.02 |
 | a_lossgrid_1p7b_combined_slide2_vocab | Qwen3-1.7B | 3/3 | 0.54 | 0.52 | +0.02 | arc_easy -0.02 |
 | a_lossgrid_1p7b_combined_slide2_vocabfisher | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_challenge -0.06 |
+| a_lossgrid_1p7b_combined_slide4_multidelta | Qwen3-1.7B | 3/3 | 0.52 | 0.52 | -0.01 | arc_challenge -0.01 |
 
 ## Corpus-specific base references
 

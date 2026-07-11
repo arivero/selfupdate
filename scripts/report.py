@@ -49,6 +49,20 @@ def _text_page(pdf, title, body, fontsize=9):
     plt.close(fig)
 
 
+def _text_file_pages(pdf, title, path, fontsize=5, lines_per_page=18):
+    """Render a complete text artifact without character truncation."""
+    path = Path(path)
+    if not path.exists():
+        _text_page(pdf, title, f"{path} is missing.", fontsize=fontsize)
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    total = max(1, (len(lines) + lines_per_page - 1) // lines_per_page)
+    for page, start in enumerate(range(0, max(len(lines), 1), lines_per_page), 1):
+        chunk = lines[start:start + lines_per_page]
+        _text_page(pdf, f"{title} ({page}/{total})", "\n".join(chunk),
+                   fontsize=fontsize)
+
+
 def _image_page(pdf, title, png):
     if not Path(png).exists():
         return
@@ -705,8 +719,8 @@ def main() -> None:
 
     with PdfPages(args.out) as pdf:
         if args.lossgrid_only:
-            _text_page(pdf, "July 11 1.7B loss-grid checkpoint scorecard",
-                       _markdown_text(RUNS / "lossgrid_report.md"), fontsize=5)
+            _text_file_pages(pdf, "July 11 1.7B loss-grid checkpoint scorecard",
+                             RUNS / "lossgrid_report.md", fontsize=5)
             _image_page(pdf, "July 11 a_/lw_ checkpoint recall",
                         RUNS / "tasks_report.png")
             _image_grid_page(
