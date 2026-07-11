@@ -696,9 +696,16 @@ def per_run_appendix(pdf):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="runs/report.pdf")
+    ap.add_argument("--lossgrid-only", action="store_true",
+                    help="render only the active July-11 loss-grid scorecard")
     args = ap.parse_args()
 
     with PdfPages(args.out) as pdf:
+        if args.lossgrid_only:
+            _text_page(pdf, "July 11 1.7B loss-grid checkpoint scorecard",
+                       _markdown_text(RUNS / "lossgrid_report.md"), fontsize=5)
+            print(f"wrote {args.out}")
+            return
         coverage_matrix_page(pdf)
         objective_candidate_page(pdf)
         loss_by_model_page(pdf)
