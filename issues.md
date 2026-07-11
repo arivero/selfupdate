@@ -52,7 +52,34 @@ implementation commitment.
    because delta-only admits accumulated drift: all increments can be slightly
    wrong while their local losses remain small.
 
-2. **Multi-scale/cumulative trajectory matching**. Match short finite
+2. **Frozen Jacobian-pullback matching (`jacobian_*`) — READY FOR AN
+   INTEGRATION SPIKE.** The sibling `../jacobian-lens` checkout already holds
+   Qwen3-1.7B (466 generic WikiText prompts) and Qwen3-14B Jacobian lenses.
+   For an interior layer, its frozen base/teacher matrix `J_L` transports a
+   residual into the pre-final residual basis: `z = J_L h`. Match either
+   `||J_L(h_s-h_t)||^2 / ||J_L h_t||^2` (`jacobian_nmse`) or, more usefully,
+   `vocab_mse(final_norm(J_L h_s), final_norm(J_L h_t))`
+   (`jacobian_vocab_mse`). This weights an error direction by its estimated
+   downstream effect instead of treating all coordinates equally; it is the
+   teacher-state analogue of the Jacobian lens's "what this residual is
+   disposed to make the model say" readout. `J_L` is frozen, applied only as
+   a matrix inside the current local loss, and therefore neither creates a
+   long backward path nor introduces reference-text supervision. Map our
+   1-based `L` to the lens's 0-based block output `L-1`; retain the ordinary
+   state fallback for the final normalized endpoint because published lenses
+   stop before that nonlinearity. Load one matrix at a time from CPU/pinned
+   memory (1.7B: 16 MB/layer fp32; 14B: ~100 MB/layer), not all 14B matrices
+   to GPU. Require exact model identity, width, source-layer coverage, and
+   lens metadata in the run config/report. Main scientific risk: `J_L` is an
+   average generic-corpus/future-position Jacobian, not the current
+   prompt-conditioned derivative; compare it first against `vocab_mse` at
+   matched update norm, and report whether it improves full recall without
+   moving the standard-damage frontier. Do NOT apply a teacher lens to a
+   student of a changed width; same-width fine-tunes share a basis but should
+   still receive a post-hoc separate-lens comparison if we claim transport
+   preservation.
+
+3. **Multi-scale/cumulative trajectory matching**. Match short finite
    differences `h_L-h_{L-k}` for uniform `k in {1,2,4,8}` (only within the
    current sanctioned window), or cumulative change `h_L-h_0`, using normalized
    MSE or centered vocabulary-score cosine. This interpolates between local
@@ -64,7 +91,7 @@ implementation commitment.
    share per scale and compare at matched update norm, not merely equal nominal
    weights.
 
-3. **Relational token-geometry distillation**. Instead of requiring every
+4. **Relational token-geometry distillation**. Instead of requiring every
    hidden coordinate to coincide, match teacher/student relations among aligned
    token rows: pairwise cosine matrix, normalized squared-distance matrix, or
    centered Gram matrix. Example:
@@ -78,7 +105,7 @@ implementation commitment.
    auxiliary beside `nmse` or `vocab_mse`, never alone. Include distance and
    angle variants separately; they encode different invariances.
 
-4. **Attention-route distillation**. Match causal attention distributions for
+5. **Attention-route distillation**. Match causal attention distributions for
    each head and query at the aligned answer positions:
    `mean KL(A_t || A_s)` over valid keys, optionally with a Jensen-Shannon or
    squared-logit alternative. This targets the hypothesized mechanism directly:
@@ -92,7 +119,7 @@ implementation commitment.
    fused/flash kernels may not expose attention probabilities, and hybrid
    attention/GatedDeltaNet models need a separate state-transition target.
 
-5. **Value/output contribution matching**. Attention weights alone do not say
+6. **Value/output contribution matching**. Attention weights alone do not say
    what is written. Match each block's attention contribution after value and
    output projection (`O_L`, before residual addition), or separately match
    per-head value-weighted context vectors. Use normalized MSE/cosine and, where
@@ -106,7 +133,7 @@ implementation commitment.
 
 ### Priority B — useful controls or higher-risk candidates
 
-6. **Offline-whitened/Mahalanobis hidden matching**. Estimate a regularized
+7. **Offline-whitened/Mahalanobis hidden matching**. Estimate a regularized
    activation covariance `Sigma_L` from a broad, frozen base-model calibration
    corpus, then minimize
    `(h_s-h_t)^T (Sigma_L + lambda I)^(-alpha) (h_s-h_t)` with
@@ -118,7 +145,7 @@ implementation commitment.
    layer. Clip inverse eigenvalues and report condition numbers. A low-rank
    eigensystem plus isotropic remainder avoids an `H x H` device buffer.
 
-7. **Base-anchored trajectory preservation at every layer**. On general anchor
+8. **Base-anchored trajectory preservation at every layer**. On general anchor
    text, match the trained student's states to the frozen base model using
    `nmse` or `vocab_mse` at every layer, while recall items retain the teacher
    trajectory objective. Output anchor-KL only observes final behavior; this
@@ -129,7 +156,7 @@ implementation commitment.
    anchor weight with depth; compare destruction, recall, and parameter-update
    norm at matched item budgets.
 
-8. **Cross-layer relational/flow loss**. Match teacher and student similarities
+9. **Cross-layer relational/flow loss**. Match teacher and student similarities
    between successive layer representations for the same tokens, e.g. the
    cosine matrix between `h_{L-1}` and `h_L`, or the normalized change in token
    Gram matrices. This supervises how geometry evolves without insisting that
@@ -139,7 +166,7 @@ implementation commitment.
    coordinate-anchoring term. Only adjacent or uniformly sampled fixed offsets
    are legal—an output-biased layer pairing would violate the naming contract.
 
-9. **Contrastive trajectory loss (InfoNCE / soft nearest-neighbor)**. Treat the
+10. **Contrastive trajectory loss (InfoNCE / soft nearest-neighbor)**. Treat the
    same token and layer in teacher/student as the positive and other positions
    (preferably other examples) as negatives. This may retain token identity and
    prevent collapsed direction-only solutions. In-sequence negatives are often
@@ -149,7 +176,7 @@ implementation commitment.
    audit, and always combine with an absolute metric because contrastive
    alignment does not guarantee frozen-head compatibility.
 
-10. **Untied input-embedding metric**. On models whose input embedding and
+11. **Untied input-embedding metric**. On models whose input embedding and
     unembedding are genuinely untied, define the quadratic metric induced by
     the frozen input embedding, analogous to `vocab_mse`, or compare centered
     scores under that matrix. It supplies an independent semantic geometry and
@@ -159,7 +186,7 @@ implementation commitment.
     and verify orientation/scaling because model families implement tied and
     untied heads differently.
 
-11. **Robust/adaptive combinations**. Existing Huber is fixed-scale. Untested
+12. **Robust/adaptive combinations**. Existing Huber is fixed-scale. Untested
     robust choices include per-token pseudo-Huber/Charbonnier, clipped NMSE,
     and an uncertainty-balanced sum of state, delta, and relational losses.
     These may stop a few high-error tokens/layers from setting the update.
@@ -170,7 +197,7 @@ implementation commitment.
 
 ### Low-priority bound checks (not expected winners)
 
-12. **Reverse or symmetric teacher-distribution divergence**. Reverse KL
+13. **Reverse or symmetric teacher-distribution divergence**. Reverse KL
     `KL(student || teacher)` is mode-seeking; Jensen-Shannon and temperature-
     softened symmetric KL are bounded/more balanced. These remain shaped by the
     teacher vocabulary distribution and therefore inherit the measured groove
