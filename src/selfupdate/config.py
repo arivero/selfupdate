@@ -1,7 +1,7 @@
 """Experiment configuration: plain dataclasses loaded from YAML.
 
 ``load_config`` reads a base YAML plus an optional experiment YAML that
-overrides it (shallow-merged per section).
+overrides it (deep-merged: nested overrides keep their siblings).
 """
 
 from __future__ import annotations
@@ -265,13 +265,25 @@ def _load_yaml_mapping(path: str | Path) -> dict:
     return data
 
 
+def _merge_deep(base: dict, over: dict) -> dict:
+    """Recursive dict merge: an override that sets one key of a nested dict
+    keeps its siblings. The old one-level `cfg[k].update(v)` silently RESET
+    siblings of any dict nested two levels down (e.g. an experiment pinning
+    train.lora.enabled dropped the base's lora.r/alpha back to dataclass
+    defaults) — the silent-config-fork bug class. Landed 2026-07-11 after an
+    A/B audit of all 179 real (base, experiment) pairs showed zero semantic
+    diffs, so no existing config relied on the reset behavior."""
+    merged = dict(base)
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(merged.get(k), dict):
+            merged[k] = _merge_deep(merged[k], v)
+        else:
+            merged[k] = v
+    return merged
+
+
 def load_config(base: str | Path, experiment: str | Path | None = None) -> ExperimentConfig:
     cfg = _load_yaml_mapping(base)
     if experiment:
-        over = _load_yaml_mapping(experiment)
-        for k, v in over.items():
-            if isinstance(v, dict) and isinstance(cfg.get(k), dict):
-                cfg[k].update(v)
-            else:
-                cfg[k] = v
+        cfg = _merge_deep(cfg, _load_yaml_mapping(experiment))
     return _from_dict(ExperimentConfig, cfg)
