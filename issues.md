@@ -21,6 +21,26 @@ the campaign done-list and the completed hot-loop ladder.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
 
+## Observed RAG failure mode — full-document copying is not guaranteed (2026-07-12)
+
+The untrained Qwen3-1.7B base model was asked the ordinary recall prompt
+`¿Qué línea sigue inmediatamente a esta? «Bajo la nevada, un hombre»` with
+the full Machado source appended as `Documento recuperado`, using the same
+chat template and greedy RAG-ceiling path as `tasks_eval(with_context=True)`.
+It answered a paraphrastic/hallucinated continuation rather than the literal
+in-context line `por el camino cabalga;`.
+
+This is **not** a context-placement or truncation bug: the expected text was
+at input tokens 3092--3098, the sole `<|im_end|>` was at 6466 *after* the
+document, and the 6,475-token prompt was far inside Qwen's 131,072-token
+window. It is a retrieval/use failure: the base does not reliably select and
+copy a relevant line from a long retrieved document. Do not call the
+full-document RAG ceiling an oracle or infer that RAG exposure itself supplies
+literal recitation. Required control before any such claim: repeat the exact
+question with a short, provenance-recorded local passage (the retrieval form
+used by the training examples), and report both full-document and local-passage
+results separately.
+
 ## OPEN — untested same-width teacher/student losses (owner question, 2026-07-10)
 
 Scope: losses below have not been campaign-tested as trainer objectives in this
