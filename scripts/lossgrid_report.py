@@ -189,6 +189,11 @@ def write(rows: list[dict]) -> None:
         "stated source: fast epoch-0 subset or full pinned Qwen3-1.7B reference "
         "on ARC-Easy, ARC-Challenge, and HellaSwag.",
         "",
+        "Deliberately unqueued: `lens_js` slide1/slide2 configs exist but were "
+        "never run — a bounded symmetric-divergence control, not a sweep "
+        "candidate (issues.md low-priority item 13); absence is by design, "
+        "not a missing artifact.",
+        "",
         "| run | loss | slide | status | items | epoch | source | epoch-0 M/Q1/Q4 | final M/Q1/Q4 | e0 mean | final mean | e0 standard | standard Δ | worst Δ |",
         "|---|---|---:|---|---:|---:|---|---|---|---:|---:|---:|---:|---:|",
     ]
