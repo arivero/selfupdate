@@ -64,12 +64,27 @@ def main() -> int:
     # Accepted for CLI compatibility with existing queue rows only: the
     # recite_eval-era batching/scoring knobs have no equivalent in tasks_eval
     # (single-item greedy loop), same as evaluate.py's own --base path.
-    ap.add_argument("--batch-size", type=int, default=None)
-    ap.add_argument("--score-workers", type=int, default=None)
-    ap.add_argument("--shuffle-seed", type=int, default=None)
-    ap.add_argument("--bucket-by-length", action="store_true")
+    # They are IGNORED and warn below (knob-flow law).
+    ap.add_argument("--batch-size", type=int, default=None,
+                    help="ignored (retired recite/CER engine flag)")
+    ap.add_argument("--score-workers", type=int, default=None,
+                    help="ignored (retired recite/CER engine flag)")
+    ap.add_argument("--shuffle-seed", type=int, default=None,
+                    help="ignored (retired recite/CER engine flag)")
+    ap.add_argument("--bucket-by-length", action="store_true",
+                    help="ignored (retired recite/CER engine flag)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    retired = [flag for flag, val, default in (
+        ("--batch-size", args.batch_size, None),
+        ("--bucket-by-length", args.bucket_by_length, False),
+        ("--score-workers", args.score_workers, None),
+        ("--shuffle-seed", args.shuffle_seed, None),
+    ) if val != default]
+    if retired:
+        print("WARNING: ignoring " + " ".join(retired) + " — retired with the "
+              "recite/CER engine (2026-07-10); the three-task battery "
+              "generates item-by-item.", file=sys.stderr)
     cfg = load_config(args.config, args.experiment)
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
@@ -113,9 +128,15 @@ def main() -> int:
         "schema_version": 2,
         "teacher_reference_kind": "teacher_epoch0_rag_context",
         "model": cfg.model.name,
-        "training_scope": corpus_names,
+        "corpora_measured": corpus_names,
+        "corpus_selection": ("cli_override" if args.recall_corpora
+                             else "inferred_from_training_data"),
         "corpora": corpus_results,
     }
+    # training_scope is only honest when inferred from the experiment's own
+    # data paths; a --recall-corpora override says what the operator measured.
+    if not args.recall_corpora:
+        r["training_scope"] = corpus_names
     # One-corpus artifacts retain the v1 surface for downstream compatibility
     # with evaluate.py's tasks.json shape.
     if len(corpus_results) == 1:

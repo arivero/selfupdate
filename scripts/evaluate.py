@@ -224,15 +224,20 @@ def main() -> None:
               "the checkpoint's training data (chapter-rung-specific for "
               "Quijote); combined checkpoints measure both corpora"),
     )
+    ap.add_argument("--max-extra-tokens", type=int, default=32,
+                    help="per-item generation budget beyond the reference "
+                         "length (default matches the battery's historical 32)")
+    # Retired with the recite/CER engine (2026-07-10). Accepted so historical
+    # queue rows don't crash at dispatch, but they are IGNORED and warn below
+    # (knob-flow law: no knob may silently do nothing).
     ap.add_argument("--batch-size", type=int, default=1,
-                    help="batched generation for standard recitation evals")
-    ap.add_argument("--max-extra-tokens", type=int, default=48)
+                    help="ignored (retired recite/CER engine flag)")
     ap.add_argument("--bucket-by-length", action="store_true",
-                    help="throughput mode: group examples by reference length")
+                    help="ignored (retired recite/CER engine flag)")
     ap.add_argument("--score-workers", type=int, default=None,
-                    help="CPU workers for CER scoring in batched eval")
+                    help="ignored (retired recite/CER engine flag)")
     ap.add_argument("--shuffle-seed", type=int, default=None,
-                    help="fixed random order for batched eval; results are restored by example index")
+                    help="ignored (retired recite/CER engine flag)")
     ap.add_argument("--auto-map", action="store_true",
                     help="load with device_map=auto (multi-card eval, e.g. 32B)")
     ap.add_argument("--load-4bit", action="store_true",
@@ -242,6 +247,16 @@ def main() -> None:
                          "Implies device_map=auto and skips the .to(device) move "
                          "(bnb 4-bit tensors cannot be re-placed).")
     args = ap.parse_args()
+    retired = [flag for flag, val, default in (
+        ("--batch-size", args.batch_size, 1),
+        ("--bucket-by-length", args.bucket_by_length, False),
+        ("--score-workers", args.score_workers, None),
+        ("--shuffle-seed", args.shuffle_seed, None),
+    ) if val != default]
+    if retired:
+        print("WARNING: ignoring " + " ".join(retired) + " — retired with the "
+              "recite/CER engine (2026-07-10); the three-task battery "
+              "generates item-by-item.", file=sys.stderr)
     cfg = load_config(args.config, args.experiment)
     checkpoint_cfg = _checkpoint_run_config(args.checkpoint)
     if checkpoint_cfg and not args.base:
@@ -309,7 +324,8 @@ def main() -> None:
     corpus_results = {}
     for corpus in corpus_names:
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
-                            n_per_task=args.n_per_task)
+                            n_per_task=args.n_per_task,
+                            max_extra_tokens=args.max_extra_tokens)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
         parts = "  ".join(
@@ -322,9 +338,16 @@ def main() -> None:
         "teacher_reference_kind": (
             "teacher_epoch0_native_no_rag" if args.base else "checkpoint"),
         "model": cfg.model.name,
-        "training_scope": corpus_names,
+        "corpora_measured": corpus_names,
+        "corpus_selection": ("cli_override" if args.recall_corpora
+                             else "inferred_from_training_data"),
         "corpora": corpus_results,
     }
+    # training_scope is only honest when the corpora were inferred from the
+    # checkpoint's own training data; a --recall-corpora override says what
+    # the operator measured, not what the run trained on.
+    if not args.recall_corpora:
+        r["training_scope"] = corpus_names
     # One-corpus artifacts retain the v1 surface for downstream compatibility.
     if len(corpus_results) == 1:
         only = next(iter(corpus_results.values()))

@@ -28,7 +28,11 @@ def results_table() -> pd.DataFrame:
     base_ce = {}  # per-model epoch-zero teacher references
     base_p = Path("runs/base-eval-full/recite.json")
     if base_p.exists():
-        base_ce["Qwen/Qwen3-0.6B"] = json.loads(base_p.read_text())["general"]["mean_ce"]
+        # "general" was retired in eval schema v2 (three-task battery);
+        # only pre-v2 artifacts carry it, so degrade to no-baseline.
+        base_general = json.loads(base_p.read_text()).get("general")
+        if base_general:
+            base_ce["Qwen/Qwen3-0.6B"] = base_general["mean_ce"]
     p17 = Path("runs/base-1p7b-general.json")
     if p17.exists():
         base_ce["Qwen/Qwen3-1.7B"] = json.loads(p17.read_text())["mean_ce"]
