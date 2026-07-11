@@ -81,6 +81,26 @@ def retrieve_window(lines: list[str], block: list[str], pad: int = 4) -> str:
                      "not found in corpus")
 
 
+def retrieve_chapter(poem_path: str, block: list[str]) -> str:
+    """Chapter-scope retrieval: the whole structural unit containing the
+    block — named part for the verse corpus, capítulo (section) for Quijote
+    prose. Shares the chapter-span convention of the v5 dataset builder
+    (data/questions.py) so the chapter ceiling sees exactly the training
+    arms' RAG form."""
+    from ..data.poem import load_poem
+    from ..data.questions import _chapter_span
+
+    verses = load_poem(poem_path)
+    texts = [v.text for v in verses]
+    key = "section" if "quijote" in str(poem_path).lower() else "part"
+    for i in range(len(texts) - len(block) + 1):
+        if texts[i: i + len(block)] == block:
+            lo, hi = _chapter_span(verses, i, key)
+            return "\n".join(texts[lo:hi])
+    raise ValueError(f"retrieval failed: block starting {block[0]!r} "
+                     "not found in corpus")
+
+
 def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
                 cloze_deletions: tuple = (1, 2, 4, 8),
                 block_lines: tuple = (2, 4)) -> list[dict]:
@@ -275,7 +295,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     try:
         items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
         scope = {False: None, True: "full"}.get(with_context, with_context)
-        if scope not in (None, "full", "window"):
+        if scope not in (None, "full", "window", "chapter"):
             raise ValueError(f"unknown with_context scope {with_context!r}")
         contexts = None
         if scope == "full":
@@ -285,6 +305,9 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
             lines = [l for b in corpus_blocks(poem_path) for l in b]
             contexts = [retrieve_window(lines, it["block"],
                                         pad=context_window_lines)
+                        for it in items]
+        elif scope == "chapter":
+            contexts = [retrieve_chapter(poem_path, it["block"])
                         for it in items]
         if context_pad_random:
             if contexts is None:

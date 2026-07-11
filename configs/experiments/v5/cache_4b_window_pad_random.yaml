@@ -1,0 +1,11 @@
+# v5 teacher cache identity: 4b x window x pad_random (generation +
+# premise + recitation telemetry live in the hashed cache dir). Generated
+# by scripts/gen_v5_campaign.py.
+run_name: v5cache_4b_window_pad_random
+model:
+  name: Qwen/Qwen3-4B
+data:
+  examples_path: data/combined/examples_v5_window.jsonl
+mask:
+  mode: rag_tool
+  compaction: pad_random

@@ -59,13 +59,15 @@ def main() -> int:
                     help="batched greedy decode for the battery; the ceiling's "
                          "with_context prompts pay a corpus-length prefill per "
                          "item, so big teachers want 4-8 here")
-    ap.add_argument("--context-scope", choices=("full", "window"),
+    ap.add_argument("--context-scope", choices=("full", "window", "chapter"),
                     default="full",
-                    help="ceiling RAG form: full corpus file (historical) or "
+                    help="ceiling RAG form: full corpus file (historical), "
                          "per-item exact-match retrieval of the source block "
                          "±--context-window-lines (pair with window-scope v5 "
-                         "arms; issues.md 2026-07-12: full-document copying "
-                         "is not reliable — report both, never conflate)")
+                         "arms), or the containing chapter/part (pair with "
+                         "chapter-scope arms; issues.md 2026-07-12: "
+                         "full-document copying is not reliable — report "
+                         "scopes separately, never conflate)")
     ap.add_argument("--context-window-lines", type=int, default=4)
     ap.add_argument("--context-pad-random", action="store_true",
                     help="FLOOR variant: replace the retrieved document by a "
@@ -145,7 +147,7 @@ def main() -> int:
 
     model_short = cfg.model.name.split("/")[-1]
     kind = ("teacher_epoch0_rag_context" if args.context_scope == "full"
-            else "teacher_epoch0_rag_window")
+            else f"teacher_epoch0_rag_{args.context_scope}")
     if args.context_pad_random:
         kind += "_padfloor"
     r = {

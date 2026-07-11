@@ -62,6 +62,15 @@ def load_jsonl(path: str | Path) -> list[dict]:
     return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines()]
 
 
+def is_open_answer_dataset(path: str | Path) -> bool:
+    """True for v5 question-only datasets (empty answer segments): the
+    teacher's generated answers live in the teacher cache, so even
+    online-teacher runs must load the cache as their ANSWER source."""
+    with open(path, encoding="utf-8") as f:
+        first = f.readline()
+    return bool(first) and json.loads(first).get("answer") == ""
+
+
 class DistillDataset(Dataset):
     """Yields student inputs plus lazily-read teacher targets.
 

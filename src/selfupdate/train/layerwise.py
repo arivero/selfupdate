@@ -59,6 +59,7 @@ from ..data.dataset import (
     LengthBucketBatchSampler,
     collate_items,
     collate_padded_items,
+    is_open_answer_dataset,
 )
 from ..eval.tasks import tasks_eval
 from ..utils.runlog import setup_run_dir
@@ -128,7 +129,12 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
                 f"blocks ({cfg.model.name})")
     teacher = rt.load_teacher(moe_load_kw)
     online = teacher is not None
-    cache = None if online else rt.load_cache()
+    # Open-answer (v5) datasets keep their generated answers in the teacher
+    # cache, so an online-teacher run still loads the cache as its ANSWER
+    # source (need_layers stays [] — hidden targets remain per-step).
+    cache = (rt.load_cache()
+             if (not online or is_open_answer_dataset(cfg.data.examples_path))
+             else None)
 
     moe = None
     if cfg.train.moe_mode != "dense_or_black_box":
