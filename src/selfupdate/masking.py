@@ -122,6 +122,27 @@ RAG_STUB = "\n\nDocumento recuperado:\n[no disponible]"
 THINK_STUB = "..."
 
 
+_FILL_VOCAB_CACHE: dict[int, list[int]] = {}
+
+
+def random_fill_ids(tokenizer, key: str, n: int) -> list[int]:
+    """Seeded length-``n`` sample of DISTINCT ordinary-vocabulary token ids
+    (special/control ids banned) — the pad_random censor fill, shared by
+    ``ContextMasker`` (training) and the eval battery's padded floor.
+    Deterministic per ``key``."""
+    vocab = _FILL_VOCAB_CACHE.get(id(tokenizer))
+    if vocab is None:
+        banned = set(tokenizer.all_special_ids) | set(tokenizer.get_added_vocab().values())
+        vocab = [i for i in range(tokenizer.vocab_size) if i not in banned]
+        _FILL_VOCAB_CACHE[id(tokenizer)] = vocab
+    if n > len(vocab):
+        raise ValueError(
+            f"{key}: fill of {n} tokens exceeds the ordinary vocabulary "
+            f"({len(vocab)})")
+    seed = int(hashlib.sha256(key.encode()).hexdigest()[:12], 16)
+    return random.Random(seed).sample(vocab, n)
+
+
 def render_rag(
     example_id: str,
     question: str,
@@ -296,22 +317,12 @@ class ContextMasker:
     def __init__(self, tokenizer, pad_random: bool = False):
         self.tokenizer = tokenizer
         self.pad_random = pad_random
-        self._fill_vocab: list[int] | None = None
 
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False) if text else []
 
     def _fill_ids(self, example_id: str, n: int) -> list[int]:
-        if self._fill_vocab is None:
-            tok = self.tokenizer
-            banned = set(tok.all_special_ids) | set(tok.get_added_vocab().values())
-            self._fill_vocab = [i for i in range(tok.vocab_size) if i not in banned]
-        if n > len(self._fill_vocab):
-            raise ValueError(
-                f"{example_id}: privileged block ({n} tokens) exceeds the "
-                f"fill vocabulary ({len(self._fill_vocab)})")
-        seed = int(hashlib.sha256(example_id.encode()).hexdigest()[:12], 16)
-        return random.Random(seed).sample(self._fill_vocab, n)
+        return random_fill_ids(self.tokenizer, example_id, n)
 
     def build(self, ex: SegmentedExample,
               answer_ids: list[int] | None = None) -> AlignedPair:

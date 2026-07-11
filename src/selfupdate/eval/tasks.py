@@ -68,6 +68,19 @@ def corpus_blocks(path: str) -> list[list[str]]:
     return blocks
 
 
+def retrieve_window(lines: list[str], block: list[str], pad: int = 4) -> str:
+    """Exact-match retrieval ("grepping", owner 2026-07-12): locate the
+    block's consecutive lines in the flat corpus and return them ± ``pad``
+    context lines. The windowed teacher ceiling must FIND its passage the
+    way a retrieval tool would, not receive it by construction."""
+    for i in range(len(lines) - len(block) + 1):
+        if lines[i] == block[0] and lines[i: i + len(block)] == block:
+            lo, hi = max(0, i - pad), min(len(lines), i + len(block) + pad)
+            return "\n".join(lines[lo:hi])
+    raise ValueError(f"retrieval failed: block starting {block[0]!r} "
+                     "not found in corpus")
+
+
 def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
                 cloze_deletions: tuple = (1, 2, 4, 8),
                 block_lines: tuple = (2, 4)) -> list[dict]:
@@ -81,22 +94,22 @@ def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
         b = rng.choice([b for b in blocks if len(b) >= 2])
         if k % 2 == 0:
             i = rng.randrange(len(b) - 1)
-            items.append({"task": "next", "kind": "next_line",
+            items.append({"task": "next", "kind": "next_line", "block": b,
                           "x": b[i], "n": 0, "reference": b[i + 1]})
         else:
             cut = max(1, len(b) // 2)
-            items.append({"task": "next", "kind": "end_block",
+            items.append({"task": "next", "kind": "end_block", "block": b,
                           "x": "\n".join(b[:cut]), "n": 0,
                           "reference": "\n".join(b[cut:])})
     for k in range(n_per_task):  # prev
         b = rng.choice([b for b in blocks if len(b) >= 2])
         if k % 2 == 0:
             i = rng.randrange(1, len(b))
-            items.append({"task": "prev", "kind": "prev_line",
+            items.append({"task": "prev", "kind": "prev_line", "block": b,
                           "x": b[i], "n": 0, "reference": b[i - 1]})
         else:
             cut = max(1, len(b) // 2)
-            items.append({"task": "prev", "kind": "start_block",
+            items.append({"task": "prev", "kind": "start_block", "block": b,
                           "x": "\n".join(b[cut:]), "n": 0,
                           "reference": "\n".join(b[:cut])})
     for k in range(n_per_task):  # cloze
@@ -109,7 +122,7 @@ def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
         pos = rng.randrange(0, len(words) - n_del + 1)
         deleted = words[pos: pos + n_del]
         masked = words[:pos] + ["___"] * n_del + words[pos + n_del:]
-        items.append({"task": "cloze", "kind": "cloze", "n": n_del,
+        items.append({"task": "cloze", "kind": "cloze", "n": n_del, "block": b,
                       "x": " ".join(masked), "reference": " ".join(deleted)})
     return items
 
@@ -220,7 +233,9 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
 @torch.no_grad()
 def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                n_per_task: int = 24, max_extra_tokens: int = 32,
-               keep_examples: int = 6, with_context: bool = False,
+               keep_examples: int = 6, with_context: bool | str = False,
+               context_window_lines: int = 4,
+               context_pad_random: bool = False,
                generation_batch: int = 1) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
 
@@ -228,16 +243,28 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     The STUDENT battery never sets this — living without the passage in
     context is the entire point of the student; this flag exists only for
     the separate teacher-ceiling reference test, which measures the SAME
-    three tasks but with the full corpus file prepended as a retrieved
-    document, exactly like training's RAG mode
+    three tasks but with a retrieved document prepended, exactly like
+    training's RAG mode
     (``masking.render_rag``: "\\n\\nDocumento recuperado:\\n{passage}").
-    Same questions, same references, same scoring as the no-context battery
-    — only the prompt changes — so a teacher-ceiling score is directly
+    True/"full" = the whole corpus file (historical ceiling); "window" =
+    per-item exact-match retrieval of the item's source block ±
+    ``context_window_lines`` (:func:`retrieve_window`) — the ceiling paired
+    with window-scope v5 training, and the honest control demanded by the
+    2026-07-12 full-document-copying failure. Same questions, references and
+    scoring as the no-context battery, so ceiling scores are directly
     comparable to a checkpoint's plain ``tasks_eval`` score.
+
+    ``context_pad_random``: replace the (scope-sized) retrieved document by
+    a seeded random distinct-token fill of the same tokenized length — the
+    epoch-0 teacher FLOOR paired with pad_random-censored training arms
+    (the ``remove`` floor is simply ``with_context=False``). Approximate to
+    one decode/re-encode round trip; the training-side fill is exact at the
+    id level.
 
     ``generation_batch``: 1 (default) keeps the historical per-item greedy
     loop bit-for-bit; >1 decodes in left-padded batches — measured 2026-07-11
     because per-epoch B=1 eval was 42-56%% of loss-grid arm wall time."""
+    from ..masking import random_fill_ids
     from .recite import greedy_generate_positions, strip_think
 
     # This public evaluator is called directly by scripts as well as between
@@ -247,10 +274,29 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     model.eval()
     try:
         items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
-        context = None
-        if with_context:
+        scope = {False: None, True: "full"}.get(with_context, with_context)
+        if scope not in (None, "full", "window"):
+            raise ValueError(f"unknown with_context scope {with_context!r}")
+        contexts = None
+        if scope == "full":
             with open(poem_path, encoding="utf-8") as f:
-                context = f.read()
+                contexts = [f.read()] * len(items)
+        elif scope == "window":
+            lines = [l for b in corpus_blocks(poem_path) for l in b]
+            contexts = [retrieve_window(lines, it["block"],
+                                        pad=context_window_lines)
+                        for it in items]
+        if context_pad_random:
+            if contexts is None:
+                raise ValueError(
+                    "context_pad_random needs with_context to size the fill "
+                    "(the paired floor matches its ceiling's scope)")
+            contexts = [
+                tokenizer.decode(random_fill_ids(
+                    tokenizer, f"evalfloor-{seed}-{i}",
+                    len(tokenizer.encode(c, add_special_tokens=False))))
+                for i, c in enumerate(contexts)
+            ]
         # ``convert_tokens_to_ids('<|im_end|>')`` returns the unknown token id
         # on SentencePiece models such as Mistral.  chatfmt knows whether a
         # model actually has a single-token turn closer and otherwise returns
@@ -258,10 +304,10 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         eos = stop_token_id(tokenizer)
         device = next(model.parameters()).device
         questions, prompts, budgets = [], [], []
-        for it in items:
+        for i, it in enumerate(items):
             q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
-            content = (f"{q}\n\nDocumento recuperado:\n{context}"
-                      if context is not None else q)
+            content = (f"{q}\n\nDocumento recuperado:\n{contexts[i]}"
+                      if contexts is not None else q)
             questions.append(q)
             prompts.append(tokenizer.apply_chat_template(
                 [{"role": "user", "content": content}], tokenize=False,
@@ -294,7 +340,12 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                                  "reference": it["reference"],
                                  "answer": answer.strip()[:200], **s})
         result = {"seed": seed, "n_per_task": n_per_task,
-                  "generation_batch": generation_batch, "tasks": {}}
+                  "generation_batch": generation_batch,
+                  "with_context": scope or False,
+                  "context_pad_random": context_pad_random,
+                  **({"context_window_lines": context_window_lines}
+                     if scope == "window" else {}),
+                  "tasks": {}}
         for task, rows in agg.items():
             result["tasks"][task] = {
                 "n": len(rows),

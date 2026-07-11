@@ -59,6 +59,18 @@ def main() -> int:
                     help="batched greedy decode for the battery; the ceiling's "
                          "with_context prompts pay a corpus-length prefill per "
                          "item, so big teachers want 4-8 here")
+    ap.add_argument("--context-scope", choices=("full", "window"),
+                    default="full",
+                    help="ceiling RAG form: full corpus file (historical) or "
+                         "per-item exact-match retrieval of the source block "
+                         "±--context-window-lines (pair with window-scope v5 "
+                         "arms; issues.md 2026-07-12: full-document copying "
+                         "is not reliable — report both, never conflate)")
+    ap.add_argument("--context-window-lines", type=int, default=4)
+    ap.add_argument("--context-pad-random", action="store_true",
+                    help="FLOOR variant: replace the retrieved document by a "
+                         "seeded random distinct-token fill of matched length "
+                         "(the epoch-0 reference paired with pad_random arms)")
     ap.add_argument(
         "--recall-corpora", nargs="+", default=None,
         help="recall corpora to measure. By default this is inferred from "
@@ -119,7 +131,10 @@ def main() -> int:
     corpus_results = {}
     for corpus in corpus_names:
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
-                            n_per_task=args.n_per_task, with_context=True,
+                            n_per_task=args.n_per_task,
+                            with_context=args.context_scope,
+                            context_window_lines=args.context_window_lines,
+                            context_pad_random=args.context_pad_random,
                             generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
@@ -129,9 +144,15 @@ def main() -> int:
         print(f"{corpus}: {parts}")
 
     model_short = cfg.model.name.split("/")[-1]
+    kind = ("teacher_epoch0_rag_context" if args.context_scope == "full"
+            else "teacher_epoch0_rag_window")
+    if args.context_pad_random:
+        kind += "_padfloor"
     r = {
         "schema_version": 2,
-        "teacher_reference_kind": "teacher_epoch0_rag_context",
+        "teacher_reference_kind": kind,
+        "context_scope": args.context_scope,
+        "context_pad_random": args.context_pad_random,
         "model": cfg.model.name,
         "corpora_measured": corpus_names,
         "corpus_selection": ("cli_override" if args.recall_corpora
