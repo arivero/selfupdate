@@ -11,7 +11,12 @@ Metrics are plain accuracies (CER and the other recovery metrics are
 retired from the active eval surface): ``exact`` = fraction of items whose
 normalized answer matches the reference exactly; ``word_acc`` = fraction of
 reference words recovered in order (longest common subsequence / reference
-length). Task sets are DETERMINISTIC (seeded) so runs stay comparable.
+length). Words for the LCS are split on ALL readable separators — spaces,
+newlines, and punctuation including the verse-joining conventions people
+actually use ("/", ",", line returns) — so "verso uno/verso dos" and
+"verso uno,\nverso dos" recover the same words (owner directive
+2026-07-12; ``exact`` keeps punctuation because exact recitation includes
+it). Task sets are DETERMINISTIC (seeded) so runs stay comparable.
 """
 
 from __future__ import annotations
@@ -111,9 +116,24 @@ def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
 
 _norm_re = re.compile(r"\s+")
 
+# Word separators for the LCS: whitespace plus every readable punctuation
+# mark, including the "/" and "," verse-joining conventions and the Spanish
+# marks (mirrors masking._SPAN_PUNCT). Attached punctuation must never make
+# "cabalga;" a different word than "cabalga".
+_word_sep_re = re.compile(
+    r"[\s" + re.escape(
+        r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""" + "¡¿«»“”‘’—–…·"
+    ) + r"]+"
+)
+
 
 def _norm(s: str) -> str:
     return _norm_re.sub(" ", s.replace("«", "").replace("»", "")).strip()
+
+
+def _words(s: str) -> list[str]:
+    """Word stream for the LCS metric: separator- and punctuation-free."""
+    return [w for w in _word_sep_re.split(s) if w]
 
 
 def _lcs_words(a: list[str], b: list[str]) -> int:
@@ -129,7 +149,7 @@ def _lcs_words(a: list[str], b: list[str]) -> int:
 
 def score(reference: str, answer: str) -> dict:
     ref, ans = _norm(reference), _norm(answer)
-    ref_w, ans_w = ref.split(), ans.split()
+    ref_w, ans_w = _words(reference), _words(answer)
     return {
         "exact": float(ref == ans),
         "word_acc": (_lcs_words(ref_w, ans_w) / len(ref_w)) if ref_w else 0.0,
