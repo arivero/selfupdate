@@ -26,7 +26,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from selfupdate.config import load_config
 from selfupdate.data.dataset import DistillDataset
 from selfupdate.train.blocks import BlockStack
-from selfupdate.train.layerwise import OnlineTeacherSource
+from selfupdate.train.teacher_source import OnlineTeacherSource
 from selfupdate.train.losses import HiddenLoss
 
 

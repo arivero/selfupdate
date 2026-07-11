@@ -113,7 +113,7 @@ def layer_residuals(cfg, checkpoint: str, out_dir: Path,
     Writes layer_residuals.{json,csv,png} next to recite.json."""
     from selfupdate.data.dataset import DistillDataset
     from selfupdate.train.blocks import BlockStack
-    from selfupdate.train.layerwise import OnlineTeacherSource
+    from selfupdate.train.teacher_source import OnlineTeacherSource
     from selfupdate.train.losses import HiddenLoss, hidden_match
 
     device = cfg.model.device

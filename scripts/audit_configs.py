@@ -21,7 +21,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from selfupdate.config import load_config  # noqa: E402
-from selfupdate.train.layerwise import _validate_knob_schedule  # noqa: E402
+from selfupdate.train.validate import validate_knob_schedule as _validate_knob_schedule  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = ROOT / "configs/base.yaml"

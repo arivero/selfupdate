@@ -24,17 +24,19 @@ from selfupdate.data.dataset import Batch, collate_padded_items
 from selfupdate.teacher.cache import TeacherCache, resolve_cache_dir
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import (
-    OnlineTeacherSource,
     _extend_pending_from_batch,
-    _flush_train_log,
     _loader,
     _make_dataset,
-    _pp_device_map,
-    _uses_pipeline_map,
     _summed_batch,
-    _validate_knob_schedule,
 )
-from selfupdate.train.runtime import OptimizerPlan
+from selfupdate.train.runtime import (
+    OptimizerPlan,
+    pp_device_map as _pp_device_map,
+    uses_pipeline_map as _uses_pipeline_map,
+)
+from selfupdate.train.teacher_source import OnlineTeacherSource
+from selfupdate.train.telemetry import _flush_train_log
+from selfupdate.train.validate import validate_knob_schedule as _validate_knob_schedule
 from selfupdate.train.losses import HiddenLoss
 
 

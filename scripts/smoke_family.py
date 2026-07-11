@@ -30,7 +30,7 @@ from selfupdate.data.dataset import load_jsonl
 from selfupdate.eval.recite import student_prompt
 from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.train.blocks import BlockStack
-from selfupdate.train.layerwise import local_block_step, window_step
+from selfupdate.train.steps import local_block_step, window_step
 
 FAMILIES = [
     "mistralai/Mistral-7B-Instruct-v0.1",
