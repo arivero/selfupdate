@@ -144,7 +144,7 @@ def damage_result(run_dir: Path, model: str, bases: dict[str, dict]) -> dict:
     }
 
 
-def collect(runs_dir: Path = Path("runs")) -> tuple[list[dict], dict]:
+def collect(runs_dir: Path = Path("runs")) -> tuple[list[dict], dict, list[str]]:
     rows, bases = [], {}
     std_bases = standard_bases(runs_dir)
     unevaluated = []
@@ -183,7 +183,7 @@ def collect(runs_dir: Path = Path("runs")) -> tuple[list[dict], dict]:
         print(f"WARNING: {len(unevaluated)} run(s) with a config and "
               "checkpoint but NO tasks.json are excluded from every table: "
               + ", ".join(sorted(unevaluated)), file=sys.stderr)
-    return rows, bases
+    return rows, bases, sorted(unevaluated)
 
 
 def result_cell(row: dict, corpus: str, bases: dict) -> tuple[str, str, str]:
@@ -205,23 +205,32 @@ def scope_label(scope: tuple[str, ...]) -> str:
 
 
 def main() -> None:
-    rows, bases = collect()
+    rows, bases, unevaluated = collect()
     if not rows:
         sys.exit("no runs/*/eval/tasks.json yet — wait for the re-eval queue")
     rows.sort(key=lambda r: (r["scope"], r["model"], r["run"]))
     scope_complete = sum(set(r["scope"]).issubset(r["recall"]) for r in rows)
     damage_complete = sum(bool(r["damage"].get("n_common")) for r in rows)
+    checkpoint_total = len(rows) + len(unevaluated)
     out = ["# Checkpoint re-evaluation: recall and model damage", "",
-           f"Recall artifacts exist for {len(rows)}/{len(rows)} checkpoints; "
-           f"{scope_complete}/{len(rows)} cover every corpus in the declared "
+           f"Recall artifacts exist for {len(rows)}/{checkpoint_total} checkpoints; "
+           f"{scope_complete}/{checkpoint_total} cover every corpus in the declared "
            f"training scope. Paired standard-capability results exist for "
-           f"{damage_complete}/{len(rows)} checkpoints. There are {len(bases)} "
+           f"{damage_complete}/{checkpoint_total} checkpoints. There are {len(bases)} "
            "corpus-specific recall base references.", "",
            "Recall word accuracy is the fraction of reference words recovered "
            "in order, averaged over next, previous, and cloze prompts. Each Δ "
            "uses the epoch-zero model on the same corpus. A dash means that "
            "corpus/reference has not been evaluated; it is never imputed from "
            "the other author.", ""]
+
+    if unevaluated:
+        out += ["## Missing checkpoint evaluations", "",
+                "These checkpoints are included in every coverage denominator "
+                "but excluded from score rankings until `eval/tasks.json` "
+                "exists:", ""]
+        out.extend(f"- {name}" for name in unevaluated)
+        out.append("")
 
     def _rung_key(corpus: str) -> tuple:
         m = re.search(r"(\d+)$", corpus)

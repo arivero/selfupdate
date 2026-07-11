@@ -218,7 +218,9 @@ readouts).
 - 🔬 **P0 — Regime-fork lens comparator (free control, time-limited).** The
   2026-07-11 speed flip left the live loss grid with a LABELED fork: same
   losses, same data, `item` B=1 vs `bucketed` B=4 (bf16 kernel-shape
-  numerics + bucket order differ). A checkpoint↔checkpoint lens-divergence
+  numerics + bucket order differ). The five B8 per-epoch telemetry streams
+  also carry the now-fixed per-batch generation-budget confound; use B1 final
+  checkpoint evaluations for outcomes. A checkpoint↔checkpoint lens-divergence
   grid (student-vs-student — everything so far is teacher-vs-student)
   between matched arms would measure how much execution-regime drift
   becomes REPRESENTATIONAL drift at matched budget. This is the

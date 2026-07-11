@@ -384,8 +384,13 @@ numbers in one table.
   collectives inside every linear lose badly at trainable sizes; use PP
   at block boundaries, TP only if a single block cannot fit.
 - Speed regimes measured 2026-07-11 (1.7B, L40S): bucketed B4 = 2.7x
-  item B1 at 30.6 GB; batched eval (generation_batch 8) = 2.8-3.1x, NOT
-  bit-identical (bf16 argmax tie-flips) so science evals keep B=1;
+  item B1 at 30.6 GB; batched eval (generation_batch 8) = 2.8-3.1x. REVIEW
+  CORRECTION 2026-07-11: the original B1/B8 accuracy comparison was
+  confounded because short rows inherited the batch maximum generation
+  budget. Per-row decode truncation now restores the B1 budget contract;
+  only a fresh comparison may quantify bf16 tie-flips. Final science evals
+  stayed B1 and are unaffected; historical per-epoch telemetry from the five
+  flipped arms remains regime-confounded and must be labeled as such;
   card-packing via offload_adam does not raise throughput while arms are
   compute-saturated (91-98% util at B=1). The B1/B4 grid fork is labeled
   via the layer_loss_manifest `regime` column.
@@ -405,7 +410,8 @@ STILL OPEN — deferred with explicit reasons:
   idea requires owner sign-off against the 12k-items law.
 
 STILL OPEN — research (owner's C3 program, EXPERIMENTS.md): loss-grid
-analysis (all 73 arms complete as of 2026-07-11 ~08:00); teacher-stream
+analysis (the original grid closed; the expanded Jacobian/lens queue and its
+current completion count live in `runs/lossgrid_report.md`); teacher-stream
 k-windows (C3 #1); H100 throughput/memory/PP-TP evidence (L40S evidence
 complete); 1.7B cleanliness (intrusion 22-40% at 1.7B vs 1.5-2.5% at
 0.6B — see the intrusion depth-localization probe idea).

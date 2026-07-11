@@ -145,9 +145,10 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
     Same machinery as the retired recite engine's batched path (left pad +
     ``model.generate`` + OOM backoff halving), but a wired knob here, not a
     dead CLI flag.  Per-batch token budget is the max item budget in the
-    batch; shorter answers just stop at EOS.  Greedy batched decode matches
-    the B=1 loop up to bf16 kernel-shape rounding on argmax ties — the
-    B1-vs-B8 spot-check quantifying this is recorded in issues.md.
+    batch; each decoded row is truncated back to its own budget when it did
+    not stop at EOS.  Greedy batched decode therefore matches the B=1 budget
+    contract up to bf16 kernel-shape rounding on argmax ties. The historical
+    B1-vs-B8 spot-check was budget-confounded; see the correction in issues.md.
     """
     was_padding = tokenizer.padding_side
     tokenizer.padding_side = "left"
@@ -180,8 +181,16 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
                 continue
             gen_start = enc["input_ids"].shape[1]
             for row in range(out.shape[0]):
+                # model.generate has one max_new_tokens value for the whole
+                # batch.  Without this per-row bound, a short-reference item
+                # inherited the longest peer's budget (up to +207 tokens in
+                # the current battery), changing the evaluation rather than
+                # merely batching it.  Later tokens cannot affect earlier
+                # greedy tokens, so truncation restores the B=1 contract.
+                budget = budgets[start + row]
                 answers[start + row] = tokenizer.decode(
-                    out[row, gen_start:], skip_special_tokens=True)
+                    out[row, gen_start:gen_start + budget],
+                    skip_special_tokens=True)
             start += out.shape[0]
     finally:
         tokenizer.padding_side = was_padding
