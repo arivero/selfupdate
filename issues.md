@@ -349,161 +349,35 @@ assistant's knowledge cutoff — an inertia blind spot caught by the owner
 2026-07-04; matched-ablation continuity justified staying on Qwen3
 within-campaign, but C3 arms should default to 3.6-generation bases.
 
-## Trainer hot-loop — CLOSED 2026-07-10 (knowledge kept below)
+## Do-not-rebuild knowledge (measured negatives — referenced by AGENTS.md)
 
-Diagnosed sync-bound 2026-07-05 (owner question): `.item()` per block was
-1.46x of the walk. The C3 engineering ladder is COMPLETE — GPU-side
-logging, padded/bucketed batching with equivalence tests, window forward
-dedup, one-AdamW foreach policy (2026-07-09); then the 2026-07-10
-refactor: TrainingRuntime + explicit OptimizerPlan, ONE batched walk
-(item mode = B=1 padded batch, bit-exact), streamed pinned-CPU
-offload_adam (0.949 → 0.358 s/step at 0.6B), sliding-window trajectory
-release, hook-free PP block walk, memory-budget planner, and the
-certification harness (certs/pre single-device + certs/pp2 pipeline
-references). Details and the change gate: docs/runtime.md and AGENTS.md
-"Training Runtime & Certification". Timing regimes are NOT comparable
-across the refactor boundary — do not mix pre/post ms-per-item numbers
-in one table.
+Standing guidance, not open work. Timing regimes are NOT comparable
+across the 2026-07-10 refactor boundary — never mix pre/post ms-per-item
+numbers in one table.
 
-Kept for the record (do-not-rebuild guidance):
+- NEGATIVE (2026-07-10): async pinned-memory target prefetch (side CUDA
+  stream, per-tensor pin_memory, event-synced staging of layer L+1) was
+  implemented and MEASURED SLOWER on L40S at 0.6B: item mode -9%,
+  slide8-dedup padded B4 -25%, no memory win. Do not rebuild without
+  first measuring a pinned-POOL variant at 4B+ scale where targets are
+  >20 MB/layer (1.7B targets are ~2.4 MB/layer — out of scope).
+- PP2 is SLOWER than single-GPU for this depth-sequential workload in
+  every measured variant (hooked, hook-free, pre-moved inputs) — PP is a
+  memory technology here. ~8% of the isolated PP2 walk is accelerate
+  hook dispatch (pytree traversal, not transfers). Within a grad-accum
+  window weights are frozen, so cross-item device overlap (item i+1 on
+  partition 0 while item i runs partition 1) would be EXACT, not stale —
+  the honest PP throughput move if ever needed. TP2 remains probe-only:
+  collectives inside every linear lose badly at trainable sizes; use PP
+  at block boundaries, TP only if a single block cannot fit.
+- Speed regimes measured 2026-07-11 (1.7B, L40S): bucketed B4 = 2.7x
+  item B1 at 30.6 GB; batched eval (generation_batch 8) = 2.8-3.1x, NOT
+  bit-identical (bf16 argmax tie-flips) so science evals keep B=1;
+  card-packing via offload_adam does not raise throughput while arms are
+  compute-saturated (91-98% util at B=1). The B1/B4 grid fork is labeled
+  via the layer_loss_manifest `regime` column.
 
-NEGATIVE RESULT (2026-07-10, refactor session): async pinned-memory target
-prefetch (side CUDA stream, pin_memory + event-synced staging of layer L+1
-while block L computes) was implemented and MEASURED SLOWER on L40S at 0.6B:
-item mode -9%, slide8-dedup padded B4 -25%, no memory win. The per-tensor
-pin_memory cost exceeds what the async copy hides — the batched walk already
-covers these small (<5 MB/layer) pageable H2D copies. Do not rebuild without
-first measuring a pinned-POOL variant at 4B+ scale where targets are >20 MB
-per layer. The related real win that DID land: sliding-window trajectory
-states are now released at their last root use (activation residency W states
-instead of full depth; -180 MB at 0.6B slide8 B=8, scales with H*B*T*n).
-
-PP2 hook measurement (2026-07-10, L40S 0.6B seq600 fwd+bwd walk): single
-54-55 ms/item; PP2 with accelerate dispatch hooks 61-71; hooks stripped +
-explicit boundary moves 56-67 (~8% of the PP2 walk is hook dispatch — the
-Python pytree traversal, not redundant transfers: pre-moving inputs under
-intact hooks changes nothing). PP2 is SLOWER than single-GPU for this
-depth-sequential workload in every variant — PP is a memory technology here.
-Within a grad-accum window weights are frozen, so cross-item device overlap
-(item i+1 on partition 0 while item i runs partition 1) would be EXACT, not
-stale — the honest PP throughput move if ever needed. End-to-end (real
-trainer, 0.6B) the hook-free walk is within run noise; the isolated-walk 8%
-is the honest number, and the explicit boundary moves are the 120B
-streaming contract anyway.
-
-PP2 CERTIFICATION LANDED (2026-07-10): certs/pp2/*.json — the real trainer
-under model.pipeline_split=14 certified against the SINGLE-DEVICE
-references in certs/pre (semantic config hash excludes placement knobs).
-The first attempt immediately caught a LATENT pre-refactor bug: a readout
-window on a tied-vocab model (Qwen3 <=1.7B) computes the L=n loss on the
-vocab card (cuda:0) while in-window losses live on the block card — the
-backward-scalar sum mixed devices and crashed. Readout+PP2+tied had simply
-never been run. Fixed (accumulate on one device, scalar moves,
-autograd-recorded); single-device numerics untouched (no-op .to). TP2
-remains probe-only (parallel_bench): collectives inside every linear lose
-badly at trainable sizes; use PP at block boundaries, TP only if a single
-block cannot fit.
-
-## Per-layer residuals at checkpoints — CLOSED 2026-07-10
-`evaluate.py --layer-residuals` landed (one teacher + one student pass,
-per-layer nmse/l2mse/vocab_mse/norm-ratio on the aligned span; writes
-layer_residuals.{json,csv,png} next to recite.json). First profile on
-lw_r_s43_pinned: shallow layers track the teacher tightly (h1 nmse
-0.002), residuals grow with depth and depart sharply inside the readout
-window (h21-h28: 0.17-0.83) — storage quality now measurable separately
-from training loss.
-
-## Review-doc findings — full backlog preserved before `git rm` (2026-07-11)
-
-The three review docs (`FableReviewBy55xh.md` 2026-07-05,
-`docs/fable_review_2026-07-10.md`, `docs/fable_review_status_2026-07-07.md`)
-were removed 2026-07-11; their full finding records remain in git history.
-This is the COMPLETE still-open list distilled from the deleted 2026-07-10
-four-agent review plus the 2026-07-05 research gaps (the old abbreviated
-"Open review findings" summary and the moot test-suite-economics section
-were removed 2026-07-11 — tests are gone, fd7138d).
-(`recommendations.md` was NOT a review and is kept — it self-declares as
-the standing experiment-corpus SPEC, all worklist items COMPLETE, live work
-delegated here and to EXPERIMENTS.md.)
-
-Fixed since the reviews (do NOT re-file): `find_poem_spans` word boundaries
-(b213afc); 15 dead `queue.tsv` rows disabled (5c75662); `audit_configs` now
-scans queue-referenced run-dir snapshots (23961e4); "gold"→"reference" in
-surprise_probe/cross_report/make_figs (2bb29a7); validator holes H1-H4
-(anchor/stride/readout-weight/tail-only-per-class + `hidden_loss=zero`
-disguise, 723e7af); ALIA left-pad scoring + quijote rung conflation
-(0cdd526 / 800e546); `teacher_ceiling.py` stale-CER retirement + `tasks_eval`
-`with_context` (c2ebf06). VERIFIED LANDED 2026-07-11 (concurrent
-eval-integrity agent, committed): `tasks_eval` calls `model.eval()` and
-restores training mode; `tasks.py` EOS via `chatfmt.stop_token_id`
-(SentencePiece/Mistral stop fix); `cache.hidden_dtype` honored by the
-writer with dtype validation + legacy-cache handling (correct fp16 caches
-kept, historical bad-bf16 hashes invalidated); `--layer-residuals`
-checkpoint config adoption.
-
-SPEED (attack-plan Phase 1, measured + landed 2026-07-11, agpul04):
-- Root cause of the slow L40S queue was measured from live metrics: the
-  loss-grid arms train at item B=1 (3.08 items/s on the bench config) AND
-  pay ~1.4 min of B=1 eval at every epoch boundary — eval was 42-56% of
-  arm wall time.
-- Train regimes benched (1.7B slide2 vocab, frozen_teacher_copy, weights
-  staged to node-local /tmp — cf05b66): item B1 3.08 items/s / 27.7 GB;
-  padded B2 4.99 / 28.1 (22% pad); padded B4 5.86 / 30.0 (36.5% pad);
-  bucketed B4 8.32 / 30.6 (7.6% pad) = 2.7x. Bucketed reorders items
-  within an epoch (seeded length buckets) — part of the regime label.
-- tasks_eval gained a wired generation_batch knob (fb615f0): B8 = 3.08x
-  at 0.6B / 2.77x at 1.7B. NOT bit-identical to B1 (bf16 argmax
-  tie-flips: overall_word_acc +0.0035/+0.0094 at n_per_task=8, cloze
-  identical) — telemetry arms may batch; science evals (evaluate.py,
-  teacher_ceiling.py) keep the B=1 default.
-- Owner decision: flip ONLY not-yet-started grid arms. 5 arms flipped
-  (8813185): jacobian_lens_kl s1+s2, delta_cosine_s2, delta_vocab_cos
-  s1+s2 → bucketed B4 + eval B8 (~101 → ~39 min/arm). The regime fork is
-  labeled: layer_loss_manifest now carries a `regime` column from each
-  run's config snapshot.
-- Remaining speed items (bench-gated, per plan): pinned-POOL prefetch
-  only at 4B+ (>20 MB/layer targets); cross-item PP overlap only if PP
-  lanes become throughput-relevant; card-packing via offload_adam not
-  useful while arms are compute-saturated (91-98% util at B=1).
-
-ENGINEERING BACKLOG CLOSED 2026-07-11 (attack plan quiet-meandering-grove,
-Phases 0-4 complete; every item verified end-to-end at close):
-
-- Trainer/compliance: teacher_censored+PP validation raise; oversized
-  conn_window/readout_window_blocks named at setup; dead
-  BlockStack._shared_kv_states deleted (nothing read it); empty-mid
-  readout guard at collate (CPU, no hot-loop sync) with a pointer at the
-  clamp site (078cf0f). router_aligned+window_dedup validation had
-  already landed (eval-integrity agent). OLD_KEYS widened with a
-  banned-concept pattern guard (_ce_/label/gold) (2cc5525).
-  docs/runtime.md residency claim corrected (2cc5525).
-- torch.jit: RECLASSIFIED, not a code item — `git log -S` shows torch.jit
-  never existed in src/, scripts/, or even the deleted test file; the 14
-  deprecation warnings recorded in the old test-suite note were
-  third-party library warnings surfacing under pytest, misattributed to
-  "the online-teacher path". Residual risk is dependency compatibility at
-  the next torch bump, handled like any dependency, not a repo fix.
-- Eval stack: dead CLI flags warn; --max-extra-tokens wired (48→32
-  preserving effective budget); training_scope honesty +
-  corpora_measured/corpus_selection; analyze.py "general" guard (all
-  fc011f5). tasks_eval batched generation wired as generation_batch
-  (fb615f0, 2.8-3.1x; science evals keep B=1 default). _stage_source
-  stale-lock reclaim + standard-suite HF pinning landed via the
-  eval-integrity agent (verified). retention_eval builders pinned +
-  --build-cache overwrite refusal; standard_bases literal
-  richest-available; report denominators warn by name; /tmp stage
-  janitor (TTL, lock-aware, orphan reaping) (all f1a5948).
-  "Test coverage misses..." items are moot (tests deleted fd7138d).
-- Data/masking/config: cache.hidden_dtype honored + legacy handling
-  (eval-integrity agent, verified). adapt_records whole-file template
-  homogeneity; _matches legacy ordering; trace-harvest malformed-trace
-  warning; span check + t0/position_gap (all 2cc5525). Config
-  deep-merge, gated by a 179-pair zero-diff A/B audit (f5d42ad).
-  "gold" purged from retention_eval WITHOUT GPU re-run via in-place
-  cache-key migration, subset_id/_already_done verified stable (818b072).
-  Generator v5 fixes: last-verse off-by-one + dropped corpus system
-  prompt in rag_tool/thinking (71ed453) — take effect at the
-  examples_v5 regeneration.
+## Open items (2026-07-11; closed work lives in git history)
 
 STILL OPEN — deferred with explicit reasons:
 - examples_v5 + teacher-cache regeneration: queued GPU work for the
