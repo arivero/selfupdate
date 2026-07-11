@@ -287,10 +287,22 @@ class ContextMasker:
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False) if text else []
 
-    def build(self, ex: SegmentedExample) -> AlignedPair:
+    def build(self, ex: SegmentedExample,
+              answer_ids: list[int] | None = None) -> AlignedPair:
+        """``answer_ids`` (v5 open-answer records): the teacher's GENERATED
+        answer, injected as token ids — never re-tokenized text, so the
+        teacher-forced pass runs over exactly the ids the teacher produced.
+        Requires an empty answer segment; every slice below follows from the
+        injected length unchanged."""
         prefix = self._encode(ex.shared_prefix)
         mid = self._encode(ex.shared_mid)
-        answer = self._encode(ex.answer)
+        if answer_ids is not None:
+            assert not ex.answer, (
+                f"{ex.example_id}: answer_ids injection needs an open-answer "
+                "record (empty answer segment)")
+            answer = list(answer_ids)
+        else:
+            answer = self._encode(ex.answer)
 
         if ex.interleaved is not None:
             assert not ex.privileged and not ex.student_stub, (

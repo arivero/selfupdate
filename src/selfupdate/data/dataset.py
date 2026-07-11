@@ -95,7 +95,26 @@ class DistillDataset(Dataset):
         masker = ContextMasker(tokenizer)
         self.pairs = []
         for r in self.records:
-            pair = masker.build(SegmentedExample.from_record(r))
+            ex = SegmentedExample.from_record(r)
+            answer_ids = None
+            if not ex.answer:
+                # v5 open-answer record: the teacher's GENERATED answer is
+                # cache content (per-model), injected as token ids so the
+                # student is teacher-forced over exactly what the teacher
+                # produced. Online generation is not wired yet — raise, never
+                # silently train on an empty aligned span (knob-flow law).
+                if cache is None:
+                    raise NotImplementedError(
+                        "open-answer (v5) records need the disk teacher "
+                        "cache; per-step online generation is a planned "
+                        "extension — build the cache with "
+                        "scripts/build_teacher_cache.py")
+                answer_ids = cache.answer_ids(ex.example_id)
+                if answer_ids is None:
+                    raise ValueError(
+                        f"{ex.example_id}: teacher cache carries no generated "
+                        "answer; rebuild with scripts/build_teacher_cache.py")
+            pair = masker.build(ex, answer_ids=answer_ids)
             if cache is not None:
                 span = cache.span(pair.example_id)
                 # t0/position_gap have always been written by the cache

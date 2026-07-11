@@ -157,12 +157,46 @@ def render_rag_for(
     )
 
 
+def _prefix_matches(prefix: str, p: TemplatePieces, tail: str) -> bool:
+    """Prefix equals ``pre + tail`` up to a per-corpus SYSTEM payload.
+
+    A combined corpus can deliberately choose a different *system message*
+    per source corpus (Machado: poetry; Quijote: literature). That is still
+    native rendering for one tokenizer — permit only the system-message
+    payload itself to differ; do not mistake this for a foreign template.
+    """
+    if prefix == p.pre + tail:
+        return True
+    before, marker, after = p.pre.partition(DEFAULT_SYSTEM)
+    return bool(marker) and prefix.startswith(before) and prefix.endswith(after + tail)
+
+
+def _matches_tool(record: dict, p: TemplatePieces) -> bool:
+    """Native check for rag_tool-shaped records: the user turn CLOSES inside
+    shared_prefix and the privileged block is a whole tool turn, so
+    shared_mid is the assistant opening alone (p.mid minus its leading turn
+    close). Open-answer records (v5: ``answer == answer_text == ""``, the
+    teacher stage appends its own generation) are native by construction."""
+    close = p.answer_close + "\n"
+    if not p.mid.startswith(close):
+        return False
+    answer_ok = (record["answer"] == record["answer_text"] + p.answer_close
+                 or (record["answer"] == "" and record["answer_text"] == ""))
+    return (answer_ok
+            and record["shared_mid"] == p.mid[len(close):]
+            and _prefix_matches(record["shared_prefix"], p,
+                                record["question"] + close))
+
+
 def _matches(record: dict, p: TemplatePieces) -> bool:
     # Legacy records may lack the raw question/answer_text fields: treat
     # them as non-matching so adapt_records' curated "rebuild examples.jsonl"
     # error fires, instead of a bare KeyError from the comparisons below.
     if "question" not in record or "answer_text" not in record:
         return False
+    priv = record.get("privileged", "")
+    if "<tool_response>" in priv or record.get("answer") == "":
+        return _matches_tool(record, p)
     if record.get("shared_prefix", "").rstrip().endswith("<think>"):
         # thinking-mode record: prefix = pre + question + turn-close +
         # assistant open + "<think>\n", mid = "\n</think>\n\n". Native for
@@ -172,20 +206,8 @@ def _matches(record: dict, p: TemplatePieces) -> bool:
             record["shared_prefix"].startswith(p.pre + record["question"])
             and record["answer"] == record["answer_text"] + p.answer_close
         )
-    prefix = record["shared_prefix"]
-    exact_prefix = p.pre + record["question"]
-    if prefix != exact_prefix:
-        # A combined corpus can deliberately choose a different *system
-        # message* per source corpus (Machado: poetry; Quijote: literature).
-        # That is still native rendering for one tokenizer.  Check the fixed
-        # framing around DEFAULT_SYSTEM and permit only the system-message
-        # payload itself to differ; do not mistake this for a foreign template.
-        before, marker, after = p.pre.partition(DEFAULT_SYSTEM)
-        if not marker or not (
-            prefix.startswith(before)
-            and prefix.endswith(after + record["question"])
-        ):
-            return False
+    if not _prefix_matches(record["shared_prefix"], p, record["question"]):
+        return False
     return (
         record["shared_mid"] == p.mid
         and record["answer"] == record["answer_text"] + p.answer_close

@@ -101,7 +101,13 @@ class TeacherCacheWriter:
         example_id: str,
         hidden: dict[int, torch.Tensor],  # L -> [A, H]
         span: dict,
+        extra: dict | None = None,
     ) -> None:
+        """``extra`` (v5 open-answer records): generation artifacts merged
+        into the index entry — ``answer_ids`` (the teacher's generated
+        answer, token ids), ``hard_cut``, ``answer_text``. Answers are cache
+        content, not dataset content: the cache is the per-model artifact."""
+        span = {**span, **(extra or {})}
         for L, h in hidden.items():
             stored = h.detach().to(self.hidden_dtype).contiguous().cpu()
             if not torch.isfinite(stored).all():
@@ -159,3 +165,8 @@ class TeacherCache:
 
     def hidden(self, example_id: str, layer: int) -> torch.Tensor:
         return self._handle(example_id).get_tensor(f"{example_id}/h{layer:02d}")
+
+    def answer_ids(self, example_id: str) -> list[int] | None:
+        """Generated answer ids for open-answer (v5) examples; None for
+        legacy caches whose answers live in the dataset."""
+        return self._index["examples"][example_id].get("answer_ids")
