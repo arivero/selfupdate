@@ -227,6 +227,9 @@ def main() -> None:
     ap.add_argument("--max-extra-tokens", type=int, default=32,
                     help="per-item generation budget beyond the reference "
                          "length (default matches the battery's historical 32)")
+    ap.add_argument("--generation-batch", type=int, default=1,
+                    help="batched greedy decode for the three-task battery; "
+                         "1 = historical per-item loop")
     # Retired with the recite/CER engine (2026-07-10). Accepted so historical
     # queue rows don't crash at dispatch, but they are IGNORED and warn below
     # (knob-flow law: no knob may silently do nothing).
@@ -325,7 +328,8 @@ def main() -> None:
     for corpus in corpus_names:
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
                             n_per_task=args.n_per_task,
-                            max_extra_tokens=args.max_extra_tokens)
+                            max_extra_tokens=args.max_extra_tokens,
+                            generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
         parts = "  ".join(

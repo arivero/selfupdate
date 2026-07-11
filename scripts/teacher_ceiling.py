@@ -55,6 +55,10 @@ def main() -> int:
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", required=True)
     ap.add_argument("--n-per-task", type=int, default=24)
+    ap.add_argument("--generation-batch", type=int, default=1,
+                    help="batched greedy decode for the battery; the ceiling's "
+                         "with_context prompts pay a corpus-length prefill per "
+                         "item, so big teachers want 4-8 here")
     ap.add_argument(
         "--recall-corpora", nargs="+", default=None,
         help="recall corpora to measure. By default this is inferred from "
@@ -115,7 +119,8 @@ def main() -> int:
     corpus_results = {}
     for corpus in corpus_names:
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
-                            n_per_task=args.n_per_task, with_context=True)
+                            n_per_task=args.n_per_task, with_context=True,
+                            generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
         parts = "  ".join(

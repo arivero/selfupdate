@@ -698,7 +698,8 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
                       started_at: float) -> None:
     """Log corpus-separated fast recall without changing training mode."""
     results = {
-        name: tasks_eval(stack.model, tok, path, n_per_task=8)
+        name: tasks_eval(stack.model, tok, path, n_per_task=8,
+                         generation_batch=cfg.eval.generation_batch)
         for name, path in _epoch_recall_corpora(cfg)
     }
     summary = {
@@ -1492,7 +1493,8 @@ def _train_sequential(cfg, stack, cache, tok, log):
             act_cache.advance(stack, L, ds, device)
         if L % 7 == 0 or L == n:
             r = tasks_eval(stack.model, tok, cfg.data.poem_path,
-                           n_per_task=8)
+                           n_per_task=8,
+                           generation_batch=cfg.eval.generation_batch)
             t = r["tasks"]
             log.log(kind="eval", layer=L,
                     next_acc=t["next"]["word_acc"],

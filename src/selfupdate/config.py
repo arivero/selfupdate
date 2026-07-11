@@ -218,6 +218,10 @@ class EvalConfig:
     standard_damage_every_epochs: int = 0
     standard_damage_limit: int = 16
     standard_damage_batch_size: int = 8
+    # Batched greedy decode for the in-training three-task recall telemetry
+    # (tasks_eval generation_batch).  1 = historical per-item loop; measured
+    # 2026-07-11: B=1 per-epoch eval was 42-56% of loss-grid arm wall time.
+    generation_batch: int = 1
 
 
 @dataclass

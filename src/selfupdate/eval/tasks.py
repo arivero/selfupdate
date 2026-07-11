@@ -137,9 +137,62 @@ def score(reference: str, answer: str) -> dict:
 
 
 @torch.no_grad()
+def _generate_answers_batched(model, tokenizer, prompts: list[str],
+                              budgets: list[int], eos: int,
+                              generation_batch: int) -> list[str]:
+    """Left-padded batched greedy decode of ``prompts`` (original order kept).
+
+    Same machinery as the retired recite engine's batched path (left pad +
+    ``model.generate`` + OOM backoff halving), but a wired knob here, not a
+    dead CLI flag.  Per-batch token budget is the max item budget in the
+    batch; shorter answers just stop at EOS.  Greedy batched decode matches
+    the B=1 loop up to bf16 kernel-shape rounding on argmax ties — the
+    B1-vs-B8 spot-check quantifying this is recorded in issues.md.
+    """
+    was_padding = tokenizer.padding_side
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    from .recite import _is_cuda_oom
+
+    answers: list[str] = [""] * len(prompts)
+    try:
+        start = 0
+        cur = generation_batch
+        while start < len(prompts):
+            chunk = slice(start, start + cur)
+            enc = tokenizer(prompts[chunk], return_tensors="pt", padding=True,
+                            add_special_tokens=False)
+            enc = {k: v.to(model.device) for k, v in enc.items()}
+            try:
+                out = model.generate(
+                    **enc,
+                    max_new_tokens=max(budgets[chunk]),
+                    do_sample=False,
+                    eos_token_id=eos,
+                    pad_token_id=tokenizer.pad_token_id,
+                )
+            except RuntimeError as e:
+                if not _is_cuda_oom(e) or cur <= 1:
+                    raise
+                cur = max(1, cur // 2)
+                torch.cuda.empty_cache()
+                continue
+            gen_start = enc["input_ids"].shape[1]
+            for row in range(out.shape[0]):
+                answers[start + row] = tokenizer.decode(
+                    out[row, gen_start:], skip_special_tokens=True)
+            start += out.shape[0]
+    finally:
+        tokenizer.padding_side = was_padding
+    return answers
+
+
+@torch.no_grad()
 def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                n_per_task: int = 24, max_extra_tokens: int = 32,
-               keep_examples: int = 6, with_context: bool = False) -> dict:
+               keep_examples: int = 6, with_context: bool = False,
+               generation_batch: int = 1) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
 
     ``with_context``: teacher/RAG ceiling mode (owner directive 2026-07-11).
@@ -151,7 +204,11 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     (``masking.render_rag``: "\\n\\nDocumento recuperado:\\n{passage}").
     Same questions, same references, same scoring as the no-context battery
     — only the prompt changes — so a teacher-ceiling score is directly
-    comparable to a checkpoint's plain ``tasks_eval`` score."""
+    comparable to a checkpoint's plain ``tasks_eval`` score.
+
+    ``generation_batch``: 1 (default) keeps the historical per-item greedy
+    loop bit-for-bit; >1 decodes in left-padded batches — measured 2026-07-11
+    because per-epoch B=1 eval was 42-56%% of loss-grid arm wall time."""
     from .recite import greedy_generate_positions, strip_think
 
     # This public evaluator is called directly by scripts as well as between
@@ -171,22 +228,35 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         # its real EOS id.
         eos = stop_token_id(tokenizer)
         device = next(model.parameters()).device
-        agg: dict[str, list[dict]] = {}
-        examples = []
+        questions, prompts, budgets = [], [], []
         for it in items:
             q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
             content = (f"{q}\n\nDocumento recuperado:\n{context}"
                       if context is not None else q)
-            prompt = tokenizer.apply_chat_template(
+            questions.append(q)
+            prompts.append(tokenizer.apply_chat_template(
                 [{"role": "user", "content": content}], tokenize=False,
-                add_generation_prompt=True, enable_thinking=False)
-            ids = torch.tensor([tokenizer.encode(prompt, add_special_tokens=False)],
-                               device=device)
-            budget = len(tokenizer.encode(it["reference"])) + max_extra_tokens
-            out = greedy_generate_positions(
-                model, ids, torch.arange(ids.shape[1], device=device)[None],
-                max_new_tokens=budget, eos_id=eos)
-            answer = strip_think(tokenizer.decode(out, skip_special_tokens=True))
+                add_generation_prompt=True, enable_thinking=False))
+            budgets.append(len(tokenizer.encode(it["reference"]))
+                           + max_extra_tokens)
+        if generation_batch > 1:
+            answers = _generate_answers_batched(
+                model, tokenizer, prompts, budgets, eos, generation_batch)
+        else:
+            answers = []
+            for prompt, budget in zip(prompts, budgets):
+                ids = torch.tensor(
+                    [tokenizer.encode(prompt, add_special_tokens=False)],
+                    device=device)
+                out = greedy_generate_positions(
+                    model, ids,
+                    torch.arange(ids.shape[1], device=device)[None],
+                    max_new_tokens=budget, eos_id=eos)
+                answers.append(tokenizer.decode(out, skip_special_tokens=True))
+        agg: dict[str, list[dict]] = {}
+        examples = []
+        for it, q, raw in zip(items, questions, answers):
+            answer = strip_think(raw)
             s = score(it["reference"], answer)
             s["n_deleted"] = it["n"]
             agg.setdefault(it["task"], []).append(s)
@@ -194,7 +264,8 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                 examples.append({"kind": it["kind"], "q": q,
                                  "reference": it["reference"],
                                  "answer": answer.strip()[:200], **s})
-        result = {"seed": seed, "n_per_task": n_per_task, "tasks": {}}
+        result = {"seed": seed, "n_per_task": n_per_task,
+                  "generation_batch": generation_batch, "tasks": {}}
         for task, rows in agg.items():
             result["tasks"][task] = {
                 "n": len(rows),
