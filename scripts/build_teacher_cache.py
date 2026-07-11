@@ -59,7 +59,8 @@ def main() -> None:
     n_layers = model.config.num_hidden_layers
 
     masker = ContextMasker(tok)
-    writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size)
+    writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size,
+                                hidden_dtype=cfg.cache.hidden_dtype)
 
     ce_with, ce_without = [], []
     for ex in tqdm(examples, desc="teacher forward"):

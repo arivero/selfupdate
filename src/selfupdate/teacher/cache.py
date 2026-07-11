@@ -25,6 +25,33 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 INDEX_NAME = "index.json"
+CACHE_DTYPES = {
+    "float16": torch.float16,
+    "bfloat16": torch.bfloat16,
+}
+
+
+def cache_storage_dtype(name: str) -> torch.dtype:
+    """Torch dtype selected by ``cache.hidden_dtype``.
+
+    The old writer always cast to fp16 even when the config hash claimed
+    bfloat16.  Reject unknown spellings before a cache path is selected.
+    """
+    try:
+        return CACHE_DTYPES[name]
+    except KeyError as exc:
+        raise ValueError(
+            "cache.hidden_dtype must be one of "
+            f"{', '.join(CACHE_DTYPES)}, got {name!r}") from exc
+
+
+def _dtype_hash_token(name: str) -> str:
+    """Keep correct legacy fp16 caches, invalidate historical bad bf16 ones."""
+    cache_storage_dtype(name)
+    # Existing float16 caches were written correctly and retain their cache
+    # identity.  Historical bfloat16-labelled caches contain fp16 tensors;
+    # the versioned token forces them onto a fresh path.
+    return name if name == "float16" else f"{name}-storage-v2"
 
 
 def cache_config_hash(model_name: str, mask_mode: str, extra: dict | None = None) -> str:
@@ -44,7 +71,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
         {"compaction": cfg.mask.compaction, "examples": examples_sha,
-         "hdtype": cfg.cache.hidden_dtype, "schema": 3},
+         "hdtype": _dtype_hash_token(cfg.cache.hidden_dtype), "schema": 3},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"
@@ -52,15 +79,22 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
 
 
 class TeacherCacheWriter:
-    def __init__(self, root: str | Path, config_hash: str, shard_size: int = 128):
+    def __init__(self, root: str | Path, config_hash: str, shard_size: int = 128,
+                 hidden_dtype: str = "float16"):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.config_hash = config_hash
         self.shard_size = shard_size
+        self.hidden_dtype_name = hidden_dtype
+        self.hidden_dtype = cache_storage_dtype(hidden_dtype)
         self._buffer: dict[str, torch.Tensor] = {}
         self._buffered_examples = 0
         self._shard_no = 0
-        self._index: dict = {"config_hash": config_hash, "examples": {}}
+        self._index: dict = {
+            "config_hash": config_hash,
+            "hidden_dtype": hidden_dtype,
+            "examples": {},
+        }
 
     def add(
         self,
@@ -69,7 +103,13 @@ class TeacherCacheWriter:
         span: dict,
     ) -> None:
         for L, h in hidden.items():
-            self._buffer[f"{example_id}/h{L:02d}"] = h.to(torch.float16).contiguous().cpu()
+            stored = h.detach().to(self.hidden_dtype).contiguous().cpu()
+            if not torch.isfinite(stored).all():
+                raise FloatingPointError(
+                    f"teacher cache would store non-finite values for "
+                    f"{example_id}/h{L:02d} as {self.hidden_dtype_name}; "
+                    "use bfloat16 for outlier channels or inspect the teacher forward")
+            self._buffer[f"{example_id}/h{L:02d}"] = stored
         self._index["examples"][example_id] = {"shard": self._shard_no, **span}
         self._buffered_examples += 1
         if self._buffered_examples >= self.shard_size:

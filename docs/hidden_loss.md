@@ -51,12 +51,46 @@ the *storage* metric and compose with tail-CE — a different question.
 Both vocab kinds depend on the Frozen-Vocabulary Principle below: the
 metric is only meaningful because the vocabulary never moves.
 
-Local readout auxiliaries use reference answer CE through the frozen final norm and
-LM head. They are used only where explicitly configured:
+### Successive block-increment kinds
 
-- `last_block_ce_weight`: one-block readout test
-- `lens_ce_weight`: per-block local readout head
-- `tail_ce_blocks` + `tail_ce_weight`: bounded connected top window
+The `delta_*` kinds target what a block writes, rather than recharging it for
+an inherited absolute-state error:
+
+```text
+d_s,L = h_s,L - stopgrad(h_s,L-1)
+d_t,L = h_t,L - h_t,L-1
+```
+
+`delta_nmse` applies normalized MSE to these updates; `delta_cosine` applies
+one minus their per-position cosine. `delta_vocab_cos` is the most semantic
+form: it applies the frozen unembedding to each update, removes the
+vocabulary-wide score mean, then takes cosine:
+
+```text
+1 - mean(cos(C W d_s,L, C W d_t,L))
+```
+
+`W` is the frozen unembedding, `C = I - 11^T/V` centres vocabulary scores,
+and the LM-head bias is omitted because a vector contribution has no bias.
+The implementation evaluates this exactly through `W^T C W`, so it never
+materializes a vocabulary-sized tensor.
+
+Cache convention makes the boundaries intentionally different: no teacher
+`h0` is cached, and `h{n}` is post-final-RMSNorm rather than the raw final
+block output. Thus delta kinds apply only at interior layers `2 <= L < n`.
+At layer 1 and layer n they use the paired absolute-state fallback
+(`nmse`, `cosine`, or `vocab_mse` respectively). This prevents the final
+normalization from being mistaken for a transformer-block update. A future
+state+delta objective needs an explicit, matched-update-norm coefficient; it
+is not silently folded into these kinds.
+
+The only behavioral readout term is teacher-sourced KL through the frozen
+final norm and LM head. It is permitted only at the top position of a
+sanctioned sliding window:
+
+- `readout_source: teacher_kl` + `readout_window_blocks == conn_window`
+
+Reference-text cross-entropy is not a training objective on this branch.
 
 ## The Frozen-Vocabulary Principle
 
@@ -98,9 +132,10 @@ LM head. Tests enforce:
 - isolated single-block replay matches the in-trainer gradient
 - strict hidden-matching steps do not invoke logits
 
-Tail-CE is the named locality concession: blocks below the tail are detached,
-while the final `k` blocks train in one connected graph so the top readout CE
-can assign credit within that bounded window.
+The top teacher-KL readout is the named locality concession: blocks below the
+sanctioned sliding window are detached, while its final `k` blocks train in
+one connected graph so the teacher-sourced behavioral signal can assign credit
+within that bounded window. A tail-only readout is banned.
 
 ## Schedules
 

@@ -65,6 +65,16 @@ PLACEMENT_KEYS = {
     ("model", "pipeline_splits"),
 }
 
+# Telemetry-only additions must not invalidate a pre-refactor training
+# fingerprint when disabled.  They affect what is measured between epochs,
+# never a target, gradient, optimizer step, or checkpoint tensor.
+EVALUATION_ONLY_KEYS = {
+    ("eval", "recall_corpora"),
+    ("eval", "standard_damage_every_epochs"),
+    ("eval", "standard_damage_limit"),
+    ("eval", "standard_damage_batch_size"),
+}
+
 
 def _variants() -> dict[str, dict]:
     """Tiny-budget configs covering every trainer path. Values are top-level
@@ -138,6 +148,11 @@ def _config_hashes(cfg: ExperimentConfig) -> tuple[str, str]:
     d = dataclasses.asdict(cfg)
     full = hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:16]
     for keys in PLACEMENT_KEYS:
+        node = d
+        for k in keys[:-1]:
+            node = node[k]
+        node.pop(keys[-1], None)
+    for keys in EVALUATION_ONLY_KEYS:
         node = d
         for k in keys[:-1]:
             node = node[k]
@@ -256,8 +271,8 @@ def run_variant(name: str, overrides: dict, base: Path,
             for r in rows if r.get("kind") in ("train", "stage")
         ],
         "eval_rows": [
-            {k: r.get(k) for k in ("epoch", "layer", "cer", "line_exact",
-                                   "gen_ce") if k in r}
+            {k: r.get(k) for k in ("epoch", "layer", "cer", "line_exact")
+             if k in r}
             for r in rows if r.get("kind") == "eval"
         ],
         "done": next(({k: r.get(k) for k in ("vram_gb", "vram_reserved_gb",

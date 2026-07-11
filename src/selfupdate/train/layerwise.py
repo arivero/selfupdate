@@ -48,8 +48,7 @@ from ..data.dataset import (
     collate_items,
     collate_padded_items,
 )
-from ..eval.general import general_ce
-from ..eval.tasks import tasks_eval
+from ..eval.tasks import RECALL_CORPUS_PATHS, tasks_eval
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .losses import HiddenLoss
@@ -71,7 +70,8 @@ RUN_CLASSES = {
 NON_METHOD_CLASSES = RUN_CLASSES - {"method"}
 
 
-def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True):
+def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True,
+                     previous_target=None):
     """One local forward+backward for block L. ``h_in`` must be detached, so
     the recorded graph — and therefore the backward — is confined to block L:
     no gradient from this loss can reach any other block, the lm_head, or the
@@ -83,8 +83,16 @@ def local_block_step(stack, L, h_in, pos_emb, target, s0, A, kind, autocast=True
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
-        loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
-                       normed=(L == stack.n_layers), layer=L)
+        if loss_fn.is_delta and 1 < L < stack.n_layers:
+            if previous_target is None:
+                raise ValueError(
+                    f"{loss_fn.kind} at interior layer {L} needs h{L - 1} teacher target"
+                )
+            loss = loss_fn.delta(h_out[0, s0: s0 + A], h_in[0, s0: s0 + A],
+                                 target, previous_target)
+        else:
+            loss = loss_fn(stack.loss_view(L, h_out)[0, s0: s0 + A], target,
+                           normed=(L == stack.n_layers), layer=L)
     extra = pending_router_loss()
     (loss if extra is None else loss + extra).backward()
     return loss.detach(), h_out.detach()
@@ -123,6 +131,55 @@ def _hidden_loss_per_example(loss_fn, student_h: torch.Tensor, teacher_h: torch.
     return torch.stack(losses)
 
 
+def _delta_loss_per_example(loss_fn, student_h: torch.Tensor,
+                            student_prev: torch.Tensor,
+                            teacher_h: torch.Tensor,
+                            teacher_prev: torch.Tensor,
+                            lens: list[int]) -> torch.Tensor:
+    """Per-example counterpart of :meth:`HiddenLoss.delta`.
+
+    The prefix-slicing invariant is the same as the ordinary hidden loss;
+    keeping it here avoids per-layer boolean-mask synchronizations in padded
+    batches.
+    """
+    teacher_h = teacher_h.to(student_h.device)
+    teacher_prev = teacher_prev.to(student_h.device)
+    losses = []
+    for i, k in enumerate(lens):
+        losses.append(loss_fn.delta(student_h[i, :k], student_prev[i, :k],
+                                    teacher_h[i, :k], teacher_prev[i, :k]))
+    return torch.stack(losses)
+
+
+def _layer_loss_per_example(loss_fn, stack, L: int, h_out: torch.Tensor,
+                            h_prev: torch.Tensor, teacher_h: torch.Tensor,
+                            teacher_prev: torch.Tensor | None,
+                            batch: Batch) -> torch.Tensor:
+    """Select raw-increment or absolute-state measurement for one layer.
+
+    Cache convention makes the first and final boundaries special: no cached
+    h0, and h_n is post-final-norm.  Delta kinds therefore use their paired
+    state fallback at those two boundaries, while every interior transformer
+    block is measured by its raw update.
+    """
+    if loss_fn.is_delta and 1 < L < stack.n_layers:
+        if teacher_prev is None:
+            raise ValueError(
+                f"{loss_fn.kind} at interior layer {L} needs h{L - 1} teacher target"
+            )
+        return _delta_loss_per_example(
+            loss_fn,
+            _gather_batch_rows(h_out, batch.aligned_index),
+            _gather_batch_rows(h_prev, batch.aligned_index),
+            teacher_h, teacher_prev, batch.A.tolist(),
+        )
+    aligned = _gather_batch_rows(stack.loss_view(L, h_out), batch.aligned_index)
+    return _hidden_loss_per_example(
+        loss_fn, aligned, teacher_h, batch.A.tolist(),
+        normed=(L == stack.n_layers), layer=L,
+    )
+
+
 def _teacher_kl_per_example(student_logits: torch.Tensor,
                             teacher_logits: torch.Tensor,
                             lens: list[int]) -> torch.Tensor:
@@ -139,7 +196,7 @@ def _teacher_kl_per_example(student_logits: torch.Tensor,
 
 
 def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
-                           autocast=True):
+                           autocast=True, previous_target=None):
     """Batched counterpart of :func:`local_block_step`.
 
     The total backward scalar is the sum of per-example losses, matching the
@@ -148,11 +205,8 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h_out = stack.run_block(L, h_in, pos_emb)
-        view = stack.loss_view(L, h_out)
-        aligned = _gather_batch_rows(view, batch.aligned_index)
-        losses = _hidden_loss_per_example(
-            loss_fn, aligned, target, batch.A.tolist(),
-            normed=(L == stack.n_layers), layer=L
+        losses = _layer_loss_per_example(
+            loss_fn, stack, L, h_out, h_in, target, previous_target, batch,
         )
         total = losses.sum()
     extra = pending_router_loss()
@@ -202,7 +256,7 @@ def _span_batch(s0: int, A: int, ans0: int) -> Batch:
 
 def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
                 readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
-                autocast=True):
+                autocast=True, all_targets=None):
     """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
     top readout window): gradient flows within the window so a loss anywhere
     in it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
@@ -215,16 +269,19 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
     bit-exact against the historical item code (same kernel shapes,
     gather == slice)."""
     batch = _span_batch(s0, A, s0 + ans_off)
+    all_targets = targets if all_targets is None else all_targets
     losses, h = window_step_batch(
         stack, L0, h_in, pos_emb, {L: t[None] for L, t in targets.items()},
         batch, kind, readout_w, hidden_w=hidden_w, L1=L1,
-        readout_source=readout_source, autocast=autocast)
+        readout_source=readout_source, autocast=autocast,
+        all_targets={L: t[None] for L, t in all_targets.items()})
     return [l[0] for l in losses], h
 
 
 def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                       readout_w, hidden_w=1.0, L1=None,
-                      readout_source="teacher_kl", autocast=True):
+                      readout_source="teacher_kl", autocast=True,
+                      all_targets=None):
     """Batched connected-window step.
 
     Returns a list of per-example loss vectors in the same layer order as
@@ -233,16 +290,17 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
     n = stack.n_layers
     L1 = n if L1 is None else L1
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
+    all_targets = targets if all_targets is None else all_targets
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
         h = h_in
         losses = []
         for L in range(L0, L1 + 1):
+            h_prev = h
             h = stack.run_block(L, h, pos_emb)
             if L in targets:
-                aligned = _gather_batch_rows(stack.loss_view(L, h), batch.aligned_index)
-                losses.append(_hidden_loss_per_example(
-                    loss_fn, aligned, targets[L], batch.A.tolist(),
-                    normed=(L == n), layer=L,
+                losses.append(_layer_loss_per_example(
+                    loss_fn, stack, L, h, h_prev, targets[L],
+                    all_targets.get(L - 1), batch,
                 ))
         if losses:
             # under pipeline parallel a tied-vocab model computes the L == n
@@ -299,9 +357,11 @@ def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
     Peak graph memory stays at W blocks: a block's graph is freed right
     after its last covering window (endpoint min(last_body, b+W-1)).
 
-    ``compute_loss(L1, y)`` returns (backward scalar, detached report value)
-    for the endpoint loss on block output ``y``; it runs under the same
-    autocast as the forward. Returns the report values in endpoint order.
+    ``compute_loss(L1, x, y)`` returns (backward scalar, detached report
+    value) for the endpoint loss on block input/output ``x, y``; it runs
+    under the same autocast as the forward.  Passing x is necessary for a
+    delta lens to stop-gradient its preceding state.  Returns reports in
+    endpoint order.
     """
     dev_type = h_traj[L_start - 1].device.type
     xs, ys, params = {}, {}, {}
@@ -318,7 +378,7 @@ def _sliding_windows_dedup(stack, L_start, last_body, W, h_traj, pos_emb,
         x = root.detach().requires_grad_(True)
         with torch.autocast(dev_type, dtype=torch.bfloat16, enabled=autocast):
             y = stack.run_block(L1, x, pos_emb)
-            loss, report = compute_loss(L1, y)
+            loss, report = compute_loss(L1, x, y)
         xs[L1], ys[L1] = x, y
         params[L1] = [p for p in stack.block_params(L1) if p.requires_grad]
         L0 = max(L_start, L1 - W + 1)
@@ -361,6 +421,24 @@ def _validate_knob_schedule(cfg) -> None:
             "recall belongs in evaluation artifacts, never in training")
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
+    if cfg.eval.every_epochs <= 0:
+        raise ValueError("eval.every_epochs must be positive")
+    if cfg.eval.standard_damage_every_epochs < 0:
+        raise ValueError("eval.standard_damage_every_epochs must be >= 0")
+    if cfg.eval.standard_damage_every_epochs:
+        if cfg.eval.standard_damage_limit <= 0:
+            raise ValueError("eval.standard_damage_limit must be positive")
+        if cfg.eval.standard_damage_batch_size <= 0:
+            raise ValueError("eval.standard_damage_batch_size must be positive")
+        if cfg.train.schedule == "sequential":
+            raise ValueError(
+                "eval.standard_damage_every_epochs is epoch-based and is not "
+                "implemented for the sequential per-layer schedule")
+    unknown_corpora = set(cfg.eval.recall_corpora) - set(RECALL_CORPUS_PATHS)
+    if unknown_corpora:
+        raise ValueError(
+            f"unknown eval.recall_corpora {sorted(unknown_corpora)}; "
+            f"choose from {sorted(RECALL_CORPUS_PATHS)}")
     if cfg.train.moe_mode not in (
         "dense_or_black_box", "teacher_forced", "router_aligned",
     ):
@@ -402,6 +480,10 @@ def _validate_knob_schedule(cfg) -> None:
                                    or cfg.train.conn_stride != 1):
         bad.append("window_dedup (needs faithful sliding windows: "
                    "conn_window > 1, conn_stride == 1)")
+    if (cfg.train.window_dedup
+            and cfg.train.moe_mode == "router_aligned"):
+        bad.append("window_dedup with router_aligned (router capture keeps "
+                   "per-window graphs; known graph-leak path)")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
     if cfg.train.readout_window_blocks > 0 and cfg.train.readout_source == "UNSET":
@@ -584,6 +666,93 @@ def _flush_train_log(log, *, epoch: int, step: int, accum: int,
     pending.clear()
 
 
+def _epoch_recall_corpora(cfg) -> list[tuple[str, str]]:
+    """Named corpus paths for training telemetry, never inferred from a base.
+
+    Combined configs must pin ``eval.recall_corpora``.  A one-corpus legacy
+    config continues to evaluate its declared data.poem_path.
+    """
+    if cfg.eval.recall_corpora:
+        return [(name, RECALL_CORPUS_PATHS[name])
+                for name in cfg.eval.recall_corpora]
+    return [(Path(cfg.data.poem_path).stem, cfg.data.poem_path)]
+
+
+def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
+                      started_at: float) -> None:
+    """Log corpus-separated fast recall without changing training mode."""
+    results = {
+        name: tasks_eval(stack.model, tok, path, n_per_task=8)
+        for name, path in _epoch_recall_corpora(cfg)
+    }
+    summary = {
+        name: {
+            "next_acc": result["tasks"]["next"]["word_acc"],
+            "prev_acc": result["tasks"]["prev"]["word_acc"],
+            "cloze_acc": result["tasks"]["cloze"]["word_acc"],
+            "overall_word_acc": result["overall_word_acc"],
+        }
+        for name, result in results.items()
+    }
+    # Retain flat fields for existing tooling; the corpus map is the source of
+    # truth for new/combined arms.
+    primary = next(iter(summary.values()))
+    overall = sum(v["overall_word_acc"] for v in summary.values()) / len(summary)
+    log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
+            next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
+            cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
+            vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
+            minutes=round((time.time() - started_at) / 60, 1))
+    print(" ".join(
+        f"{name}: {value['overall_word_acc']:.2f}" for name, value in summary.items()))
+
+
+def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
+                         baseline: dict | None, started_at: float) -> dict:
+    """Paired fast standard-benchmark probe for epoch-gating a campaign."""
+    from ..eval.standard import STANDARD_TASKS, evaluate_standard
+
+    probe = evaluate_standard(
+        stack.model, tok, tasks=STANDARD_TASKS,
+        limit=cfg.eval.standard_damage_limit,
+        batch_size=cfg.eval.standard_damage_batch_size,
+        device=cfg.model.device, keep_examples=False,
+    )
+    base = baseline or probe
+    deltas = {
+        task: probe["tasks"][task]["accuracy"] - base["tasks"][task]["accuracy"]
+        for task in STANDARD_TASKS
+    }
+    worst_task = min(deltas, key=deltas.get)
+    mean_delta = sum(deltas.values()) / len(deltas)
+    log.log(kind="standard_eval", epoch=epoch, phase=phase,
+            standard_tasks={task: probe["tasks"][task]["accuracy"]
+                            for task in STANDARD_TASKS},
+            standard_macro_accuracy=probe["macro_accuracy"],
+            standard_epoch0_delta=mean_delta,
+            standard_worst_task=worst_task,
+            standard_worst_delta=deltas[worst_task],
+            standard_limit=probe["limit"],
+            benchmark_revisions=probe["benchmark_revisions"],
+            vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
+            minutes=round((time.time() - started_at) / 60, 1))
+    print(f"{phase}: standard {probe['macro_accuracy']:.3f} "
+          f"(Δ {mean_delta:+.3f}; worst {worst_task} {deltas[worst_task]:+.3f})")
+    return base
+
+
+def _epoch_zero_telemetry(cfg, stack, tok, log, started_at: float) -> dict | None:
+    """Record the paired epoch-0 reference when standard gating is enabled."""
+    if not cfg.eval.standard_damage_every_epochs:
+        return None
+    _log_epoch_recall(cfg, stack, tok, log, epoch=0, phase="epoch0",
+                      started_at=started_at)
+    return _log_standard_damage(cfg, stack, tok, log, epoch=0, phase="epoch0",
+                                baseline=None, started_at=started_at)
+
+
 class OnlineTeacherSource:
     """Frozen-teacher forwards for schedules that need per-step teacher
     states. Two backends, exactly one active:
@@ -692,6 +861,7 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
     step = accum = 0
     pending_losses: list[list[torch.Tensor]] = []
     t0 = time.time()
+    standard_baseline = _epoch_zero_telemetry(cfg, stack, tok, log, t0)
     for epoch in range(cfg.train.epochs):
         for items in loader:
             for it in items:
@@ -712,20 +882,17 @@ def _train_teacher_censored(cfg, stack, tok, log, teacher):
                     step += 1
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True)
-        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
-                           n_per_task=8)
-            t = r["tasks"]
-            log.log(kind="eval", epoch=epoch,
-                    next_acc=t["next"]["word_acc"],
-                    prev_acc=t["prev"]["word_acc"],
-                    cloze_acc=t["cloze"]["word_acc"],
-                    overall_word_acc=r["overall_word_acc"],
-                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
-                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-                    minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
+        completed = epoch + 1
+        if completed % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            _log_epoch_recall(cfg, stack, tok, log, epoch=completed,
+                              phase=f"after_epoch_{completed}", started_at=t0)
+        if (cfg.eval.standard_damage_every_epochs
+                and (completed % cfg.eval.standard_damage_every_epochs == 0
+                     or epoch == cfg.train.epochs - 1)):
+            standard_baseline = _log_standard_damage(
+                cfg, stack, tok, log, epoch=completed,
+                phase=f"after_epoch_{completed}", baseline=standard_baseline,
+                started_at=t0)
 
 
 def censored_rows(s0: int, t0: int, A: int, t_priv, device) -> torch.Tensor:
@@ -762,6 +929,11 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     term. Teacher-stream k-windows are a distinct future mode
     (docs/windows.md)."""
     n = stack.n_layers
+    # Unit-level callers historically pass a kind string, whereas the trainer
+    # constructs one configured object.  Normalize once here so delta-kind
+    # routing has the same information in both paths.
+    if isinstance(loss_fn, str):
+        loss_fn = HiddenLoss(loss_fn, stack.final_norm, stack.lm_head)
     tA0 = it.t0
     rows = censored_rows(it.s0, tA0, it.A, getattr(it, "t_priv", None), device)
     pos_c = rows[None]  # teacher absolute positions == row indices
@@ -773,6 +945,10 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
     layer_losses = []
     for L in range(1, n + 1):
         inp = t_states[L - 1][:, rows].detach()
+        previous_target = (
+            t_states[L - 1][0, tA0: tA0 + it.A].detach()
+            if loss_fn.is_delta and 1 < L < n else None
+        )
         if L == n:
             loss_val, _ = last_block_step(
                 stack, inp, pos_emb_c, _target(L), it.s0, it.A,
@@ -781,6 +957,7 @@ def _censored_item(cfg, stack, loss_fn, it, t_states, device):
         else:
             loss_val, _ = local_block_step(
                 stack, L, inp, pos_emb_c, _target(L), it.s0, it.A, loss_fn,
+                previous_target=previous_target,
             )
         layer_losses.append(loss_val)
     return layer_losses
@@ -830,6 +1007,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                 batch, loss_fn, cfg.train.readout_weight,
                 hidden_w=cfg.train.window_hidden_weight,
                 readout_source=cfg.train.readout_source,
+                all_targets=targets,
             )
             layer_losses.extend(readout_losses)
             break
@@ -842,12 +1020,11 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                     t = stack.run_block(LL, t, pos_emb)
                     h_traj[LL] = t.detach()
             if cfg.train.window_dedup:
-                def _endpoint_loss(L1, y):
-                    aligned = _gather_batch_rows(stack.loss_view(L1, y),
-                                                 batch.aligned_index)
-                    per_ex = _hidden_loss_per_example(
-                        loss_fn, aligned, targets[L1], batch.A.tolist(),
-                        normed=(L1 == n), layer=L1)
+                def _endpoint_loss(L1, x, y):
+                    per_ex = _layer_loss_per_example(
+                        loss_fn, stack, L1, y, x, targets[L1],
+                        targets.get(L1 - 1), batch,
+                    )
                     return per_ex.sum(), per_ex.detach()
                 layer_losses.extend(_sliding_windows_dedup(
                     stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
@@ -857,6 +1034,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                     win_losses, _ = window_step_batch(
                         stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
                         batch, loss_fn, readout_w=0.0, L1=L1,
+                        all_targets=targets,
                     )
                     layer_losses.extend(win_losses)
                     # trajectory lifetime: roots below the NEXT window's root
@@ -874,6 +1052,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
             win_losses, h = window_step_batch(
                 stack, L, h.detach(), pos_emb, win_targets,
                 batch, loss_fn, readout_w=0.0, L1=L1,
+                all_targets=targets,
             )
             layer_losses.extend(win_losses)
             L = L1 + 1
@@ -885,7 +1064,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
         else:
             loss_vals, h = local_block_step_batch(
                 stack, L, h.detach(), pos_emb, targets[L],
-                batch, loss_fn,
+                batch, loss_fn, previous_target=targets.get(L - 1),
             )
         layer_losses.append(loss_vals)
         L += 1
@@ -919,6 +1098,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
     pending_losses: list[list[torch.Tensor]] = []
     t0 = time.time()
     done = False
+    standard_baseline = _epoch_zero_telemetry(cfg, stack, tok, log, t0)
     for epoch in range(cfg.train.epochs):
         if done:
             break
@@ -977,20 +1157,17 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
                          pending=pending_losses, n_layers=n, partial=True,
                          **({"router_overlap": moe.overlap_flush()}
                             if moe else {}))
-        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
-                           n_per_task=8)
-            t = r["tasks"]
-            log.log(kind="eval", epoch=epoch,
-                    next_acc=t["next"]["word_acc"],
-                    prev_acc=t["prev"]["word_acc"],
-                    cloze_acc=t["cloze"]["word_acc"],
-                    overall_word_acc=r["overall_word_acc"],
-                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
-                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-                    minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
+        completed = epoch + 1
+        if completed % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            _log_epoch_recall(cfg, stack, tok, log, epoch=completed,
+                              phase=f"after_epoch_{completed}", started_at=t0)
+        if (cfg.eval.standard_damage_every_epochs
+                and (completed % cfg.eval.standard_damage_every_epochs == 0
+                     or epoch == cfg.train.epochs - 1)):
+            standard_baseline = _log_standard_damage(
+                cfg, stack, tok, log, epoch=completed,
+                phase=f"after_epoch_{completed}", baseline=standard_baseline,
+                started_at=t0)
 
 
 class AnchorBank:
@@ -1117,6 +1294,7 @@ def _train_mixed(cfg, stack, tok, log, teacher):
     pending_losses: list[list[torch.Tensor]] = []
     branch_counts = {"teacher": 0, "student": 0}
     t0 = time.time()
+    standard_baseline = _epoch_zero_telemetry(cfg, stack, tok, log, t0)
     for epoch in range(cfg.train.epochs):
         p = mix_teacher_p(cfg, epoch)
         for items in loader:
@@ -1161,20 +1339,17 @@ def _train_mixed(cfg, stack, tok, log, teacher):
                          student_items=branch_counts["student"],
                          partial=True)
         branch_counts = {"teacher": 0, "student": 0}
-        if (epoch + 1) % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
-            r = tasks_eval(stack.model, tok, cfg.data.poem_path,
-                           n_per_task=8)
-            t = r["tasks"]
-            log.log(kind="eval", epoch=epoch,
-                    next_acc=t["next"]["word_acc"],
-                    prev_acc=t["prev"]["word_acc"],
-                    cloze_acc=t["cloze"]["word_acc"],
-                    overall_word_acc=r["overall_word_acc"],
-                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
-                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                    vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-                    minutes=round((time.time() - t0) / 60, 1))
-            print(f"epoch {epoch}: next {t['next']['word_acc']:.2f} prev {t['prev']['word_acc']:.2f} cloze {t['cloze']['word_acc']:.2f}")
+        completed = epoch + 1
+        if completed % cfg.eval.every_epochs == 0 or epoch == cfg.train.epochs - 1:
+            _log_epoch_recall(cfg, stack, tok, log, epoch=completed,
+                              phase=f"after_epoch_{completed}", started_at=t0)
+        if (cfg.eval.standard_damage_every_epochs
+                and (completed % cfg.eval.standard_damage_every_epochs == 0
+                     or epoch == cfg.train.epochs - 1)):
+            standard_baseline = _log_standard_damage(
+                cfg, stack, tok, log, epoch=completed,
+                phase=f"after_epoch_{completed}", baseline=standard_baseline,
+                started_at=t0)
 
 
 class StudentActCache:
@@ -1229,7 +1404,7 @@ def _train_sequential(cfg, stack, cache, tok, log):
     ds = _make_dataset(cfg, cache, tok, [1])  # pairs built once; layer swapped per stage
     full_ft = not cfg.train.lora.enabled
     for L in range(1, n + 1):
-        ds.need_layers = [L]
+        ds.need_layers = ([L - 1, L] if loss_fn.is_delta and 1 < L < n else [L])
         loader = _loader(cfg, ds)
         if full_ft:
             stack.blocks[L - 1].float()  # fp32 master for the active block only
@@ -1254,6 +1429,10 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         h_in = act_cache.get(it.example_id).to(device, torch.float32)[None]
                     pos_emb = stack.rope(h_in, pos)
                     target = it.hidden[L].to(device)
+                    previous_target = (
+                        it.hidden[L - 1].to(device)
+                        if loss_fn.is_delta and 1 < L < n else None
+                    )
                     if L == n:
                         loss_val, _ = last_block_step(
                             stack, h_in.detach(), pos_emb, target, it.s0, it.A,
@@ -1263,6 +1442,7 @@ def _train_sequential(cfg, stack, cache, tok, log):
                         loss_val, _ = local_block_step(
                             stack, L, h_in.detach(), pos_emb, target,
                             it.s0, it.A, loss_fn,
+                            previous_target=previous_target,
                         )
                     epoch_losses.append(loss_val)
                     accum += 1
@@ -1299,7 +1479,6 @@ def _train_sequential(cfg, stack, cache, tok, log):
                     prev_acc=t["prev"]["word_acc"],
                     cloze_acc=t["cloze"]["word_acc"],
                     overall_word_acc=r["overall_word_acc"],
-                    gen_ce=general_ce(stack.model, tok)["mean_ce"],
                     vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
                     vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
                     minutes=round((time.time() - t0) / 60, 1))

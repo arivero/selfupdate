@@ -122,9 +122,11 @@ class TrainConfig:
     moe_router_weight: float = 0.0
     seed: int = 17
     max_steps: int = 0  # 0 = no cap
-    # nmse | l2mse | cosine | huber (geometric) | vocab_mse | lens_kl
-    # | tuned_lens_kl (lens_kl after a frozen per-layer tuned-lens translator)
-    # (frozen-vocabulary metric kinds, see losses.py / docs/hidden_loss.md)
+    # nmse | l2mse | cosine | huber (absolute-state geometric) | vocab_mse
+    # | lens_kl | tuned_lens_kl | vocab_fisher (absolute-state frozen-vocabulary)
+    # | delta_nmse | delta_cosine | delta_vocab_cos (successive raw block
+    # increments; L=1/h_n use the paired state fallback because the cache has
+    # no h0 and h_n is post-final-norm).  See losses.py / docs/hidden_loss.md.
     hidden_loss: str = "nmse"
     tuned_lens_path: str = ""
     # Top readout term attached ONLY to sanctioned sliding windows:
@@ -203,6 +205,16 @@ class TrainConfig:
 class EvalConfig:
     recite_lines: int = 20
     every_epochs: int = 2
+    # Optional explicit corpus set for in-training recall telemetry.  Empty
+    # retains the historical one-corpus cfg.data.poem_path behavior; combined
+    # campaigns must pin both corpus names from eval.tasks.RECALL_CORPUS_PATHS.
+    recall_corpora: list = field(default_factory=list)
+    # Fixed fast subset of ARC-Easy / ARC-Challenge / HellaSwag, evaluated in
+    # process.  0 disables it for legacy/certification configs; campaign arms
+    # pin 1 to record epoch 0 and every completed epoch.
+    standard_damage_every_epochs: int = 0
+    standard_damage_limit: int = 16
+    standard_damage_batch_size: int = 8
 
 
 @dataclass

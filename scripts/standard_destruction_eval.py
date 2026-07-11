@@ -28,6 +28,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import sys
 import time
 from pathlib import Path
@@ -42,13 +43,47 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
+from selfupdate.eval.standard import (BENCHMARK_REVISIONS, STANDARD_TASKS,
+                                      evaluate_task)
 
 
-TASKS = ("wikitext2_ppl", "arc_easy", "arc_challenge", "hellaswag")
+TASKS = ("wikitext2_ppl", *STANDARD_TASKS)
+STAGE_LOCK_STALE_SECONDS = 15 * 60
 
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
+
+
+def _stage_lock_is_stale(lock: Path) -> bool:
+    """A node-local lock is stale when its local owner died or timed out."""
+    try:
+        owner = json.loads((lock / "owner.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        owner = {}
+    pid = owner.get("pid")
+    host = owner.get("hostname")
+    if pid and host == socket.gethostname():
+        try:
+            os.kill(int(pid), 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        else:
+            return False
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    timeout = float(os.environ.get(
+        "SELFUPDATE_EVAL_STAGE_LOCK_STALE_SECONDS", STAGE_LOCK_STALE_SECONDS))
+    return age >= timeout
+
+
+def _write_stage_lock_owner(lock: Path) -> None:
+    (lock / "owner.json").write_text(json.dumps({
+        "pid": os.getpid(), "hostname": socket.gethostname(),
+        "started_at": time.time(),
+    }))
 
 
 def _stage_source(source: str, label: str, shared: bool) -> str:
@@ -56,7 +91,8 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
 
     Shared model snapshots are retained across jobs on this node. Unique
     checkpoints are removed at process exit. A mkdir lock prevents concurrent
-    jobs from constructing the same shared snapshot.
+    jobs from constructing the same shared snapshot; dead owners are reclaimed
+    so a killed copy cannot wedge every later evaluation on the node.
     """
     from huggingface_hub import snapshot_download
 
@@ -73,11 +109,16 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
         while not (dest / ".complete").exists():
             try:
                 lock.mkdir()
+                _write_stage_lock_owner(lock)
                 owner = True
             except FileExistsError:
                 owner = False
             if owner:
                 try:
+                    # Atomic publish normally prevents this state, but clean a
+                    # partial directory left by an interrupted older stager.
+                    if dest.exists() and not (dest / ".complete").exists():
+                        shutil.rmtree(dest)
                     tmp = dest.with_name(dest.name + f".tmp-{os.getpid()}")
                     shutil.rmtree(tmp, ignore_errors=True)
                     shutil.copytree(src, tmp, symlinks=False)
@@ -87,8 +128,13 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
                     else:
                         shutil.rmtree(tmp, ignore_errors=True)
                 finally:
-                    lock.rmdir()
+                    shutil.rmtree(lock, ignore_errors=True)
                 break
+            if _stage_lock_is_stale(lock):
+                # The lock directory is the atomic ownership token.  Delete
+                # only a dead/expired token, then contend normally next loop.
+                shutil.rmtree(lock, ignore_errors=True)
+                continue
             time.sleep(0.2)
         return str(dest)
 
@@ -183,61 +229,11 @@ def _load_model(args):
     return cfg, model, tok
 
 
-def _arc_examples(config: str, split: str, limit: int | None) -> list[dict]:
-    if config == "ARC-Easy":
-        # Repository-pinned standard subset: avoids dataset-revision drift and
-        # guarantees that checkpoint and epoch-zero jobs see identical items.
-        pinned = Path("data/eval/arc_easy_v1.json")
-        if pinned.exists():
-            rows = json.loads(pinned.read_text())["items"]
-            return rows[:limit] if limit else rows
-    ds = load_dataset("allenai/ai2_arc", config, split=split)
-    rows = []
-    for row in ds:
-        labels = list(row["choices"]["label"])
-        texts = list(row["choices"]["text"])
-        answer = str(row["answerKey"])
-        if answer in labels:
-            target = labels.index(answer)
-        elif answer.isdigit() and str(int(answer)) in labels:
-            target = labels.index(str(int(answer)))
-        else:
-            continue
-        rows.append(
-            {
-                "id": row.get("id"),
-                "prompt": f"Question: {row['question'].strip()}\nAnswer:",
-                "choices": [f" {t.strip()}" for t in texts],
-                "target": target,
-            }
-        )
-        if limit and len(rows) >= limit:
-            break
-    return rows
-
-
-def _hellaswag_examples(split: str, limit: int | None) -> list[dict]:
-    ds = load_dataset("Rowan/hellaswag", split=split)
-    rows = []
-    for row in ds:
-        target = int(row["label"])
-        ctx = f"{row['ctx_a']} {row['ctx_b']}".strip()
-        rows.append(
-            {
-                "id": row.get("ind"),
-                "prompt": ctx,
-                "choices": [f" {e.strip()}" for e in row["endings"]],
-                "target": target,
-            }
-        )
-        if limit and len(rows) >= limit:
-            break
-    return rows
-
-
 def _wikitext2_text(max_chars: int | None) -> str:
     # Serial download/load only. Do not use num_proc on Lustre.
-    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="validation")
+    ds = load_dataset(
+        "Salesforce/wikitext", "wikitext-2-raw-v1", split="validation",
+        revision=BENCHMARK_REVISIONS["Salesforce/wikitext"])
     parts = []
     chars = 0
     for row in ds:
@@ -251,85 +247,9 @@ def _wikitext2_text(max_chars: int | None) -> str:
     return "\n\n".join(parts)
 
 
-def _task_examples(task: str, limit: int | None) -> list[dict]:
-    if task == "arc_easy":
-        return _arc_examples("ARC-Easy", "validation", limit)
-    if task == "arc_challenge":
-        return _arc_examples("ARC-Challenge", "validation", limit)
-    if task == "hellaswag":
-        return _hellaswag_examples("validation", limit)
-    raise ValueError(task)
-
-
 def _chunks(xs: list, n: int) -> Iterable[list]:
     for i in range(0, len(xs), n):
         yield xs[i:i + n]
-
-
-@torch.no_grad()
-def _score_pairs(model, tok, pairs: list[tuple[str, str]], device: str) -> list[float]:
-    texts = [p + c for p, c in pairs]
-    # padding_side MUST be right: the span arithmetic below indexes from the
-    # sequence start. Some fleet tokenizers (ALIA-40b) ship padding_side=left,
-    # which silently scored pad/prompt tokens for every non-longest option.
-    enc = tok(texts, return_tensors="pt", padding=True, padding_side="right",
-              add_special_tokens=False)
-    input_ids = enc["input_ids"].to(device)
-    attention_mask = enc["attention_mask"].to(device)
-    logits = model(input_ids, attention_mask=attention_mask, use_cache=False).logits
-
-    scores = []
-    for i, (prompt, choice) in enumerate(pairs):
-        prompt_ids = tok.encode(prompt, add_special_tokens=False)
-        choice_ids = tok.encode(choice, add_special_tokens=False)
-        start = len(prompt_ids)
-        end = start + len(choice_ids)
-        if not choice_ids or end > int(attention_mask[i].sum().item()):
-            scores.append(-math.inf)
-            continue
-        row_logits = logits[i, start - 1:end - 1].float()
-        targets = input_ids[i, start:end].to(row_logits.device)
-        nll = F.cross_entropy(row_logits, targets, reduction="sum").item()
-        scores.append(-nll / max(1, len(choice_ids)))
-    return scores
-
-
-def _evaluate_task(model, tok, task: str, limit: int | None, batch_size: int, device: str) -> dict:
-    examples = _task_examples(task, limit)
-    correct = 0
-    per_example = []
-    flat = []
-    owners = []
-    for ex_i, ex in enumerate(examples):
-        for choice_i, choice in enumerate(ex["choices"]):
-            flat.append((ex["prompt"], choice))
-            owners.append((ex_i, choice_i))
-
-    scores_by_example = [[-math.inf] * len(ex["choices"]) for ex in examples]
-    for batch, owner_batch in zip(_chunks(flat, batch_size), _chunks(owners, batch_size)):
-        scores = _score_pairs(model, tok, batch, device)
-        for (ex_i, choice_i), score in zip(owner_batch, scores):
-            scores_by_example[ex_i][choice_i] = score
-
-    for ex, scores in zip(examples, scores_by_example):
-        pred = max(range(len(scores)), key=lambda i: scores[i])
-        ok = pred == ex["target"]
-        correct += int(ok)
-        per_example.append(
-            {
-                "id": ex["id"],
-                "target": ex["target"],
-                "pred": pred,
-                "correct": ok,
-                "scores": scores,
-            }
-        )
-    return {
-        "task": task,
-        "n": len(examples),
-        "accuracy": correct / len(examples) if examples else float("nan"),
-        "per_example": per_example,
-    }
 
 
 @torch.no_grad()
@@ -421,7 +341,7 @@ def main() -> int:
                 flush=True,
             )
         else:
-            results[task] = _evaluate_task(
+            results[task] = evaluate_task(
                 model, tok, task, args.limit, args.batch_size, device
             )
             print(f"{task}: acc={results[task]['accuracy']:.3f} n={results[task]['n']}", flush=True)
@@ -438,6 +358,12 @@ def main() -> int:
         ),
         "limit": args.limit,
         "batch_size": args.batch_size,
+        "benchmark_revisions": {
+            "arc_easy": "data/eval/arc_easy_v1.json",
+            "arc_challenge": BENCHMARK_REVISIONS["allenai/ai2_arc"],
+            "hellaswag": BENCHMARK_REVISIONS["Rowan/hellaswag"],
+            "wikitext2_ppl": BENCHMARK_REVISIONS["Salesforce/wikitext"],
+        },
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 # Checkpoint re-evaluation: recall and model damage
 
-Recall artifacts exist for 160/160 checkpoints; 160/160 cover every corpus in the declared training scope. Paired standard-capability results exist for 159/160 checkpoints. There are 19 corpus-specific recall base references.
+Recall artifacts exist for 160/160 checkpoints; 160/160 cover every corpus in the declared training scope. Paired standard-capability results exist for 160/160 checkpoints. There are 19 corpus-specific recall base references.
 
 Recall word accuracy is the fraction of reference words recovered in order, averaged over next, previous, and cloze prompts. Each Δ uses the epoch-zero model on the same corpus. A dash means that corpus/reference has not been evaluated; it is never imputed from the other author.
 
@@ -321,7 +321,7 @@ This is the capability check. Accuracy and Δ are paired means over the standard
 | lw_l_final_8b_rag | Qwen3-8B | 3/3 | 0.59 | 0.63 | -0.04 | hellaswag -0.10 |
 | lw_j_llama8b_rag | Llama-3.1-8B-Instruct | 3/3 | 0.55 | 0.65 | -0.10 | arc_challenge -0.15 |
 | lw_j_phi4mini_rag | Phi-4-mini-reasoning | 3/3 | 0.53 | 0.51 | +0.02 | hellaswag -0.02 |
-| lw_j_mistral7b_rag | Mistral-7B-Instruct-v0.1 | 0/3 | — | 0.60 | — | — |
+| lw_j_mistral7b_rag | Mistral-7B-Instruct-v0.1 | 3/3 | 0.57 | 0.60 | -0.04 | hellaswag -0.07 |
 | lw_k_gptoss_rag | gpt-oss-20b | 3/3 | 0.42 | 0.56 | -0.14 | arc_easy -0.22 |
 | clean_combined_slide8_nmse_0p6b_rag | Qwen3-0.6B | 3/3 | 0.41 | 0.46 | -0.05 | arc_easy -0.11 |
 | clean_combined_slide8_vocab_0p6b_rag | Qwen3-0.6B | 3/3 | 0.40 | 0.46 | -0.06 | arc_easy -0.11 |

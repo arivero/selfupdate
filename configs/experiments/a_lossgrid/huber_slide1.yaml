@@ -1,0 +1,5 @@
+run_name: a_lossgrid_1p7b_combined_slide1_huber
+train:
+  hidden_loss: huber
+eval:
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]

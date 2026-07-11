@@ -6,7 +6,7 @@ tokens ``[s0+1, s0+A)`` — the caller passes tensors already sliced to the
 aligned span, so here row i of the student always corresponds to row i of the
 cached teacher.
 
-Two families of hidden-match kinds:
+Three families of hidden-match kinds:
 
 - geometric (``nmse``, ``l2mse``, ``cosine``, ``huber``): compare hidden
   vectors directly, in the residual-stream metric.
@@ -16,6 +16,9 @@ Two families of hidden-match kinds:
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
   (Gaussian) approximation of ``lens_kl``, which is full KL between the
   teacher's and student's logit-lens distributions.
+- increment (``delta_nmse``, ``delta_cosine``, ``delta_vocab_cos``): compare
+  the raw residual update made by an interior block rather than its inherited
+  absolute state. Cache boundaries use the paired absolute-state metric.
 
 Whitened/CKA-style losses are deliberately absent: items are batch-1
 ``[A, H]`` slices with A often below H, so per-batch covariances are
@@ -32,6 +35,16 @@ import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "zero")
 VOCAB_KINDS = ("vocab_mse", "lens_kl", "tuned_lens_kl", "vocab_fisher")
+# Match what a block *adds* rather than repeatedly charging it for inherited
+# state error.  The trainer applies these only to interior raw block outputs
+# (2 <= L < n); L=1 and h_n use the paired state fallback below because the
+# disk cache has no h0 and h_n is post-final-norm.
+DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos")
+DELTA_STATE_FALLBACKS = {
+    "delta_nmse": "nmse",
+    "delta_cosine": "cosine",
+    "delta_vocab_cos": "vocab_mse",
+}
 
 FISHER_TOPK = 64
 
@@ -79,19 +92,24 @@ class HiddenLoss:
     kinds apply it here so every layer is measured in the decode geometry.
     The norm and head are frozen, so gradients through them still reach only
     the student block that produced ``student_h`` — locality is untouched.
+    Increment kinds expose :meth:`delta` for raw interior updates; calling an
+    increment kind at a cache boundary selects its documented state fallback.
     """
 
     def __init__(self, kind: str, final_norm=None, lm_head=None, tuned_lens_path: str = ""):
-        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS:
+        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
+        if kind == "delta_vocab_cos" and (final_norm is None or lm_head is None):
+            raise ValueError("hidden loss 'delta_vocab_cos' needs final_norm and lm_head")
         if kind == "tuned_lens_kl" and not tuned_lens_path:
             raise ValueError("hidden loss 'tuned_lens_kl' needs train.tuned_lens_path")
         self.kind = kind
         self.final_norm = final_norm
         self.lm_head = lm_head
         self._gram: torch.Tensor | None = None
+        self._centered_gram: torch.Tensor | None = None
         self.translators = None
         if kind == "tuned_lens_kl":
             from .tuned_lens import load_translators
@@ -112,14 +130,41 @@ class HiddenLoss:
             self._gram = M
         return self._gram
 
+    def _centered_gram_matrix(self) -> torch.Tensor:
+        """``Wᵀ C W`` for vocabulary-mean-centred scores.
+
+        ``C = I - 11ᵀ/V`` removes an otherwise arbitrary vocabulary-wide
+        score offset.  We form it from the existing unembedding Gram instead
+        of materialising a [positions, vocab] logit tensor.
+        """
+        if self._centered_gram is None:
+            W = self.lm_head.weight.detach()
+            with torch.autocast(W.device.type, enabled=False):
+                mean = W.float().sum(dim=0)
+                self._centered_gram = (
+                    self._gram_matrix() - torch.outer(mean, mean) / W.shape[0]
+                )
+        return self._centered_gram
+
+    @property
+    def is_delta(self) -> bool:
+        return self.kind in DELTA_KINDS
+
+    @property
+    def state_fallback_kind(self) -> str:
+        """Absolute-state metric used where a raw adjacent difference is
+        unavailable (the embedding boundary and cached post-norm endpoint)."""
+        return DELTA_STATE_FALLBACKS.get(self.kind, self.kind)
+
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
                  normed: bool = False, layer: int | None = None) -> torch.Tensor:
         # pipeline-parallel guard: targets are produced on the item device
         # (cuda:0) while upper blocks live on cuda:1; .to() is differentiable
         teacher_h = teacher_h.to(student_h.device)
-        if self.kind in GEOMETRIC_KINDS:
-            return hidden_match(student_h, teacher_h, self.kind)
-        if self.kind == "tuned_lens_kl":
+        kind = self.state_fallback_kind
+        if kind in GEOMETRIC_KINDS:
+            return hidden_match(student_h, teacher_h, kind)
+        if kind == "tuned_lens_kl":
             if layer is None:
                 raise ValueError("tuned_lens_kl needs a layer index")
             lens_dev = next(self.translators.parameters()).device
@@ -137,7 +182,7 @@ class HiddenLoss:
         head_dev = self.lm_head.weight.device
         student_h = student_h.to(head_dev)
         teacher_h = teacher_h.to(head_dev)
-        if self.kind == "vocab_mse":
+        if kind == "vocab_mse":
             with torch.autocast(student_h.device.type, enabled=False):
                 d = student_h.float() - teacher_h.float()
                 M = self._gram_matrix()
@@ -145,7 +190,7 @@ class HiddenLoss:
                 t = teacher_h.float()
                 denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
-        if self.kind == "vocab_fisher":
+        if kind == "vocab_fisher":
             # Position-dependent Fisher metric: weight the logit-space error
             # by the TEACHER's layer-L lens distribution, restricted to its
             # top-k support. This is the Gauss-Newton form of lens_kl —
@@ -184,3 +229,43 @@ class HiddenLoss:
             F.log_softmax(t_logits.float(), dim=-1),
             log_target=True, reduction="batchmean",
         )
+
+    def delta(self, student_h: torch.Tensor, student_prev: torch.Tensor,
+              teacher_h: torch.Tensor, teacher_prev: torch.Tensor) -> torch.Tensor:
+        """Compare raw successive block contributions.
+
+        The preceding student state is explicitly stop-gradient.  In a
+        connected window the normal path through ``student_h`` may still give
+        credit to earlier blocks inside that sanctioned window, but this loss
+        never creates a second direct gradient through the subtraction.
+        Final norm and LM-head bias are intentionally absent: this is a
+        residual-update measurement, not a decode of an absolute state.
+        """
+        if not self.is_delta:
+            raise ValueError(f"hidden loss {self.kind!r} has no delta form")
+        student_prev = student_prev.detach().to(student_h.device)
+        teacher_h = teacher_h.to(student_h.device)
+        teacher_prev = teacher_prev.to(student_h.device)
+        if self.kind == "delta_nmse":
+            return hidden_match(student_h - student_prev,
+                                teacher_h - teacher_prev, "nmse")
+        if self.kind == "delta_cosine":
+            return hidden_match(student_h - student_prev,
+                                teacher_h - teacher_prev, "cosine")
+
+        # ``delta_vocab_cos``: cosine of *centred* frozen-vocabulary score
+        # changes.  Wᵀ C W avoids a V-wide score tensor while exactly matching
+        # ``cos(C W d_s, C W d_t)`` up to fp32 matmul rounding.
+        head_dev = self.lm_head.weight.device
+        with torch.autocast(head_dev.type, enabled=False):
+            ds = (student_h.to(head_dev).float()
+                  - student_prev.to(head_dev).float())
+            dt = (teacher_h.to(head_dev).float()
+                  - teacher_prev.to(head_dev).float())
+            M = self._centered_gram_matrix()
+            ds_M = ds @ M
+            dt_M = dt @ M
+            dot = (ds_M * dt).sum(-1)
+            ds_norm = (ds_M * ds).sum(-1).clamp_min(0).sqrt()
+            dt_norm = (dt_M * dt).sum(-1).clamp_min(0).sqrt()
+            return 1.0 - (dot / (ds_norm * dt_norm).clamp_min(1e-8)).mean()

@@ -57,6 +57,52 @@ def _checkpoint_run_config(checkpoint: str | None) -> dict:
     return {}
 
 
+def _adopt_checkpoint_eval_config(cfg, checkpoint_cfg: dict,
+                                  *, require_geometry: bool = False):
+    """Adopt checkpoint identity and input geometry for evaluation.
+
+    The command-line base config chooses placement and other evaluator knobs;
+    the checkpoint config is the source of truth for model identity, dataset,
+    and masking.  Copying only ``model.name`` and ``poem_path`` made
+    ``--layer-residuals`` silently tokenize Quijote/stub-gap checkpoints with
+    Machado/remove geometry.
+    """
+    if not checkpoint_cfg:
+        if require_geometry:
+            raise ValueError(
+                "--layer-residuals needs the checkpoint's saved config.yaml "
+                "to recover its data and mask geometry; pass a checkpoint "
+                "with a complete run config")
+        return cfg
+
+    saved_model = checkpoint_cfg.get("model") or {}
+    if saved_model.get("name"):
+        cfg.model.name = saved_model["name"]
+
+    saved_data = checkpoint_cfg.get("data") or {}
+    saved_mask = checkpoint_cfg.get("mask") or {}
+    if require_geometry:
+        missing = []
+        if not saved_data.get("examples_path"):
+            missing.append("data.examples_path")
+        if not saved_mask.get("compaction"):
+            missing.append("mask.compaction")
+        if missing:
+            raise ValueError(
+                "--layer-residuals refuses to guess checkpoint geometry; "
+                f"saved config is missing {', '.join(missing)}")
+
+    # Saved run configs can contain retired train keys, but data/mask are
+    # stable dataclasses.  Copy only their declared fields so evaluation stays
+    # compatible with historical configs without accepting misspellings.
+    for target, saved in ((cfg.data, saved_data), (cfg.mask, saved_mask)):
+        known = set(target.__dataclass_fields__)
+        for key, value in saved.items():
+            if key in known:
+                setattr(target, key, value)
+    return cfg
+
+
 def layer_residuals(cfg, checkpoint: str, out_dir: Path,
                     limit: int | None = None) -> dict:
     """Checkpoint-time per-layer residuals against the frozen teacher —
@@ -117,8 +163,10 @@ def layer_residuals(cfg, checkpoint: str, out_dir: Path,
             count += 1
     per_layer = {m: [v / count for v in sums[m].tolist()] for m in sums}
     result = {"model": cfg.model.name, "checkpoint": str(checkpoint),
-              "examples_path": cfg.data.examples_path, "n_items": count,
-              "n_layers": n, "per_layer": per_layer}
+              "examples_path": cfg.data.examples_path,
+              "mask": {"mode": cfg.mask.mode,
+                       "compaction": cfg.mask.compaction},
+              "n_items": count, "n_layers": n, "per_layer": per_layer}
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "layer_residuals.json").write_text(
         json.dumps(result, indent=1) + "\n")
@@ -196,15 +244,9 @@ def main() -> None:
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     checkpoint_cfg = _checkpoint_run_config(args.checkpoint)
-    checkpoint_model = ((checkpoint_cfg.get("model") or {}).get("name")
-                        if checkpoint_cfg else None)
-    if checkpoint_model and not args.base:
-        cfg.model.name = checkpoint_model
-    data_cfg = ((checkpoint_cfg.get("data") or {})
-                if checkpoint_cfg and not args.base else {})
-    ck_poem = data_cfg.get("poem_path")
-    if ck_poem:
-        cfg.data.poem_path = ck_poem
+    if checkpoint_cfg and not args.base:
+        cfg = _adopt_checkpoint_eval_config(
+            cfg, checkpoint_cfg, require_geometry=args.layer_residuals)
 
     src = cfg.model.name if args.base else args.checkpoint
     if not src:
@@ -253,9 +295,8 @@ def main() -> None:
         # poem_path made the old report silently call a Machado-only evaluation
         # a combined result. The Quijote rung comes from the checkpoint's own
         # paths — checkpoints score on THEIR corpus, never a fixed chapter.
-        examples_path = str(data_cfg.get("examples_path") or
-                            getattr(cfg.data, "examples_path", ""))
-        poem_path = str(ck_poem or cfg.data.poem_path)
+        examples_path = str(cfg.data.examples_path)
+        poem_path = str(cfg.data.poem_path)
         if "combined" in examples_path:
             corpus_names = ["machado",
                             quijote_rung(examples_path) or "quijote_ch1"]
