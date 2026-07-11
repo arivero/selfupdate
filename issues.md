@@ -446,78 +446,59 @@ SPEED (attack-plan Phase 1, measured + landed 2026-07-11, agpul04):
   lanes become throughput-relevant; card-packing via offload_adam not
   useful while arms are compute-saturated (91-98% util at B=1).
 
-STILL OPEN — trainer / compliance:
-- Online-teacher path still uses deprecated torch.jit
-  (`jit.script_method` removal risk on the next torch bump) — replace
-  before any torch upgrade.
-- `audit_configs` `OLD_KEYS` blacklist is name-based, not structural — a
-  renamed banned knob would slip through.
-- The "gold"→"reference" lexicon purge is unenforced by any guard, and still
-  present in `retention_eval.py` (DEFERRED on purpose: its "gold" dict key is
-  `CACHE_VERSION`-gated and that same version also gates the retention-eval
-  resumability check, so a blind rename forces a full-fleet GPU re-run — needs
-  a cache migration, not a sed).
-- `router_aligned` + `window_dedup`: `_sliding_windows_dedup` never drains
-  `pending_router_loss()`, so the combo dies deep in item 1 with a misleading
-  "graph leak" tripwire instead of failing at validation.
-- Latent: stale `_shared_kv_states` in `_censored_item` on the LoRA path
-  (harmless for all current architectures; wrong-length teacher KV for a
-  future shared-KV family); `teacher_censored` + PP crashes cross-device at
-  item 1 (fail-loud, combo unused); `teacher_rows.clamp_min(0)` would mis-map
-  the first readout row if a data mode ever had an empty mid (masking
-  currently guarantees nonempty); `readout_window_blocks > n` KeyErrors
-  (nonsense config, unvalidated).
-- `docs/runtime.md` overstates sliding-path activation-residency (peak
-  detached-state residency is full depth).
+ENGINEERING BACKLOG CLOSED 2026-07-11 (attack plan quiet-meandering-grove,
+Phases 0-4 complete; every item verified end-to-end at close):
 
-STILL OPEN — eval stack (three items CLOSED 2026-07-11 fc011f5: dead CLI
-flags now warn loudly on any non-default value, --max-extra-tokens wired
-with default 48→32 preserving effective behavior; training_scope emitted
-only when inferred, with corpora_measured + corpus_selection always
-present; analyze.py:31 "general" read guarded — build_corpus_index.py's
-reads were already guarded, review finding partially stale):
-- `tasks_eval` generates item-by-item (B=1). Fine at the current battery
-  size (72 short answers vs the old engine's ~600 full recitations — the
-  batching flags died WITH their workload), but two spots may want real
-  batched generation later: big-teacher ceilings (27B-120B) where
-  `with_context=True` pays a full corpus-length prefill per item, and any
-  future n_per_task increase. If it bites, implement batching INSIDE
-  tasks_eval as a real knob — do not resurrect the retired recite-era
-  flags. (KV prefix-sharing across items would need context-BEFORE-question
-  prompt order, which breaks the render_rag convention students trained
-  on — measurement comparability beats speed there.)
-- `_stage_source` mkdir-lock has no stale-owner detection; a killed copy job
-  wedges lanes silently.
-- Only ARC-Easy is repo-pinned; hellaswag/arc_challenge/wikitext float on HF
-  revisions (a pinned wikitext file exists but is ignored).
-- `/tmp` eval staging is never cleaned (~170 GB/node at full fleet).
-- Report denominators are self-referential: a run missing `tasks.json`
-  vanishes silently instead of erroring.
-- `standard_bases` prefers the 3-task teacher file over a richer 5-bench
-  destruction base (transitional).
-- Test coverage misses base-keying and `collect()` end-to-end.
+- Trainer/compliance: teacher_censored+PP validation raise; oversized
+  conn_window/readout_window_blocks named at setup; dead
+  BlockStack._shared_kv_states deleted (nothing read it); empty-mid
+  readout guard at collate (CPU, no hot-loop sync) with a pointer at the
+  clamp site (078cf0f). router_aligned+window_dedup validation had
+  already landed (eval-integrity agent). OLD_KEYS widened with a
+  banned-concept pattern guard (_ce_/label/gold) (2cc5525).
+  docs/runtime.md residency claim corrected (2cc5525).
+- torch.jit: RECLASSIFIED, not a code item — `git log -S` shows torch.jit
+  never existed in src/, scripts/, or even the deleted test file; the 14
+  deprecation warnings recorded in the old test-suite note were
+  third-party library warnings surfacing under pytest, misattributed to
+  "the online-teacher path". Residual risk is dependency compatibility at
+  the next torch bump, handled like any dependency, not a repo fix.
+- Eval stack: dead CLI flags warn; --max-extra-tokens wired (48→32
+  preserving effective budget); training_scope honesty +
+  corpora_measured/corpus_selection; analyze.py "general" guard (all
+  fc011f5). tasks_eval batched generation wired as generation_batch
+  (fb615f0, 2.8-3.1x; science evals keep B=1 default). _stage_source
+  stale-lock reclaim + standard-suite HF pinning landed via the
+  eval-integrity agent (verified). retention_eval builders pinned +
+  --build-cache overwrite refusal; standard_bases literal
+  richest-available; report denominators warn by name; /tmp stage
+  janitor (TTL, lock-aware, orphan reaping) (all f1a5948).
+  "Test coverage misses..." items are moot (tests deleted fd7138d).
+- Data/masking/config: cache.hidden_dtype honored + legacy handling
+  (eval-integrity agent, verified). adapt_records whole-file template
+  homogeneity; _matches legacy ordering; trace-harvest malformed-trace
+  warning; span check + t0/position_gap (all 2cc5525). Config
+  deep-merge, gated by a 179-pair zero-diff A/B audit (f5d42ad).
+  "gold" purged from retention_eval WITHOUT GPU re-run via in-place
+  cache-key migration, subset_id/_already_done verified stable (818b072).
+  Generator v5 fixes: last-verse off-by-one + dropped corpus system
+  prompt in rag_tool/thinking (71ed453) — take effect at the
+  examples_v5 regeneration.
 
-STILL OPEN — data / masking / teacher / config:
-- `cache.hidden_dtype` is hash-only: the writer hardcodes fp16 regardless, and
-  fp32→fp16 truncation has no finite-check — an 8B+ deep-layer channel above
-  65504 caches as inf and poisons every run on that cache. (Concurrent agent
-  likely addressing — verify `test_cache_dtype.py` before re-filing.)
-- continuation/maieutic window ranges are off by one: the last verse is
-  unreachable in any continuation/maieutic answer (fix belongs in a v-next
-  dataset; v1 is byte-identity-guarded).
-- Config merge is one level deep: an experiment overriding one key of a nested
-  dict silently resets its siblings to dataclass defaults.
-- `adapt_records` probes only `records[0]`; a mixed-template jsonl trains later
-  records on the wrong format silently.
-- `_matches` KeyErrors on legacy records before the curated "rebuild
-  examples.jsonl" error can fire.
-- Trace harvest stops only on `</think>`; a malformed trace freezes
-  turn-boundary tokens inside the privileged block, unwarned.
-- Dataset/cache span check omits t0 / position_gap (free to check; narrows a
-  tokenizer-drift window).
-- rag_tool/thinking builds drop the corpus style's system prompt.
+STILL OPEN — deferred with explicit reasons:
+- examples_v5 + teacher-cache regeneration: queued GPU work for the
+  post-grid campaign boundary (v4 stays byte-guarded for comparability
+  with the completed loss grid).
+- Bench-gated speed items: pinned-POOL prefetch only at 4B+ (>20
+  MB/layer targets, per the measured negative at 0.6B); cross-item PP
+  overlap only if PP lanes become throughput-relevant.
+- Lens-diagnostics idea set (docs/lens_diagnostics_ideas.md, 2026-07-11
+  section): all diagnostic-side; the regime-fork lens comparator is
+  time-limited (needs the B=1 arms while fresh); the early-abort gate
+  idea requires owner sign-off against the 12k-items law.
 
-STILL OPEN — research gaps (2026-07-05 review; also tracked in EXPERIMENTS.md
-C3 queue): teacher-stream k-windows not implemented (C3 #1); H100
-throughput / memory / PP-TP evidence absent (L40S evidence complete); 1.7B
-cleanliness (intrusion 22-40% at 1.7B vs 1.5-2.5% at 0.6B).
+STILL OPEN — research (owner's C3 program, EXPERIMENTS.md): loss-grid
+analysis (all 73 arms complete as of 2026-07-11 ~08:00); teacher-stream
+k-windows (C3 #1); H100 throughput/memory/PP-TP evidence (L40S evidence
+complete); 1.7B cleanliness (intrusion 22-40% at 1.7B vs 1.5-2.5% at
+0.6B — see the intrusion depth-localization probe idea).
