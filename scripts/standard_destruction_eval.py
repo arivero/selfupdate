@@ -86,6 +86,36 @@ def _write_stage_lock_owner(lock: Path) -> None:
     }))
 
 
+def _sweep_stage_root(root: Path) -> None:
+    """Age-gated janitor for OUR staging root only (~170 GB/node unswept at
+    full fleet). Shared snapshots expire SELFUPDATE_EVAL_STAGE_TTL_DAYS
+    (default 7) after their last use (reuse refreshes the .complete marker);
+    dirs holding a live build lock are never touched. jobs/ dirs are
+    atexit-cleaned normally but leak on SIGKILL — same TTL reaps orphans
+    (eval jobs run minutes-hours, never days)."""
+    ttl = float(os.environ.get("SELFUPDATE_EVAL_STAGE_TTL_DAYS", "7")) * 86400
+    now = time.time()
+    for kind in ("models", "jobs"):
+        base = root / kind
+        if not base.is_dir():
+            continue
+        for d in base.iterdir():
+            if not d.is_dir() or d.name.endswith(".lock"):
+                continue
+            if kind == "models" and d.with_name(d.name + ".lock").exists():
+                continue  # being (re)built right now
+            marker = d / ".complete"
+            ref = marker if marker.exists() else d
+            try:
+                idle = now - ref.stat().st_mtime
+            except OSError:
+                continue
+            if idle >= ttl:
+                print(f"stage janitor: removing {d} "
+                      f"(idle {idle / 86400:.1f} d)", file=sys.stderr)
+                shutil.rmtree(d, ignore_errors=True)
+
+
 def _stage_source(source: str, label: str, shared: bool) -> str:
     """Copy a model/checkpoint to node-local XFS before safetensor mmap.
 
@@ -102,6 +132,7 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
     root = Path(os.environ.get(
         "SELFUPDATE_EVAL_STAGE", f"/tmp/{os.environ.get('USER', 'user')}/selfupdate-eval-stage"))
     root.mkdir(parents=True, exist_ok=True)
+    _sweep_stage_root(root)
     if shared:
         dest = root / "models" / _safe_name(label)
         lock = dest.with_name(dest.name + ".lock")
@@ -136,6 +167,12 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
                 shutil.rmtree(lock, ignore_errors=True)
                 continue
             time.sleep(0.2)
+        # Reuse refreshes the marker: the janitor's TTL then measures time
+        # since last USE, so an actively shared snapshot never expires.
+        try:
+            os.utime(dest / ".complete")
+        except OSError:
+            pass
         return str(dest)
 
     dest = root / "jobs" / f"{_safe_name(label)}-{os.getpid()}"

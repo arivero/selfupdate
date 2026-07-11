@@ -93,7 +93,10 @@ def standard_bases(runs_dir: Path) -> dict[str, dict]:
             continue
         raw = json.loads(path.read_text())
         model, bench = raw.get("model"), raw.get("benchmarks") or {}
-        if model and model not in bases:
+        # "richest available" literally: a 5-bench destruction base beats a
+        # 3-task teacher file (the old first-wins order preferred whichever
+        # loop ran first, which inverted the docstring for models with both).
+        if model and len(bench) > len(bases.get(model, {})):
             bases[model] = bench
     return bases
 
@@ -144,10 +147,21 @@ def damage_result(run_dir: Path, model: str, bases: dict[str, dict]) -> dict:
 def collect(runs_dir: Path = Path("runs")) -> tuple[list[dict], dict]:
     rows, bases = [], {}
     std_bases = standard_bases(runs_dir)
+    unevaluated = []
     for d in sorted(runs_dir.iterdir()):
         f = d / "eval" / "tasks.json" if not d.name.startswith("base-tasks-") \
             else d / "tasks.json"
         if not f.exists():
+            # Denominators must not be self-referential: a real run whose
+            # battery never ran would otherwise just vanish from every
+            # table. Name it loudly instead.
+            if (d / "config.yaml").exists() and (
+                    (d / "checkpoint").exists()
+                    or (d / "CHECKPOINT_PRUNED.md").exists()
+            ) and not d.name.startswith("certify_"):
+                # certify_* dirs are train_certify.py instrument variants —
+                # never battery-evaluated, not missing science.
+                unevaluated.append(d.name)
             continue
         r = json.loads(f.read_text())
         measured = recall_results(r)
@@ -165,6 +179,10 @@ def collect(runs_dir: Path = Path("runs")) -> tuple[list[dict], dict]:
             entry["scope"] = training_scope(c, set(measured))
             entry["damage"] = damage_result(d, entry["model"], std_bases)
             rows.append(entry)
+    if unevaluated:
+        print(f"WARNING: {len(unevaluated)} run(s) with a config and "
+              "checkpoint but NO tasks.json are excluded from every table: "
+              + ", ".join(sorted(unevaluated)), file=sys.stderr)
     return rows, bases
 
 

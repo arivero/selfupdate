@@ -75,6 +75,8 @@ import torch
 import torch.nn.functional as F
 import yaml
 
+from selfupdate.eval.standard import BENCHMARK_REVISIONS
+
 CACHE_DIR = REPO / "data" / "eval"
 CACHE_VERSION = "v1"
 
@@ -121,7 +123,8 @@ def _recall_cache_path(corpus: str) -> Path:
 def _build_arc_cache(n_items: int) -> None:
     from datasets import load_dataset
 
-    ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="validation")
+    ds = load_dataset("allenai/ai2_arc", "ARC-Easy", split="validation",
+                      revision=BENCHMARK_REVISIONS["allenai/ai2_arc"])
     rows = []
     for row in ds:
         labels = list(row["choices"]["label"])
@@ -157,7 +160,9 @@ def _build_arc_cache(n_items: int) -> None:
 def _build_wikitext_cache(max_chars: int) -> None:
     from datasets import load_dataset
 
-    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="validation")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1",
+                      split="validation",
+                      revision=BENCHMARK_REVISIONS["Salesforce/wikitext"])
     parts, chars = [], 0
     for row in ds:
         text = str(row.get("text") or "").strip()
@@ -267,6 +272,19 @@ def _subset_id(keys: list) -> str:
 
 def build_cache(args) -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    # The version-pinned cache files are git-tracked corpus artifacts (the
+    # "pinned wikitext file" IS the cache). Rebuilding silently overwrote
+    # them with whatever the Hub served that day — refuse unless forced,
+    # and remember completed-checkpoint resumability keys on CACHE_VERSION.
+    existing = [p for p in (_arc_cache_path(), _wikitext_cache_path(),
+                            *(_recall_cache_path(c) for c in RECALL_CORPORA))
+                if p.exists()]
+    if existing and not args.force_cache:
+        raise SystemExit(
+            "retention caches are git-pinned corpus artifacts; refusing to "
+            "overwrite: " + ", ".join(str(p) for p in existing)
+            + " — pass --force-cache to rebuild (and bump CACHE_VERSION if "
+            "content changes)")
     _build_arc_cache(args.arc_items)
     _build_wikitext_cache(args.wikitext_max_chars)
     for corpus in RECALL_CORPORA:
@@ -692,6 +710,9 @@ def _print_timings(timings: list) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--build-cache", action="store_true")
+    ap.add_argument("--force-cache", action="store_true",
+                    help="allow --build-cache to overwrite the git-pinned "
+                         "cache artifacts (bump CACHE_VERSION on content change)")
     ap.add_argument("--checkpoints", nargs="*", default=None)
     ap.add_argument("--glob", nargs="*", default=None)
     ap.add_argument("--manifest", default=None)
