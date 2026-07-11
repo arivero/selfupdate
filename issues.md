@@ -429,9 +429,28 @@ numbers in one table.
 ## Open items (2026-07-11; closed work lives in git history)
 
 STILL OPEN — deferred with explicit reasons:
-- examples_v5 + teacher-cache regeneration: queued GPU work for the
-  post-grid campaign boundary (v4 stays byte-guarded for comparability
-  with the completed loss grid).
+- examples_v5: BUILT 2026-07-12 under the new question-only contract
+  (owner: dataset = conversational questions + master-RAG tool turn, NO
+  answers; the teacher GENERATES the answer at the cache stage and the
+  student trains on its forward hidden states; answers are per-model
+  cache content, never dataset content — anchoring a dataset to a model
+  makes a bad dataset). Two RAG scopes built (window/chapter,
+  data/combined/examples_v5_*.jsonl, full-corpus coverage asserted);
+  censoring axis remove vs pad_random (length-matched random
+  non-repeating ordinary-token fill — fixed pads/repeated fillers are
+  attendable attractors). Ladder campaign queued:
+  scripts/queue_v5_ladder_20260712.tsv (3 best grid losses x 4 teaching
+  styles x 0.6B/1.7B/4B; per-rung recitation ceilings gate the arms
+  against the RAG-authority failure recorded above). v4 stays
+  byte-guarded. OPEN remainder: 4B jacobian lens artifact
+  (../jacobian-lens) before the 4B x jacobian arms; online-teacher
+  generation for open-answer datasets (disk cache required until wired).
+- 0.6B v5 smoke telemetry (2026-07-12): premise contrast healthy with
+  window RAG (CE 0.55 with vs 3.70 without) but the teacher is chatty —
+  66.7% of generations still hit the 2x cut after the +32 framing
+  margin (it recites MORE than asked); word-LCS vs target 0.34. Teacher
+  behavior for the ladder ceilings to measure, not a pipeline bug; cut
+  spans end with a forced <|im_end|>.
 - Bench-gated speed items: pinned-POOL prefetch only at 4B+ (>20
   MB/layer targets, per the measured negative at 0.6B); cross-item PP
   overlap only if PP lanes become throughput-relevant.
