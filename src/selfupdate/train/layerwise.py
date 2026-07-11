@@ -184,6 +184,7 @@ def _make_dataset(cfg, cache, tok, layers, with_teacher_ids=False):
         need_layers=layers,
         rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
         with_teacher_ids=with_teacher_ids,
+        pad_random=(cfg.mask.compaction == "pad_random"),
     )
 
 

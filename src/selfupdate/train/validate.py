@@ -34,6 +34,10 @@ def validate_knob_schedule(cfg) -> None:
             "recall belongs in evaluation artifacts, never in training")
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
+    if cfg.mask.compaction not in (
+        "remove", "stub", "stub_gap", "remove_gap", "pad_random",
+    ):
+        raise ValueError(f"unknown mask.compaction {cfg.mask.compaction!r}")
     if cfg.eval.every_epochs <= 0:
         raise ValueError("eval.every_epochs must be positive")
     if cfg.eval.standard_damage_every_epochs < 0:

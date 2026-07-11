@@ -143,7 +143,7 @@ def main() -> None:
     model.eval()
     n_layers = model.config.num_hidden_layers
 
-    masker = ContextMasker(tok)
+    masker = ContextMasker(tok, pad_random=(cfg.mask.compaction == "pad_random"))
     writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size,
                                 hidden_dtype=cfg.cache.hidden_dtype)
     stop_id = stop_token_id(tok)

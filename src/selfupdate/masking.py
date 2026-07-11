@@ -25,6 +25,8 @@ losses apply at ``[s0, s0+A-1)`` predicting tokens ``[s0+1, s0+A)``.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import random
 import re
 import string
 from dataclasses import asdict, dataclass, field
@@ -279,13 +281,37 @@ def render_thinking_selective(
 
 
 class ContextMasker:
-    """Tokenizes SegmentedExamples into aligned teacher/student ID pairs."""
+    """Tokenizes SegmentedExamples into aligned teacher/student ID pairs.
 
-    def __init__(self, tokenizer):
+    ``pad_random`` (mask.compaction=pad_random, owner 2026-07-12): the
+    student's view of the privileged block is a LENGTH-MATCHED random fill —
+    every token distinct, drawn from ordinary vocabulary only (no special or
+    control ids: a fixed pad token or any repeated filler is an attendable
+    attractor the student could learn to key on). Length preservation makes
+    the position gap zero, so student RoPE geometry matches the teacher's
+    with no rebase. The fill is seeded per example_id: deterministic across
+    epochs, runs, and cache/training stages.
+    """
+
+    def __init__(self, tokenizer, pad_random: bool = False):
         self.tokenizer = tokenizer
+        self.pad_random = pad_random
+        self._fill_vocab: list[int] | None = None
 
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False) if text else []
+
+    def _fill_ids(self, example_id: str, n: int) -> list[int]:
+        if self._fill_vocab is None:
+            tok = self.tokenizer
+            banned = set(tok.all_special_ids) | set(tok.get_added_vocab().values())
+            self._fill_vocab = [i for i in range(tok.vocab_size) if i not in banned]
+        if n > len(self._fill_vocab):
+            raise ValueError(
+                f"{example_id}: privileged block ({n} tokens) exceeds the "
+                f"fill vocabulary ({len(self._fill_vocab)})")
+        seed = int(hashlib.sha256(example_id.encode()).hexdigest()[:12], 16)
+        return random.Random(seed).sample(self._fill_vocab, n)
 
     def build(self, ex: SegmentedExample,
               answer_ids: list[int] | None = None) -> AlignedPair:
@@ -326,6 +352,11 @@ class ContextMasker:
         else:
             priv = self._encode(ex.privileged)
             stub = self._encode(ex.student_stub)
+            if self.pad_random and priv:
+                assert not stub, (
+                    f"{ex.example_id}: pad_random requires an empty "
+                    "student_stub (the fill replaces the block wholesale)")
+                stub = self._fill_ids(ex.example_id, len(priv))
             teacher_ids = prefix + priv + mid + answer
             student_ids = prefix + stub + mid + answer
             t0 = len(prefix) + len(priv)

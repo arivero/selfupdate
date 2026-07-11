@@ -82,6 +82,12 @@ class MaskConfig:
     #                says the rebase is output-neutral for the base model, so
     #                any difference is purely about which geometry the
     #                distilled memory is written at.
+    #   pad_random — length-matched random fill of the privileged block
+    #                (every token distinct, ordinary vocabulary only, seeded
+    #                per example): position gap is zero by construction.
+    #                Owner 2026-07-12: fixed pad tokens and repeated fillers
+    #                are attendable attractors — random non-repeating fill is
+    #                the sanctioned length-preserving censor.
     compaction: str = "remove"
 
 

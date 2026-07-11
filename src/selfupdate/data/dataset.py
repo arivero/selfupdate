@@ -78,6 +78,7 @@ class DistillDataset(Dataset):
         need_layers: list[int] | None = None,
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
+        pad_random: bool = False,
     ):
         # re-render segments if this tokenizer's chat template differs from
         # the one examples.jsonl was built with (identity for Qwen)
@@ -92,7 +93,7 @@ class DistillDataset(Dataset):
         self.need_layers = need_layers  # via setter: validates cache presence
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
-        masker = ContextMasker(tokenizer)
+        masker = ContextMasker(tokenizer, pad_random=pad_random)
         self.pairs = []
         for r in self.records:
             ex = SegmentedExample.from_record(r)
