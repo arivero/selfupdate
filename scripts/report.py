@@ -728,6 +728,16 @@ def main() -> None:
                 sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses_heatmap.png")),
                 per_page=6,
             )
+            _image_grid_page(
+                pdf, "Per-run temporal layer-loss curves (x=epoch, y=loss)",
+                sorted(RUNS.glob("a_lossgrid_*/eval/layer_losses.png")),
+                per_page=6,
+            )
+            _image_grid_page(
+                pdf, "Per-run parameter modification by layer",
+                sorted(RUNS.glob("a_lossgrid_*/eval/weight_deltas.png")),
+                per_page=6,
+            )
             _image_page(pdf, "Temporal layer-loss curves (x=epoch, y=loss)",
                         RUNS / "lossgrid_temporal_layer_losses.png")
             _image_page(pdf, "Cross-run final layer-loss distribution",
