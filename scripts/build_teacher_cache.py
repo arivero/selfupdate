@@ -56,14 +56,19 @@ def reference_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
 
 def _generation_budget(masker: ContextMasker, ex: SegmentedExample,
                        expected_chars: int) -> int:
-    """Token budget = 2x the expected answer length + margin. The
-    chars-per-token ratio is measured on this record's own passage, so the
-    budget adapts to the corpus without anchoring the dataset to a
-    tokenizer."""
+    """Token budget = 2x the expected answer length + a fixed conversational
+    margin. The chars-per-token ratio is measured on this record's own
+    passage, so the budget adapts to the corpus without anchoring the
+    dataset to a tokenizer. The margin absorbs answer FRAMING ("Sí, el
+    verso que sigue es: ..."): the 0.6B smoke measured 91.7%% hard-cuts at
+    +8 because preamble ate the budget before the quoted answer finished —
+    a cut span teaches the student truncated behavior, so short answers
+    must be able to terminate naturally; the 2x PROPORTIONAL control is
+    unchanged."""
     priv_ids = masker._encode(ex.privileged)
     ratio = (len(priv_ids) / max(len(ex.privileged), 1)) if priv_ids else 0.35
     est = max(4, math.ceil(expected_chars * ratio))
-    return 2 * est + 8
+    return 2 * est + 32
 
 
 @torch.no_grad()
