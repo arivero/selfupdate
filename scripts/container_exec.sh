@@ -6,10 +6,16 @@ IMAGE="${SELFUPDATE_SIF:-$ROOT/containers/pytorch-2.11.0-cu128-cudnn9-runtime.si
 OVERLAY="${SELFUPDATE_OVERLAY:-$ROOT/containers/selfupdate-python-deps-cu128.sqsh}"
 DEV_PYTHON_HOST="${SELFUPDATE_DEV_PYTHON_HOST:-/tmp/$USER/selfupdate-dev-python}"
 DEV_PYTHON_CONTAINER="/dev-python"
-# Model snapshots are shared at the account cache.  Do not create a second,
-# incomplete Hugging Face cache under the checkout merely because the repo is
-# mounted at /work inside Singularity.
-HF_CACHE_HOST="${SELFUPDATE_HF_CACHE_HOST:-$HOME/.cache/huggingface}"
+# Prefer an explicitly completed node-local snapshot stage.  Otherwise use
+# the account cache; never create an accidental third cache under /work.
+HF_STAGE_HOST="${SELFUPDATE_HF_STAGE:-/tmp/$USER/selfupdate-hf-cache}"
+if [[ -n "${SELFUPDATE_HF_CACHE_HOST:-}" ]]; then
+  HF_CACHE_HOST="$SELFUPDATE_HF_CACHE_HOST"
+elif [[ -f "$HF_STAGE_HOST/.selfupdate-hf-stage-ready" ]]; then
+  HF_CACHE_HOST="$HF_STAGE_HOST"
+else
+  HF_CACHE_HOST="$HOME/.cache/huggingface"
+fi
 HF_CACHE_CONTAINER="/hf-cache"
 
 export SINGULARITY_CACHEDIR="${SINGULARITY_CACHEDIR:-/tmp/$USER/singularity-cache}"

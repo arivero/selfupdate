@@ -130,3 +130,9 @@ carried by `[expunged]` (fp32 state for k blocks only), `sequential`
 bf16, adapters-off teacher for free). The 4B [expunged] run is full-FT
 QUALITY training of a 0.9B-param window on a card where traditional 4B
 full-FT cannot even load its optimizer.
+# Node-local model-cache staging
+
+Before a GPU campaign, stage the precise Hugging Face model snapshots needed
+to node-local `/tmp`; this reduces Lustre metadata/read pressure without
+duplicating the durable account cache. The workflow and capacity rule are in
+[cache staging](cache_staging.md).

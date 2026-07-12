@@ -91,3 +91,9 @@ python3 -m venv --system-site-packages .venv
 
 On the L40S cluster, use the interpreter and CUDA-wheel guidance in
 `AGENTS.md`; do not rely on `/usr/bin/python3`.
+# Local model-cache staging
+
+For GPU campaigns, keep durable Hugging Face snapshots in
+`$HOME/.cache/huggingface` and stage only the needed models to node-local
+`/tmp` with `scripts/stage_hf_cache.sh`. The container launcher automatically
+uses a completed stage. See [cache staging](docs/cache_staging.md).
