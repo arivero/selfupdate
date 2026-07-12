@@ -167,11 +167,12 @@ def main() -> None:
         # made the scheduler rerun this base evaluation indefinitely.
         floor_plain = f"runs/v5_refs/{tag}_floor_none/tasks.json"
         row(floor_plain, cache_mb, "-",
-            f"{py} scripts/evaluate.py --experiment "
-            f"configs/experiments/v5/cache_{tag}_window_remove.yaml --base "
+            f"{py} scripts/teacher_ceiling.py --experiment "
+            f"configs/experiments/v5/cache_{tag}_window_remove.yaml "
+            f"--context-scope none "
             f"--generation-batch 8 "
             f"--recall-corpora machado quijote_ch1 quijote_ch4 "
-            f"--out runs/v5_refs/{tag}_floor_none")
+            f"--out {floor_plain}")
         gates = {}
         for scope in SCOPES:
             gate = f"runs/v5_refs/{tag}_gate_{scope}.json"

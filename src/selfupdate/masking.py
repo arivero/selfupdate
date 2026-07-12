@@ -115,6 +115,12 @@ IM_END = "<|im_end|>"
 EMPTY_THINK = "<think>\n\n</think>\n\n"
 
 DEFAULT_SYSTEM = "Eres un experto en poesía española. Respondes recitando de memoria, con exactitud literal."
+RAG_TOOL_SYSTEM = (
+    "Responde con el texto literal solicitado usando la respuesta de la "
+    "herramienta de recuperación. Cuando recibas un <tool_response>, busca "
+    "allí la respuesta antes de contestar; no la inventes ni respondas de "
+    "memoria. Devuelve únicamente el texto pedido, sin explicación."
+)
 
 
 # uninformative placeholder shown to the student under "stub" compaction
@@ -168,7 +174,7 @@ def render_rag_tool(
     question: str,
     passage: str,
     answer: str,
-    system: str = DEFAULT_SYSTEM,
+    system: str = RAG_TOOL_SYSTEM,
     student_stub: str = "",
     open_answer: bool = False,
 ) -> SegmentedExample:

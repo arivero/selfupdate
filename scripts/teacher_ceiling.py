@@ -59,9 +59,10 @@ def main() -> int:
                     help="batched greedy decode for the battery; the ceiling's "
                          "with_context prompts pay a corpus-length prefill per "
                          "item, so big teachers want 4-8 here")
-    ap.add_argument("--context-scope", choices=("full", "window", "chapter"),
+    ap.add_argument("--context-scope", choices=("none", "full", "window", "chapter"),
                     default="full",
-                    help="ceiling RAG form: full corpus file (historical), "
+                    help="ceiling RAG form: none = same tool-shaped prompt "
+                         "without retrieval; full corpus file (historical), "
                          "per-item exact-match retrieval of the source block "
                          "±--context-window-lines (pair with window-scope v5 "
                          "arms), or the containing chapter/part (pair with "
@@ -132,11 +133,13 @@ def main() -> int:
 
     corpus_results = {}
     for corpus in corpus_names:
+        context_scope = False if args.context_scope == "none" else args.context_scope
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
                             n_per_task=args.n_per_task,
-                            with_context=args.context_scope,
+                            with_context=context_scope,
                             context_window_lines=args.context_window_lines,
                             context_pad_random=args.context_pad_random,
+                            rag_tool_prompt=True,
                             generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
@@ -146,7 +149,8 @@ def main() -> int:
         print(f"{corpus}: {parts}")
 
     model_short = cfg.model.name.split("/")[-1]
-    kind = ("teacher_epoch0_rag_context" if args.context_scope == "full"
+    kind = ("teacher_epoch0_native_no_rag" if args.context_scope == "none"
+            else "teacher_epoch0_rag_context" if args.context_scope == "full"
             else f"teacher_epoch0_rag_{args.context_scope}")
     if args.context_pad_random:
         kind += "_padfloor"

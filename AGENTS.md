@@ -331,6 +331,13 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
   Investigate every new error and promptly patch confirmed code or queue
   defects; never treat a healthy-looking GPU or a log line as a substitute for
   active supervision.
+- **RAG target-generation gate (owner, 2026-07-12):** a failed RAG gate is a
+  diagnosis obligation, never a threshold-relaxation or queue-bypass event.
+  The agent must inspect completion cuts and exact tokenized tool conversation,
+  repair the retrieval invitation/placement when the teacher ignores RAG,
+  rebuild the affected dataset/cache under a new identity, and rerun the
+  real-RAG vs no-RAG epoch-zero and random-context controls. See
+  `docs/rag_generation_gate.md`.
 - Never abort a training run before it has seen at least 12,000 training items.
   Early noisy plateaus have recovered in the layerwise tail runs, and matched
   item budget is needed for comparisons.

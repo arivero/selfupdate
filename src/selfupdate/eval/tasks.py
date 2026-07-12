@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import random
 import re
+import unicodedata
 
 import torch
 
@@ -149,24 +150,29 @@ def build_tasks(poem_path: str, seed: int = 17, n_per_task: int = 24,
 
 _norm_re = re.compile(r"\s+")
 
-# Word separators for the LCS: whitespace plus every readable punctuation
-# mark, including the "/" and "," verse-joining conventions and the Spanish
-# marks (mirrors masking._SPAN_PUNCT). Attached punctuation must never make
-# "cabalga;" a different word than "cabalga".
-_word_sep_re = re.compile(
-    r"[\s" + re.escape(
-        r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~""" + "¡¿«»“”‘’—–…·"
-    ) + r"]+"
-)
-
-
 def _norm(s: str) -> str:
     return _norm_re.sub(" ", s.replace("«", "").replace("»", "")).strip()
 
 
 def _words(s: str) -> list[str]:
-    """Word stream for the LCS metric: separator- and punctuation-free."""
-    return [w for w in _word_sep_re.split(s) if w]
+    """Word stream for LCS, excluding all Unicode whitespace/punctuation.
+
+    This deliberately treats spaces, tabs, carriage returns, line feeds, and
+    punctuation such as `,;«»—` as separators rather than recoverable answer
+    content.  Unicode category ``P*`` covers non-ASCII typography too, so a
+    corpus/editorial punctuation variant cannot inflate or reduce word-LCS.
+    """
+    words, current = [], []
+    for ch in s:
+        if ch.isspace() or unicodedata.category(ch).startswith("P"):
+            if current:
+                words.append("".join(current))
+                current = []
+        else:
+            current.append(ch)
+    if current:
+        words.append("".join(current))
+    return words
 
 
 def _lcs_words(a: list[str], b: list[str]) -> int:
@@ -264,6 +270,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                keep_examples: int = 6, with_context: bool | str = False,
                context_window_lines: int = 4,
                context_pad_random: bool = False,
+               rag_tool_prompt: bool = False,
                generation_batch: int = 1) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
 
@@ -288,6 +295,11 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     (the ``remove`` floor is simply ``with_context=False``). Approximate to
     one decode/re-encode round trip; the training-side fill is exact at the
     id level.
+
+    ``rag_tool_prompt`` uses the same closed user turn, ``<tool_response>``
+    and retrieval-use instruction as v5 target generation.  It is mandatory
+    for a v5 teacher gate: evaluating a different plain-document prompt would
+    diagnose the evaluator rather than the teacher conversation.
 
     ``generation_batch``: 1 (default) keeps the historical per-item greedy
     loop bit-for-bit; >1 decodes in left-padded batches — measured 2026-07-11
@@ -337,12 +349,19 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         questions, prompts, budgets = [], [], []
         for i, it in enumerate(items):
             q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
-            content = (f"{q}\n\nDocumento recuperado:\n{contexts[i]}"
-                      if contexts is not None else q)
             questions.append(q)
-            prompts.append(tokenizer.apply_chat_template(
-                [{"role": "user", "content": content}], tokenize=False,
-                add_generation_prompt=True, enable_thinking=False))
+            if rag_tool_prompt:
+                from ..masking import render_rag_tool
+                ex = render_rag_tool(f"eval-{i}", q,
+                                     contexts[i] if contexts is not None else "",
+                                     answer="", open_answer=True)
+                prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
+            else:
+                content = (f"{q}\n\nDocumento recuperado:\n{contexts[i]}"
+                           if contexts is not None else q)
+                prompts.append(tokenizer.apply_chat_template(
+                    [{"role": "user", "content": content}], tokenize=False,
+                    add_generation_prompt=True, enable_thinking=False))
             budgets.append(len(tokenizer.encode(it["reference"]))
                            + max_extra_tokens)
         if generation_batch > 1:
@@ -381,6 +400,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                   "generation_batch": generation_batch,
                   "with_context": scope or False,
                   "context_pad_random": context_pad_random,
+                  "prompt_regime": ("rag_tool" if rag_tool_prompt else "plain_user"),
                   **({"context_window_lines": context_window_lines}
                      if scope == "window" else {}),
                   "tasks": {}}

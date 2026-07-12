@@ -137,6 +137,16 @@ while :; do
                 [ -z "$done" ] && continue
                 case "$done" in \#*) continue;; esac
                 [ -e "$done" ] && continue
+                # A RAG generation gate writes <marker>.failed.json on a
+                # scientific failure and deliberately leaves its success
+                # marker absent.  Retrying the same closed gate every 15 s
+                # burns a GPU without creating new evidence.  An agent must
+                # inspect, repair the prompt/budget, then remove the failed
+                # marker only when launching a fresh certification.
+                if [[ "$cmd" == *"scripts/rag_generation_gate.py"* ]] \
+                    && [ -e "$done.failed.json" ]; then
+                    continue
+                fi
                 if [ "$after" != "-" ]; then
                     [ -e "$after" ] || continue
                     dependency_running "$after" && continue
