@@ -390,6 +390,24 @@ class TrainingRuntime:
         self.cache = TeacherCache(cache_root, expect_hash=chash)
         return self.cache
 
+    def release_teacher(self) -> None:
+        """Drop a frozen teacher once its one-time targets are materialized.
+
+        Summed full-FT cache runs may request ``frozen_teacher_copy`` solely
+        for anchor precomputation.  Keeping that copy after the anchor bank is
+        built both defeats the disk-cache execution path and needlessly holds
+        a second base model in VRAM.  Online-LoRA and teacher-stream schedules
+        never call this method: they require the teacher every batch.
+        """
+        if self.teacher is None:
+            return
+        self.teacher = None
+        # CUDA allocations are otherwise reusable by this process, but
+        # returning idle teacher blocks here makes the post-anchor footprint
+        # visible to the allocator and prevents a false OOM at first batch.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     @property
     def online(self) -> bool:
         return self.teacher is not None

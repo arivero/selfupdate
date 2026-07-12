@@ -143,7 +143,8 @@ while :; do
                 # burns a GPU without creating new evidence.  An agent must
                 # inspect, repair the prompt/budget, then remove the failed
                 # marker only when launching a fresh certification.
-                if [[ "$cmd" == *"scripts/rag_generation_gate.py"* ]] \
+                if [[ "$cmd" == *"scripts/rag_generation_gate.py"* || \
+                      "$cmd" == *"scripts/cache_generation_gate.py"* ]] \
                     && [ -e "$done.failed.json" ]; then
                     continue
                 fi

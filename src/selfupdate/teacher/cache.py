@@ -63,7 +63,7 @@ def cache_config_hash(model_name: str, mask_mode: str, extra: dict | None = None
 def resolve_cache_dir(cfg) -> tuple[Path, str]:
     """Canonical cache directory + expected hash for an ExperimentConfig.
     Must mirror scripts/build_teacher_cache.py exactly. The hash covers every
-    payload-shaping parameter (hidden dtype, schema) so a config change
+    payload-shaping parameter (including the v5 answer-generation budget) so a config change
     can never silently reuse an incompatible cache."""
     examples_sha = hashlib.sha256(
         Path(cfg.data.examples_path).read_bytes()
@@ -71,7 +71,12 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
         {"compaction": cfg.mask.compaction, "examples": examples_sha,
-         "hdtype": _dtype_hash_token(cfg.cache.hidden_dtype), "schema": 3},
+         "hdtype": _dtype_hash_token(cfg.cache.hidden_dtype),
+         # Open-answer caches include the teacher's generated answer ids in
+         # their index.  The allowance changes those ids, aligned lengths, and
+         # every stored h[L] payload, so it must be part of cache identity.
+         "generation_extra_tokens": int(cfg.cache.generation_extra_tokens),
+         "schema": 4},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"

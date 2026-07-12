@@ -25,11 +25,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# ladder rungs: (tag, HF name, train need_mb, cache need_mb, offload_adam)
+# ladder rungs: (tag, HF name, train need_mb per device, cache need_mb,
+# offload_adam, pipeline split, GPUs per train job). PP2 is a memory placement
+# only; it remains the same summed layerwise experiment.
 MODELS = [
-    ("0p6b", "Qwen/Qwen3-0.6B", 16000, 12000, False),
-    ("1p7b", "Qwen/Qwen3-1.7B", 30000, 18000, True),
-    ("4b", "Qwen/Qwen3-4B", 66000, 30000, True),
+    ("0p6b", "Qwen/Qwen3-0.6B", 16000, 12000, False, 0, 1),
+    ("1p7b", "Qwen/Qwen3-1.7B", 30000, 18000, True, 0, 1),
+    ("4b", "Qwen/Qwen3-4B", 40000, 30000, True, 18, 2),
 ]
 
 # per-rung (micro_batch, grad_accum). EFFECTIVE batch = micro_batch*grad_accum
@@ -69,6 +71,7 @@ BASE_TPL = """\
 run_name: {prefix}_{tag}_base_never_trained
 model:
   name: {name}
+{pipeline}
 data:
   examples_path: data/combined/examples_{prefix}_window.jsonl
 mask:
@@ -130,11 +133,15 @@ data:
 mask:
   mode: {mode}
   compaction: {censor}
+cache:
+  # Pinned because v5 answer ids are cache payload, not merely a decoding
+  # preference. resolve_cache_dir includes it in the cache identity.
+  generation_extra_tokens: {generation_extra_tokens}
 """
 
 
 def main(prefix: str = "v5", mode: str = "rag_tool",
-        gen_extra_tokens: int = 32, budget_multiplier: float = 1.0) -> None:
+        gen_extra_tokens: int = 96, budget_multiplier: float = 1.0) -> None:
     cfg_dir = ROOT / "configs" / "experiments" / prefix
     queue = ROOT / "scripts" / f"queue_{prefix}_ladder_20260712.tsv"
     cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -144,13 +151,14 @@ def main(prefix: str = "v5", mode: str = "rag_tool",
         rows.append(f"{done}\t{mb}\t{after}\t{cmd}\t{gpus}")
 
     py = ".venv/bin/python"
-    for tag, name, train_mb, cache_mb, offload in MODELS:
+    for tag, name, train_mb, cache_mb, offload, pipeline_split, train_gpus in MODELS:
         base = f"configs/experiments/{prefix}/base_{tag}.yaml"
         micro_batch, grad_accum = BATCHING[tag]
         (ROOT / base).write_text(BASE_TPL.format(
             tag=tag, name=name, prefix=prefix, mode=mode,
             micro_batch=micro_batch, grad_accum=grad_accum,
-            offload="\n  offload_adam: true" if offload else ""),
+            offload="\n  offload_adam: true" if offload else "",
+            pipeline=(f"  pipeline_split: {pipeline_split}" if pipeline_split else "")),
             encoding="utf-8")
         rows.append(f"# ---- {name} rung "
                     f"(ceilings/floors first: RAG-authority gate) ----")
@@ -221,13 +229,23 @@ def main(prefix: str = "v5", mode: str = "rag_tool",
                 cache_cfg = f"configs/experiments/{prefix}/cache_{tag}_{scope}_{censor}.yaml"
                 (ROOT / cache_cfg).write_text(CACHE_TPL.format(
                     tag=tag, name=name, scope=scope, censor=censor,
-                    prefix=prefix, mode=mode),
+                    prefix=prefix, mode=mode,
+                    generation_extra_tokens=gen_extra_tokens),
                     encoding="utf-8")
                 marker = f"runs/.{prefix}cache_{tag}_{scope}_{censor}.done"
                 cache_markers[(scope, censor)] = marker
                 row(marker, cache_mb, gates[scope],
                     f"bash -c '{py} scripts/build_teacher_cache.py "
                     f"--experiment {cache_cfg} && touch {marker}'")
+                # The task-battery RAG gate establishes retrieval use, but
+                # it has a different per-item budget formula.  Certify the
+                # actual answer ids written by this cache before any arm can
+                # consume them.
+                completion = f"runs/.{prefix}cache_{tag}_{scope}_{censor}.generation.json"
+                row(completion, 256, marker,
+                    f"{py} scripts/cache_generation_gate.py --cache-config "
+                    f"{cache_cfg} --out {completion}")
+                cache_markers[(scope, censor)] = completion
         # arms
         for ltag, loss, slide, extra in LOSSES:
             if extra == "jlens" and tag not in JLENS:
@@ -244,8 +262,8 @@ def main(prefix: str = "v5", mode: str = "rag_tool",
                         encoding="utf-8")
                     ck = f"runs/{run}/checkpoint"
                     row(ck, train_mb, cache_markers[(scope, censor)],
-                        f"{py} scripts/train.py --config {base} "
-                        f"--experiment {arm}")
+                        f"{py} scripts/train_oom_backoff.py --config {base} "
+                        f"--experiment {arm}", gpus=train_gpus)
                     row(f"runs/{run}/eval/tasks.json", cache_mb, ck,
                         f"{py} scripts/evaluate.py --config {base} "
                         f"--experiment {arm} --checkpoint {ck} "
@@ -287,10 +305,10 @@ if __name__ == "__main__":
     ap.add_argument("--mode", default="rag_tool",
                     choices=["rag_tool", "rag_system"],
                     help="mask.mode for every generated config")
-    ap.add_argument("--gen-extra-tokens", type=int, default=32,
+    ap.add_argument("--gen-extra-tokens", type=int, default=96,
                     help="teacher_ceiling.py --max-extra-tokens (FIXED "
-                         "margin) for every ceiling/floor call (default 32 "
-                         "matches the script's own default)")
+                         "margin) for every ceiling/floor call and the v5 "
+                         "cache answer budget (default 96)")
     ap.add_argument("--budget-multiplier", type=float, default=1.0,
                     help="teacher_ceiling.py --budget-multiplier (scales "
                          "with reference length) for every ceiling/floor "

@@ -26,6 +26,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -89,6 +90,11 @@ def generate_answer(model, masker, ex, stop_id: int,
         do_sample=False,
         eos_token_id=stop_id,
         pad_token_id=stop_id,
+        # GenerationConfig inherits this from Qwen today, but pinning it here
+        # makes the cache-build performance contract explicit and prevents a
+        # model/config default from silently turning each decode into repeated
+        # full-prefix forwards.
+        use_cache=True,
     )
     gen = out[0, len(prompt):].tolist()
     if stop_id in gen:
@@ -153,6 +159,14 @@ def main() -> None:
     model.eval()
     n_layers = model.config.num_hidden_layers
 
+    def sync() -> None:
+        # Phase timings must not assign queued CUDA work to the next CPU
+        # section. The cache loop is dependency-serial already (generation →
+        # forward → D2H write → next forward), so these synchronization
+        # points measure existing waits rather than creating a new overlap.
+        if torch.cuda.is_available():
+            torch.cuda.synchronize(model.device)
+
     masker = ContextMasker(tok, pad_random=(cfg.mask.compaction == "pad_random"))
     writer = TeacherCacheWriter(root, chash, shard_size=cfg.cache.shard_size,
                                 hidden_dtype=cfg.cache.hidden_dtype)
@@ -161,14 +175,21 @@ def main() -> None:
 
     ce_with, ce_without = [], []
     gen_report = []
+    timings = {"generation_seconds": 0.0, "teacher_forward_seconds": 0.0,
+               "cache_write_seconds": 0.0, "student_forward_seconds": 0.0,
+               "finalize_seconds": 0.0}
+    started_at = time.perf_counter()
     for record, ex in tqdm(list(zip(records, examples)), desc="teacher forward"):
         extra = None
         if v5:
+            t_phase = time.perf_counter()
             budget = _generation_budget(
                 masker, ex, int(record.get("expected_answer_chars", 64)),
                 cfg.cache.generation_extra_tokens)
             answer_ids, hard_cut = generate_answer(
                 model, masker, ex, stop_id, budget)
+            sync()
+            timings["generation_seconds"] += time.perf_counter() - t_phase
             answer_text = tok.decode(answer_ids[:-1])
             pair = masker.build(ex, answer_ids=answer_ids)
             extra = {"answer_ids": answer_ids, "hard_cut": hard_cut}
@@ -184,13 +205,17 @@ def main() -> None:
         else:
             pair = masker.build(ex)
         t_ids = torch.tensor([pair.teacher_ids], device=model.device)
+        t_phase = time.perf_counter()
         with torch.no_grad():
             out = model(t_ids, output_hidden_states=True, use_cache=False)
+        sync()
+        timings["teacher_forward_seconds"] += time.perf_counter() - t_phase
         span = pair.t_aligned
         hidden = {
             L: out.hidden_states[L][0, span.start:span.stop]
             for L in range(1, n_layers + 1)
         }
+        t_phase = time.perf_counter()
         writer.add(
             ex.example_id, hidden,
             span={
@@ -201,14 +226,26 @@ def main() -> None:
             },
             extra=extra,
         )
+        sync()
+        timings["cache_write_seconds"] += time.perf_counter() - t_phase
 
         ce_with.append(reference_ce(out.logits[0], pair.teacher_ids, pair.t_answer))
         s_ids = torch.tensor([pair.student_ids], device=model.device)
+        t_phase = time.perf_counter()
         with torch.no_grad():
             s_out = model(s_ids, use_cache=False)
+        sync()
+        timings["student_forward_seconds"] += time.perf_counter() - t_phase
         ce_without.append(reference_ce(s_out.logits[0], pair.student_ids, pair.s_answer))
 
+    t_phase = time.perf_counter()
     writer.finalize()
+    sync()
+    timings["finalize_seconds"] = time.perf_counter() - t_phase
+    timings["total_seconds"] = time.perf_counter() - started_at
+    timings["examples"] = len(examples)
+    timings["seconds_per_example"] = (
+        timings["total_seconds"] / max(len(examples), 1))
     mean = lambda xs: sum(xs) / len(xs) if xs else float("nan")
     print(f"wrote {len(examples)} examples, {n_layers} layers each, to {root}")
     print(f"premise check — teacher answer CE: with context {mean(ce_with):.3f}, "
@@ -217,6 +254,10 @@ def main() -> None:
         "ce_with_context": ce_with, "ce_without_context": ce_without,
         "mean_with": mean(ce_with), "mean_without": mean(ce_without),
     }))
+    (root / "timings.json").write_text(json.dumps(timings, indent=2) + "\n")
+    print("cache timing — " + ", ".join(
+        f"{k} {v:.1f}s" for k, v in timings.items()
+        if k.endswith("_seconds")))
     if v5:
         accs = [g["word_acc"] for g in gen_report if "word_acc" in g]
         cuts = [g for g in gen_report if g["hard_cut"]]

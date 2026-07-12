@@ -142,7 +142,19 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
                             cfg.train.moe_router_weight)
 
     if cfg.train.schedule == "summed":
-        _train_summed(cfg, stack, cache, tok, log, teacher, moe)
+        # A full-FT frozen copy in a summed run exists only to precompute the
+        # anchor bank.  It is NOT an online target source: the teacher cache
+        # supplies hidden targets.  Keeping it resident made v5 pay a second
+        # full-model forward every batch and retain its VRAM for no signal.
+        if teacher is not None and not cfg.train.online_teacher:
+            def release_teacher():
+                nonlocal teacher
+                teacher = None
+                rt.release_teacher()
+        else:
+            release_teacher = None
+        _train_summed(cfg, stack, cache, tok, log, teacher, moe,
+                      release_teacher=release_teacher)
     elif cfg.train.schedule == "teacher_censored":
         if teacher is None:
             raise ValueError(
@@ -476,12 +488,21 @@ def _extend_pending_from_batch(pending: list[list[torch.Tensor]],
         pending.append([losses[i] for losses in layer_losses])
 
 
-def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None):
+def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
+                  release_teacher=None):
     device = cfg.model.device
     n = stack.n_layers
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     anchor = _make_anchor(cfg, tok, teacher)
-    online = teacher is not None
+    # ``online_teacher`` is the sole summed-schedule target-source switch.
+    # A frozen teacher copy may have been loaded above only for anchor target
+    # precomputation; cached full-FT targets remain the intended v5 path.
+    online = cfg.train.online_teacher
+    if not online and release_teacher is not None:
+        teacher = None
+        release_teacher()
+    if not online and cache is None:
+        raise ValueError("summed cached training needs a teacher cache")
     ds = _make_dataset(cfg, cache, tok,
                        [] if online else list(range(1, n + 1)),
                        with_teacher_ids=online)

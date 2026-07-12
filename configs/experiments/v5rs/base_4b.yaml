@@ -4,6 +4,7 @@
 run_name: v5rs_4b_base_never_trained
 model:
   name: Qwen/Qwen3-4B
+  pipeline_split: 18
 data:
   examples_path: data/combined/examples_v5rs_window.jsonl
 mask:
