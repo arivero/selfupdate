@@ -17,9 +17,10 @@ Entry points:
 - ``adapt_records(records, tokenizer)``: load-time choke point. Records built
   by scripts/build_dataset.py store canonical Qwen text plus the raw
   ``question``/``answer_text`` fields; when the run's tokenizer uses a
-  different template, segments are re-rendered from the raw fields (RAG-mode
-  ``privileged`` is pure text, so this is lossless). For Qwen tokenizers this
-  is an exact identity — asserted in tests/test_chatfmt.py.
+  different template, segments are re-rendered from the raw fields. For
+  ``rag_system``, a system-content sentinel preserves the privileged memory
+  *inside the system turn* rather than degrading it to a user/document turn.
+  For Qwen tokenizers this is an exact identity — asserted in tests/test_chatfmt.py.
 - ``render_rag_for(tokenizer, ...)``: generic counterpart of
   ``masking.render_rag`` for code that builds fresh prompts (recite_long).
 - ``stop_token_id(tokenizer)``: the turn-terminator token to stop generation
@@ -126,6 +127,32 @@ def template_pieces(tokenizer, system: str = DEFAULT_SYSTEM) -> TemplatePieces:
 
     _pieces_cache[key] = pieces
     return pieces
+
+
+def system_memory_pieces(tokenizer, question: str,
+                         system: str = DEFAULT_SYSTEM) -> tuple[str, str]:
+    """Split a rendered conversation *inside* its system message.
+
+    ``rag_system`` represents the privileged poem as an internal literal
+    memory, not as a retrieval/document turn.  Foreign chat templates cannot
+    reuse Qwen's handwritten delimiters, but they can render their own system
+    message containing a text sentinel.  The returned pieces preserve the
+    exact semantic placement::
+
+        system(prefix) + privileged memory + system-close + user(question)
+        + assistant-open
+    """
+    rendered = _render(
+        tokenizer,
+        [{"role": "system", "content": system + _SENTINEL},
+         {"role": "user", "content": question}],
+        add_generation_prompt=True,
+    )
+    assert rendered.count(_SENTINEL) == 1, (
+        "chat template duplicated/transformed system content; cannot preserve "
+        "rag_system memory placement"
+    )
+    return tuple(rendered.split(_SENTINEL))  # type: ignore[return-value]
 
 
 def stop_token_id(tokenizer) -> int:
@@ -289,11 +316,19 @@ def adapt_records(
                 "(scripts/build_dataset.py, mask.mode=rag_tool)"
             )
         if _is_system_shaped(r):
-            raise ValueError(
-                f"{r.get('example_id')}: rag_system records split inside the "
-                "system turn; rebuild the dataset for this family "
-                "(scripts/build_dataset.py, mask.mode=rag_system)"
-            )
+            # Keep the poem in the system turn for every family.  Rendering
+            # the passage as a user/document message would make this a
+            # different RAG experiment, and is specifically not an acceptable
+            # fallback for the v5 memory-framed protocol.
+            pre, mid = system_memory_pieces(tokenizer, r["question"], system)
+            answer = r.get("answer_text", "")
+            adapted.append({
+                **r,
+                "shared_prefix": pre,
+                "shared_mid": mid,
+                "answer": (answer + p.answer_close) if answer else "",
+            })
+            continue
         if "question" not in r or "answer_text" not in r:
             raise ValueError(
                 f"{r.get('example_id')}: record lacks raw question/answer_text "
