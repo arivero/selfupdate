@@ -247,6 +247,10 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   scripts/fetch_quijote.py keeps a curl fallback as belt-and-braces.
 - GPU tests contend with campaign jobs on cuda:0 — pin with
   `CUDA_VISIBLE_DEVICES=<free>` when lanes are busy.
+- When an agent captures Python output (ad-hoc probes, log tails), set
+  `TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error`
+  — otherwise the 0→100% weight-loading progress bars flood the transcript
+  and burn tokens.
 
 ## L40S Cluster Environment
 
