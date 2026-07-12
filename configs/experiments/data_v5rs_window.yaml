@@ -1,0 +1,16 @@
+# v5 question-only dataset, WINDOW-scope master RAG: the retrieval tool
+# returns the target lines ± rag_window_lines of context (the "grep hit"
+# form). No answers in the dataset — the teacher generates them at the
+# teacher stage (owner contract 2026-07-12; see data/questions.py).
+run_name: data_v5rs_window
+data:
+  question_set: v5
+  examples_path: data/combined/examples_v5rs_window.jsonl
+  rag_scope: window
+  rag_window_lines: 4
+  corpora:
+    - {poem_path: data/poem/raw.txt, corpus_style: verse, prefix: mach}
+    - {poem_path: data/quijote/raw_ch4.txt, corpus_style: prose_quijote, prefix: quij}
+mask:
+  mode: rag_system
+  compaction: remove

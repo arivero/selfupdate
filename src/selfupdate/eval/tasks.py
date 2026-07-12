@@ -272,6 +272,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                context_pad_random: bool = False,
                context_wrong: bool = False,
                rag_tool_prompt: bool = False,
+               rag_system_prompt: bool = False,
                generation_batch: int = 1) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
 
@@ -364,7 +365,15 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         for i, it in enumerate(items):
             q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
             questions.append(q)
-            if rag_tool_prompt:
+            if rag_system_prompt:
+                # exact v5rs conversation: passage evoked in the system turn
+                # as memory framing, no tool vocabulary (masking.RAG_SYSTEM_WRAP)
+                from ..masking import render_rag_system
+                ex = render_rag_system(f"eval-{i}", q,
+                                       contexts[i] if contexts is not None else "",
+                                       answer="", open_answer=True)
+                prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
+            elif rag_tool_prompt:
                 from ..masking import render_rag_tool
                 ex = render_rag_tool(f"eval-{i}", q,
                                      contexts[i] if contexts is not None else "",
@@ -415,7 +424,9 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                   "with_context": scope or False,
                   "context_pad_random": context_pad_random,
                   "context_wrong": context_wrong,
-                  "prompt_regime": ("rag_tool" if rag_tool_prompt else "plain_user"),
+                  "prompt_regime": ("rag_system" if rag_system_prompt
+                                    else "rag_tool" if rag_tool_prompt
+                                    else "plain_user"),
                   **({"context_window_lines": context_window_lines}
                      if scope == "window" else {}),
                   "tasks": {}}

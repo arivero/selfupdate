@@ -152,7 +152,10 @@ def main() -> int:
                             context_window_lines=args.context_window_lines,
                             context_pad_random=args.context_pad_random,
                             context_wrong=args.context_wrong,
-                            rag_tool_prompt=True,
+                            # certify the exact campaign conversation: the
+                            # config's mask.mode picks the prompt regime
+                            rag_tool_prompt=(cfg.mask.mode != "rag_system"),
+                            rag_system_prompt=(cfg.mask.mode == "rag_system"),
                             generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
         corpus_results[corpus] = result
