@@ -127,6 +127,15 @@ RAG_TOOL_SYSTEM = (
 RAG_STUB = "\n\nDocumento recuperado:\n[no disponible]"
 THINK_STUB = "..."
 
+# system-turn RAG (owner directive 2026-07-12): the passage is evoked as the
+# model's own remembered knowledge, far from the answer, with NO tool or
+# retrieval vocabulary anywhere in either view. Measured strongest
+# non-thinking teacher delivery at 8B (0.90 word_acc vs 0.60 through the
+# native tool protocol and 0.31 through the orphan tool turn; belief
+# counterfactual clean at every size — probes of 2026-07-12).
+RAG_SYSTEM_WRAP = "\n\nRecuerdas literalmente este texto:\n{passage}"
+RAG_SYSTEM_STUB = "\n\nRecuerdas literalmente este texto:\n[…]"
+
 
 _FILL_VOCAB_CACHE: dict[int, list[int]] = {}
 
@@ -196,6 +205,40 @@ def render_rag_tool(
         if passage else ""
     )
     mid = f"{IM_START}assistant\n{EMPTY_THINK}"
+    return SegmentedExample(
+        example_id, prefix, privileged, mid,
+        "" if open_answer else f"{answer}{IM_END}", student_stub
+    )
+
+
+def render_rag_system(
+    example_id: str,
+    question: str,
+    passage: str,
+    answer: str,
+    system: str = DEFAULT_SYSTEM,
+    student_stub: str = "",
+    open_answer: bool = False,
+) -> SegmentedExample:
+    """RAG inside the SYSTEM turn: privileged = a memory-framed continuation
+    of the system message (``RAG_SYSTEM_WRAP``), placed BEFORE the user turn.
+
+    The student's censored view is a canonical recite-from-memory
+    conversation with zero RAG mention. Because the aligned span is always
+    ``shared_mid + answer``, the whole user turn joins it here: hidden losses
+    also match the teacher's context-conditioned question representations,
+    which is the point — the knowledge is evoked remotely, far from the
+    answer, never presented as a document next to it.
+
+    ``open_answer=True`` (v5 question-only records) leaves the answer
+    segment EMPTY — no text, no ``<|im_end|>``: the teacher stage appends
+    its own generation plus the terminator."""
+    prefix = f"{IM_START}system\n{system}"
+    privileged = RAG_SYSTEM_WRAP.format(passage=passage) if passage else ""
+    mid = (
+        f"{IM_END}\n{IM_START}user\n{question}{IM_END}\n"
+        f"{IM_START}assistant\n{EMPTY_THINK}"
+    )
     return SegmentedExample(
         example_id, prefix, privileged, mid,
         "" if open_answer else f"{answer}{IM_END}", student_stub

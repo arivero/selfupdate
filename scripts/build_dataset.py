@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from selfupdate.config import load_config
 from selfupdate.data.poem import STYLES, load_poem, make_specs
-from selfupdate.masking import RAG_STUB, THINK_STUB, render_rag, render_rag_tool
+from selfupdate.masking import (RAG_STUB, RAG_SYSTEM_STUB, THINK_STUB,
+                                render_rag, render_rag_system, render_rag_tool)
 
 
 def build_v5(cfg) -> None:
@@ -26,9 +27,12 @@ def build_v5(cfg) -> None:
     corpus line is a build invariant; the manifest lands next to the jsonl."""
     from selfupdate.data.questions import coverage_report, make_v5_specs
 
-    if cfg.mask.mode != "rag_tool":
-        sys.exit("question_set=v5 requires mask.mode=rag_tool "
-                 "(the master RAG is a retrieval-tool turn)")
+    if cfg.mask.mode not in ("rag_tool", "rag_system"):
+        sys.exit("question_set=v5 requires mask.mode=rag_tool or rag_system "
+                 "(the master RAG is a retrieval-tool turn or a system-turn "
+                 "memory block)")
+    render_v5 = (render_rag_system if cfg.mask.mode == "rag_system"
+                 else render_rag_tool)
     corpora = cfg.data.corpora or [{
         "poem_path": cfg.data.poem_path,
         "corpus_style": cfg.data.corpus_style,
@@ -59,7 +63,7 @@ def build_v5(cfg) -> None:
             sys.exit(f"v5 coverage hole in {corpus['poem_path']}: lines "
                      f"{report['uncovered_lines'][:10]}...")
         for s in specs:
-            ex = render_rag_tool(
+            ex = render_v5(
                 f"{prefix}-{s.task_id}" if prefix else s.task_id,
                 s.question, s.passage, answer="", system=style.system,
                 open_answer=True,
@@ -123,7 +127,8 @@ def main() -> None:
 
     stub = ""
     if cfg.mask.compaction in ("stub", "stub_gap"):
-        stub = RAG_STUB if cfg.mask.mode == "rag" else THINK_STUB
+        stub = {"rag": RAG_STUB,
+                "rag_system": RAG_SYSTEM_STUB}.get(cfg.mask.mode, THINK_STUB)
 
     if cfg.mask.mode == "rag":
         examples = [
@@ -139,6 +144,13 @@ def main() -> None:
             render_rag_tool(s.task_id, s.question, s.passage, s.answer,
                             student_stub=stub,
                             system=STYLES[cfg.data.corpus_style].system)
+            for s in specs
+        ]
+    elif cfg.mask.mode == "rag_system":
+        examples = [
+            render_rag_system(s.task_id, s.question, s.passage, s.answer,
+                              student_stub=stub,
+                              system=STYLES[cfg.data.corpus_style].system)
             for s in specs
         ]
     elif cfg.mask.mode in ("thinking", "thinking_selective"):

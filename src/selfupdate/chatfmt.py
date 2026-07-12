@@ -188,12 +188,41 @@ def _matches_tool(record: dict, p: TemplatePieces) -> bool:
                                 record["question"] + close))
 
 
+def _matches_system(record: dict, p: TemplatePieces) -> bool:
+    """Native check for rag_system-shaped records: the privileged block
+    CONTINUES the system turn, so shared_prefix is the system opening plus
+    payload WITHOUT its turn close, and shared_mid carries the system close,
+    the whole user turn, and the assistant opening (= the post-payload part
+    of ``pre``, then the question, then ``mid``)."""
+    before, marker, after = p.pre.partition(DEFAULT_SYSTEM)
+    if not marker:
+        # No recognisable system payload slot in this template's pre piece;
+        # cannot decompose the system turn — treat as foreign.
+        return False
+    answer_ok = (record["answer"] == record["answer_text"] + p.answer_close
+                 or (record["answer"] == "" and record["answer_text"] == ""))
+    return (answer_ok
+            and record["shared_prefix"].startswith(before)
+            and p.answer_close not in record["shared_prefix"]
+            and record["shared_mid"] == after + record["question"] + p.mid)
+
+
+def _is_system_shaped(record: dict) -> bool:
+    """rag_system records are the only shape whose question lives in
+    shared_mid (every other mode closes the user turn inside shared_prefix
+    or opens a think block there)."""
+    q = record.get("question")
+    return bool(q) and q in record.get("shared_mid", "")
+
+
 def _matches(record: dict, p: TemplatePieces) -> bool:
     # Legacy records may lack the raw question/answer_text fields: treat
     # them as non-matching so adapt_records' curated "rebuild examples.jsonl"
     # error fires, instead of a bare KeyError from the comparisons below.
     if "question" not in record or "answer_text" not in record:
         return False
+    if _is_system_shaped(record):
+        return _matches_system(record, p)
     priv = record.get("privileged", "")
     if "<tool_response>" in priv or record.get("answer") == "":
         return _matches_tool(record, p)
@@ -258,6 +287,12 @@ def adapt_records(
                 f"{r.get('example_id')}: rag_tool records embed Qwen's native "
                 "tool protocol; rebuild the dataset for this family "
                 "(scripts/build_dataset.py, mask.mode=rag_tool)"
+            )
+        if _is_system_shaped(r):
+            raise ValueError(
+                f"{r.get('example_id')}: rag_system records split inside the "
+                "system turn; rebuild the dataset for this family "
+                "(scripts/build_dataset.py, mask.mode=rag_system)"
             )
         if "question" not in r or "answer_text" not in r:
             raise ValueError(
