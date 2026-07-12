@@ -15,7 +15,7 @@ train:
   schedule: summed
   epochs: 6
   lr: 1.0e-5
-  micro_batch: 4
+  micro_batch: 8
   grad_accum: 8
   batching: bucketed
   hidden_loss: huber

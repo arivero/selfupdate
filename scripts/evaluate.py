@@ -227,9 +227,9 @@ def main() -> None:
     ap.add_argument("--max-extra-tokens", type=int, default=32,
                     help="per-item generation budget beyond the reference "
                          "length (default matches the battery's historical 32)")
-    ap.add_argument("--generation-batch", type=int, default=1,
+    ap.add_argument("--generation-batch", type=int, default=8,
                     help="batched greedy decode for the three-task battery; "
-                         "1 = historical per-item loop")
+                         "default 8; 1 = historical per-item loop")
     # Retired with the recite/CER engine (2026-07-10). Accepted so historical
     # queue rows don't crash at dispatch, but they are IGNORED and warn below
     # (knob-flow law: no knob may silently do nothing).

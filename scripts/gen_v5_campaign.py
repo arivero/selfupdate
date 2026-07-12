@@ -10,7 +10,7 @@ retrieval turn disqualifies its arms before they burn GPU).
 
 The training recipe is held fixed across the grid (lossgrid crown recipe:
 summed schedule, stride-1 sliding credit, teacher_kl readout, anchor-KL,
-frozen teacher copy, bucketed B4); each arm pins exactly {model, loss+slide,
+frozen teacher copy, bucketed B8); each arm pins exactly {model, loss+slide,
 examples_path(scope), compaction}. Budget: 6 epochs x 2071 items = 12,426
 matched items per arm.
 
@@ -70,7 +70,7 @@ train:
   schedule: summed
   epochs: 6
   lr: 1.0e-5
-  micro_batch: 4
+  micro_batch: 8
   grad_accum: 8
   batching: bucketed
   hidden_loss: huber
@@ -162,6 +162,7 @@ def main() -> None:
         row(floor_plain, cache_mb, "-",
             f"{py} scripts/evaluate.py --experiment "
             f"configs/experiments/v5/cache_{tag}_window_remove.yaml --base "
+            f"--generation-batch 8 "
             f"--recall-corpora machado quijote_ch1 quijote_ch4 "
             f"--out runs/v5_refs/{tag}_floor_none")
         # caches: one per scope x censor (generation inside)
@@ -198,6 +199,7 @@ def main() -> None:
                         f"{py} scripts/evaluate.py --config {base} "
                         f"--experiment {arm} --checkpoint {ck} "
                         f"--out runs/{run}/eval "
+                        f"--generation-batch 8 "
                         f"--recall-corpora machado quijote_ch1 quijote_ch4")
                     row(f"runs/standard_damage/{run}.json", cache_mb, ck,
                         f"{py} scripts/standard_destruction_eval.py "
