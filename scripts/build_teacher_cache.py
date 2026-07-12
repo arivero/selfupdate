@@ -30,6 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from selfupdate.utils.env import cap_cpu_threads  # noqa: E402
+
+cap_cpu_threads()
+
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
@@ -55,20 +59,21 @@ def reference_ce(logits: torch.Tensor, ids: list[int], ans: slice) -> float:
 
 
 def _generation_budget(masker: ContextMasker, ex: SegmentedExample,
-                       expected_chars: int) -> int:
+                       expected_chars: int, extra_tokens: int) -> int:
     """Token budget = 2x the expected answer length + a fixed conversational
-    margin. The chars-per-token ratio is measured on this record's own
+margin. The chars-per-token ratio is measured on this record's own
     passage, so the budget adapts to the corpus without anchoring the
     dataset to a tokenizer. The margin absorbs answer FRAMING ("Sí, el
     verso que sigue es: ..."): the 0.6B smoke measured 91.7%% hard-cuts at
     +8 because preamble ate the budget before the quoted answer finished —
-    a cut span teaches the student truncated behavior, so short answers
-    must be able to terminate naturally; the 2x PROPORTIONAL control is
-    unchanged."""
+a cut span teaches the student truncated behavior, so short answers
+must be able to terminate naturally; the explicit margin comes from
+``cache.generation_extra_tokens`` and the 2x proportional control is
+unchanged."""
     priv_ids = masker._encode(ex.privileged)
     ratio = (len(priv_ids) / max(len(ex.privileged), 1)) if priv_ids else 0.35
     est = max(4, math.ceil(expected_chars * ratio))
-    return 2 * est + 32
+    return 2 * est + extra_tokens
 
 
 @torch.no_grad()
@@ -160,7 +165,8 @@ def main() -> None:
         extra = None
         if v5:
             budget = _generation_budget(
-                masker, ex, int(record.get("expected_answer_chars", 64)))
+                masker, ex, int(record.get("expected_answer_chars", 64)),
+                cfg.cache.generation_extra_tokens)
             answer_ids, hard_cut = generate_answer(
                 model, masker, ex, stop_id, budget)
             answer_text = tok.decode(answer_ids[:-1])

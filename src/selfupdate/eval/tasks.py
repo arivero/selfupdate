@@ -270,6 +270,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                keep_examples: int = 6, with_context: bool | str = False,
                context_window_lines: int = 4,
                context_pad_random: bool = False,
+               context_wrong: bool = False,
                rag_tool_prompt: bool = False,
                generation_batch: int = 1) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
@@ -329,6 +330,8 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         elif scope == "chapter":
             contexts = [retrieve_chapter(poem_path, it["block"])
                         for it in items]
+        if context_pad_random and context_wrong:
+            raise ValueError("context_pad_random and context_wrong are exclusive")
         if context_pad_random:
             if contexts is None:
                 raise ValueError(
@@ -340,6 +343,17 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                     len(tokenizer.encode(c, add_special_tokens=False))))
                 for i, c in enumerate(contexts)
             ]
+        elif context_wrong:
+            if not contexts:
+                raise ValueError("context_wrong needs retrieved context")
+            # A real but wrong passage is a stronger counterfactual than
+            # random filler: rotate it between deterministic task items.
+            # Rotate by HALF the list, never by one: adjacent items sit on
+            # adjacent corpus blocks, so a ``next`` item's answer is
+            # literally the head of the neighboring window (rotate-by-1
+            # measured 0.74 vs 0.25 word_acc, 0.6B probe 2026-07-12).
+            k = len(contexts) // 2
+            contexts = contexts[k:] + contexts[:k]
         # ``convert_tokens_to_ids('<|im_end|>')`` returns the unknown token id
         # on SentencePiece models such as Mistral.  chatfmt knows whether a
         # model actually has a single-token turn closer and otherwise returns
@@ -400,6 +414,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                   "generation_batch": generation_batch,
                   "with_context": scope or False,
                   "context_pad_random": context_pad_random,
+                  "context_wrong": context_wrong,
                   "prompt_regime": ("rag_tool" if rag_tool_prompt else "plain_user"),
                   **({"context_window_lines": context_window_lines}
                      if scope == "window" else {}),

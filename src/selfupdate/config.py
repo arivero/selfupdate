@@ -96,6 +96,10 @@ class CacheConfig:
     root: str = "caches"
     shard_size: int = 128
     hidden_dtype: str = "float16"
+    # Extra generation allowance for question-only RAG teacher targets.  The
+    # 96-token margin is certified separately by the RAG gate; it prevents
+    # conversational framing from truncating the answer span.
+    generation_extra_tokens: int = 96
 
 
 @dataclass

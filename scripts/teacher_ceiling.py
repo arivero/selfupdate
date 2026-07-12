@@ -26,6 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from selfupdate.utils.env import cap_cpu_threads  # noqa: E402
+
+cap_cpu_threads()
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -78,6 +82,9 @@ def main() -> int:
                     help="FLOOR variant: replace the retrieved document by a "
                          "seeded random distinct-token fill of matched length "
                          "(the epoch-0 reference paired with pad_random arms)")
+    ap.add_argument("--context-wrong", action="store_true",
+                    help="counterfactual diagnostic: rotate real retrieved "
+                         "passages between questions")
     ap.add_argument(
         "--recall-corpora", nargs="+", default=None,
         help="recall corpora to measure. By default this is inferred from "
@@ -144,6 +151,7 @@ def main() -> int:
                             with_context=context_scope,
                             context_window_lines=args.context_window_lines,
                             context_pad_random=args.context_pad_random,
+                            context_wrong=args.context_wrong,
                             rag_tool_prompt=True,
                             generation_batch=args.generation_batch)
         result["poem_path"] = CORPUS_PATHS[corpus]
@@ -164,6 +172,7 @@ def main() -> int:
         "teacher_reference_kind": kind,
         "context_scope": args.context_scope,
         "context_pad_random": args.context_pad_random,
+        "context_wrong": args.context_wrong,
         "max_extra_tokens": args.max_extra_tokens,
         "model": cfg.model.name,
         "corpora_measured": corpus_names,
