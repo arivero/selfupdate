@@ -458,6 +458,28 @@ STILL OPEN — deferred with explicit reasons:
   section): all diagnostic-side; the regime-fork lens comparator is
   time-limited (needs the B=1 arms while fresh); the early-abort gate
   idea requires owner sign-off against the 12k-items law.
+- IDEA, NOT IMPLEMENTED (owner, 2026-07-12): training-target grounding cutoff
+  in build_teacher_cache.py's v5 generation step. The eval-battery budget fix
+  this session (tasks.py: size generation budget on the RAG passage length,
+  not the answer length — a teacher given enough room always stops naturally,
+  no genuinely unbounded generation) is a DIFFERENT question from whether the
+  TAIL of a long teacher generation is still actually grounded in the
+  retrieved passage. Proposal: monitor, per generated span, whether the
+  teacher's answer is still attending to / using the RAG passage, and if a
+  late span has drifted into free-running continuation no longer grounded in
+  it, cut the TRAINING TARGET there — training on an ungrounded tail defeats
+  RAG-conditioned distillation even if the text itself is accurate. Two
+  candidate signals discussed: (a) literal attention-weight mass on the
+  passage token span at each generated position — the principled measure,
+  but expensive during generation and noisy to threshold under GQA/sliding-
+  window attention; (b) a cheap verbatim-overlap proxy reusing
+  masking.find_poem_spans (already used for thinking_selective censoring) —
+  conflates "grounded" with "quoting literally," would miss a still-faithful
+  paraphrase. Recommended first step if picked up: a MEASUREMENT pass only
+  (where does verbatim/attention grounding drop off across the v5 corpus),
+  next to the existing premise-check contrast in build_teacher_cache.py,
+  before deciding whether to act on it by truncating targets. Do not
+  implement without a further owner decision.
 
 STILL OPEN — research (owner's C3 program, EXPERIMENTS.md): loss-grid
 analysis (the original grid closed; the expanded Jacobian/lens queue and its

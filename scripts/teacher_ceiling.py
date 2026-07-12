@@ -60,9 +60,18 @@ def main() -> int:
     ap.add_argument("--experiment", required=True)
     ap.add_argument("--n-per-task", type=int, default=24)
     ap.add_argument("--max-extra-tokens", type=int, default=32,
-                    help="generation allowance beyond the reference length; "
-                         "increase only to diagnose/repair conversational "
-                         "framing cuts, never by relaxing the gate")
+                    help="FIXED generation allowance added on top of the "
+                         "(possibly scaled) reference length; increase only "
+                         "to diagnose/repair conversational framing cuts, "
+                         "never by relaxing the gate")
+    ap.add_argument("--budget-multiplier", type=float, default=1.0,
+                    help="scale the reference-length term before adding "
+                         "--max-extra-tokens. A flat additive alone starves "
+                         "long chapter-scope references (Quijote chapters "
+                         "run to hundreds of tokens) while over-padding "
+                         "short next-line ones; >1 makes the margin grow "
+                         "with the answer instead of a one-size-fits-all "
+                         "constant")
     ap.add_argument("--generation-batch", type=int, default=1,
                     help="batched greedy decode for the battery; the ceiling's "
                          "with_context prompts pay a corpus-length prefill per "
@@ -148,6 +157,7 @@ def main() -> int:
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
                             n_per_task=args.n_per_task,
                             max_extra_tokens=args.max_extra_tokens,
+                            budget_multiplier=args.budget_multiplier,
                             with_context=context_scope,
                             context_window_lines=args.context_window_lines,
                             context_pad_random=args.context_pad_random,
@@ -177,6 +187,7 @@ def main() -> int:
         "context_pad_random": args.context_pad_random,
         "context_wrong": args.context_wrong,
         "max_extra_tokens": args.max_extra_tokens,
+        "budget_multiplier": args.budget_multiplier,
         "model": cfg.model.name,
         "corpora_measured": corpus_names,
         "corpus_selection": ("cli_override" if args.recall_corpora

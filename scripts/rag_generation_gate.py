@@ -53,7 +53,18 @@ def main() -> int:
         if not gen:
             failures.append(f"{corpus}: no completion telemetry; rerun ceiling")
             continue
-        hard_cut = float(gen["hard_cut_fraction"])
+        # Bounded-kinds hard-cut, when the ceiling provides it: start_block/
+        # end_block ask the model to continue a paragraph with no length
+        # bound, and a teacher that never emits EOS there is imitable
+        # teacher behavior (the student clones it), not evidence the
+        # generation is unassessable — Quijote's long prose paragraphs
+        # saturate ANY fixed budget on those two kinds alone (owner
+        # directive 2026-07-12: the gate exists to catch a teacher that
+        # doesn't access the RAG, not to certify a bounded stop on
+        # open-ended continuation). Falls back to the unfiltered fraction
+        # for ceilings produced before this field existed.
+        hard_cut = float(gen.get("hard_cut_fraction_bounded",
+                                 gen["hard_cut_fraction"]))
         score = float(c["overall_word_acc"])
         floor_score = float(f["overall_word_acc"])
         no_rag_score = float(n["overall_word_acc"])

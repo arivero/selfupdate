@@ -121,7 +121,8 @@ mask:
 """
 
 
-def main(prefix: str = "v5", mode: str = "rag_tool") -> None:
+def main(prefix: str = "v5", mode: str = "rag_tool",
+        gen_extra_tokens: int = 32, budget_multiplier: float = 1.0) -> None:
     cfg_dir = ROOT / "configs" / "experiments" / prefix
     queue = ROOT / "scripts" / f"queue_{prefix}_ladder_20260712.tsv"
     cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -139,40 +140,54 @@ def main(prefix: str = "v5", mode: str = "rag_tool") -> None:
             encoding="utf-8")
         rows.append(f"# ---- {name} rung "
                     f"(ceilings/floors first: RAG-authority gate) ----")
-        # teacher references: ceiling per scope, padded floor, plain floor
-        ceilings, floors = {}, {}
-        for scope in SCOPES:
-            cache_cfg = f"configs/experiments/{prefix}/cache_{tag}_{scope}_remove.yaml"
-            ceil = f"runs/{prefix}_refs/{tag}_ceiling_{scope}.json"
-            row(ceil, cache_mb, "-",
-                f"{py} scripts/teacher_ceiling.py --experiment {cache_cfg} "
-                f"--context-scope {scope} --generation-batch 8 "
-                f"--recall-corpora machado quijote_ch1 quijote_ch4 --out {ceil}")
-            ceilings[scope] = ceil
-        for scope in SCOPES:
-            floor_pad = f"runs/{prefix}_refs/{tag}_floor_padrandom_{scope}.json"
-            # Serialize each random-context control after its real-context
-            # ceiling so the following gate has both artifacts; the scheduler
-            # intentionally supports one dependency path per row.
-            row(floor_pad, cache_mb, ceilings[scope],
-                f"{py} scripts/teacher_ceiling.py --experiment "
-                f"configs/experiments/{prefix}/cache_{tag}_{scope}_pad_random.yaml "
-                f"--context-scope {scope} --context-pad-random "
-                f"--generation-batch 8 "
-                f"--recall-corpora machado quijote_ch1 quijote_ch4 "
-                f"--out {floor_pad}")
-            floors[scope] = floor_pad
+        # budget_multiplier=1.0 is teacher_ceiling.py's own default, so
+        # omitting the flag entirely keeps the unqualified (v5) invocation
+        # byte-identical to before this knob existed.
+        mult_flag = (f"--budget-multiplier {budget_multiplier} "
+                    if budget_multiplier != 1.0 else "")
         # evaluate.py writes a directory containing tasks.json, not a JSON
         # file at --out itself.  The old .json marker never appeared and
         # made the scheduler rerun this base evaluation indefinitely.
+        # Built FIRST and threaded through every ceiling's "after": the gate
+        # reads ceiling + floor_pad + floor_plain, but the scheduler only
+        # tracks one dependency edge per row, and floor_plain previously had
+        # "after: -" with no ordering relative to the gate that consumes it
+        # — a race the gate crashed on (FileNotFoundError) whenever its
+        # floor_pad edge resolved before floor_plain happened to finish
+        # (2026-07-12).
         floor_plain = f"runs/{prefix}_refs/{tag}_floor_none/tasks.json"
         row(floor_plain, cache_mb, "-",
             f"{py} scripts/teacher_ceiling.py --experiment "
             f"configs/experiments/{prefix}/cache_{tag}_window_remove.yaml "
             f"--context-scope none "
             f"--generation-batch 8 "
+            f"--max-extra-tokens {gen_extra_tokens} {mult_flag}"
             f"--recall-corpora machado quijote_ch1 quijote_ch4 "
             f"--out {floor_plain}")
+        # ceiling per scope, then its padded floor — both chained after
+        # floor_plain so the gate's single dependency edge (on floor_pad)
+        # transitively guarantees all three of its inputs exist.
+        ceilings, floors = {}, {}
+        for scope in SCOPES:
+            cache_cfg = f"configs/experiments/{prefix}/cache_{tag}_{scope}_remove.yaml"
+            ceil = f"runs/{prefix}_refs/{tag}_ceiling_{scope}.json"
+            row(ceil, cache_mb, floor_plain,
+                f"{py} scripts/teacher_ceiling.py --experiment {cache_cfg} "
+                f"--context-scope {scope} --generation-batch 8 "
+                f"--max-extra-tokens {gen_extra_tokens} {mult_flag}"
+                f"--recall-corpora machado quijote_ch1 quijote_ch4 --out {ceil}")
+            ceilings[scope] = ceil
+        for scope in SCOPES:
+            floor_pad = f"runs/{prefix}_refs/{tag}_floor_padrandom_{scope}.json"
+            row(floor_pad, cache_mb, ceilings[scope],
+                f"{py} scripts/teacher_ceiling.py --experiment "
+                f"configs/experiments/{prefix}/cache_{tag}_{scope}_pad_random.yaml "
+                f"--context-scope {scope} --context-pad-random "
+                f"--generation-batch 8 "
+                f"--max-extra-tokens {gen_extra_tokens} {mult_flag}"
+                f"--recall-corpora machado quijote_ch1 quijote_ch4 "
+                f"--out {floor_pad}")
+            floors[scope] = floor_pad
         gates = {}
         for scope in SCOPES:
             gate = f"runs/{prefix}_refs/{tag}_gate_{scope}.json"
@@ -253,6 +268,21 @@ if __name__ == "__main__":
     ap.add_argument("--mode", default="rag_tool",
                     choices=["rag_tool", "rag_system"],
                     help="mask.mode for every generated config")
+    ap.add_argument("--gen-extra-tokens", type=int, default=32,
+                    help="teacher_ceiling.py --max-extra-tokens (FIXED "
+                         "margin) for every ceiling/floor call (default 32 "
+                         "matches the script's own default)")
+    ap.add_argument("--budget-multiplier", type=float, default=1.0,
+                    help="teacher_ceiling.py --budget-multiplier (scales "
+                         "with reference length) for every ceiling/floor "
+                         "call; default 1.0 matches the script's own "
+                         "default. Chapter-scope Quijote references run to "
+                         "hundreds of tokens, so a >1 multiplier — not a "
+                         "bigger flat --gen-extra-tokens — is the fix for "
+                         "framing-driven hard cuts diagnosed by "
+                         "rag_generation_gate.py; never relax the gate "
+                         "itself")
     a = ap.parse_args()
-    main(prefix=a.prefix, mode=a.mode)
+    main(prefix=a.prefix, mode=a.mode, gen_extra_tokens=a.gen_extra_tokens,
+        budget_multiplier=a.budget_multiplier)
     sys.exit(0)

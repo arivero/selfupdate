@@ -21,6 +21,7 @@ it). Task sets are DETERMINISTIC (seeded) so runs stay comparable.
 
 from __future__ import annotations
 
+import math
 import random
 import re
 import unicodedata
@@ -267,6 +268,7 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
 @torch.no_grad()
 def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                n_per_task: int = 24, max_extra_tokens: int = 32,
+               budget_multiplier: float = 1.0,
                keep_examples: int = 6, with_context: bool | str = False,
                context_window_lines: int = 4,
                context_pad_random: bool = False,
@@ -297,6 +299,29 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     (the ``remove`` floor is simply ``with_context=False``). Approximate to
     one decode/re-encode round trip; the training-side fill is exact at the
     id level.
+
+    Generation budget = ``ceil(basis_len * budget_multiplier) +
+    max_extra_tokens``, where ``basis_len`` is the RAG PASSAGE's token
+    length when a context is given, else the reference's. Default
+    multiplier 1.0 preserves every existing caller's exact budget (student
+    battery, telemetry, layerwise eval, which have no passage and so size
+    on the reference as before).
+
+    Sizing on the reference/answer length alone is wrong for the RAG
+    battery: a size-controlled probe (2026-07-12) gave Qwen3-1.7B a 1500-
+    token allowance on Quijote next_line/end_block items and it stopped
+    naturally on EVERY one — no genuinely unbounded generation — but it
+    unwound up to 436 tokens before doing so on a one-line "next_line"
+    answer whose reference was 62-191 tokens. The natural stopping points
+    (75-436 tokens) were bounded by the window-scope PASSAGE length
+    (643-836 tokens) with margin, not by the reference length — a model
+    reciting from a long retrieved passage may need to reproduce a large
+    fraction of it before finding a natural stop, especially in unbroken
+    prose with no line-break cues. A flat or reference-scaled margin
+    starves that (2026-07-12 gate failures, hard-cut up to 58% despite
+    retrieval_use_pass=True on every corpus — the teacher was reading the
+    RAG correctly and truncation was our budget equation's mistake, not a
+    model defect).
 
     ``rag_tool_prompt`` uses the same closed user turn, ``<tool_response>``
     and retrieval-use instruction as v5 target generation.  It is mandatory
@@ -385,7 +410,18 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                 prompts.append(tokenizer.apply_chat_template(
                     [{"role": "user", "content": content}], tokenize=False,
                     add_generation_prompt=True, enable_thinking=False))
-            budgets.append(len(tokenizer.encode(it["reference"]))
+            # Budget basis: the RAG passage length when a context is given,
+            # not the reference/answer length. Measured 2026-07-12: with a
+            # generous budget, Qwen3-1.7B naturally stops on EVERY
+            # next_line/end_block Quijote item (no genuinely unbounded
+            # generation) — but it may unwind up to ~70% of a long
+            # window-scope passage (643-836 tokens) before doing so, far
+            # more than a one-line answer's own length. A safe stop budget
+            # is sized to the RAG input, not the answer (owner directive).
+            basis_len = (len(tokenizer.encode(contexts[i]))
+                        if contexts is not None
+                        else len(tokenizer.encode(it["reference"])))
+            budgets.append(math.ceil(basis_len * budget_multiplier)
                            + max_extra_tokens)
         if generation_batch > 1:
             answers, completion = _generate_answers_batched(
@@ -445,6 +481,16 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         result["overall_word_acc"] = (sum(r["word_acc"] for rows in agg.values()
                                           for r in rows)
                                       / max(1, sum(len(r) for r in agg.values())))
+        # start_block/end_block ask the model to "finish"/"begin" a paragraph
+        # with no length bound; a teacher that never emits EOS there is
+        # imitable teacher behavior (the student clones it), not a
+        # completion defect — Quijote's long unbounded prose paragraphs
+        # saturate ANY fixed budget (measured 100% budget consumption on
+        # every end_block item regardless of size, 2026-07-12). Certifying
+        # completion is only meaningful for length-bounded answer kinds.
+        UNBOUNDED_KINDS = {"start_block", "end_block"}
+        bounded = [c for it, c in zip(items, completion)
+                  if it["kind"] not in UNBOUNDED_KINDS]
         result["generation"] = {
             "n": len(completion),
             "mean_generated_tokens": (sum(x["generated_tokens"] for x in completion)
@@ -455,6 +501,9 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                                  / max(1, len(completion))),
             "hard_cut_fraction": (sum(x["hard_cut"] for x in completion)
                                   / max(1, len(completion))),
+            "n_bounded": len(bounded),
+            "hard_cut_fraction_bounded": (sum(x["hard_cut"] for x in bounded)
+                                          / max(1, len(bounded))),
         }
         result["examples"] = examples
         return result
