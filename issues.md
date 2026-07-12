@@ -454,6 +454,23 @@ STILL OPEN — deferred with explicit reasons:
 - Bench-gated speed items: pinned-POOL prefetch only at 4B+ (>20
   MB/layer targets, per the measured negative at 0.6B); cross-item PP
   overlap only if PP lanes become throughput-relevant.
+- IDEA, NOT IMPLEMENTED (owner, 2026-07-12): **student-step CUDA graphs**.
+  This is distinct from vLLM's successful CUDA-graph capture of a static
+  autoregressive *inference* decode loop; nothing in the current trainer uses
+  `torch.compile` or CUDA graphs. A PyTorch graph could capture a fixed-shape,
+  resident full-FT micro-step (forward → depth-uniform local/window loss →
+  backward → optimizer step), but cannot be assumed to cover the current
+  variable-length examples, variable spans/window endpoints, CPU/offloaded
+  optimizer states, lazy target copies, or host-side telemetry. A valid first
+  experiment must bucket padded sequence length and pin a single
+  `(microbatch, length bucket, window schedule)`; preallocate every input,
+  loss, gradient, and optimizer buffer; move logging/CPU copies outside the
+  capture; then compare to eager at identical numerics, update count, and
+  peak VRAM. Start with `torch.compile` of the fixed-shape primitive, then
+  capture only the resident path if it is stable. CUDA graphs reserve memory
+  and may worsen the V5 OOM problem, so no production adoption without that
+  memory-and-throughput measurement. Do not mistake vLLM generation gains for
+  evidence that the layerwise training walk will gain similarly.
 - Lens-diagnostics idea set (docs/lens_diagnostics_ideas.md, 2026-07-11
   section): all diagnostic-side; the regime-fork lens comparator is
   time-limited (needs the B=1 arms while fresh); the early-abort gate
@@ -487,3 +504,31 @@ current completion count live in `runs/lossgrid_report.md`); teacher-stream
 k-windows (C3 #1); H100 throughput/memory/PP-TP evidence (L40S evidence
 complete); 1.7B cleanliness (intrusion 22-40% at 1.7B vs 1.5-2.5% at
 0.6B — see the intrusion depth-localization probe idea).
+# vLLM benchmark cloze aggregation scored missing `word_acc` as zero (2026-07-13)
+
+`scripts/benchmark_vllm_generation.py` originally summarized every response
+through `x.get("word_acc", 0.0)`.  That is invalid for V5 cloze records:
+`_recitation_stats` intentionally emits `containment` because the deleted-word
+reference is not stored.  Consequently all 249 cloze examples in the 2,071-row
+V5RS corpus counted as zero in `mean_word_acc`, including correct outputs.
+
+Measured on the Qwen3-14B H100 graph run, the published raw aggregate was
+74.06%; combining each task's intended metric gives 85.32% (+11.26 percentage
+points).  Case-folding the reference-word LCS adds only another 0.87 points on
+non-cloze items and does not explain the remaining gap.  Inspection confirms
+the main residual error is real: the model often copies the last line of the
+RAG passage rather than the requested adjacent line (next: 89.43%, prev:
+60.62%, cloze containment: 93.63%).
+
+The next-line failures are not a target-index inversion: examples such as
+`mach-v5-nx1-0003` ask "¿Me escribes el verso que sigue?", and `target_lines`
+points to the immediately following verse (`en la feria de Berlanga`).  The
+observed wrong answer (`Muy ricas las bodas fueron,`) is the tail of the
+privileged passage.  Treat this as a prompt/RAG placement failure or teacher
+behavior issue, not as evidence that the scorer expects the last line.
+
+The benchmark now reports `mean_task_score`, `mean_word_acc` over applicable
+next/prev examples only, and `mean_containment` over cloze examples only, with
+their denominators.  Historical summary JSON files retain the old field
+semantics; recompute their task-aware aggregates from the response JSONL before
+using them in comparisons.
