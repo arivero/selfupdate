@@ -28,6 +28,7 @@ train:
   anchor_kl_weight: 0.5
   anchor_path: data/anchors_es_v2.txt
   frozen_teacher_copy: true
+  offload_adam: true
   lora:
     enabled: false
 eval:

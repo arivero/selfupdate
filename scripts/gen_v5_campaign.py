@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # ladder rungs: (tag, HF name, train need_mb, cache need_mb, offload_adam)
 MODELS = [
     ("0p6b", "Qwen/Qwen3-0.6B", 16000, 12000, False),
-    ("1p7b", "Qwen/Qwen3-1.7B", 42000, 18000, False),
+    ("1p7b", "Qwen/Qwen3-1.7B", 34000, 18000, True),
     ("4b", "Qwen/Qwen3-4B", 66000, 30000, True),
 ]
 
