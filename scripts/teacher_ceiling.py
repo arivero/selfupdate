@@ -55,6 +55,10 @@ def main() -> int:
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", required=True)
     ap.add_argument("--n-per-task", type=int, default=24)
+    ap.add_argument("--max-extra-tokens", type=int, default=32,
+                    help="generation allowance beyond the reference length; "
+                         "increase only to diagnose/repair conversational "
+                         "framing cuts, never by relaxing the gate")
     ap.add_argument("--generation-batch", type=int, default=1,
                     help="batched greedy decode for the battery; the ceiling's "
                          "with_context prompts pay a corpus-length prefill per "
@@ -136,6 +140,7 @@ def main() -> int:
         context_scope = False if args.context_scope == "none" else args.context_scope
         result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
                             n_per_task=args.n_per_task,
+                            max_extra_tokens=args.max_extra_tokens,
                             with_context=context_scope,
                             context_window_lines=args.context_window_lines,
                             context_pad_random=args.context_pad_random,
@@ -159,6 +164,7 @@ def main() -> int:
         "teacher_reference_kind": kind,
         "context_scope": args.context_scope,
         "context_pad_random": args.context_pad_random,
+        "max_extra_tokens": args.max_extra_tokens,
         "model": cfg.model.name,
         "corpora_measured": corpus_names,
         "corpus_selection": ("cli_override" if args.recall_corpora
