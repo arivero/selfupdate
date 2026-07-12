@@ -1,0 +1,216 @@
+# vLLM greedy-generation benchmark
+
+Date: 2026-07-12. This is a generation-only baseline for the V5 question-only
+teacher prompts. It deliberately does **not** request hidden states, run the
+teacher-forced hidden-state forward, write safetensors, or run the student
+premise forward.
+
+## Environment
+
+The usable current environment is Fable's self-contained
+`../venvs/vllm025`: vLLM 0.25.0+cu129, Torch 2.11.0+cu129, Python 3.12.10.
+It is compatible with the L40S driver because it links CUDA 12 libraries. The
+installation recipe and driver rationale are preserved in
+`../howFableInstalledVLLMhere.md`.
+
+The older comparison environment is `../venvs/vllm126` plus
+`../2025/vllm`: vLLM 0.10.1rc2, Torch 2.8.0+cu128.
+
+Protocol: 2,071 V5 window-RAG prompts; greedy decoding; the exact cache-builder
+per-record ceiling (`2 × estimated answer tokens + 96`); no truncation. The
+full workload permits 341,292 generated tokens, with a 932-token maximum
+ceiling. Peak memory is vLLM's physical-GPU reservation, sampled by
+`nvidia-smi`.
+
+## L40S full-corpus results
+
+All rows use one L40S, batch 64, and all 2,071 prompts. `Load/setup` is
+reported separately and includes weight load, KV-cache profiling and, in graph
+mode, compilation/capture. The `peak VRAM` measurement includes vLLM's KV
+reservation; it is not model-weight memory alone.
+
+| model | runtime / mode | load/setup | generation | generated tokens | tok/s | peak VRAM | hard cuts | mean word recall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | vLLM 0.10 eager | n/a | 473.37 s | 158,804 | 335.47 | 39.25 GiB | 4.83% | 45.23% |
+| Qwen3-0.6B | vLLM 0.25 eager | 10.17 s | 614.61 s | 159,669 | 259.79 | 38.72 GiB | 5.02% | 46.04% |
+| Qwen3-0.6B | vLLM 0.25 graphs | 123.22 s | **198.31 s** | 158,918 | **801.35** | 39.20 GiB | 4.68% | 45.15% |
+| Qwen3-1.7B | vLLM 0.10 eager | n/a | 567.40 s | 169,180 | 298.17 | 38.77 GiB | n/a | n/a |
+| Qwen3-1.7B | vLLM 0.25 graphs | 123.88 s | 477.60 s | 168,511 | 352.83 | 38.93 GiB | 12.17% | 51.77% |
+| Qwen3-4B | vLLM 0.10 eager | n/a | 980.37 s | 165,115 | 168.42 | 38.71 GiB | n/a | n/a |
+| Qwen3-4B | vLLM 0.25 graphs | 123.95 s | 899.26 s | 164,550 | 182.98 | 39.19 GiB | 15.79% | 64.55% |
+| Qwen3-8B | vLLM 0.10 eager | n/a | 1,472.14 s | 130,878 | 88.90 | 39.45 GiB | n/a | n/a |
+| Qwen3-8B | vLLM 0.25 graphs | 124.38 s | 1,420.77 s | 131,607 | 92.63 | 39.53 GiB | 6.04% | 67.21% |
+
+The small-model result is the clear win: after compilation, vLLM 0.25 graph
+mode is 4.04x faster than its own eager mode and 2.39x faster than vLLM 0.10
+eager. At 1.7B--8B on this shared L40S host, graph mode only improves the old
+eager reference by 18%, 9%, and 5%, respectively. That scaling result is why
+the H100 measurements must be paired eager-versus-graphs tests, rather than a
+claim that the graph setting universally solves throughput.
+
+This is **not** directly comparable to the approximately hour-scale old cache
+build: that build additionally performs the all-hidden-states teacher forward,
+CPU transfer and safetensors writes, and a student premise forward. The clean
+claim for 0.6B is that vLLM 0.25 graph mode produced all teacher answers in
+3.3 minutes (5.4 minutes including a cold setup); it says nothing yet about
+the cache-build's non-generation phases.
+
+Against the matching cached PyTorch greedy generations, vLLM 0.10 has 51.41%
+next/previous word recall versus 51.60%, 76.68 versus 76.41 mean answer tokens,
+and 72.38% exact decoded-answer agreement. It is therefore a valid inference
+substitute for this prompt/model combination.
+
+## Fable-build speed check: evenly spaced 256-prompt sample
+
+All rows use Qwen3-0.6B, batch 64, the same deterministic evenly spaced V5
+sample, and report generation time only. Engine load/compilation is separate.
+
+| engine | mode | generation time | tokens | tok/s | peak VRAM | word recall | exact cache text |
+|---|---|---:|---:|---:|---:|---:|---:|
+| vLLM 0.10.1 + cu128 | eager | 68.47 s | 19,202 | 280.46 | 39.25 GiB | 48.06% | 69.14% |
+| vLLM 0.25 + cu129 | eager | 90.23 s | 19,483 | 215.94 | 39.65 GiB | 48.00% | 68.75% |
+| vLLM 0.25 + cu129 | torch.compile + CUDA graphs | 29.09 s | 19,397 | **666.83** | 40.09 GiB | 47.55% | 76.17% |
+
+Interpretation: merely upgrading while forcing eager execution is 23% slower
+on this L40S sample. In its intended graph mode, the new build is 2.38× faster
+than the older eager engine. Its initial graph compilation takes about 41 s and
+must be amortized; the recorded `load_seconds` includes setup while the table
+does not.
+
+## Eager batch-size control and PP check
+
+The finished L40S 0.6B eager controls show why the production reference is
+batch 64: full-corpus B=16 took 925.23 s / 172.32 tok/s, versus B=64's 614.61
+s / 259.79 tok/s. Both had approximately 10 s warm eager setup and 38.72 GiB
+of vLLM reservation. The repeated GPU-2 256-prompt eager B=64 check was 93.16
+s / 208.39 tok/s (10.20 s setup), consistent with the earlier 90.23 s result.
+
+Qwen3-14B also completed a 256-prompt PP=2 graph-mode smoke test: 11,342
+tokens in 318.90 s (35.57 tok/s), 174.02 s setup, and 38.31 GiB sampled on
+the first card. It establishes that pipeline parallelism runs, but it is not a
+single-card baseline nor a full-corpus measurement, and its first-card memory
+sample must not be reported as total PP memory.
+
+## Large-model scaling check
+
+Qwen3-8B on the same 256-prompt batch-64 sample, using vLLM 0.25 graph-capable
+configuration but no forced graph result claim yet: 15,023 generated tokens in
+194.06 s, or 77.41 tok/s, with 39.40 GiB peak VRAM, 6.25% hard cuts, and 68.03%
+mean task word recall. The model's 15.27 GiB bf16 weights still fit on one
+L40S; usable KV capacity was 157,040 tokens.
+
+## H100 reproduction and next ladder
+
+The H100 node is `agpuh01`, with DEV0/DEV1 reserved for this work; DEV2/DEV3
+belong to another user and are never touched. Results go to
+`runs/vllm_benchmark_h100/` so the L40S evidence remains immutable.
+
+*Scoring note.* The tables retain the benchmark's established reference-word
+recall field.  A later diagnostic also combines that field with cloze-block
+containment; its Qwen3-14B value is 85.32%, but it is a different mixed-task
+aggregate, **not recall**, and is intentionally not a table entry or a model
+quality claim.  It is useful only for auditing the old "missing field means
+zero" aggregation error.
+
+The first H100 graph pair has completed with the exact L40S workload. The H100
+has 80 GiB HBM; at the same 0.85 vLLM reservation fraction it reserves roughly
+70.6 GiB, so its reported peak is intentionally much larger than the L40S
+peak and does not mean the models need 70 GiB of weights.
+
+| model | mode | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | mean word recall |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | vLLM 0.25 graphs | 91.13 s | 123.56 s | 159,136 | 1,287.91 | 70.60 GiB | 4.97% | 45.80% |
+| Qwen3-0.6B | vLLM 0.25 eager | 19.17 s | 625.61 s | 159,075 | 254.27 | 70.30 GiB | 4.97% | 46.05% |
+| Qwen3-1.7B | vLLM 0.25 graphs | 89.54 s | 194.37 s | 169,142 | 870.19 | 70.59 GiB | 12.41% | 52.10% |
+| Qwen3-1.7B | vLLM 0.25 eager | 19.39 s | 709.25 s | 169,081 | 238.39 | 70.30 GiB | 12.12% | 51.79% |
+| Qwen3-4B | vLLM 0.25 graphs | 52.81 s | 315.90 s | 164,834 | 521.80 | 70.96 GiB | 15.93% | 64.58% |
+| Qwen3-4B | vLLM 0.25 eager | 16.95 s | 771.63 s | 164,786 | 213.55 | 70.12 GiB | 15.84% | 64.62% |
+| Qwen3-8B | vLLM 0.25 graphs | 60.66 s | 421.97 s | 130,514 | 309.30 | 70.65 GiB | 6.23% | 67.01% |
+| Qwen3-8B | vLLM 0.25 eager | 19.79 s | 705.38 s | 130,501 | 185.01 | 70.06 GiB | 6.04% | 66.89% |
+
+This is the first important H100 finding: eager mode does not automatically
+use the H100's throughput. Relative to the same-mode L40S result, H100 eager
+is slightly slower at 0.6B (254 versus 260 tok/s) and still only 238 tok/s at
+1.7B; CUDA graphs instead deliver 5.07x (0.6B), 3.65x (1.7B), 2.44x
+(4B), and 1.67x (8B) over H100 eager.
+
+The completed 0.6B graph-mode full-corpus batch sweep demonstrates that the
+graph benefit is usable even at B=1, but throughput continues to scale through
+the H100-only B=128 point:
+
+| batch | generation time | generated tokens | tok/s |
+|---:|---:|---:|---:|
+| 1 | 273.70 s | 160,246 | 585.48 |
+| 2 | 255.96 s | 159,267 | 622.22 |
+| 4 | 234.92 s | 159,267 | 677.98 |
+| 8 | 204.97 s | 159,267 | 777.01 |
+| 16 | 174.23 s | 159,364 | 914.68 |
+| 32 | 146.78 s | 159,882 | 1,089.24 |
+| 64 | 122.23 s | 159,962 | 1,308.73 |
+| 128 | 107.85 s | 160,172 | **1,485.19** |
+
+The paired 0.6B eager sweep on DEV1 is active but making progress. Its first
+completed rows show that eager mode scales only weakly with batch size on this
+workload:
+
+| batch | generation time | generated tokens | tok/s |
+|---:|---:|---:|---:|
+| 1 | 1,444.93 s | 158,917 | 109.98 |
+| 2 | 1,362.63 s | 158,715 | 116.48 |
+| 4 | 1,216.63 s | 158,778 | 130.51 |
+| 8 | 1,059.50 s | 158,701 | 149.79 |
+| 16 | 902.86 s | 158,572 | 175.63 |
+
+DEV0 is now running a single-card Qwen3-14B graph baseline while DEV1 finishes
+the eager sweep. Two-card PP runs wait for both DEV0 and DEV1 to be free.
+
+## Auxiliary: exporting a full hidden-state token to CPU (H100)
+
+Teacher-cache egress is a different bottleneck from vLLM answer generation.
+For one answer-position token, a *full token* means its bf16 hidden vector at
+every transformer layer, i.e. `layers × hidden_size × 2` bytes. The current
+cache writer (`TeacherCacheWriter.add`) transfers each layer independently via
+`h.contiguous().cpu()`. The synthetic, weight-free H100 benchmark in
+`scripts/benchmark_hidden_transfer.py` measures that exact copy shape, without
+model forward, finite-value checks, safetensors serialization, or disk I/O.
+
+| model | layers × hidden | full-token payload | bulk pinned copy, 1 token | current-like per-layer `.cpu()`, 1 token | bulk pinned copy, 512 tokens | current-like per-layer `.cpu()`, 512 tokens |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | 28 × 1,024 | 56 KiB | 3.94 µs/token | 359.75 µs/token | 1.64 µs/token | 23.78 µs/token |
+| Qwen3-1.7B | 28 × 2,048 | 112 KiB | 4.64 µs/token | 366.88 µs/token | 2.09 µs/token | 47.41 µs/token |
+| Qwen3-4B | 36 × 2,560 | 180 KiB | 5.82 µs/token | 470.35 µs/token | 5.29 µs/token | 71.96 µs/token |
+| Qwen3-8B | 36 × 4,096 | 288 KiB | 8.00 µs/token | 484.56 µs/token | 8.51 µs/token | 83.69 µs/token |
+
+The bulk pinned path reaches about 32--51 GiB/s at 512 tokens; the
+current-like path reaches only about 2.25--3.28 GiB/s because it allocates and
+synchronizes a pageable CPU transfer for every layer. Thus GPU→CPU bandwidth
+is not intrinsically the cache bottleneck when the full hidden-state tensor is
+batched; the present per-layer transfer pattern can become one. These figures
+are a transfer-only lower bound: the real cache writer also validates every
+CPU tensor and writes safetensors shards. Any writer change must preserve the
+per-layer on-disk schema and be measured end-to-end before adoption.
+
+`nvidia-smi topo -m` reports GPU0's CPU/NUMA affinity as cores 16--31 / NUMA
+node 1, while the benchmark process was unbound across all four NUMA nodes.
+The 32--51 GiB/s bulk range (34--55 GB/s) is therefore an end-to-end host-copy
+measurement, not a PCIe specification: its 51 GiB/s high point is consistent
+with a well-fed PCIe-5-class path, while the lower readings may include remote
+NUMA memory placement. A future exact link-limit measurement should bind both
+CPU execution and pinned-memory allocation to GPU0's NUMA node.
+
+Only after those eight H100 reproductions finish, inspect cached larger model
+directories and benchmark models that fit on one or two H100s. For each,
+test pipeline parallelism first, then tensor parallelism only if time remains.
+These placement tests retain the same greedy answer-generation protocol and
+record per-device memory rather than claiming a single-card PP peak.
+
+## Repetition recipe
+
+Use `scripts/benchmark_vllm_generation.py`. A comparable H100 run must pin:
+model revision, V5 JSONL, tokenizer/chat template, generation allowance,
+batch size, `max_model_len`, TP/PP layout, and whether CUDA graphs are enabled.
+Report load/compile time separately from generation time.
+
+The next measurements are explicit 2-card and 4-card pipeline-parallel vLLM
+runs. They should be treated as placement/throughput tests, not as a change to
+the teacher-generation target protocol.
