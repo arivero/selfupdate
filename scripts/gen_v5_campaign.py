@@ -191,7 +191,12 @@ def main(prefix: str = "v5", mode: str = "rag_tool",
         gates = {}
         for scope in SCOPES:
             gate = f"runs/{prefix}_refs/{tag}_gate_{scope}.json"
-            row(gate, cache_mb, floors[scope],
+            # rag_generation_gate.py imports only json/argparse -- no torch,
+            # no GPU use -- but previously inherited cache_mb (up to 30000MB
+            # for the 4B rung), making the scheduler needlessly stall a
+            # near-instant JSON comparison behind full VRAM availability
+            # while real model jobs saturate every GPU (observed 2026-07-12).
+            row(gate, 256, floors[scope],
                 f"{py} scripts/rag_generation_gate.py --ceiling {ceilings[scope]} "
                 f"--floor {floors[scope]} --no-rag {floor_plain} --out {gate}")
             gates[scope] = gate
