@@ -28,9 +28,21 @@ ROOT = Path(__file__).resolve().parent.parent
 # ladder rungs: (tag, HF name, train need_mb, cache need_mb, offload_adam)
 MODELS = [
     ("0p6b", "Qwen/Qwen3-0.6B", 16000, 12000, False),
-    ("1p7b", "Qwen/Qwen3-1.7B", 34000, 18000, True),
+    ("1p7b", "Qwen/Qwen3-1.7B", 30000, 18000, True),
     ("4b", "Qwen/Qwen3-4B", 66000, 30000, True),
 ]
+
+# per-rung (micro_batch, grad_accum). EFFECTIVE batch = micro_batch*grad_accum
+# is held at 64 across the ladder so optimization dynamics match; micro_batch
+# is a pure memory/speed knob. The 1.7B full-FT jacobian arms peak on the long
+# Quijote buckets, so they halve micro_batch (and double grad_accum) to cut the
+# batch-scaled activation/jacobian working memory — on top of offloaded Adam
+# (2026-07-12: full_resident + micro_batch 8 OOM'd at step ~93 on L40S).
+BATCHING = {
+    "0p6b": (8, 8),
+    "1p7b": (4, 16),
+    "4b": (4, 16),
+}
 
 # top-3 losses of the completed loss grid (runs/lossgrid_report.csv,
 # final mean recall at matched budget), each with its winning slide.
@@ -68,8 +80,8 @@ train:
   schedule: summed
   epochs: 6
   lr: 1.0e-5
-  micro_batch: 8
-  grad_accum: 8
+  micro_batch: {micro_batch}
+  grad_accum: {grad_accum}
   batching: bucketed
   hidden_loss: huber
   conn_window: 1
@@ -134,8 +146,10 @@ def main(prefix: str = "v5", mode: str = "rag_tool",
     py = ".venv/bin/python"
     for tag, name, train_mb, cache_mb, offload in MODELS:
         base = f"configs/experiments/{prefix}/base_{tag}.yaml"
+        micro_batch, grad_accum = BATCHING[tag]
         (ROOT / base).write_text(BASE_TPL.format(
             tag=tag, name=name, prefix=prefix, mode=mode,
+            micro_batch=micro_batch, grad_accum=grad_accum,
             offload="\n  offload_adam: true" if offload else ""),
             encoding="utf-8")
         rows.append(f"# ---- {name} rung "
