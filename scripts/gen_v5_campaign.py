@@ -140,7 +140,7 @@ def main() -> None:
         rows.append(f"# ---- {name} rung "
                     f"(ceilings/floors first: RAG-authority gate) ----")
         # teacher references: ceiling per scope, padded floor, plain floor
-        refs = []
+        ceilings, floors = {}, {}
         for scope in SCOPES:
             cache_cfg = f"configs/experiments/v5/cache_{tag}_{scope}_remove.yaml"
             ceil = f"runs/v5_refs/{tag}_ceiling_{scope}.json"
@@ -148,23 +148,37 @@ def main() -> None:
                 f"{py} scripts/teacher_ceiling.py --experiment {cache_cfg} "
                 f"--context-scope {scope} --generation-batch 8 "
                 f"--recall-corpora machado quijote_ch1 quijote_ch4 --out {ceil}")
-            refs.append(ceil)
+            ceilings[scope] = ceil
         for scope in SCOPES:
             floor_pad = f"runs/v5_refs/{tag}_floor_padrandom_{scope}.json"
-            row(floor_pad, cache_mb, "-",
+            # Serialize each random-context control after its real-context
+            # ceiling so the following gate has both artifacts; the scheduler
+            # intentionally supports one dependency path per row.
+            row(floor_pad, cache_mb, ceilings[scope],
                 f"{py} scripts/teacher_ceiling.py --experiment "
                 f"configs/experiments/v5/cache_{tag}_{scope}_pad_random.yaml "
                 f"--context-scope {scope} --context-pad-random "
                 f"--generation-batch 8 "
                 f"--recall-corpora machado quijote_ch1 quijote_ch4 "
                 f"--out {floor_pad}")
-        floor_plain = f"runs/v5_refs/{tag}_floor_none.json"
+            floors[scope] = floor_pad
+        # evaluate.py writes a directory containing tasks.json, not a JSON
+        # file at --out itself.  The old .json marker never appeared and
+        # made the scheduler rerun this base evaluation indefinitely.
+        floor_plain = f"runs/v5_refs/{tag}_floor_none/tasks.json"
         row(floor_plain, cache_mb, "-",
             f"{py} scripts/evaluate.py --experiment "
             f"configs/experiments/v5/cache_{tag}_window_remove.yaml --base "
             f"--generation-batch 8 "
             f"--recall-corpora machado quijote_ch1 quijote_ch4 "
             f"--out runs/v5_refs/{tag}_floor_none")
+        gates = {}
+        for scope in SCOPES:
+            gate = f"runs/v5_refs/{tag}_gate_{scope}.json"
+            row(gate, cache_mb, floors[scope],
+                f"{py} scripts/rag_generation_gate.py --ceiling {ceilings[scope]} "
+                f"--floor {floors[scope]} --no-rag {floor_plain} --out {gate}")
+            gates[scope] = gate
         # caches: one per scope x censor (generation inside)
         cache_markers = {}
         for scope in SCOPES:
@@ -175,7 +189,7 @@ def main() -> None:
                     encoding="utf-8")
                 marker = f"runs/.v5cache_{tag}_{scope}_{censor}.done"
                 cache_markers[(scope, censor)] = marker
-                row(marker, cache_mb, refs[0],
+                row(marker, cache_mb, gates[scope],
                     f"bash -c '{py} scripts/build_teacher_cache.py "
                     f"--experiment {cache_cfg} && touch {marker}'")
         # arms
@@ -216,9 +230,9 @@ def main() -> None:
         "# NOTE 4B x jacobian_lens_kl is NOT queued: no Qwen3-4B lens in\n"
         "# ../jacobian-lens/out/lenses yet — build it there first, then\n"
         "# regenerate with scripts/gen_v5_campaign.py.\n"
-        "# Ceilings run before caches/arms per rung: inspect\n"
-        "# runs/v5_refs/<rung>_ceiling_*.json — a non-attending teacher\n"
-        "# (RAG-authority failure) disqualifies the rung's arms.\n")
+        "# Each scope then needs a passing generation gate before caches/arms:\n"
+        "# generation must stop naturally and real RAG must beat its matched\n"
+        "# random-context floor on every corpus.\n")
     QUEUE.write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
     n_arms = sum(1 for r in rows
                  if r.split("\t")[0].endswith("/checkpoint"))

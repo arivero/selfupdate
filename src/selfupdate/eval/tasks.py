@@ -192,7 +192,7 @@ def score(reference: str, answer: str) -> dict:
 @torch.no_grad()
 def _generate_answers_batched(model, tokenizer, prompts: list[str],
                               budgets: list[int], eos: int,
-                              generation_batch: int) -> list[str]:
+                              generation_batch: int) -> tuple[list[str], list[dict]]:
     """Left-padded batched greedy decode of ``prompts`` (original order kept).
 
     Same machinery as the retired recite engine's batched path (left pad +
@@ -210,6 +210,7 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
     from .recite import _is_cuda_oom
 
     answers: list[str] = [""] * len(prompts)
+    completion: list[dict] = [{} for _ in prompts]
     try:
         start = 0
         cur = generation_batch
@@ -241,13 +242,20 @@ def _generate_answers_batched(model, tokenizer, prompts: list[str],
                 # merely batching it.  Later tokens cannot affect earlier
                 # greedy tokens, so truncation restores the B=1 contract.
                 budget = budgets[start + row]
+                generated = out[row, gen_start:gen_start + budget].tolist()
+                stopped = eos in generated
                 answers[start + row] = tokenizer.decode(
-                    out[row, gen_start:gen_start + budget],
-                    skip_special_tokens=True)
+                    generated, skip_special_tokens=True)
+                completion[start + row] = {
+                    "generated_tokens": len(generated),
+                    "budget_tokens": budget,
+                    "stopped": stopped,
+                    "hard_cut": len(generated) >= budget and not stopped,
+                }
             start += out.shape[0]
     finally:
         tokenizer.padding_side = was_padding
-    return answers
+    return answers, completion
 
 
 @torch.no_grad()
@@ -338,10 +346,10 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
             budgets.append(len(tokenizer.encode(it["reference"]))
                            + max_extra_tokens)
         if generation_batch > 1:
-            answers = _generate_answers_batched(
+            answers, completion = _generate_answers_batched(
                 model, tokenizer, prompts, budgets, eos, generation_batch)
         else:
-            answers = []
+            answers, completion = [], []
             for prompt, budget in zip(prompts, budgets):
                 ids = torch.tensor(
                     [tokenizer.encode(prompt, add_special_tokens=False)],
@@ -350,10 +358,17 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                     model, ids,
                     torch.arange(ids.shape[1], device=device)[None],
                     max_new_tokens=budget, eos_id=eos)
+                stopped = eos in out
                 answers.append(tokenizer.decode(out, skip_special_tokens=True))
+                completion.append({
+                    "generated_tokens": len(out),
+                    "budget_tokens": budget,
+                    "stopped": stopped,
+                    "hard_cut": len(out) >= budget and not stopped,
+                })
         agg: dict[str, list[dict]] = {}
         examples = []
-        for it, q, raw in zip(items, questions, answers):
+        for it, q, raw, meta in zip(items, questions, answers, completion):
             answer = strip_think(raw)
             s = score(it["reference"], answer)
             s["n_deleted"] = it["n"]
@@ -361,7 +376,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
             if len(examples) < keep_examples:
                 examples.append({"kind": it["kind"], "q": q,
                                  "reference": it["reference"],
-                                 "answer": answer.strip()[:200], **s})
+                                 "answer": answer.strip()[:200], **meta, **s})
         result = {"seed": seed, "n_per_task": n_per_task,
                   "generation_batch": generation_batch,
                   "with_context": scope or False,
@@ -384,6 +399,17 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         result["overall_word_acc"] = (sum(r["word_acc"] for rows in agg.values()
                                           for r in rows)
                                       / max(1, sum(len(r) for r in agg.values())))
+        result["generation"] = {
+            "n": len(completion),
+            "mean_generated_tokens": (sum(x["generated_tokens"] for x in completion)
+                                      / max(1, len(completion))),
+            "mean_budget_tokens": (sum(x["budget_tokens"] for x in completion)
+                                   / max(1, len(completion))),
+            "stopped_fraction": (sum(x["stopped"] for x in completion)
+                                 / max(1, len(completion))),
+            "hard_cut_fraction": (sum(x["hard_cut"] for x in completion)
+                                  / max(1, len(completion))),
+        }
         result["examples"] = examples
         return result
     finally:
