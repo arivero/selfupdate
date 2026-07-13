@@ -205,13 +205,18 @@ cloze, in percentage points.
 | Qwen3.5-9B | 1 × H100 | `ee2c63a` | 115.08 s | 48.04 s | 79,334 | 1,651.51 | 2.08% | 93.10% | 94.17% | 7.54× | +0.05 / -0.17 pp |
 | Llama-3.1-8B-Instruct | 1 × H100 | `57263ff` | 56.54 s | 49.84 s | 137,451 | 2,757.69 | 5.75% | 85.70% | 65.51% | 9.00× | -0.15 / +0.07 pp |
 | Phi-4 | 1 × H100 | `c32e750` | 93.08 s | 87.14 s | 162,325 | 1,862.84 | 4.83% | 93.10% | 74.30% | 9.97× | -0.07 / +0.08 pp |
+| GPT-OSS-20B | 1 × H100, Harmony low | `c32e750` | 95.58 s | 60.42 s | 162,525 | 2,689.70 | 23.76% | 28.66% | 74.22% | 5.48× | +1.23 / -1.25 pp |
+| Nemotron Nano 9B v2 | 1 × H100 | `c32e750` | 109.20 s | 102.97 s | 328,511 | 3,190.25 | 99.71% | 68.62% | 21.89% | 9.52× | +0.36 / -0.04 pp |
+| Mistral-7B-Instruct-v0.1 | 1 × H100 | `5fac972` | 98.02 s | 61.83 s | 236,299 | 3,821.83 | 29.65% | 57.45% | 65.70% | 10.76× | +0.15 / -0.52 pp |
 
 Each artifact contains 2,071 unique example IDs, non-empty exact token-ID
 lists, and matching recorded token lengths.  The largest absolute LCS change
 in this first block is 0.44 points; the largest cloze change is 0.72 points.
-Generation improves 7.54–9.97× even against the earlier graph references,
+Generation improves 5.48–10.76× even against the earlier graph references,
 confirming that true mixed-length batching—not merely enabling graphs—is the
-dominant change.
+dominant change.  The speed column is not a quality ranking: Nemotron's 99.71%
+hard-cut rate and GPT-OSS-20B's 28.66% next/previous LCS make those conditions
+poor teacher candidates despite their throughput.
 
 ## H100 larger-model and two-card throughput results
 
