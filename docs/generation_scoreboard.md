@@ -1,6 +1,6 @@
 # V5 generation speed scoreboard
 
-Last updated: 2026-07-13.  Full `examples_v5rs_window.jsonl`: 2,071 prompts,
+Last updated: 2026-07-14.  Full `examples_v5rs_window.jsonl`: 2,071 prompts,
 greedy decoding, batch 64 unless a one-card capacity limit is stated.  Times
 are answer generation only; model loading/capture, hidden-state extraction,
 D2H, and storage are separate.  Quality is next/previous word LCS and cloze
@@ -81,38 +81,52 @@ row when estimating that path.  Model loading is outside `total`, just as
 graph-backend setup is outside the generation time above.  `storage` is worker
 time and overlaps compute; `total` is the cache phase wall clock.
 
-| model | hidden mode | commit | requested / effective batch | teacher compute | D2H | storage | hidden bytes | total |
+| model | hidden mode | run commit | requested / observed batch | teacher compute | D2H | storage | hidden bytes | total |
 |---|---|---|---:|---:|---:|---:|---:|---:|
-| Qwen3-0.6B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 30.46 s | 0.467 s | 8.95 s | 17.55 GB | **37.46 s** |
-| Qwen3-1.7B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 33.11 s | 0.696 s | 14.80 s | 36.22 GB | **43.24 s** |
-| Qwen3.5-0.8B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 50.80 s | 0.376 s | 8.50 s | 18.75 GB | **57.00 s** |
-| Qwen3.5-2B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 54.72 s | 0.751 s | 13.24 s | 29.31 GB | **63.25 s** |
-| Qwen3.5-9B | length-aligned batches, durable Lustre | `fa43971` | 64 / 23–64 | 88.15 s | 1.088 s | 38.46 s | 42.00 GB | **101.08 s** |
-| Qwen3.5-4B | one forward per example | `e35594a` | 1 / 1 | 612.43 s | 0.715 s | 24.48 s | 36.63 GB | **623.64 s** |
-| Qwen3.5-4B | length-aligned randomized batches, OOM backoff | `41d65c5` | 64 / 5–64 | 68.76 s | 0.924 s | 16.08 s | 36.63 GB | **86.20 s** |
-| Qwen3-4B | length-aligned batches, durable Lustre | `d285abb` | 64 / 23–64 | 44.75 s | 1.071 s | 50.78 s | 57.38 GB | **82.56 s** |
-| Qwen3-8B | length-aligned batches, durable Lustre | `d285abb` | 64 / 23–64 | 59.78 s | 2.220 s | 59.06 s | 81.71 GB | **102.82 s** |
-| Qwen3-14B | length-aligned batches, Lustre, OOM backoff | `fa43971` | 64 / 23–64 | 85.82 s | 2.479 s | 68.71 s | 97.36 GB | **137.16 s** |
-| Llama-3.1-8B-Instruct | length-aligned batches, durable Lustre | `b3ed8df` | 64 / 23–64 | 56.83 s | 1.362 s | 55.95 s | 64.00 GB | **94.32 s** |
-| Phi-4 | length-aligned batches, Lustre, OOM backoff | `b3ed8df` | 64 / 23–64 | 90.72 s | 2.302 s | 91.16 s | 64.00 GB | **159.39 s** |
+| Qwen3-0.6B | single card, length-aligned | `d285abb` | 64 / 23–64 | 30.46 s | 0.467 s | 8.95 s | 17.55 GB | **37.46 s** |
+| Qwen3-1.7B | single card, length-aligned | `d285abb` | 64 / 23–64 | 33.11 s | 0.696 s | 14.80 s | 36.22 GB | **43.24 s** |
+| Qwen3.5-0.8B | single card, length-aligned | `d285abb` | 64 / 23–64 | 50.80 s | 0.376 s | 8.50 s | 18.75 GB | **57.00 s** |
+| Qwen3.5-2B | single card, length-aligned | `d285abb` | 64 / 23–64 | 54.72 s | 0.751 s | 13.24 s | 29.31 GB | **63.25 s** |
+| GPT-OSS-20B | single card, exact response IDs | `8cededa` | 64 / 7–64 | 44.02 s | 1.050 s | 39.19 s | 39.25 GB | **86.16 s** |
+| Gemma-4-26B-A4B-it | single card, exact response IDs | `8cededa` | 64 / 26–64 | 66.28 s | 0.746 s | 33.99 s | 37.06 GB | **92.03 s** |
+| Llama-3.1-8B-Instruct | single card, length-aligned | `b3ed8df` | 64 / 23–64 | 56.83 s | 1.362 s | 55.95 s | 72.53 GB | **94.32 s** |
+| Qwen3.5-9B | single card, length-aligned | `d285abb` | 64 / 23–64 | 88.15 s | 1.088 s | 38.46 s | 56.52 GB | **101.08 s** |
+| Qwen3-8B | single card, length-aligned | `d285abb` | 64 / 23–64 | 59.78 s | 2.220 s | 59.06 s | 81.71 GB | **102.82 s** |
+| Qwen3.5-4B | single card, exact response IDs | `8cededa` | 64 / 37–64 | 69.02 s | 0.727 s | 36.09 s | 36.63 GB | **105.03 s** |
+| Mistral-7B-Instruct-v0.1 | single card, exact response IDs | `8cededa` | 64 / 23–64 | 60.64 s | 1.866 s | 70.94 s | 100.73 GB | **118.76 s** |
+| Qwen3-14B | single card, length-aligned, OOM backoff | `fa43971` | 64 / 23–64 | 85.82 s | 2.479 s | 68.71 s | 99.26 GB | **137.16 s** |
+| Phi-4 | single card, length-aligned, OOM backoff | `b3ed8df` | 64 / 23–64 | 90.72 s | 2.302 s | 91.16 s | 121.96 GB | **159.39 s** |
+| Qwen3.6-35B-A3B | single card, exact response IDs, OOM backoff | `8cededa` | 64 / 16–64 | 145.57 s | 0.723 s | 29.08 s | 34.65 GB | **167.41 s** |
+| ALIA-40B-FC-2606 | PP2, exact response IDs, OOM backoff | `8cededa` | 64 / 12–32 | 148.87 s | 2.524 s | 167.82 s | 177.00 GB | **321.05 s** |
+| Qwen3.6-27B | single card, exact response IDs, OOM backoff | `8cededa` | 64 / 16–64 | 234.36 s | 2.539 s | 122.58 s | 135.62 GB | **361.41 s** |
+| Gemma-4-31B-it | single card, exact response IDs, OOM backoff | `8cededa` | 64 / 4–32 | 247.80 s | 2.603 s | 124.65 s | 137.34 GB | **361.89 s** |
+| Qwen3-32B | single card, exact response IDs, OOM backoff | `8cededa` | 64 / 4–32 | 242.72 s | 3.439 s | 152.81 s | 184.90 GB | **386.26 s** |
+| NVIDIA Nemotron Nano 9B v2 | single card, exact response IDs, batch-1 fallback | `8cededa` | 64 / 1 | 1,070.53 s | 5.182 s | 208.79 s | 229.08 GB | **1,209.25 s** |
 
-The batched row is 7.23× faster in wall time.  D2H is 1.34% of teacher compute
-even after compute was accelerated, so PCIe transfer is not the bottleneck;
+Across the completed rows, D2H is 1.34% of teacher compute on the original
+batched calibration, so PCIe transfer is not the bottleneck;
 storage/backpressure is now the secondary cost.  All 2,071 semantic index
 entries match the B=1 cache.  A full-cache audit sampled 32 examples × 32
 layers bit-exactly, and the preceding 64-example certification compared all
 2,048 tensors bit-exactly (zero maximum and mean absolute difference).
 
-For the dense teacher, completed steady phases are 35.22 s generation plus
-86.20 s hidden caching = 121.42 s.  Their independent model load/setup costs
-remain separate and must not be hidden inside that sum.
+For the dense Qwen3.5-4B teacher, the completed steady phases are 35.22 s
+generation plus 105.03 s hidden caching = 140.25 s.  Their independent model
+load/setup costs remain separate and must not be hidden inside that sum.
 
-The new node-local rows put D2H at 0.74–2.10% of teacher compute.  The two
-larger direct-Lustre rows put it at 2.39% and 3.71%; in contrast, storage
-worker time reaches 50.78–59.06 seconds and is comparable to compute.  The
-unavoidable CUDA copy is therefore not the throughput bottleneck in either
-storage condition.  The writer overlaps storage with the teacher walk, so
-`storage` is worker time and must not be added to `total`.
+The new exact-ID rows put D2H at 0.4–3.7% of teacher compute (5.2 seconds in
+the batch-1 Nemotron fallback); storage worker time reaches 208.8 seconds and
+is comparable to or larger than compute for the biggest caches.  The
+unavoidable CUDA copy is therefore not the throughput bottleneck.  The writer
+overlaps storage with the teacher walk, so `storage` is worker time and must
+not be added to `total`.
+
+The exact-ID ladder covers 20 complete full-corpus caches.  GPT-OSS-120B is
+not included: two PP2 attempts failed during Transformers mxfp4 weight
+conversion, before the first teacher batch, with a CUDA illegal-memory-access
+error.  Its exact-token vLLM response artifact exists, so this is a loader
+compatibility gap rather than a missing generated-answer dataset; it needs a
+specialized 120B Torch loader before a cache timing can be reported.
 
 ### Large-model hidden probes (n = 64)
 
