@@ -363,27 +363,36 @@ def main() -> None:
     v5 = all(open_answer) and bool(examples)
     if args.generation_only and not v5:
         sys.exit("--generation-only requires an open-answer V5 dataset")
-    try:
-        model_dtype = getattr(torch, cfg.model.dtype)
-    except AttributeError as exc:
-        raise ValueError(f"unknown model.dtype {cfg.model.dtype!r}") from exc
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model.name, dtype=model_dtype, low_cpu_mem_usage=True)
-    model.to(cfg.model.device)
-    model.eval()
-    # Text-only cache targets come from the decoder body.  Multimodal Gemma 4
-    # wraps that body under model.language_model; ordinary causal LMs expose it
-    # directly as model.  Calling the body avoids materializing a full
-    # [sequence, vocabulary] logits tensor.
-    decoder = getattr(model.model, "language_model", model.model)
-    n_layers = decoder.config.num_hidden_layers
+    # Import-only scoring needs the tokenizer and exact response IDs, but no
+    # teacher weights.  Avoid a many-GiB model load when validating a completed
+    # generation artifact before the independent hidden-state cache pass.
+    import_only = bool(args.generation_only
+                       and cfg.cache.generation_responses_path)
+    model = None
+    decoder = None
+    n_layers = 0
+    if not import_only:
+        try:
+            model_dtype = getattr(torch, cfg.model.dtype)
+        except AttributeError as exc:
+            raise ValueError(f"unknown model.dtype {cfg.model.dtype!r}") from exc
+        model = AutoModelForCausalLM.from_pretrained(
+            cfg.model.name, dtype=model_dtype, low_cpu_mem_usage=True)
+        model.to(cfg.model.device)
+        model.eval()
+        # Text-only cache targets come from the decoder body.  Multimodal Gemma
+        # 4 wraps that body under model.language_model; ordinary causal LMs
+        # expose it directly as model.  Calling the body avoids materializing a
+        # full [sequence, vocabulary] logits tensor.
+        decoder = getattr(model.model, "language_model", model.model)
+        n_layers = decoder.config.num_hidden_layers
 
     def sync() -> None:
         # Phase timings must not assign queued CUDA work to the next CPU
         # section. The cache loop is dependency-serial already (generation →
         # forward → D2H write → next forward), so these synchronization
         # points measure existing waits rather than creating a new overlap.
-        if torch.cuda.is_available():
+        if model is not None and torch.cuda.is_available():
             torch.cuda.synchronize(model.device)
 
     masker = ContextMasker(tok, pad_random=(cfg.mask.compaction == "pad_random"))
@@ -543,7 +552,7 @@ def main() -> None:
             key: value for key, value in timings.items()
             if key.startswith("generation_") or key.startswith("maximum_")
         }, indent=2) + "\n")
-        if cfg.cache.generation_compile:
+        if cfg.cache.generation_compile and model is not None:
             # Transformers retains the torch.compile callable on the model.
             # Its CUDA-graph private pool is sized by the largest decode batch
             # and can otherwise leave too little room for output_hidden_states.
