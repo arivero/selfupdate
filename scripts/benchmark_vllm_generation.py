@@ -202,6 +202,11 @@ def main() -> None:
                     help="performance mode: permit vLLM compilation/CUDA graphs")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
+    # Capture provenance before model setup/generation. A live campaign may
+    # commit an unrelated evaluator or documentation change while this process
+    # runs; reading HEAD at summary time would then falsely attribute the job.
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
     import torch
     from transformers import AutoTokenizer
@@ -366,8 +371,6 @@ def main() -> None:
                          "cached_text_match_fraction": sum(x.get("matches_cached_text") is True for x in batch_outputs) / max(sum(x.get("matches_cached_text") is not None for x in batch_outputs), 1)})
             partial_response_path.replace(response_path)
             print(json.dumps(rows[-1]), flush=True)
-    source_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     summary = {"model": args.model, "source_commit": source_commit,
                "vllm": __import__("vllm").__version__, "torch": torch.__version__,
                "cuda": torch.version.cuda, "load_seconds": load_seconds, "prompt_count": len(prompts),
