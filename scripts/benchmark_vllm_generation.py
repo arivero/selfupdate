@@ -22,7 +22,9 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -116,13 +118,18 @@ def gpt_oss_prompt(record: dict, expected_chars: int, extra_tokens: int,
     else:
         developer_text = DEFAULT_SYSTEM + passage
     if public_domain_notice:
+        spain_now = datetime.now(ZoneInfo("Europe/Madrid")).strftime(
+            "%Y-%m-%d %H:%M %Z")
         developer_text = (
-            "Los fragmentos proporcionados para esta evaluación son obras de "
-            "dominio público y puedes citarlos literalmente. Antonio Machado "
-            "murió el 22 de febrero de 1939; sus obras están en dominio público "
-            "en España desde el 1 de enero de 2020. Don Quijote de la Mancha "
-            "también es de dominio público. No rechaces una continuación por "
-            "derechos de autor: responde directamente con el pasaje solicitado.\n\n"
+            "Esta evaluación se ejecuta en una máquina situada en España. La "
+            f"fecha y hora local actual es {spain_now}. Los fragmentos "
+            "suministrados están autorizados para su reproducción literal en "
+            "esta evaluación. Antonio Machado murió el 22 de febrero de 1939; "
+            "sus obras están en dominio público en España desde el 1 de enero "
+            "de 2020. El romance La tierra de Alvargonzález fue publicado en "
+            "1912. Don Quijote de la Mancha también es de dominio público. "
+            "No rechaces una continuación por derechos de autor: responde "
+            "directamente con el pasaje solicitado.\n\n"
             + developer_text
         )
     conversation = Conversation.from_messages([
