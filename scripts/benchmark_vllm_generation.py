@@ -157,6 +157,8 @@ def main() -> None:
     ap.add_argument("--pipeline-parallel-size", type=int, default=1)
     ap.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     ap.add_argument("--max-model-len", type=int, default=4096)
+    ap.add_argument("--max-num-seqs", type=int, default=None,
+                    help="vLLM concurrent-sequence ceiling; set explicitly for capacity sweeps")
     ap.add_argument("--prompt-format", choices=("native", "gpt_oss_harmony",
                                                    "gpt_oss_guided_memory"),
                     default="native",
@@ -216,12 +218,15 @@ def main() -> None:
                              {x["example_id"] for x in prompts})
     with GpuMonitor(device) as monitor:
         t_load = time.perf_counter()
-        llm = LLM(model=args.model, dtype="bfloat16",
-                  enforce_eager=not args.use_cudagraphs,
-                  tensor_parallel_size=args.tensor_parallel_size,
-                  pipeline_parallel_size=args.pipeline_parallel_size,
-                  gpu_memory_utilization=args.gpu_memory_utilization,
-                  max_model_len=args.max_model_len, disable_log_stats=True)
+        llm_kw = dict(model=args.model, dtype="bfloat16",
+                      enforce_eager=not args.use_cudagraphs,
+                      tensor_parallel_size=args.tensor_parallel_size,
+                      pipeline_parallel_size=args.pipeline_parallel_size,
+                      gpu_memory_utilization=args.gpu_memory_utilization,
+                      max_model_len=args.max_model_len, disable_log_stats=True)
+        if args.max_num_seqs is not None:
+            llm_kw["max_num_seqs"] = args.max_num_seqs
+        llm = LLM(**llm_kw)
         load_seconds = time.perf_counter() - t_load
 
         rows = []
@@ -289,6 +294,7 @@ def main() -> None:
                "cuda": torch.version.cuda, "load_seconds": load_seconds, "prompt_count": len(prompts),
                "tensor_parallel_size": args.tensor_parallel_size, "pipeline_parallel_size": args.pipeline_parallel_size,
                "use_cudagraphs": args.use_cudagraphs,
+               "max_num_seqs": args.max_num_seqs,
                "prompt_format": args.prompt_format,
                "limit": args.limit,
                "generation_extra_tokens": extra_tokens, "results": rows}
