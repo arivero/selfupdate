@@ -22,6 +22,7 @@ import argparse
 import json
 import math
 import random
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -290,6 +291,9 @@ def main() -> None:
     # detached logs/transcripts enormous.  Cache progress is reported by the
     # outer teacher-forward bar and final structured timings instead.
     transformers_logging.disable_progress_bar()
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent.parent,
+        text=True).strip()
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
@@ -441,6 +445,14 @@ def main() -> None:
                "generation_seconds": 0.0, "teacher_forward_seconds": 0.0,
                "cache_write_seconds": 0.0,
                "finalize_seconds": 0.0}
+    timings.update({
+        "model": cfg.model.name,
+        "source_commit": source_commit,
+        "pipeline_split": cfg.model.pipeline_split,
+        "pipeline_splits": cfg.model.pipeline_splits,
+        "device_map": cfg.model.device_map,
+        "cuda_devices": [str(device) for device in cuda_devices],
+    })
     hidden_bytes = 0
     teacher_compute_events = []
     started_at = time.perf_counter()
@@ -746,6 +758,12 @@ def main() -> None:
             t_phase = time.perf_counter()
             layer_states = [out.hidden_states[L][row, span.start:span.stop]
                             for L in range(1, n_layers + 1)]
+            if "hidden_state_devices" not in timings:
+                device_counts = {}
+                for state in layer_states:
+                    key = str(state.device)
+                    device_counts[key] = device_counts.get(key, 0) + 1
+                timings["hidden_state_devices"] = device_counts
             layer_devices = {state.device for state in layer_states}
             if copy_streams and len(layer_devices) == 1:
                 packed_gpu = torch.stack(layer_states).to(writer.hidden_dtype)
