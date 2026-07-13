@@ -180,6 +180,39 @@ mode scales only weakly with batch size on this workload:
 The later fixed-32k capacity control provides the completed eager B=1--64
 curve under an explicit long-context engine ceiling.
 
+## H100 optimized mixed-budget campaign (2026-07-13)
+
+The new driver gives every request its own exact generation ceiling and stop
+ID in one physical batch-64 engine call.  The earlier driver accepted 64 input
+records but then split them into many tiny same-budget calls, forfeiting
+continuous batching and most graph occupancy.  Every row below is a full
+2,071-prompt run.  A separate CPU process rereads the saved answer texts and
+independently invokes the historical cache-builder scorer for hard cuts,
+next/previous word LCS, and cloze target-block lexical precision.  It also
+rescored the documented reference response file rather than trusting legacy
+aggregate fields.  `quality Δ` is new minus documented reference for LCS and
+cloze, in percentage points.
+
+| model | placement | commit | load/setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision | speedup vs documented graph | quality Δ LCS / cloze |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | 1 × H100 | `ee2c63a` | 53.90 s | 15.77 s | 159,096 | 10,089.89 | 5.02% | 51.73% | 86.88% | 7.84× | -0.33 / -0.16 pp |
+| Qwen3-1.7B | 1 × H100 | `ee2c63a` | 48.80 s | 22.89 s | 168,894 | 7,379.02 | 12.60% | 59.42% | 77.62% | 8.49× | +0.20 / +0.72 pp |
+| Qwen3-4B | 1 × H100 | `ee2c63a` | 56.20 s | 34.63 s | 164,386 | 4,747.06 | 15.69% | 73.08% | 82.12% | 9.12× | -0.33 / -0.39 pp |
+| Qwen3-8B | 1 × H100 | `57263ff` | 66.75 s | 51.22 s | 130,125 | 2,540.75 | 6.23% | 76.06% | 83.70% | 8.24× | -0.11 / +0.07 pp |
+| Qwen3-14B | 1 × H100 | `c32e750` | 91.31 s | 72.25 s | 95,408 | 1,320.46 | 2.12% | 84.14% | 93.69% | 8.37× | -0.04 / +0.06 pp |
+| Qwen3.5-0.8B | 1 × H100 | `ee2c63a` | 94.92 s | 19.93 s | 245,263 | 12,304.16 | 58.52% | 50.89% | 65.07% | 8.92× | +0.44 / -0.37 pp |
+| Qwen3.5-2B | 1 × H100 | `ee2c63a` | 93.15 s | 23.85 s | 161,892 | 6,788.29 | 14.15% | 62.22% | 77.89% | 9.45× | +0.20 / -0.46 pp |
+| Qwen3.5-9B | 1 × H100 | `ee2c63a` | 115.08 s | 48.04 s | 79,334 | 1,651.51 | 2.08% | 93.10% | 94.17% | 7.54× | +0.05 / -0.17 pp |
+| Llama-3.1-8B-Instruct | 1 × H100 | `57263ff` | 56.54 s | 49.84 s | 137,451 | 2,757.69 | 5.75% | 85.70% | 65.51% | 9.00× | -0.15 / +0.07 pp |
+| Phi-4 | 1 × H100 | `c32e750` | 93.08 s | 87.14 s | 162,325 | 1,862.84 | 4.83% | 93.10% | 74.30% | 9.97× | -0.07 / +0.08 pp |
+
+Each artifact contains 2,071 unique example IDs, non-empty exact token-ID
+lists, and matching recorded token lengths.  The largest absolute LCS change
+in this first block is 0.44 points; the largest cloze change is 0.72 points.
+Generation improves 7.54–9.97× even against the earlier graph references,
+confirming that true mixed-length batching—not merely enabling graphs—is the
+dominant change.
+
 ## H100 larger-model and two-card throughput results
 
 **Table batch: 64 prompts (global, including PP2).** These are the same
