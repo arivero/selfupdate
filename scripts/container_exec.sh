@@ -31,11 +31,18 @@ overlay_args=()
 if [[ -f "$OVERLAY" ]]; then
   overlay_args=(--overlay "$OVERLAY")
 fi
+device_env=()
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  # Singularity --cleanenv otherwise drops the scheduler's physical device
+  # selection and makes concurrent single-card jobs collide on cuda:0.
+  device_env=(--env "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES")
+fi
 
 exec singularity exec --nv \
   --cleanenv \
   --pwd /work \
   "${overlay_args[@]}" \
+  "${device_env[@]}" \
   --home "$CONTAINER_HOME:/home/$USER" \
   --env PYTHONPATH="$DEV_PYTHON_CONTAINER:/opt/selfupdate-python:/work/src" \
   --env PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}" \
