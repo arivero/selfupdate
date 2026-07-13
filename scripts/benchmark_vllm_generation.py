@@ -167,6 +167,8 @@ def main() -> None:
                         help="native template, GPT-OSS memory framing, or guided GPT-OSS memory framing")
     ap.add_argument("--generation-extra-tokens", type=int, default=None,
                     help="override config's conversational generation margin")
+    ap.add_argument("--generation-max-tokens", type=int, default=None,
+                    help="fixed per-answer generation ceiling; overrides the V5 per-record budget")
     ap.add_argument("--use-cudagraphs", action="store_true",
                     help="performance mode: permit vLLM compilation/CUDA graphs")
     ap.add_argument("--out", default=None)
@@ -209,6 +211,11 @@ def main() -> None:
             prompts.append({"example_id": ex.example_id, "record": record,
                             "ids": masker.build(ex).teacher_ids, "budget": budget,
                             "stop_id": stop_id})
+    if args.generation_max_tokens is not None:
+        if args.generation_max_tokens < 1:
+            raise ValueError("--generation-max-tokens must be positive")
+        for item in prompts:
+            item["budget"] = args.generation_max_tokens
 
     out_dir = ROOT / (args.out or f"runs/vllm_benchmark/{args.model.split('/')[-1]}_tp{args.tensor_parallel_size}_pp{args.pipeline_parallel_size}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -264,13 +271,21 @@ def main() -> None:
                         stats = _recitation_stats(item["record"], text, corpus)
                         old = baseline.get(item["example_id"], {})
                         outputs.append({"batch_size": bs, "example_id": item["example_id"],
-                                        "gen_tokens": len(token_ids), "hard_cut": hard_cut,
+                                        # gen_tokens retains the scoring sentinel for backwards
+                                        # compatible throughput figures.  The answer_* fields
+                                        # exclude it and describe the model's actual response.
+                                        "gen_tokens": len(token_ids),
+                                        "answer_tokens": len(token_ids) - 1,
+                                        "answer_chars": len(text),
+                                        "answer_words": len(text.split()),
+                                        "hard_cut": hard_cut,
                                         "answer_text": text, "raw_answer_text": raw_text, **stats,
                                         "pytorch_word_acc": old.get("word_acc"),
                                         "matches_cached_text": text == old.get("answer_text") if old else None})
             elapsed = time.perf_counter() - t0
             batch_outputs = [x for x in outputs if x["batch_size"] == bs]
             tokens = sum(x["gen_tokens"] for x in batch_outputs)
+            answer_tokens = sum(x["answer_tokens"] for x in batch_outputs)
             word_scores = [x["word_acc"] for x in batch_outputs if "word_acc" in x]
             containment_scores = [x["containment"] for x in batch_outputs
                                   if "containment" in x]
@@ -285,6 +300,9 @@ def main() -> None:
                          "generated_tokens": tokens, "tokens_per_second": tokens / elapsed,
                          "peak_gpu_mib": monitor.peak_mib,
                          "mean_gen_tokens": tokens / max(len(prompts), 1),
+                         "mean_answer_tokens": answer_tokens / max(len(prompts), 1),
+                         "mean_answer_chars": sum(x["answer_chars"] for x in batch_outputs) / max(len(prompts), 1),
+                         "mean_answer_words": sum(x["answer_words"] for x in batch_outputs) / max(len(prompts), 1),
                          "hard_cut_fraction": sum(x["hard_cut"] for x in batch_outputs) / max(len(prompts), 1),
                          "mean_task_score": sum(task_scores) / max(len(task_scores), 1),
                          "mean_word_acc": sum(word_scores) / max(len(word_scores), 1),
@@ -302,7 +320,9 @@ def main() -> None:
                "max_num_batched_tokens": args.max_num_batched_tokens,
                "prompt_format": args.prompt_format,
                "limit": args.limit,
-               "generation_extra_tokens": extra_tokens, "results": rows}
+               "generation_extra_tokens": extra_tokens,
+               "generation_max_tokens": args.generation_max_tokens,
+               "results": rows}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"wrote {out_dir / 'summary.json'}")
 
