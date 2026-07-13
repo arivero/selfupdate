@@ -235,12 +235,17 @@ the graph campaign.
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
 | Qwen3.5-0.8B | 1 × H100, graphs | `ee2c63a` | 94.92 s | 19.93 s | 245,263 | 12,304.16 | 58.52% | 50.89% | 65.07% |
 | Qwen3.5-0.8B | 1 × H100, eager | `8e47788` | 49.94 s | 119.90 s | 244,814 | 2,041.75 | 58.43% | 50.81% | 63.95% |
+| GPT-OSS-120B | 2 × H100 PP2, graphs | `d27003b` | 100.35 s | 118.07 s | 188,613 | 1,597.48 | 22.55% | 51.00% | 75.44% |
+| GPT-OSS-120B | 2 × H100 PP2, eager | `8e47788` | 33.36 s | 209.23 s | 186,671 | 892.17 | 21.97% | 48.57% | 73.96% |
 
 True mixed batching makes the eager path 13.67× faster than the old fragmented
 eager result (1,639.19 s), while graphs make the repaired driver another 6.02×
 faster.  Eager minus graph quality is -0.08 LCS and -1.12 cloze percentage
 points; the latter is retained as a real observed difference on the 249 cloze
-questions, not dismissed as equivalent.
+questions, not dismissed as equivalent.  At 120B, graphs provide a smaller
+1.77× speedup: PP/MoE compute dominates more of the run.  Eager minus graph
+quality is -2.42 LCS and -1.48 cloze points despite 0.58 points fewer hard
+cuts, so these modes are not quality-equivalent in this measurement.
 
 Llama-3.3-70B TP2 failed during engine initialization after the cold
 Torch/FlashInfer collective compilation, with a CUDA illegal-address followed
