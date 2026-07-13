@@ -371,6 +371,9 @@ def main() -> None:
                     help="override cache.teacher_batch for hidden-state forwards")
     ap.add_argument("--max-sequence-tokens", type=int, default=None,
                     help="override cache.max_sequence_tokens; e.g. 8192")
+    ap.add_argument("--hidden-dtype", choices=("float16", "bfloat16"),
+                    default=None,
+                    help="override cache.hidden_dtype for stored teacher states")
     ap.add_argument("--generation-budget-bucket", type=int, default=None,
                     help="1=exact allowances, N=round up to N, 0=one outer group")
     ap.add_argument("--generation-compile", action="store_true",
@@ -410,6 +413,8 @@ def main() -> None:
         cfg.cache.teacher_batch = args.teacher_batch
     if args.max_sequence_tokens is not None:
         cfg.cache.max_sequence_tokens = args.max_sequence_tokens
+    if args.hidden_dtype is not None:
+        cfg.cache.hidden_dtype = args.hidden_dtype
     if args.generation_budget_bucket is not None:
         cfg.cache.generation_budget_bucket = args.generation_budget_bucket
     if args.generation_compile:
