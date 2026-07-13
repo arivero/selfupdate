@@ -161,8 +161,46 @@ workload:
 | 8 | 1,059.50 s | 158,701 | 149.79 |
 | 16 | 902.86 s | 158,572 | 175.63 |
 
-DEV0 is now running a single-card Qwen3-14B graph baseline while DEV1 finishes
-the eager sweep. Two-card PP runs wait for both DEV0 and DEV1 to be free.
+## H100 larger-model and two-card throughput results
+
+These are the same 2,071-prompt, greedy, full-corpus protocol at batch 64.
+`sampled VRAM` is the highest reservation observed on either device, not the
+sum of both devices.  The two GPT-OSS rows differ only in how the supplied
+passage is framed: the guided-memory wording asks the model to remember and
+recite the text, rather than presenting it as a formal retrieval task.
+
+| model | placement / prompt framing | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev word recall (n=1,822) | cloze containment (n=249) |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-14B | 1 × H100, graphs | 83.40 s | 604.86 s | 95,249 | 157.47 | 70.08 GiB | 2.27% | 84.18% | 93.63% |
+| Qwen3-32B | 2 × H100 PP=2, graphs | 105.20 s | 1,568.65 s | 135,463 | 86.36 | 73.16 GiB | 5.21% | 85.10% | 74.90% |
+| Qwen3.6-27B | 2 × H100 PP=2, graphs | 303.60 s | 935.08 s | 70,588 | 75.49 | 68.19 GiB | 0.34% | 97.93% | **98.10%** |
+| Qwen3.6-35B-A3B | 2 × H100 PP=2, graphs | 258.07 s | 284.83 s | 74,496 | 261.55 | 65.60 GiB | 0.19% | 93.84% | 97.13% |
+| Gemma-4-31B-it | 2 × H100 PP=2, graphs | 219.09 s | 1,158.31 s | 78,296 | 67.59 | 71.11 GiB | 0.24% | **98.91%** | 75.04% |
+| Gemma-4-26B-A4B-it | 2 × H100 PP=2, graphs | 182.28 s | 298.71 s | 85,038 | **284.69** | 65.50 GiB | 1.45% | 97.29% | 81.37% |
+| ALIA-40B-FC-2606 | 2 × H100 PP=2, graphs | 109.14 s | 1,501.85 s | 94,482 | 62.91 | 68.63 GiB | 3.04% | 61.18% | 90.15% |
+| GPT-OSS-120B | 2 × H100 PP=2, Harmony framing | 116.23 s | 505.45 s | 188,091 | 372.13 | 69.74 GiB | 21.78% | 49.69% | 76.42% |
+| GPT-OSS-120B | 2 × H100 PP=2, guided-memory framing | 57.39 s | 514.76 s | 194,735 | 378.30 | 68.39 GiB | 20.67% | 51.52% | 73.30% |
+
+The table preserves the original purpose of this work: a speed baseline for
+our own cache builder.  It separately records cold setup from answer decoding
+and deliberately excludes hidden-state extraction, GPU-to-CPU copies,
+safetensors writes, and the student premise forward.  Those omitted phases are
+why it is a lower-bound baseline for V5 cache construction, not a claim that
+the full cache build should take the same time.
+
+## H100 additional one-card graph results
+
+These are the same full-corpus batch-64 protocol.  They are preliminary
+graph-mode baselines; each receives a paired eager control later in the queue.
+
+| model | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev word recall | cloze containment |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Phi-4 | 89.83 s | 868.41 s | 162,121 | 186.69 | 70.36 GiB | 4.73% | 93.18% | 74.22% |
+| GPT-OSS-20B | 163.04 s | 331.21 s | 160,220 | **483.75** | 68.78 GiB | 22.84% | 27.43% | 75.47% |
+
+GPT-OSS-20B uses the Harmony memory framing.  Its high decode speed does not
+make it a suitable recitation teacher in this condition: its hard-cut rate is
+22.84% and its ordinary reference-word recall is 27.43%.
 
 ## Auxiliary: exporting a full hidden-state token to CPU (H100)
 
