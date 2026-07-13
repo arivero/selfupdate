@@ -293,6 +293,8 @@ def main() -> None:
     ap.add_argument("--experiment", default=None)
     ap.add_argument("--generation-batch", type=int, default=None,
                     help="override cache.generation_batch")
+    ap.add_argument("--teacher-batch", type=int, default=None,
+                    help="override cache.teacher_batch for hidden-state forwards")
     ap.add_argument("--max-sequence-tokens", type=int, default=None,
                     help="override cache.max_sequence_tokens; e.g. 8192")
     ap.add_argument("--generation-budget-bucket", type=int, default=None,
@@ -321,6 +323,8 @@ def main() -> None:
     cfg = load_config(args.config, args.experiment)
     if args.generation_batch is not None:
         cfg.cache.generation_batch = args.generation_batch
+    if args.teacher_batch is not None:
+        cfg.cache.teacher_batch = args.teacher_batch
     if args.max_sequence_tokens is not None:
         cfg.cache.max_sequence_tokens = args.max_sequence_tokens
     if args.generation_budget_bucket is not None:
@@ -605,9 +609,10 @@ def main() -> None:
     teacher_progress_path = root / "teacher_progress.jsonl"
     teacher_progress_path.write_text("")
     teacher_wall_started = time.perf_counter()
-
-    for item_no, (record, ex) in enumerate(tqdm(
-            zip(records, examples), total=len(examples), desc="teacher forward")):
+    if cfg.cache.teacher_batch < 1:
+        raise ValueError("cache.teacher_batch must be positive")
+    teacher_items = []
+    for item_no, (record, ex) in enumerate(zip(records, examples)):
         extra = None
         if v5:
             answer_ids, hard_cut = generated_answers[item_no]
@@ -615,87 +620,154 @@ def main() -> None:
             extra = {"answer_ids": answer_ids, "hard_cut": hard_cut}
         else:
             pair = masker.build(ex)
-        t_ids = torch.tensor([pair.teacher_ids], device=model.device)
+        teacher_items.append((record, ex, pair, extra))
+
+    teacher_indices = list(range(len(teacher_items)))
+    teacher_batches: list[list[int]] = []
+    if cfg.cache.teacher_batch > 1 and cfg.cache.generation_shuffle_seed:
+        # Length alignment limits padding while deterministic randomization of
+        # members and batch order avoids an ordered long-sequence tail. Cache
+        # entries remain keyed by example id, so physical shard order has no
+        # training semantics.
+        rng = random.Random(cfg.cache.generation_shuffle_seed)
+        rng.shuffle(teacher_indices)
+        length_buckets: dict[int, list[int]] = {}
+        for index in teacher_indices:
+            width = len(teacher_items[index][2].teacher_ids)
+            length_buckets.setdefault(math.ceil(width / 128) * 128, []).append(index)
+        for group in length_buckets.values():
+            teacher_batches.extend(
+                group[start:start + cfg.cache.teacher_batch]
+                for start in range(0, len(group), cfg.cache.teacher_batch))
+        rng.shuffle(teacher_batches)
+    else:
+        teacher_batches = [
+            teacher_indices[start:start + cfg.cache.teacher_batch]
+            for start in range(0, len(teacher_indices), cfg.cache.teacher_batch)]
+
+    pending_batches = list(reversed(teacher_batches))
+    safe_teacher_batch = cfg.cache.teacher_batch
+    effective_teacher_batches: list[int] = []
+    completed_teacher = 0
+    progress = tqdm(total=len(examples), desc="teacher forward")
+    while pending_batches:
+        indices = pending_batches.pop()
+        if len(indices) > safe_teacher_batch:
+            chunks = [indices[start:start + safe_teacher_batch]
+                      for start in range(0, len(indices), safe_teacher_batch)]
+            pending_batches.extend(reversed(chunks))
+            continue
+        width = max(len(teacher_items[index][2].teacher_ids) for index in indices)
+        t_ids = torch.full(
+            (len(indices), width), stop_id, dtype=torch.long, device=model.device)
+        attention_mask = torch.zeros_like(t_ids)
+        for row, index in enumerate(indices):
+            ids = teacher_items[index][2].teacher_ids
+            t_ids[row, :len(ids)] = torch.tensor(
+                ids, dtype=torch.long, device=model.device)
+            attention_mask[row, :len(ids)] = 1
         if copy_stream is not None:
             compute_start = torch.cuda.Event(enable_timing=True)
             compute_end = torch.cuda.Event(enable_timing=True)
             compute_start.record(torch.cuda.current_stream(model.device))
         else:
             t_phase = time.perf_counter()
-        with torch.no_grad():
-            out = decoder(t_ids, output_hidden_states=True, use_cache=False)
+        try:
+            with torch.no_grad():
+                if len(indices) == 1:
+                    # Preserve the historical B=1 call exactly: no explicit
+                    # all-ones mask and therefore no numerics change at the
+                    # default teacher_batch=1.
+                    out = decoder(
+                        t_ids, output_hidden_states=True, use_cache=False)
+                else:
+                    out = decoder(
+                        t_ids, attention_mask=attention_mask,
+                        output_hidden_states=True, use_cache=False)
+        except RuntimeError as exc:
+            if not _is_cuda_oom(exc) or len(indices) <= 1:
+                raise
+            del t_ids, attention_mask
+            safe_teacher_batch = max(1, len(indices) // 2)
+            chunks = [indices[start:start + safe_teacher_batch]
+                      for start in range(0, len(indices), safe_teacher_batch)]
+            pending_batches.extend(reversed(chunks))
+            torch.cuda.empty_cache()
+            print(f"teacher forward OOM: retrying at batch {safe_teacher_batch}",
+                  flush=True)
+            continue
         if copy_stream is not None:
             compute_end.record(torch.cuda.current_stream(model.device))
             teacher_compute_events.append((compute_start, compute_end))
         else:
             timings["teacher_forward_seconds"] += time.perf_counter() - t_phase
-        span = pair.t_aligned
-        # One packed, asynchronous D2H transfer replaces one implicit CUDA
-        # synchronization per layer.  A dedicated copy stream and background
-        # writer overlap transfer, finite checks, and /tmp shard writes with
-        # the next teacher forward while preserving the per-layer file layout.
-        t_phase = time.perf_counter()
-        packed_gpu = torch.stack([
-            out.hidden_states[L][0, span.start:span.stop]
-            for L in range(1, n_layers + 1)
-        ]).to(writer.hidden_dtype)
-        if copy_stream is not None:
-            # Validate the packed storage-dtype payload once on the GPU.  The
-            # scalar joins the existing asynchronous D2H copy and is read only
-            # after its ready event in the writer thread.  This replaces one
-            # small CPU isfinite kernel per layer and avoids writer backpressure
-            # without adding a synchronization to the teacher walk.
-            finite_gpu = torch.isfinite(packed_gpu).all()
-            packed_hidden = torch.empty_like(
-                packed_gpu, device="cpu", pin_memory=True)
-            finite_flag = torch.empty(
-                (), dtype=torch.bool, device="cpu", pin_memory=True)
-            copy_stream.wait_stream(torch.cuda.current_stream(model.device))
-            with torch.cuda.stream(copy_stream):
-                copy_start_event = torch.cuda.Event(enable_timing=True)
-                copy_start_event.record(copy_stream)
-                packed_hidden.copy_(packed_gpu, non_blocking=True)
-                finite_flag.copy_(finite_gpu, non_blocking=True)
-                packed_gpu.record_stream(copy_stream)
-                finite_gpu.record_stream(copy_stream)
-                ready_event = torch.cuda.Event(enable_timing=True)
-                ready_event.record(copy_stream)
-        else:
-            packed_hidden = packed_gpu.cpu()
-            finite_flag = None
-            copy_start_event = None
-            ready_event = None
-        hidden_bytes += packed_hidden.numel() * packed_hidden.element_size()
-        hidden = {L: packed_hidden[L - 1] for L in range(1, n_layers + 1)}
-        writer.add(
-            ex.example_id, hidden,
-            span={
-                "t0": pair.t_aligned.start, "s0": pair.s_aligned.start,
-                "A": pair.aligned_len, "mid_len": pair.s_answer.start - pair.s_aligned.start,
-                "position_gap": pair.position_gap,
-                "n_teacher": len(pair.teacher_ids), "n_student": len(pair.student_ids),
-            },
-            extra=extra,
-            copy_start_event=copy_start_event,
-            ready_event=ready_event,
-            finite_flag=finite_flag,
-        )
-        timings["cache_write_seconds"] += time.perf_counter() - t_phase
-        completed = item_no + 1
-        if completed % 100 == 0 or completed == len(examples):
-            # This is deliberately wall/queue telemetry only: no .item(), CPU
-            # tensor copy, CUDA event wait, or stream synchronization in the
-            # teacher walk.  Exact compute/D2H/storage timings are finalized
-            # from their events after the asynchronous writer drains.
-            elapsed = time.perf_counter() - teacher_wall_started
-            with teacher_progress_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({
-                    "completed": completed,
-                    "total": len(examples),
-                    "elapsed_seconds": elapsed,
-                    "examples_per_second": completed / elapsed,
-                    "hidden_bytes_queued": hidden_bytes,
-                }) + "\n")
+        effective_teacher_batches.append(len(indices))
+        for row, index in enumerate(indices):
+            _, ex, pair, extra = teacher_items[index]
+            span = pair.t_aligned
+            # One packed, asynchronous D2H transfer replaces one implicit CUDA
+            # synchronization per layer.  A dedicated copy stream and background
+            # writer overlap transfer, finite checks, and /tmp shard writes with
+            # the next teacher forward while preserving per-layer cache tensors.
+            t_phase = time.perf_counter()
+            packed_gpu = torch.stack([
+                out.hidden_states[L][row, span.start:span.stop]
+                for L in range(1, n_layers + 1)
+            ]).to(writer.hidden_dtype)
+            if copy_stream is not None:
+                finite_gpu = torch.isfinite(packed_gpu).all()
+                packed_hidden = torch.empty_like(
+                    packed_gpu, device="cpu", pin_memory=True)
+                finite_flag = torch.empty(
+                    (), dtype=torch.bool, device="cpu", pin_memory=True)
+                copy_stream.wait_stream(torch.cuda.current_stream(model.device))
+                with torch.cuda.stream(copy_stream):
+                    copy_start_event = torch.cuda.Event(enable_timing=True)
+                    copy_start_event.record(copy_stream)
+                    packed_hidden.copy_(packed_gpu, non_blocking=True)
+                    finite_flag.copy_(finite_gpu, non_blocking=True)
+                    packed_gpu.record_stream(copy_stream)
+                    finite_gpu.record_stream(copy_stream)
+                    ready_event = torch.cuda.Event(enable_timing=True)
+                    ready_event.record(copy_stream)
+            else:
+                packed_hidden = packed_gpu.cpu()
+                finite_flag = None
+                copy_start_event = None
+                ready_event = None
+            hidden_bytes += packed_hidden.numel() * packed_hidden.element_size()
+            hidden = {L: packed_hidden[L - 1] for L in range(1, n_layers + 1)}
+            writer.add(
+                ex.example_id, hidden,
+                span={
+                    "t0": pair.t_aligned.start, "s0": pair.s_aligned.start,
+                    "A": pair.aligned_len,
+                    "mid_len": pair.s_answer.start - pair.s_aligned.start,
+                    "position_gap": pair.position_gap,
+                    "n_teacher": len(pair.teacher_ids),
+                    "n_student": len(pair.student_ids),
+                },
+                extra=extra,
+                copy_start_event=copy_start_event,
+                ready_event=ready_event,
+                finite_flag=finite_flag,
+            )
+            timings["cache_write_seconds"] += time.perf_counter() - t_phase
+            completed_teacher += 1
+            progress.update(1)
+            if completed_teacher % 100 == 0 or completed_teacher == len(examples):
+                elapsed = time.perf_counter() - teacher_wall_started
+                with teacher_progress_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({
+                        "completed": completed_teacher,
+                        "total": len(examples),
+                        "elapsed_seconds": elapsed,
+                        "examples_per_second": completed_teacher / elapsed,
+                        "hidden_bytes_queued": hidden_bytes,
+                        "effective_batch": len(indices),
+                    }) + "\n")
+        del out, t_ids, attention_mask
+    progress.close()
 
     t_phase = time.perf_counter()
     writer.finalize()
@@ -718,6 +790,11 @@ def main() -> None:
     timings["storage_over_teacher_compute"] = (
         writer.storage_seconds / timings["teacher_forward_seconds"]
         if timings["teacher_forward_seconds"] else 0.0)
+    timings["requested_teacher_batch"] = cfg.cache.teacher_batch
+    timings["minimum_effective_teacher_batch"] = (
+        min(effective_teacher_batches) if effective_teacher_batches else 0)
+    timings["maximum_effective_teacher_batch"] = (
+        max(effective_teacher_batches) if effective_teacher_batches else 0)
     timings["examples"] = len(examples)
     timings["requested_generation_batch"] = cfg.cache.generation_batch
     timings["generation_budget_bucket"] = cfg.cache.generation_budget_bucket

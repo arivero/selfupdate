@@ -103,6 +103,10 @@ class CacheConfig:
     # Open-answer teacher generation.  B=1 preserves the historical cache
     # builder; larger values use left-padded greedy batches with OOM backoff.
     generation_batch: int = 1
+    # Teacher-forced hidden-state forwards after answer generation/import.
+    # Kept independent because large teachers may decode at B=64 but only fit
+    # a much smaller all-hidden-states batch. OOM backoff persists the safe B.
+    teacher_batch: int = 1
     # Exact allowance groups at 1. Larger values round allowances up to this
     # width; zero places each outer batch in one group.
     generation_budget_bucket: int = 1

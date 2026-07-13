@@ -85,6 +85,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          # Batched greedy decode can differ from B=1 at exact argmax ties;
          # inference dtype likewise shapes both answers and hidden targets.
          "generation_batch": int(cfg.cache.generation_batch),
+         "teacher_batch": int(cfg.cache.teacher_batch),
          "generation_budget_bucket": int(cfg.cache.generation_budget_bucket),
          "generation_compile": bool(cfg.cache.generation_compile),
          "generation_cache_implementation": cfg.cache.generation_cache_implementation,
@@ -96,7 +97,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
          "limit": int(cfg.cache.limit),
          "model_dtype": cfg.model.dtype,
-         "schema": 8},
+         "schema": 9},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"
