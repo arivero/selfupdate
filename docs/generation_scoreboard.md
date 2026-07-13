@@ -33,6 +33,7 @@ they remain in `docs/vllm_generation_benchmark.md`.
 
 | model | runtime / mode | commit | completed | tokens | elapsed | running tok/s | disposition |
 |---|---|---|---:|---:|---:|---:|---|
+| Qwen3.6-35B-A3B | graph exact-token backend, exact-budget subgroups, batch 64 | `e912f2d` | 2,001 / 2,071 | 73,699 | 280.8 s | **262.46** | late OOM at 0.99 reservation; no full score, retrying at `1f28029` with mixed-budget scheduling and margin |
 | Qwen3.5-4B | PyTorch compiled/hybrid, static compile/cache length, fixed physical batch 32 | `e7f930e` | 32 / 2,071 | 840 | 53.32 s | **15.75** | stopped: decisively below target |
 | Qwen3.5-4B | same, fixed physical batch 64 | `e7f930e` | 0 / 2,071 | 0 | >88 s | n/a | stopped before first batch completed |
 
@@ -44,15 +45,21 @@ they remain in `docs/vllm_generation_benchmark.md`.
 | Qwen3.5-4B | PyTorch compiled/hybrid dynamic, batch 64 | `af6bc76` | >1,404 s | n/a | generation incomplete after corrected eager cutoff; stopped for matched dynamic/fixed probes |
 | Qwen3.5-4B | PyTorch compiled/static fixed, n=64 | `3b4939b` | n/a | n/a | incompatible before generation: Transformers has no static-cache mask mapping for `linear_attention` |
 
-## Live in-repo candidates
+## Exact-token cache backend attempts
 
-- Gemma compiled/hybrid, requested batch 64: first full attempt stopped after
-  crossing the target window without completing; no fabricated full score.
-- Qwen3.6 compiled/hybrid, commit `6396fd6`, completed at 2,267.86 s and
-  32.82 tok/s; its later hidden-state phase was stopped because it is outside
-  this generation scoreboard.
-- Qwen3.5-4B matched n=64 probes at commit `3b4939b` are running: dynamic
-  hybrid on GPU 0 and fixed-batch/static-compile hybrid on GPU 1.
+These are our cache-generation workflow attempts, not imported historical
+vLLM reference rows.  They use the graph-capable continuous generation backend
+and preserve exact response token IDs for lossless reuse by the in-repo
+`build_teacher_cache.py` hidden-state phase.
+
+| model | runtime / mode | commit | requested batch | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | one-card graph exact-token backend, exact-budget subgroups | `e912f2d` | 64 | 142.99 s | **297.22 s** | 84,276 | **283.55** | 1.45% | 97.11% | 81.45% |
+
+The Gemma artifact contains 2,071 unique rows; every row contains a non-empty
+`token_ids` list whose length matches `gen_tokens`.  Its 297.22-second answer
+phase meets the approximately 300-second generation objective on one card.
+Qwen3.6 and Qwen3.5-4B mixed-budget attempts at commit `1f28029` are live.
 
 Per-effective-batch partial progress is available for launches at commit
 `da68d4a` and later.
