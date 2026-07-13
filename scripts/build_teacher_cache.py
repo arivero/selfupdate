@@ -640,18 +640,29 @@ def main() -> None:
             for L in range(1, n_layers + 1)
         ]).to(writer.hidden_dtype)
         if copy_stream is not None:
+            # Validate the packed storage-dtype payload once on the GPU.  The
+            # scalar joins the existing asynchronous D2H copy and is read only
+            # after its ready event in the writer thread.  This replaces one
+            # small CPU isfinite kernel per layer and avoids writer backpressure
+            # without adding a synchronization to the teacher walk.
+            finite_gpu = torch.isfinite(packed_gpu).all()
             packed_hidden = torch.empty_like(
                 packed_gpu, device="cpu", pin_memory=True)
+            finite_flag = torch.empty(
+                (), dtype=torch.bool, device="cpu", pin_memory=True)
             copy_stream.wait_stream(torch.cuda.current_stream(model.device))
             with torch.cuda.stream(copy_stream):
                 copy_start_event = torch.cuda.Event(enable_timing=True)
                 copy_start_event.record(copy_stream)
                 packed_hidden.copy_(packed_gpu, non_blocking=True)
+                finite_flag.copy_(finite_gpu, non_blocking=True)
                 packed_gpu.record_stream(copy_stream)
+                finite_gpu.record_stream(copy_stream)
                 ready_event = torch.cuda.Event(enable_timing=True)
                 ready_event.record(copy_stream)
         else:
             packed_hidden = packed_gpu.cpu()
+            finite_flag = None
             copy_start_event = None
             ready_event = None
         hidden_bytes += packed_hidden.numel() * packed_hidden.element_size()
@@ -667,6 +678,7 @@ def main() -> None:
             extra=extra,
             copy_start_event=copy_start_event,
             ready_event=ready_event,
+            finite_flag=finite_flag,
         )
         timings["cache_write_seconds"] += time.perf_counter() - t_phase
         completed = item_no + 1

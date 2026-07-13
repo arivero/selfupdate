@@ -127,6 +127,7 @@ class TeacherCacheWriter:
         hidden: dict[int, torch.Tensor],  # L -> [A, H]
         span: dict,
         extra: dict | None = None,
+        finite_checked: bool = False,
     ) -> None:
         """``extra`` (v5 open-answer records): generation artifacts merged
         into the index entry — ``answer_ids`` (the teacher's generated
@@ -135,7 +136,7 @@ class TeacherCacheWriter:
         span = {**span, **(extra or {})}
         for L, h in hidden.items():
             stored = h.detach().to(self.hidden_dtype).contiguous().cpu()
-            if not torch.isfinite(stored).all():
+            if not finite_checked and not torch.isfinite(stored).all():
                 raise FloatingPointError(
                     f"teacher cache would store non-finite values for "
                     f"{example_id}/h{L:02d} as {self.hidden_dtype_name}; "
@@ -189,12 +190,18 @@ class AsyncTeacherCacheWriter:
             try:
                 if item is None:
                     return
-                copy_start_event, ready_event, args, kwargs = item
+                copy_start_event, ready_event, finite_flag, args, kwargs = item
                 if self._error is None:
                     if ready_event is not None:
                         ready_event.synchronize()
                         self.copy_seconds += (
                             copy_start_event.elapsed_time(ready_event) / 1000.0)
+                    if finite_flag is not None:
+                        if not bool(finite_flag.item()):
+                            raise FloatingPointError(
+                                "teacher cache would store non-finite values for "
+                                f"{args[0]}; inspect the teacher forward")
+                        kwargs["finite_checked"] = True
                     started = time.perf_counter()
                     self._writer.add(*args, **kwargs)
                     self.storage_seconds += time.perf_counter() - started
@@ -207,9 +214,10 @@ class AsyncTeacherCacheWriter:
         if self._error is not None:
             raise RuntimeError("background teacher-cache writer failed") from self._error
 
-    def add(self, *args, copy_start_event=None, ready_event=None, **kwargs) -> None:
+    def add(self, *args, copy_start_event=None, ready_event=None,
+            finite_flag=None, **kwargs) -> None:
         self._raise_if_failed()
-        self._queue.put((copy_start_event, ready_event, args, kwargs))
+        self._queue.put((copy_start_event, ready_event, finite_flag, args, kwargs))
         self._raise_if_failed()
 
     def finalize(self) -> None:
