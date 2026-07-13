@@ -34,13 +34,15 @@ cap_cpu_threads()
 
 import torch
 from tqdm import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, CompileConfig
+from transformers import AutoTokenizer, CompileConfig
 from transformers.utils import logging as transformers_logging
 
 from selfupdate.chatfmt import adapt_records, stop_token_id
 from selfupdate.config import load_config
 from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.teacher.cache import AsyncTeacherCacheWriter, resolve_cache_dir
+from selfupdate.train.runtime import (load_causal_lm, pp_device_map,
+                                      uses_pipeline_map)
 
 
 def load_records(path: str, tokenizer) -> list[dict]:
@@ -380,9 +382,16 @@ def main() -> None:
             model_dtype = getattr(torch, cfg.model.dtype)
         except AttributeError as exc:
             raise ValueError(f"unknown model.dtype {cfg.model.dtype!r}") from exc
-        model = AutoModelForCausalLM.from_pretrained(
-            cfg.model.name, dtype=model_dtype, low_cpu_mem_usage=True)
-        model.to(cfg.model.device)
+        load_kwargs = {"dtype": model_dtype, "low_cpu_mem_usage": True}
+        if uses_pipeline_map(cfg):
+            load_kwargs["device_map"] = pp_device_map(cfg)
+        elif cfg.model.device_map:
+            if cfg.model.device_map != "auto":
+                raise ValueError("model.device_map must be empty or 'auto'")
+            load_kwargs["device_map"] = "auto"
+        model = load_causal_lm(cfg.model.name, **load_kwargs)
+        if not uses_pipeline_map(cfg) and not cfg.model.device_map:
+            model.to(cfg.model.device)
         model.eval()
         # Text-only cache targets come from the decoder body.  Multimodal Gemma
         # 4 wraps that body under model.language_model; ordinary causal LMs
@@ -391,13 +400,20 @@ def main() -> None:
         decoder = getattr(model.model, "language_model", model.model)
         n_layers = decoder.config.num_hidden_layers
 
+    input_device = (model.get_input_embeddings().weight.device
+                    if model is not None else torch.device(cfg.model.device))
+    cuda_devices = sorted({parameter.device for parameter in model.parameters()
+                           if parameter.device.type == "cuda"},
+                          key=lambda device: device.index or 0) if model is not None else []
+
     def sync() -> None:
         # Phase timings must not assign queued CUDA work to the next CPU
         # section. The cache loop is dependency-serial already (generation →
         # forward → D2H write → next forward), so these synchronization
         # points measure existing waits rather than creating a new overlap.
         if model is not None and torch.cuda.is_available():
-            torch.cuda.synchronize(model.device)
+            for device in cuda_devices:
+                torch.cuda.synchronize(device)
 
     masker = ContextMasker(tok, pad_random=(cfg.mask.compaction == "pad_random"))
     stop_id = stop_token_id(tok)
@@ -604,8 +620,9 @@ def main() -> None:
     writer = AsyncTeacherCacheWriter(
         root, chash, shard_size=cfg.cache.shard_size,
         hidden_dtype=cfg.cache.hidden_dtype)
-    copy_stream = (torch.cuda.Stream(device=model.device)
-                   if torch.cuda.is_available() else None)
+    copy_streams = ({device: torch.cuda.Stream(device=device)
+                     for device in cuda_devices}
+                    if torch.cuda.is_available() else {})
     teacher_progress_path = root / "teacher_progress.jsonl"
     teacher_progress_path.write_text("")
     teacher_wall_started = time.perf_counter()
@@ -659,18 +676,19 @@ def main() -> None:
             continue
         width = max(len(teacher_items[index][2].teacher_ids) for index in indices)
         t_ids = torch.full(
-            (len(indices), width), stop_id, dtype=torch.long, device=model.device)
+            (len(indices), width), stop_id, dtype=torch.long, device=input_device)
         attention_mask = torch.zeros_like(t_ids)
         for row, index in enumerate(indices):
             ids = teacher_items[index][2].teacher_ids
             t_ids[row, :len(ids)] = torch.tensor(
-                ids, dtype=torch.long, device=model.device)
+                ids, dtype=torch.long, device=input_device)
             attention_mask[row, :len(ids)] = 1
-        if copy_stream is not None:
+        if len(cuda_devices) == 1:
             compute_start = torch.cuda.Event(enable_timing=True)
             compute_end = torch.cuda.Event(enable_timing=True)
-            compute_start.record(torch.cuda.current_stream(model.device))
+            compute_start.record(torch.cuda.current_stream(input_device))
         else:
+            sync()
             t_phase = time.perf_counter()
         try:
             with torch.no_grad():
@@ -696,10 +714,11 @@ def main() -> None:
             print(f"teacher forward OOM: retrying at batch {safe_teacher_batch}",
                   flush=True)
             continue
-        if copy_stream is not None:
-            compute_end.record(torch.cuda.current_stream(model.device))
+        if len(cuda_devices) == 1:
+            compute_end.record(torch.cuda.current_stream(input_device))
             teacher_compute_events.append((compute_start, compute_end))
         else:
+            sync()
             timings["teacher_forward_seconds"] += time.perf_counter() - t_phase
         effective_teacher_batches.append(len(indices))
         for row, index in enumerate(indices):
@@ -710,17 +729,19 @@ def main() -> None:
             # writer overlap transfer, finite checks, and /tmp shard writes with
             # the next teacher forward while preserving per-layer cache tensors.
             t_phase = time.perf_counter()
-            packed_gpu = torch.stack([
-                out.hidden_states[L][row, span.start:span.stop]
-                for L in range(1, n_layers + 1)
-            ]).to(writer.hidden_dtype)
-            if copy_stream is not None:
+            layer_states = [out.hidden_states[L][row, span.start:span.stop]
+                            for L in range(1, n_layers + 1)]
+            layer_devices = {state.device for state in layer_states}
+            if copy_streams and len(layer_devices) == 1:
+                packed_gpu = torch.stack(layer_states).to(writer.hidden_dtype)
                 finite_gpu = torch.isfinite(packed_gpu).all()
                 packed_hidden = torch.empty_like(
                     packed_gpu, device="cpu", pin_memory=True)
                 finite_flag = torch.empty(
                     (), dtype=torch.bool, device="cpu", pin_memory=True)
-                copy_stream.wait_stream(torch.cuda.current_stream(model.device))
+                device = packed_gpu.device
+                copy_stream = copy_streams[device]
+                copy_stream.wait_stream(torch.cuda.current_stream(device))
                 with torch.cuda.stream(copy_stream):
                     copy_start_event = torch.cuda.Event(enable_timing=True)
                     copy_start_event.record(copy_stream)
@@ -730,7 +751,46 @@ def main() -> None:
                     finite_gpu.record_stream(copy_stream)
                     ready_event = torch.cuda.Event(enable_timing=True)
                     ready_event.record(copy_stream)
+            elif copy_streams:
+                # Explicit PP leaves each layer's state on its owning card.
+                # Copy card-local layer groups into slices of one pinned CPU
+                # tensor.  The writer waits for all card events, while their
+                # D2H transfers and the next teacher forward may overlap.
+                shape = (n_layers, span.stop - span.start,
+                         layer_states[0].shape[-1])
+                packed_hidden = torch.empty(
+                    shape, dtype=writer.hidden_dtype, device="cpu",
+                    pin_memory=True)
+                copy_start_event = []
+                ready_event = []
+                for layer_no, state in enumerate(layer_states):
+                    if state.device.type == "cpu":
+                        packed_hidden[layer_no].copy_(
+                            state.to(writer.hidden_dtype))
+                cuda_layer_devices = {
+                    device for device in layer_devices
+                    if device.type == "cuda"}
+                for device in sorted(cuda_layer_devices,
+                                     key=lambda value: value.index or 0):
+                    stream = copy_streams[device]
+                    stream.wait_stream(torch.cuda.current_stream(device))
+                    with torch.cuda.stream(stream):
+                        start_event = torch.cuda.Event(enable_timing=True)
+                        start_event.record(stream)
+                        for layer_no, state in enumerate(layer_states):
+                            if state.device != device:
+                                continue
+                            converted = state.to(writer.hidden_dtype)
+                            packed_hidden[layer_no].copy_(
+                                converted, non_blocking=True)
+                            converted.record_stream(stream)
+                        end_event = torch.cuda.Event(enable_timing=True)
+                        end_event.record(stream)
+                    copy_start_event.append(start_event)
+                    ready_event.append(end_event)
+                finite_flag = None
             else:
+                packed_gpu = torch.stack(layer_states).to(writer.hidden_dtype)
                 packed_hidden = packed_gpu.cpu()
                 finite_flag = None
                 copy_start_event = None

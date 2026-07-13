@@ -194,9 +194,21 @@ class AsyncTeacherCacheWriter:
                 copy_start_event, ready_event, finite_flag, args, kwargs = item
                 if self._error is None:
                     if ready_event is not None:
-                        ready_event.synchronize()
-                        self.copy_seconds += (
-                            copy_start_event.elapsed_time(ready_event) / 1000.0)
+                        starts = (list(copy_start_event)
+                                  if isinstance(copy_start_event, (list, tuple))
+                                  else [copy_start_event])
+                        ready = (list(ready_event)
+                                 if isinstance(ready_event, (list, tuple))
+                                 else [ready_event])
+                        for event in ready:
+                            event.synchronize()
+                        # Device groups copy concurrently.  Count the D2H wall
+                        # critical path, not the sum of overlapping card-local
+                        # intervals; the scalar single-card behavior is unchanged.
+                        self.copy_seconds += max(
+                            start.elapsed_time(end)
+                            for start, end in zip(starts, ready)
+                        ) / 1000.0
                     if finite_flag is not None:
                         if not bool(finite_flag.item()):
                             raise FloatingPointError(
