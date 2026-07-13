@@ -1,0 +1,16 @@
+# Dense control for full 2,071-question V5RS cache throughput/quality tests.
+run_name: teacher_cache_qwen35_4b_v5rs
+model:
+  name: Qwen/Qwen3.5-4B
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: remove
+cache:
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
