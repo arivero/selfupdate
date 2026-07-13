@@ -91,6 +91,22 @@ python3 -m venv --system-site-packages .venv
 
 On the L40S cluster, use the interpreter and CUDA-wheel guidance in
 `AGENTS.md`; do not rely on `/usr/bin/python3`.
+
+## Container runtime
+
+For Lustre-heavy GPU jobs, use the repository's Singularity runtime rather
+than copying a virtual environment:
+
+```bash
+scripts/container_exec.sh python scripts/build_teacher_cache.py
+```
+
+The launcher binds this checkout as `/work`, uses the pinned PyTorch SIF and
+Python-dependency overlay under `containers/`, preserves physical
+`CUDA_VISIBLE_DEVICES`, and keeps Singularity and Torch caches under `/tmp`.
+See `AGENTS.md` for the image contents, cache staging, development overlay,
+and node validation commands.  For durable Hugging Face snapshots, see
+[cache staging](docs/cache_staging.md).
 # Local model-cache staging
 
 For GPU campaigns, keep durable Hugging Face snapshots in
