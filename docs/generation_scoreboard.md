@@ -14,8 +14,9 @@ Rank full runs primarily by generation seconds and secondarily by generated
 tokens per second.  Token count is retained because models stop at different
 answer lengths.
 
-No in-repo full-corpus attempt has completed yet.  The two live rows are added
-only after their atomic `generation_timings.json` and quality report exist.
+| model | runtime / mode | commit | requested batch | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3.6-35B-A3B | PyTorch compiled/hybrid | `6396fd6` | 32 | 193.09 s | **2,267.86 s** | 74,422 | **32.82** | 0.14% | 94.34% | 96.65% |
 
 ## Sample/probe scoreboard
 
@@ -38,9 +39,9 @@ they remain in `docs/vllm_generation_benchmark.md`.
 
 - Gemma compiled/hybrid, requested batch 64: first full attempt stopped after
   crossing the target window without completing; no fabricated full score.
-- Qwen3.6 compiled/hybrid, commit `6396fd6`, requested batch 32 after the
-  measured batch-64 OOM: corrected full generation running on GPU 1; no score
-  until completion.
+- Qwen3.6 compiled/hybrid, commit `6396fd6`, completed at 2,267.86 s and
+  32.82 tok/s; its later hidden-state phase was stopped because it is outside
+  this generation scoreboard.
 - Qwen3.5-4B dense compiled/hybrid, commit `af6bc76`, full generation is
   running on GPU 0; static fixed-shape comparison follows.
 
