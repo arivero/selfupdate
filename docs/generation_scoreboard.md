@@ -34,6 +34,8 @@ they remain in `docs/vllm_generation_benchmark.md`.
 | model | runtime / mode | commit | observed wall lower bound | tok/s | disposition |
 |---|---|---|---:|---:|---|
 | Gemma-4-26B-A4B-it | in-repo PyTorch compiled/hybrid, batch 64 | `264610f` | >1,911 s | n/a | generation incomplete and no longer able to beat the eager target; stopped to test dense fixed-shape strategies |
+| Qwen3.5-4B | PyTorch compiled/hybrid dynamic, batch 64 | `af6bc76` | >1,404 s | n/a | generation incomplete after corrected eager cutoff; stopped for matched dynamic/fixed probes |
+| Qwen3.5-4B | PyTorch compiled/static fixed, n=64 | `3b4939b` | n/a | n/a | incompatible before generation: Transformers has no static-cache mask mapping for `linear_attention` |
 
 ## Live in-repo candidates
 
@@ -42,8 +44,8 @@ they remain in `docs/vllm_generation_benchmark.md`.
 - Qwen3.6 compiled/hybrid, commit `6396fd6`, completed at 2,267.86 s and
   32.82 tok/s; its later hidden-state phase was stopped because it is outside
   this generation scoreboard.
-- Qwen3.5-4B dense compiled/hybrid, commit `af6bc76`, full generation is
-  running on GPU 0; static fixed-shape comparison follows.
+- Qwen3.5-4B matched n=64 probes at commit `3b4939b` are running: dynamic
+  hybrid on GPU 0 and fixed-batch/static-compile hybrid on GPU 1.
 
 Per-effective-batch partial progress is available for launches at commit
 `da68d4a` and later.
