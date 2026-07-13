@@ -72,11 +72,14 @@ while finishing far below both the eager and prior graph timings.
 
 ## Full hidden-state cache phase (n = 2,071)
 
-Generation is imported as exact token IDs in both rows, so these numbers cover
-only the in-repo teacher-forced hidden-state pass and its asynchronous write.
-Model loading is outside `total`, just as graph-backend setup is outside the
-generation time above.  `storage` is worker time and overlaps compute; `total`
-is the phase wall clock.
+Generation is imported as exact token IDs from the completed external vLLM
+0.25 artifacts in `runs/vllm_benchmark_h100`.  The cache builder therefore
+does not call vLLM during these rows: these numbers cover only the in-repo
+PyTorch teacher-forced hidden-state pass and its asynchronous write.  They are
+not end-to-end answer-plus-cache times; add the corresponding vLLM generation
+row when estimating that path.  Model loading is outside `total`, just as
+graph-backend setup is outside the generation time above.  `storage` is worker
+time and overlaps compute; `total` is the cache phase wall clock.
 
 | model | hidden mode | commit | requested / effective batch | teacher compute | D2H | storage | hidden bytes | total |
 |---|---|---|---:|---:|---:|---:|---:|---:|
