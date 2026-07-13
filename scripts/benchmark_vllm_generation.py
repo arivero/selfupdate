@@ -308,6 +308,10 @@ def main() -> None:
                                         # compatible throughput figures.  The answer_* fields
                                         # exclude it and describe the model's actual response.
                                         "gen_tokens": len(token_ids),
+                                        # Preserve exact teacher ids so the in-repo cache
+                                        # builder can reuse graph/continuous-batch answers
+                                        # without a lossy decode→encode round trip.
+                                        "token_ids": token_ids,
                                         "answer_tokens": len(token_ids) - 1,
                                         "answer_chars": len(text),
                                         "answer_words": len(text.split()),
