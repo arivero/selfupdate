@@ -293,6 +293,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
+    ap.add_argument("--model", default=None,
+                    help="override model.name for cache benchmark campaigns")
+    ap.add_argument("--pipeline-split", type=int, default=None,
+                    help="place decoder blocks before/after this index on two GPUs")
+    ap.add_argument("--device-map-auto", action="store_true",
+                    help="use Hugging Face automatic model placement")
     ap.add_argument("--generation-batch", type=int, default=None,
                     help="override cache.generation_batch")
     ap.add_argument("--teacher-batch", type=int, default=None,
@@ -323,6 +329,15 @@ def main() -> None:
                     help="reuse exact token_ids from a completed response JSONL")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+    if args.model is not None:
+        cfg.model.name = args.model
+    if args.pipeline_split is not None:
+        cfg.model.pipeline_split = args.pipeline_split
+    if args.device_map_auto:
+        cfg.model.device_map = "auto"
+    if uses_pipeline_map(cfg) and cfg.model.device_map:
+        raise ValueError(
+            "model.pipeline_split(s) and model.device_map are mutually exclusive")
     if args.generation_batch is not None:
         cfg.cache.generation_batch = args.generation_batch
     if args.teacher_batch is not None:
