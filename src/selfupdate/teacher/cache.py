@@ -71,6 +71,9 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     examples_sha = hashlib.sha256(
         Path(cfg.data.examples_path).read_bytes()
     ).hexdigest()[:16]
+    response_sha = (hashlib.sha256(
+        Path(cfg.cache.generation_responses_path).read_bytes()).hexdigest()[:16]
+        if cfg.cache.generation_responses_path else "")
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
         {"compaction": cfg.mask.compaction, "examples": examples_sha,
@@ -88,11 +91,12 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "generation_compile_dynamic": bool(cfg.cache.generation_compile_dynamic),
          "generation_cache_max_tokens": int(cfg.cache.generation_cache_max_tokens),
          "generation_fixed_batch": bool(cfg.cache.generation_fixed_batch),
+         "generation_responses_sha": response_sha,
          "generation_shuffle_seed": int(cfg.cache.generation_shuffle_seed),
          "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
          "limit": int(cfg.cache.limit),
          "model_dtype": cfg.model.dtype,
-         "schema": 7},
+         "schema": 8},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"

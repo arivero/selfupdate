@@ -315,6 +315,8 @@ def main() -> None:
                     help="evenly-spaced cache subset for a performance probe")
     ap.add_argument("--generation-only", action="store_true",
                     help="benchmark/write teacher answers without hidden-state caching")
+    ap.add_argument("--generation-responses", default=None,
+                    help="reuse exact token_ids from a completed response JSONL")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     if args.generation_batch is not None:
@@ -339,6 +341,8 @@ def main() -> None:
         cfg.cache.root = args.cache_root
     if args.limit is not None:
         cfg.cache.limit = args.limit
+    if args.generation_responses is not None:
+        cfg.cache.generation_responses_path = args.generation_responses
 
     root, chash = resolve_cache_dir(cfg)
     root.mkdir(parents=True, exist_ok=True)
@@ -411,7 +415,40 @@ def main() -> None:
         timings["maximum_individual_sequence_tokens"] = max(
             (len(prompt) + budget for prompt, budget in zip(prompts, budgets)),
             default=0)
-        if cfg.cache.generation_compile and prompts:
+        if cfg.cache.generation_responses_path:
+            t_import = time.perf_counter()
+            response_rows = [json.loads(line) for line in Path(
+                cfg.cache.generation_responses_path).read_text(
+                    encoding="utf-8").splitlines()]
+            response_by_id = {row["example_id"]: row for row in response_rows}
+            if len(response_by_id) != len(response_rows):
+                raise ValueError("duplicate example_id in generation responses")
+            missing = [ex.example_id for ex in examples
+                       if ex.example_id not in response_by_id]
+            if missing:
+                raise ValueError(
+                    f"generation responses miss {len(missing)} examples; "
+                    f"first is {missing[0]}")
+            for ex, budget in zip(examples, budgets):
+                row = response_by_id[ex.example_id]
+                ids = row.get("token_ids")
+                if not isinstance(ids, list) or not ids:
+                    raise ValueError(
+                        f"generation response {ex.example_id} has no token_ids")
+                ids = [int(token_id) for token_id in ids]
+                if ids[-1] != stop_id:
+                    raise ValueError(
+                        f"generation response {ex.example_id} lacks stop sentinel")
+                if len(ids) > budget + 1:
+                    raise ValueError(
+                        f"generation response {ex.example_id} exceeds its budget")
+                generated_answers.append((ids, bool(row["hard_cut"])))
+            timings["generation_import_seconds"] = (
+                time.perf_counter() - t_import)
+            timings["generation_responses_path"] = (
+                cfg.cache.generation_responses_path)
+        if (not generated_answers
+                and cfg.cache.generation_compile and prompts):
             order = list(range(len(prompts)))
             if cfg.cache.generation_fixed_batch:
                 warm_groups: dict[int, list[int]] = {}
@@ -445,36 +482,37 @@ def main() -> None:
             sync()
             timings["generation_setup_seconds"] = (
                 time.perf_counter() - t_setup)
-        progress_path = root / "generation_progress.jsonl"
-        progress_path.write_text("")
-        t_phase = time.perf_counter()
+        if not generated_answers:
+            progress_path = root / "generation_progress.jsonl"
+            progress_path.write_text("")
+            t_phase = time.perf_counter()
 
-        def record_generation_progress(completed, total, tokens,
-                                       effective_batch, allowance):
-            elapsed = time.perf_counter() - t_phase
-            with progress_path.open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps({
-                    "completed": completed,
-                    "total": total,
-                    "generated_tokens": tokens,
-                    "elapsed_seconds": elapsed,
-                    "tokens_per_second": tokens / elapsed if elapsed else 0.0,
-                    "effective_batch": effective_batch,
-                    "allowance": allowance,
-                }) + "\n")
+            def record_generation_progress(completed, total, tokens,
+                                           effective_batch, allowance):
+                elapsed = time.perf_counter() - t_phase
+                with progress_path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({
+                        "completed": completed,
+                        "total": total,
+                        "generated_tokens": tokens,
+                        "elapsed_seconds": elapsed,
+                        "tokens_per_second": tokens / elapsed if elapsed else 0.0,
+                        "effective_batch": effective_batch,
+                        "allowance": allowance,
+                    }) + "\n")
 
-        generated_answers, effective_generation_batches = generate_answers_batched(
-            model, prompts, budgets, stop_id, cfg.cache.generation_batch,
-            cfg.cache.max_sequence_tokens, cfg.cache.generation_budget_bucket,
-            cfg.cache.generation_compile,
-            cfg.cache.generation_cache_implementation,
-            cfg.cache.generation_shuffle_seed,
-            cfg.cache.generation_compile_dynamic,
-            cfg.cache.generation_cache_max_tokens,
-            cfg.cache.generation_fixed_batch,
-            record_generation_progress)
-        sync()
-        timings["generation_seconds"] = time.perf_counter() - t_phase
+            generated_answers, effective_generation_batches = generate_answers_batched(
+                model, prompts, budgets, stop_id, cfg.cache.generation_batch,
+                cfg.cache.max_sequence_tokens, cfg.cache.generation_budget_bucket,
+                cfg.cache.generation_compile,
+                cfg.cache.generation_cache_implementation,
+                cfg.cache.generation_shuffle_seed,
+                cfg.cache.generation_compile_dynamic,
+                cfg.cache.generation_cache_max_tokens,
+                cfg.cache.generation_fixed_batch,
+                record_generation_progress)
+            sync()
+            timings["generation_seconds"] = time.perf_counter() - t_phase
         for record, ex, (answer_ids, hard_cut) in zip(
                 records, examples, generated_answers):
             answer_text = tok.decode(answer_ids[:-1])

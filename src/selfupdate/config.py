@@ -115,6 +115,9 @@ class CacheConfig:
     generation_compile_dynamic: bool = True
     generation_cache_max_tokens: int = 0
     generation_fixed_batch: bool = False
+    # Optional exact-token response JSONL produced by the graph/continuous
+    # batching benchmark. Empty means generate inside this process.
+    generation_responses_path: str = ""
     # Zero preserves dataset order.  A positive seed deterministically shuffles
     # within allowance buckets and shuffles aligned batches; answers are
     # restored to their original example ids.
