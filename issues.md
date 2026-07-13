@@ -426,58 +426,6 @@ numbers in one table.
   compute-saturated (91-98% util at B=1). The B1/B4 grid fork is labeled
   via the layer_loss_manifest `regime` column.
 
-### Teacher-cache lessons to test in `train.py` (measured 2026-07-13)
-
-These are training-runtime hypotheses, not trainer changes or established
-training speedups.  They are recorded now so the cache campaign's useful
-execution evidence is not lost or over-generalized.
-
-- **Report effective work shape, not only configured batch.**  The old V5
-  generation driver accepted outer batches of 64 but split each one into tiny
-  exact-budget engine calls.  Passing 64 independent per-request budgets in a
-  single continuous call improved the first eight completed H100 model runs by
-  7.54--9.45x over their already graphed references.  A future trainer timing
-  should therefore log the distribution of physical micro-batch sizes, padded
-  sequence widths, active/aligned tokens, and window shape; a nominal
-  `micro_batch: 4` is weak evidence of GPU occupancy.
-- **Length alignment and randomization are compatible.**  Deterministically
-  shuffle members, bucket by padded length, form full batches, and shuffle the
-  batch order.  This avoids both padding waste and the dataset-ordered long
-  tail.  The cache hidden walk using this schedule reduced Qwen3.5-4B's full
-  2,071-example wall time from 623.64 s at B1 to 86.20 s at requested B64
-  (effective B5--64), while preserving semantic indices and the audited hidden
-  tensors bit-exactly.  Training must still A/B certify its own gradients; the
-  cache result does not prove batched optimizer numerics.
-- **Persist capacity discoveries within a run.**  The cache walk halves the
-  safe batch after an out-of-memory event and applies that ceiling to later
-  batches instead of repeatedly rediscovering the same failure.  The analogous
-  trainer mechanism should be considered only at a clean accumulation/window
-  boundary so retries cannot duplicate a partial update.
-- **Separate setup/capture from steady-state throughput.**  Compilation and
-  CUDA-graph capture can dominate a short probe.  Any `train.py` experiment
-  must publish compile/capture seconds, steady items/tokens per second, peak
-  reserved memory, and the number of re-captures separately.  Start with the
-  fixed-shape resident primitive described below; variable windows, offloaded
-  optimizer pages, and host telemetry are not graph-safe by assumption.
-- **Keep host work out of the hot walk, but prioritize occupancy before copy
-  tuning.**  Packed pinned-memory asynchronous device-to-host transfer was
-  useful engineering, yet the optimized 4B cache copied 36.63 GB in 0.924 s:
-  only 1.34% of 68.76 s teacher compute.  Storage worker time was 16.08 s and
-  overlapped compute.  This reinforces the existing ban on per-block
-  `.item()`/`.cpu()`/printing, but says the next large win is fuller GPU work,
-  not another bespoke copy path.
-- **Do not revive the disproven target-prefetch design.**  Cache outputs are
-  independent immutable tensors and their D2H write can overlap later teacher
-  forwards.  Training target H2D prefetch has different dependencies and was
-  already measured 9--25% slower on L40S above.  The cache result is not new
-  evidence for retrying it; only the explicitly scoped pinned-pool 4B+ probe
-  remains open.
-- **Parallelism remains model placement, not data parallelism.**  For this
-  layerwise depth-sequential method, first improve single-lane effective batch
-  and shape reuse.  If weights do not fit, retain PP at block boundaries (or TP
-  only when a block cannot fit); do not infer a data-parallel training plan from
-  the two independent single-card cache-generation lanes.
-
 ## Open items (2026-07-11; closed work lives in git history)
 
 STILL OPEN — deferred with explicit reasons:
