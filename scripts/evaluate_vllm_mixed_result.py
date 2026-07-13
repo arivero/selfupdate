@@ -35,11 +35,11 @@ REFERENCE_DIRS = {
     "openai/gpt-oss-20b": "gpt-oss-20b_vllm025_graph_full_h100",
     "openai/gpt-oss-120b": "gpt-oss-120b_vllm025_pp2_graph_full_h100",
     "nvidia/NVIDIA-Nemotron-Nano-9B-v2":
-        "NVIDIA-Nemotron-Nano-9B-v2_vllm025_graph_full_4k_h100",
+        "NVIDIA-Nemotron-Nano-9B-v2_vllm025_graph_full_h100",
     "meta-llama/Meta-Llama-3.1-8B-Instruct":
         "Llama-3.1-8B-Instruct_vllm025_graph_full_h100",
     "mistralai/Mistral-7B-Instruct-v0.1":
-        "Mistral-7B-Instruct-v0.1_vllm025_graph_full_4k_h100",
+        "Mistral-7B-Instruct-v0.1_vllm025_graph_full_h100",
     "BSC-LT/ALIA-40b-fc-2606": "ALIA-40b-fc-2606_vllm025_pp2_graph_full_h100",
 }
 
