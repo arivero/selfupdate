@@ -247,6 +247,25 @@ questions, not dismissed as equivalent.  At 120B, graphs provide a smaller
 quality is -2.42 LCS and -1.48 cloze points despite 0.58 points fewer hard
 cuts, so these modes are not quality-equivalent in this measurement.
 
+### GPT-OSS full-thinking control
+
+This control changes both Harmony reasoning effort (`high`) and the answer
+ceiling (fixed 4,096 tokens with an 8,192-token model context).  It is not a
+same-work speed comparison with the short mixed-budget rows above; its purpose
+is to measure the quality and throughput of allowing the reasoning stream to
+run substantially longer.
+
+| model | placement / mode | commit | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| GPT-OSS-20B | 1 × H100, graphs, Harmony high, fixed 4K | `d285abb` | 48.96 s | **1,087.58 s** | 6,899,120 | **6,343.57** | 71.56% | 41.29% | 35.36% |
+
+All 2,071 response rows and prompt-token rows passed the independent old
+cut/LCS/cloze evaluator.  Relative to the old low-reasoning reference, LCS is
+13.87 percentage points higher but cloze precision is 40.11 points lower.
+The 71.56% hard-cut rate shows that high reasoning commonly consumes even the
+4,096-token ceiling; its higher token throughput does not compensate for the
+18× increase in generated work when full-run latency is the objective.
+
 Llama-3.3-70B TP2 failed during engine initialization after the cold
 Torch/FlashInfer collective compilation, with a CUDA illegal-address followed
 by `CUBLAS_STATUS_EXECUTION_FAILED`.  Its first automatic PP2 fallback began

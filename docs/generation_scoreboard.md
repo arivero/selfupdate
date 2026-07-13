@@ -80,8 +80,14 @@ is the phase wall clock.
 
 | model | hidden mode | commit | requested / effective batch | teacher compute | D2H | storage | hidden bytes | total |
 |---|---|---|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 30.46 s | 0.467 s | 8.95 s | 17.55 GB | **37.46 s** |
+| Qwen3-1.7B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 33.11 s | 0.696 s | 14.80 s | 36.22 GB | **43.24 s** |
+| Qwen3.5-0.8B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 50.80 s | 0.376 s | 8.50 s | 18.75 GB | **57.00 s** |
+| Qwen3.5-2B | length-aligned batches, node-local XFS | `d285abb` | 64 / 23–64 | 54.72 s | 0.751 s | 13.24 s | 29.31 GB | **63.25 s** |
 | Qwen3.5-4B | one forward per example | `e35594a` | 1 / 1 | 612.43 s | 0.715 s | 24.48 s | 36.63 GB | **623.64 s** |
 | Qwen3.5-4B | length-aligned randomized batches, OOM backoff | `41d65c5` | 64 / 5–64 | 68.76 s | 0.924 s | 16.08 s | 36.63 GB | **86.20 s** |
+| Qwen3-4B | length-aligned batches, durable Lustre | `d285abb` | 64 / 23–64 | 44.75 s | 1.071 s | 50.78 s | 57.38 GB | **82.56 s** |
+| Qwen3-8B | length-aligned batches, durable Lustre | `d285abb` | 64 / 23–64 | 59.78 s | 2.220 s | 59.06 s | 81.71 GB | **102.82 s** |
 
 The batched row is 7.23× faster in wall time.  D2H is 1.34% of teacher compute
 even after compute was accelerated, so PCIe transfer is not the bottleneck;
@@ -93,6 +99,13 @@ layers bit-exactly, and the preceding 64-example certification compared all
 For the dense teacher, completed steady phases are 35.22 s generation plus
 86.20 s hidden caching = 121.42 s.  Their independent model load/setup costs
 remain separate and must not be hidden inside that sum.
+
+The new node-local rows put D2H at 0.74–2.10% of teacher compute.  The two
+larger direct-Lustre rows put it at 2.39% and 3.71%; in contrast, storage
+worker time reaches 50.78–59.06 seconds and is comparable to compute.  The
+unavoidable CUDA copy is therefore not the throughput bottleneck in either
+storage condition.  The writer overlaps storage with the teacher walk, so
+`storage` is worker time and must not be added to `total`.
 
 ### Large-model hidden probes (n = 64)
 
