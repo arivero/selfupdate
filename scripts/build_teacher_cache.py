@@ -114,6 +114,7 @@ def generate_answers_batched(
 
     answers: list[tuple[list[int], bool] | None] = [None] * len(prompts)
     effective_batches: list[int] = []
+    safe_batch_size = batch_size
     order = list(range(len(prompts)))
     outer_batches: list[list[int]] = []
     if shuffle_seed:
@@ -152,7 +153,7 @@ def generate_answers_batched(
             by_budget.setdefault(group_budget, []).append(index)
         for group_budget, group in by_budget.items():
             offset = 0
-            current = len(group)
+            current = min(len(group), safe_batch_size)
             while offset < len(group):
                 indices = group[offset:offset + current]
                 chunk_prompts = [prompts[index] for index in indices]
@@ -192,6 +193,7 @@ def generate_answers_batched(
                         raise
                     del input_ids, attention_mask
                     current = max(1, len(indices) // 2)
+                    safe_batch_size = min(safe_batch_size, current)
                     torch.cuda.empty_cache()
                     print(
                         f"generation OOM: retrying allowance {group_budget} at "
@@ -210,7 +212,7 @@ def generate_answers_batched(
                     answers[index] = (ids, hard_cut)
                 effective_batches.append(len(indices))
                 offset += len(indices)
-                current = min(len(group) - offset, len(group))
+                current = min(len(group) - offset, safe_batch_size)
                 del input_ids, attention_mask, out, generated
     if any(answer is None for answer in answers):
         raise RuntimeError("batched generation left an unanswered record")
