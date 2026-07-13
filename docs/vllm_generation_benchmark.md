@@ -29,17 +29,17 @@ reported separately and includes weight load, KV-cache profiling and, in graph
 mode, compilation/capture. The `peak VRAM` measurement includes vLLM's KV
 reservation; it is not model-weight memory alone.
 
-| model | runtime / mode | load/setup | generation | generated tokens | tok/s | peak VRAM | hard cuts | mean word recall |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| Qwen3-0.6B | vLLM 0.10 eager | n/a | 473.37 s | 158,804 | 335.47 | 39.25 GiB | 4.83% | 45.23% |
-| Qwen3-0.6B | vLLM 0.25 eager | 10.17 s | 614.61 s | 159,669 | 259.79 | 38.72 GiB | 5.02% | 46.04% |
-| Qwen3-0.6B | vLLM 0.25 graphs | 123.22 s | **198.31 s** | 158,918 | **801.35** | 39.20 GiB | 4.68% | 45.15% |
-| Qwen3-1.7B | vLLM 0.10 eager | n/a | 567.40 s | 169,180 | 298.17 | 38.77 GiB | n/a | n/a |
-| Qwen3-1.7B | vLLM 0.25 graphs | 123.88 s | 477.60 s | 168,511 | 352.83 | 38.93 GiB | 12.17% | 51.77% |
-| Qwen3-4B | vLLM 0.10 eager | n/a | 980.37 s | 165,115 | 168.42 | 38.71 GiB | n/a | n/a |
-| Qwen3-4B | vLLM 0.25 graphs | 123.95 s | 899.26 s | 164,550 | 182.98 | 39.19 GiB | 15.79% | 64.55% |
-| Qwen3-8B | vLLM 0.10 eager | n/a | 1,472.14 s | 130,878 | 88.90 | 39.45 GiB | n/a | n/a |
-| Qwen3-8B | vLLM 0.25 graphs | 124.38 s | 1,420.77 s | 131,607 | 92.63 | 39.53 GiB | 6.04% | 67.21% |
+| model | runtime / mode | load/setup | generation | generated tokens | tok/s | peak VRAM | hard cuts | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | vLLM 0.10 eager | n/a | 473.37 s | 158,804 | 335.47 | 39.25 GiB | 4.83% | 51.41% | 86.94% |
+| Qwen3-0.6B | vLLM 0.25 eager | 10.17 s | 614.61 s | 159,669 | 259.79 | 38.72 GiB | 5.02% | 52.33% | 86.42% |
+| Qwen3-0.6B | vLLM 0.25 graphs | 123.22 s | **198.31 s** | 158,918 | **801.35** | 39.20 GiB | 4.68% | 51.33% | 86.75% |
+| Qwen3-1.7B | vLLM 0.10 eager | n/a | 567.40 s | 169,180 | 298.17 | 38.77 GiB | n/a | 59.28% | 76.80% |
+| Qwen3-1.7B | vLLM 0.25 graphs | 123.88 s | 477.60 s | 168,511 | 352.83 | 38.93 GiB | 12.17% | 58.85% | 77.22% |
+| Qwen3-4B | vLLM 0.10 eager | n/a | 980.37 s | 165,115 | 168.42 | 38.71 GiB | n/a | 72.96% | 81.98% |
+| Qwen3-4B | vLLM 0.25 graphs | 123.95 s | 899.26 s | 164,550 | 182.98 | 39.19 GiB | 15.79% | 73.37% | 82.04% |
+| Qwen3-8B | vLLM 0.10 eager | n/a | 1,472.14 s | 130,878 | 88.90 | 39.45 GiB | n/a | 76.44% | 83.65% |
+| Qwen3-8B | vLLM 0.25 graphs | 124.38 s | 1,420.77 s | 131,607 | 92.63 | 39.53 GiB | 6.04% | 76.40% | 83.88% |
 
 The small-model result is the clear win: after compilation, vLLM 0.25 graph
 mode is 4.04x faster than its own eager mode and 2.39x faster than vLLM 0.10
@@ -65,11 +65,11 @@ substitute for this prompt/model combination.
 All rows use Qwen3-0.6B, batch 64, the same deterministic evenly spaced V5
 sample, and report generation time only. Engine load/compilation is separate.
 
-| engine | mode | generation time | tokens | tok/s | peak VRAM | word recall | exact cache text |
-|---|---|---:|---:|---:|---:|---:|---:|
-| vLLM 0.10.1 + cu128 | eager | 68.47 s | 19,202 | 280.46 | 39.25 GiB | 48.06% | 69.14% |
-| vLLM 0.25 + cu129 | eager | 90.23 s | 19,483 | 215.94 | 39.65 GiB | 48.00% | 68.75% |
-| vLLM 0.25 + cu129 | torch.compile + CUDA graphs | 29.09 s | 19,397 | **666.83** | 40.09 GiB | 47.55% | 76.17% |
+| engine | mode | generation time | tokens | tok/s | peak VRAM | next/prev LCS | cloze precision | exact cache text |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| vLLM 0.10.1 + cu128 | eager | 68.47 s | 19,202 | 280.46 | 39.25 GiB | 54.44% | 87.19% | 69.14% |
+| vLLM 0.25 + cu129 | eager | 90.23 s | 19,483 | 215.94 | 39.65 GiB | 54.37% | 88.28% | 68.75% |
+| vLLM 0.25 + cu129 | torch.compile + CUDA graphs | 29.09 s | 19,397 | **666.83** | 40.09 GiB | 53.87% | 91.32% | 76.17% |
 
 Interpretation: merely upgrading while forcing eager execution is 23% slower
 on this L40S sample. In its intended graph mode, the new build is 2.38× faster
@@ -95,8 +95,8 @@ sample must not be reported as total PP memory.
 
 Qwen3-8B on the same 256-prompt batch-64 sample, using vLLM 0.25 graph-capable
 configuration but no forced graph result claim yet: 15,023 generated tokens in
-194.06 s, or 77.41 tok/s, with 39.40 GiB peak VRAM, 6.25% hard cuts, and 68.03%
-mean task word recall. The model's 15.27 GiB bf16 weights still fit on one
+194.06 s, or 77.41 tok/s, with 39.40 GiB peak VRAM, 6.25% hard cuts, 77.06%
+next/previous word recall, and 80.10% target-block lexical precision. The model's 15.27 GiB bf16 weights still fit on one
 L40S; usable KV capacity was 157,040 tokens.
 
 ## H100 reproduction and next ladder
@@ -105,28 +105,35 @@ The H100 node is `agpuh01`, with DEV0/DEV1 reserved for this work; DEV2/DEV3
 belong to another user and are never touched. Results go to
 `runs/vllm_benchmark_h100/` so the L40S evidence remains immutable.
 
-*Scoring note.* The tables retain the benchmark's established reference-word
-recall field.  A later diagnostic also combines that field with cloze-block
-containment; its Qwen3-14B value is 85.32%, but it is a different mixed-task
-aggregate, **not recall**, and is intentionally not a table entry or a model
-quality claim.  It is useful only for auditing the old "missing field means
-zero" aggregation error.
+*Scoring correction.* The historical `mean_word_acc` field (and every table
+column that called it “mean word recall”) is invalid: it computed
+`x.get("word_acc", 0.0)`. Next and previous prompts carry a valid `word_acc`;
+the 249 cloze prompts carry `containment` instead, so each was silently scored
+as zero. This is a cloze-only aggregation bug, not a next-versus-previous or
+pre-versus-post comparison. Historical aggregates are therefore removed below.
+For cloze, `containment` means the fraction of generated words that occur
+anywhere in the target block: target-block lexical precision. It is not cloze
+recall or blank-fill accuracy, because the deleted words were not stored.
+Every quality table reports it separately from next/previous reference-word
+recall; neither is an average of the other. The Qwen3-14B H100 graph audit's
+85.32% task-mixed value remains a diagnostic only, not a recall claim or table
+entry.
 
 The first H100 graph pair has completed with the exact L40S workload. The H100
 has 80 GiB HBM; at the same 0.85 vLLM reservation fraction it reserves roughly
 70.6 GiB, so its reported peak is intentionally much larger than the L40S
 peak and does not mean the models need 70 GiB of weights.
 
-| model | mode | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | mean word recall |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| Qwen3-0.6B | vLLM 0.25 graphs | 91.13 s | 123.56 s | 159,136 | 1,287.91 | 70.60 GiB | 4.97% | 45.80% |
-| Qwen3-0.6B | vLLM 0.25 eager | 19.17 s | 625.61 s | 159,075 | 254.27 | 70.30 GiB | 4.97% | 46.05% |
-| Qwen3-1.7B | vLLM 0.25 graphs | 89.54 s | 194.37 s | 169,142 | 870.19 | 70.59 GiB | 12.41% | 52.10% |
-| Qwen3-1.7B | vLLM 0.25 eager | 19.39 s | 709.25 s | 169,081 | 238.39 | 70.30 GiB | 12.12% | 51.79% |
-| Qwen3-4B | vLLM 0.25 graphs | 52.81 s | 315.90 s | 164,834 | 521.80 | 70.96 GiB | 15.93% | 64.58% |
-| Qwen3-4B | vLLM 0.25 eager | 16.95 s | 771.63 s | 164,786 | 213.55 | 70.12 GiB | 15.84% | 64.62% |
-| Qwen3-8B | vLLM 0.25 graphs | 60.66 s | 421.97 s | 130,514 | 309.30 | 70.65 GiB | 6.23% | 67.01% |
-| Qwen3-8B | vLLM 0.25 eager | 19.79 s | 705.38 s | 130,501 | 185.01 | 70.06 GiB | 6.04% | 66.89% |
+| model | mode | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | vLLM 0.25 graphs | 91.13 s | 123.56 s | 159,136 | 1,287.91 | 70.60 GiB | 4.97% | 52.06% | 87.04% |
+| Qwen3-0.6B | vLLM 0.25 eager | 19.17 s | 625.61 s | 159,075 | 254.27 | 70.30 GiB | 4.97% | 52.05% | 85.65% |
+| Qwen3-1.7B | vLLM 0.25 graphs | 89.54 s | 194.37 s | 169,142 | 870.19 | 70.59 GiB | 12.41% | 59.23% | 76.90% |
+| Qwen3-1.7B | vLLM 0.25 eager | 19.39 s | 709.25 s | 169,081 | 238.39 | 70.30 GiB | 12.12% | 59.19% | 77.26% |
+| Qwen3-4B | vLLM 0.25 graphs | 52.81 s | 315.90 s | 164,834 | 521.80 | 70.96 GiB | 15.93% | 73.41% | 82.51% |
+| Qwen3-4B | vLLM 0.25 eager | 16.95 s | 771.63 s | 164,786 | 213.55 | 70.12 GiB | 15.84% | 73.45% | 82.23% |
+| Qwen3-8B | vLLM 0.25 graphs | 60.66 s | 421.97 s | 130,514 | 309.30 | 70.65 GiB | 6.23% | 76.17% | 83.63% |
+| Qwen3-8B | vLLM 0.25 eager | 19.79 s | 705.38 s | 130,501 | 185.01 | 70.06 GiB | 6.04% | 76.03% | 84.06% |
 
 This is the first important H100 finding: eager mode does not automatically
 use the H100's throughput. Relative to the same-mode L40S result, H100 eager
@@ -169,7 +176,7 @@ sum of both devices.  The two GPT-OSS rows differ only in how the supplied
 passage is framed: the guided-memory wording asks the model to remember and
 recite the text, rather than presenting it as a formal retrieval task.
 
-| model | placement / prompt framing | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev word recall (n=1,822) | cloze containment (n=249) |
+| model | placement / prompt framing | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Qwen3-14B | 1 × H100, graphs | 83.40 s | 604.86 s | 95,249 | 157.47 | 70.08 GiB | 2.27% | 84.18% | 93.63% |
 | Qwen3-32B | 2 × H100 PP=2, graphs | 105.20 s | 1,568.65 s | 135,463 | 86.36 | 73.16 GiB | 5.21% | 85.10% | 74.90% |
@@ -193,7 +200,7 @@ the full cache build should take the same time.
 These are the same full-corpus batch-64 protocol.  They are preliminary
 graph-mode baselines; each receives a paired eager control later in the queue.
 
-| model | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev word recall | cloze containment |
+| model | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | Phi-4 | 89.83 s | 868.41 s | 162,121 | 186.69 | 70.36 GiB | 4.73% | 93.18% | 74.22% |
 | GPT-OSS-20B | 163.04 s | 331.21 s | 160,220 | **483.75** | 68.78 GiB | 22.84% | 27.43% | 75.47% |
