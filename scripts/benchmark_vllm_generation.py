@@ -279,54 +279,55 @@ def main() -> None:
             completed_tokens = 0
             for start in range(0, len(prompts), bs):
                 chunk = prompts[start:start + bs]
-                # vLLM SamplingParams has a batch-wide ceiling. Grouping by
-                # actual per-record ceilings keeps the precise V5 protocol.
-                by_budget: dict[int, list[dict]] = {}
-                for item in chunk:
-                    by_budget.setdefault(item["budget"], []).append(item)
-                for budget, group in by_budget.items():
-                    generated = llm.generate(
-                        [{"prompt_token_ids": x["ids"]} for x in group],
-                        SamplingParams(temperature=0.0, top_p=1.0, max_tokens=budget,
-                                       stop_token_ids=[group[0]["stop_id"]], ignore_eos=False),
-                        use_tqdm=False,
+                # vLLM accepts one SamplingParams object per prompt.  Keep the
+                # exact per-record V5 ceiling without fragmenting a physical
+                # batch into many tiny same-budget engine calls.  The engine
+                # can now continuously schedule all `bs` mixed-length rows.
+                generated = llm.generate(
+                    [{"prompt_token_ids": x["ids"]} for x in chunk],
+                    [SamplingParams(
+                        temperature=0.0, top_p=1.0,
+                        max_tokens=item["budget"],
+                        stop_token_ids=[item["stop_id"]], ignore_eos=False,
+                    ) for item in chunk],
+                    use_tqdm=False,
+                )
+                for item, result in zip(chunk, generated):
+                    token_ids = result.outputs[0].token_ids
+                    item_stop_id = item["stop_id"]
+                    hard_cut = not token_ids or token_ids[-1] != item_stop_id
+                    if hard_cut:
+                        token_ids = token_ids + [item_stop_id]
+                    if args.prompt_format.startswith("gpt_oss_"):
+                        text, raw_text = item["decoder"](token_ids[:-1])
+                    else:
+                        text, raw_text = tok.decode(token_ids[:-1]), None
+                    stats = _recitation_stats(item["record"], text, corpus)
+                    old = baseline.get(item["example_id"], {})
+                    outputs.append({"batch_size": bs, "example_id": item["example_id"],
+                                    # gen_tokens retains the scoring sentinel for backwards
+                                    # compatible throughput figures.  The answer_* fields
+                                    # exclude it and describe the model's actual response.
+                                    "gen_tokens": len(token_ids),
+                                    # Preserve exact teacher ids so the in-repo cache
+                                    # builder can reuse graph/continuous-batch answers
+                                    # without a lossy decode→encode round trip.
+                                    "token_ids": token_ids,
+                                    "answer_tokens": len(token_ids) - 1,
+                                    "answer_chars": len(text),
+                                    "answer_words": len(text.split()),
+                                    "hard_cut": hard_cut,
+                                    "answer_text": text, "raw_answer_text": raw_text, **stats,
+                                    "pytorch_word_acc": old.get("word_acc"),
+                                    "matches_cached_text": text == old.get("answer_text") if old else None})
+                    completed += 1
+                    completed_tokens += len(token_ids)
+                if args.progress:
+                    print(
+                        f"progress batch_size={bs} completed={completed}/{len(prompts)} "
+                        f"raw_tokens={completed_tokens} elapsed_s={time.perf_counter() - t0:.1f}",
+                        flush=True,
                     )
-                    for item, result in zip(group, generated):
-                        token_ids = result.outputs[0].token_ids
-                        item_stop_id = item["stop_id"]
-                        hard_cut = not token_ids or token_ids[-1] != item_stop_id
-                        if hard_cut:
-                            token_ids = token_ids + [item_stop_id]
-                        if args.prompt_format.startswith("gpt_oss_"):
-                            text, raw_text = item["decoder"](token_ids[:-1])
-                        else:
-                            text, raw_text = tok.decode(token_ids[:-1]), None
-                        stats = _recitation_stats(item["record"], text, corpus)
-                        old = baseline.get(item["example_id"], {})
-                        outputs.append({"batch_size": bs, "example_id": item["example_id"],
-                                        # gen_tokens retains the scoring sentinel for backwards
-                                        # compatible throughput figures.  The answer_* fields
-                                        # exclude it and describe the model's actual response.
-                                        "gen_tokens": len(token_ids),
-                                        # Preserve exact teacher ids so the in-repo cache
-                                        # builder can reuse graph/continuous-batch answers
-                                        # without a lossy decode→encode round trip.
-                                        "token_ids": token_ids,
-                                        "answer_tokens": len(token_ids) - 1,
-                                        "answer_chars": len(text),
-                                        "answer_words": len(text.split()),
-                                        "hard_cut": hard_cut,
-                                        "answer_text": text, "raw_answer_text": raw_text, **stats,
-                                        "pytorch_word_acc": old.get("word_acc"),
-                                        "matches_cached_text": text == old.get("answer_text") if old else None})
-                        completed += 1
-                        completed_tokens += len(token_ids)
-                    if args.progress:
-                        print(
-                            f"progress batch_size={bs} completed={completed}/{len(prompts)} "
-                            f"raw_tokens={completed_tokens} elapsed_s={time.perf_counter() - t0:.1f}",
-                            flush=True,
-                        )
             elapsed = time.perf_counter() - t0
             batch_outputs = [x for x in outputs if x["batch_size"] == bs]
             tokens = sum(x["gen_tokens"] for x in batch_outputs)
