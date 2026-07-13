@@ -196,6 +196,8 @@ def main() -> None:
                     help="fixed per-answer generation ceiling; overrides the V5 per-record budget")
     ap.add_argument("--reasoning-effort", choices=("low", "medium", "high"),
                     default="low", help="GPT-OSS Harmony reasoning effort")
+    ap.add_argument("--progress", action="store_true",
+                    help="print one flushed, compact line after each completed generation group")
     ap.add_argument("--use-cudagraphs", action="store_true",
                     help="performance mode: permit vLLM compilation/CUDA graphs")
     ap.add_argument("--out", default=None)
@@ -273,6 +275,8 @@ def main() -> None:
         for bs in args.batch_sizes:
             t0 = time.perf_counter()
             outputs = []
+            completed = 0
+            completed_tokens = 0
             for start in range(0, len(prompts), bs):
                 chunk = prompts[start:start + bs]
                 # vLLM SamplingParams has a batch-wide ceiling. Grouping by
@@ -311,6 +315,14 @@ def main() -> None:
                                         "answer_text": text, "raw_answer_text": raw_text, **stats,
                                         "pytorch_word_acc": old.get("word_acc"),
                                         "matches_cached_text": text == old.get("answer_text") if old else None})
+                        completed += 1
+                        completed_tokens += len(token_ids)
+                    if args.progress:
+                        print(
+                            f"progress batch_size={bs} completed={completed}/{len(prompts)} "
+                            f"raw_tokens={completed_tokens} elapsed_s={time.perf_counter() - t0:.1f}",
+                            flush=True,
+                        )
             elapsed = time.perf_counter() - t0
             batch_outputs = [x for x in outputs if x["batch_size"] == bs]
             tokens = sum(x["gen_tokens"] for x in batch_outputs)
