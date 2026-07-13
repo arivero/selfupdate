@@ -157,9 +157,8 @@ the H100-only B=128 point:
 | 64 | 122.23 s | 159,962 | 1,308.73 |
 | 128 | 107.85 s | 160,172 | **1,485.19** |
 
-The paired 0.6B eager sweep on DEV1 is active but making progress. Its first
-completed rows show that eager mode scales only weakly with batch size on this
-workload:
+The paired 0.6B eager sweep on DEV1 completed. Its first rows show that eager
+mode scales only weakly with batch size on this workload:
 
 | batch | generation time | generated tokens | tok/s |
 |---:|---:|---:|---:|
@@ -168,6 +167,9 @@ workload:
 | 4 | 1,216.63 s | 158,778 | 130.51 |
 | 8 | 1,059.50 s | 158,701 | 149.79 |
 | 16 | 902.86 s | 158,572 | 175.63 |
+
+The later fixed-32k capacity control provides the completed eager B=1--64
+curve under an explicit long-context engine ceiling.
 
 ## H100 larger-model and two-card throughput results
 
@@ -211,6 +213,78 @@ in the queue.
 GPT-OSS-20B uses the Harmony memory framing.  Its high decode speed does not
 make it a suitable recitation teacher in this condition: its hard-cut rate is
 22.84% and its ordinary reference-word recall is 27.43%.
+
+## H100 completed one-card eager controls
+
+**Table batch: 64 prompts.** The shared two-GPU queue completed these eager
+controls after the graph baselines.  GPT-OSS-20B and Gemma-3-12B-it failed
+engine initialization once and were deliberately not retried.  Nemotron's
+99.71% hard-cut rate makes its speed result unsuitable as a normal recitation
+comparison.
+
+| model | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-14B | 40.09 s | 652.33 s | 94,832 | 145.37 | 70.10 GiB | 2.12% | 84.26% | 94.27% |
+| Phi-4 | 34.59 s | 910.44 s | 162,398 | 178.37 | 68.71 GiB | 4.97% | 93.11% | 74.01% |
+| NVIDIA Nemotron Nano 9B v2 | 78.09 s | 2,088.06 s | 328,697 | 157.42 | 70.05 GiB | 99.71% | 68.57% | 22.13% |
+| Llama 3.1 8B Instruct | 23.35 s | 612.81 s | 137,739 | 224.77 | 69.72 GiB | 5.41% | 85.62% | 65.32% |
+| Mistral 7B Instruct v0.1 | 18.08 s | 922.45 s | 235,955 | 255.79 | 68.40 GiB | 30.18% | 57.82% | 66.19% |
+
+Qwen3-14B is 1.08× faster with graphs (157.47 versus 145.37 tok/s), a much
+smaller gain than the 0.6B--8B Qwen3 graph controls.  The completed controls
+therefore confirm that the graph benefit is model- and batch-shape-dependent,
+not simply a property of the accelerator.
+
+## H100 Qwen3.5 self-update ladder
+
+**Table batch: 64 prompts.** All eight jobs completed in the shared queue.
+This is a family-relevant teacher ladder rather than a cross-family search:
+Qwen3.5 uses the Qwen continuation and its 250k vocabulary must be accounted
+for in any future frozen-vocabulary lens-loss experiment.  Scores are the same
+separate next/previous LCS and cloze precision measures used throughout this
+document; neither column is a mixed recall average.
+
+| model | mode | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-0.8B | graphs | 115.93 s | 177.79 s | 243,586 | **1,370.06** | 68.01 GiB | 57.36% | 50.45% | 65.44% |
+| Qwen3.5-0.8B | eager | 53.77 s | 1,639.19 s | 244,064 | 148.89 | 68.74 GiB | 58.47% | 50.53% | 64.56% |
+| Qwen3.5-2B | graphs | 116.37 s | 225.36 s | 162,372 | 720.49 | 68.03 GiB | 14.39% | 62.02% | 78.34% |
+| Qwen3.5-2B | eager | 48.85 s | 1,545.96 s | 162,983 | 105.43 | 69.09 GiB | 14.87% | 62.93% | 78.26% |
+| Qwen3.5-4B | graphs | 111.21 s | 254.17 s | 86,670 | 341.00 | 68.24 GiB | 2.22% | 91.82% | 92.56% |
+| Qwen3.5-4B | eager | 52.67 s | 1,240.15 s | 86,683 | 69.90 | 69.31 GiB | 2.03% | 92.01% | 92.77% |
+| Qwen3.5-9B | graphs | 117.10 s | 362.06 s | 79,865 | 220.59 | 67.89 GiB | 1.98% | 93.05% | 94.33% |
+| Qwen3.5-9B | eager | 55.78 s | 1,134.07 s | 80,048 | 70.58 | 69.73 GiB | 2.08% | 93.24% | **94.39%** |
+
+The graph/eager decode-speed ratios are 9.20×, 6.83×, 4.88×, and 3.13× from
+0.8B through 9B.  Quality is stable across execution mode at a given size;
+the salient quality transition is 2B to 4B, where hard cuts fall from about
+14% to 2% and next/previous LCS rises from 62% to 92%.
+
+## H100 0.6B fixed-32k engine-capacity control
+
+**Context ceiling: 32,768 tokens; table batch is the `batch` column and is
+also vLLM `max_num_seqs`.** This is a capacity-controlled repeat of the 0.6B
+full-corpus sweep, with a fresh engine at every point.  All B=1--64 jobs fit;
+it measures performance beneath the fixed ceiling rather than finding an OOM
+boundary.  The prompt workload itself remains the ordinary 2,071 V5 prompts,
+so the 32k ceiling changes engine capacity, not prompt length.
+
+| batch | graph tok/s | graph VRAM | eager tok/s | eager VRAM |
+|---:|---:|---:|---:|---:|
+| 1 | 570.97 | 68.26 GiB | 117.09 | 68.12 GiB |
+| 2 | 605.08 | 68.26 GiB | 121.28 | 68.12 GiB |
+| 4 | 662.05 | 68.28 GiB | 132.12 | 68.14 GiB |
+| 8 | 757.01 | 68.28 GiB | 152.86 | 68.14 GiB |
+| 16 | 889.00 | 68.28 GiB | 178.82 | 68.14 GiB |
+| 32 | 1,056.35 | 68.28 GiB | 215.03 | 68.14 GiB |
+| 64 | **1,284.24** | 68.30 GiB | **259.09** | 68.16 GiB |
+
+Quality was stable over the sweep: graph next/previous LCS was
+51.75--52.09% and cloze precision 85.77--87.00%; eager LCS was
+51.72--51.97% and cloze precision 85.62--86.11%.  At B=64 the 32k-capped
+graph result (1,284.24 tok/s) matches the original default-capacity graph
+result (1,287.91 tok/s), so the ordinary workload is not limited by this
+capacity cap.
 
 ## Auxiliary: exporting a full hidden-state token to CPU (H100)
 

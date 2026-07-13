@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 caches/
 runs/
+*.tgz
 .venv
 outerclaude
 backups/
