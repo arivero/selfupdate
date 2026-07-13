@@ -89,7 +89,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
          "limit": int(cfg.cache.limit),
          "model_dtype": cfg.model.dtype,
-         "schema": 5},
+         "schema": 6},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"

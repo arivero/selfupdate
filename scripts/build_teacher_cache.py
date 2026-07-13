@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from pathlib import Path
@@ -114,15 +115,32 @@ def generate_answers_batched(
     answers: list[tuple[list[int], bool] | None] = [None] * len(prompts)
     effective_batches: list[int] = []
     order = list(range(len(prompts)))
+    outer_batches: list[list[int]] = []
     if shuffle_seed:
-        generator = torch.Generator().manual_seed(shuffle_seed)
-        order = torch.randperm(len(order), generator=generator).tolist()
-    # Match benchmark_vllm_generation.py exactly: an outer batch contains up
-    # to B records, then calls are grouped by the exact generation allowance.
-    # This avoids charging every short answer for its longest peer and makes
-    # the quality/speed comparison capacity-controlled.
-    for outer_start in range(0, len(order), batch_size):
-        outer_indices = order[outer_start:outer_start + batch_size]
+        # Keep similarly sized decode jobs together so rounded allowance
+        # groups actually reach the requested batch size.  Randomize both
+        # members and batch order deterministically: this retains stochastic
+        # scheduling without mixing a 100-token answer with an 800-token one.
+        rng = random.Random(shuffle_seed)
+        rng.shuffle(order)
+        aligned: dict[int, list[int]] = {}
+        for index in order:
+            key = (budgets[index] if budget_bucket == 1 else 0
+                   if budget_bucket == 0 else
+                   math.ceil(budgets[index] / budget_bucket) * budget_bucket)
+            aligned.setdefault(key, []).append(index)
+        for group in aligned.values():
+            outer_batches.extend(
+                group[start:start + batch_size]
+                for start in range(0, len(group), batch_size))
+        rng.shuffle(outer_batches)
+    else:
+        outer_batches = [
+            order[start:start + batch_size]
+            for start in range(0, len(order), batch_size)]
+    # With no scheduling seed this remains the benchmark-compatible dataset
+    # order.  A positive seed opts into the aligned randomized schedule above.
+    for outer_indices in outer_batches:
         by_budget: dict[int, list[int]] = {}
         outer_budgets = [budgets[index] for index in outer_indices]
         for index in outer_indices:

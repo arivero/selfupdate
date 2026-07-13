@@ -111,7 +111,8 @@ class CacheConfig:
     generation_compile: bool = False
     generation_cache_implementation: str = ""
     # Zero preserves dataset order.  A positive seed deterministically shuffles
-    # scheduling only; answers are restored to their original example ids.
+    # within allowance buckets and shuffles aligned batches; answers are
+    # restored to their original example ids.
     generation_shuffle_seed: int = 0
     # Optional hard ceiling for prompt + generated answer.  Zero delegates to
     # the model configuration.  Campaigns benchmarking an 8k deployment pin

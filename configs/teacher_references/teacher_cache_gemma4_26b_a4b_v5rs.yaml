@@ -11,6 +11,6 @@ mask:
 cache:
   hidden_dtype: bfloat16
   generation_batch: 64
-  generation_budget_bucket: 1
+  generation_budget_bucket: 32
   generation_shuffle_seed: 17
   max_sequence_tokens: 8192
