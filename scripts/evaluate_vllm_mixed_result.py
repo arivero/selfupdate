@@ -82,6 +82,7 @@ def main() -> int:
     responses = [json.loads(line) for line in
                  (result_dir / "responses_bs64.jsonl").read_text().splitlines()]
     ids = [row["example_id"] for row in responses]
+    prompt_id_rows = sum("prompt_token_ids" in row for row in responses)
     integrity = {
         "expected_examples": 2071,
         "response_rows": len(responses),
@@ -90,13 +91,20 @@ def main() -> int:
         "all_token_lengths_match": all(
             len(row.get("token_ids", [])) == row.get("gen_tokens")
             for row in responses),
+        "prompt_token_id_rows": prompt_id_rows,
+        "prompt_token_ids_complete_or_absent": prompt_id_rows in (0, len(responses)),
+        "all_present_prompt_token_ids_nonempty": all(
+            row.get("prompt_token_ids")
+            for row in responses if "prompt_token_ids" in row),
     }
     if (summary.get("prompt_count") != 2071
             or result.get("examples") != 2071
             or integrity["response_rows"] != 2071
             or integrity["unique_example_ids"] != 2071
             or not integrity["all_token_ids_nonempty"]
-            or not integrity["all_token_lengths_match"]):
+            or not integrity["all_token_lengths_match"]
+            or not integrity["prompt_token_ids_complete_or_absent"]
+            or not integrity["all_present_prompt_token_ids_nonempty"]):
         raise ValueError(f"incomplete/corrupt result: {integrity}")
 
     # Independent post-hoc invocation of the historical cache-builder eval.
