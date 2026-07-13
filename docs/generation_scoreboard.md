@@ -5,16 +5,28 @@ greedy decoding, batch 64 unless a one-card capacity limit is stated.  Times
 are answer generation only; model loading/capture, hidden-state extraction,
 D2H, and storage are separate.  Quality is next/previous word LCS and cloze
 target-block lexical precision.  A result is entered only after its output
-summary is complete.
+summary is complete.  Full-corpus and sample scores are separate: a sample
+can diagnose throughput but never displaces a full-run result.
 
-| model | runtime / placement | mode | generation | tok/s | hard cuts | next/prev LCS | cloze precision | role |
-|---|---|---|---:|---:|---:|---:|---:|---|
-| Gemma-4-26B-A4B-it | vLLM 0.25, 2 x H100 PP2 | graphs | **298.71 s** | 284.69 | 1.45% | 97.29% | 81.37% | best known graph target |
-| Gemma-4-26B-A4B-it | vLLM 0.25, 1 x H100 | eager | 1,679.97 s | 49.74 | 1.35% | 97.11% | 80.94% | one-card eager time to beat |
-| Qwen3.6-35B-A3B | vLLM 0.25, 2 x H100 PP2 | graphs | **284.83 s** | 261.55 | 0.19% | 93.84% | 97.13% | best known graph target |
-| Qwen3.6-35B-A3B | vLLM 0.25, 1 x H100 | eager | 2,326.59 s | 31.99 | 0.10% | 94.10% | 97.30% | one-card eager time to beat |
-| Qwen3.5-4B | vLLM 0.25, 1 x H100 | graphs | **254.17 s** | 341.00 | 2.22% | 91.82% | 92.56% | best known graph target |
-| Qwen3.5-4B | vLLM 0.25, 1 x H100 | eager | 1,240.15 s | 69.90 | 2.03% | 92.01% | 92.77% | one-card eager time to beat |
+## Full-corpus single-card scoreboard (n = 2,071)
+
+Rank full runs primarily by generation seconds and secondarily by generated
+tokens per second.  Token count is retained because models stop at different
+answer lengths.
+
+No in-repo full-corpus attempt has completed yet.  The two live rows are added
+only after their atomic `generation_timings.json` and quality report exist.
+
+## Sample/probe scoreboard
+
+| model | runtime / mode | n | tokens | setup | generation | tok/s | hard cuts | next/prev LCS |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | in-repo PyTorch compiled/hybrid | 8 | 432 | 170.61 s | 14.40 s | **30.00** | 12.5% | 100.0% |
+| Gemma-4-26B-A4B-it | in-repo PyTorch eager/hybrid | 8 | 432 | 0.00 s | 181.25 s | 2.38 | 12.5% | 100.0% |
+| Qwen3.6-35B-A3B | in-repo PyTorch compiled/hybrid | 8 | 327 | 110.16 s | 10.86 s | **30.11** | 0.0% | 87.5% |
+
+vLLM baselines and targets are deliberately excluded from this scoreboard;
+they remain in `docs/vllm_generation_benchmark.md`.
 
 ## Live in-repo candidates
 
