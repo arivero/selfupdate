@@ -229,6 +229,23 @@ is 5.62x slower for Gemma and 8.17x slower for Qwen.  Low sampled utilization
 comparison is generation-only; cache-builder hidden-state extraction and
 storage are measured as separate phases.
 
+The first in-repo `torch.compile`/CUDA-graph safety probes use the same eight
+evenly spaced records, batch 64, 32-token allowance buckets, hybrid generation
+cache, and deterministic scheduling seed 17.  Compile/capture is deliberately
+separate from the second, steady generation pass:
+
+| model | compile/capture | steady generation | hidden forward | D2H | storage | total | hard cuts | next/prev LCS |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | 170.61 s | 14.40 s | 6.14 s | 3.04 ms | 0.11 s | 191.27 s | 12.5% | 100.0% |
+| Qwen3.6-35B-A3B | 110.16 s | 10.86 s | 7.13 s | 2.61 ms | 0.11 s | 128.29 s | 0.0% | 87.5% |
+
+For Gemma the matched eager probe took 181.25 s for generation, so its
+post-capture pass is 12.59x faster.  Its answer texts and sample quality are
+unchanged.  Both models copy hidden payloads at about 47.9 GiB/s.  D2H is only
+0.05% of Gemma teacher compute and 0.04% of Qwen teacher compute; CPU finite
+checks plus `/tmp` safetensors storage are 1.86% and 1.58%, respectively.
+These ratios reject transfer/storage as the current throughput bottleneck.
+
 ## H100 additional one-card graph results
 
 **Table batch: 64 prompts.** These are the same full-corpus protocol. They are
