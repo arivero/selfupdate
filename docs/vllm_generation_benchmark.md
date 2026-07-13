@@ -22,6 +22,15 @@ full workload permits 341,292 generated tokens, with a 932-token maximum
 ceiling. Peak memory is vLLM's physical-GPU reservation, sampled by
 `nvidia-smi`.
 
+The generation allowance is deliberately a tight, **per-record** comparison:
+for a given prompt every model receives the identical ceiling, but short
+expected continuations can have a ceiling such as 115 tokens.  A hard cut
+therefore records that the model consumed its permitted continuation without a
+stop token. This is informative in this memory/recitation setting: a model
+that directly continues the passage normally stops well within its allowance,
+whereas a model that begins a verbose explanation is visibly penalized. It is
+not an arbitrary global 115-token cap.
+
 ## L40S full-corpus results
 
 **Table batch: 64 prompts.** All rows use one L40S and all 2,071 prompts. `Load/setup` is
@@ -332,6 +341,106 @@ Use `scripts/benchmark_vllm_generation.py`. A comparable H100 run must pin:
 model revision, V5 JSONL, tokenizer/chat template, generation allowance,
 batch size, `max_model_len`, TP/PP layout, and whether CUDA graphs are enabled.
 Report load/compile time separately from generation time.
+
+## Fixed-4k answer-ceiling diagnostic
+
+This deliberately separate H100 table removes the V5 conversational answer
+allowance and instead permits up to 4,096 generated tokens per response. The
+outer submitted batch is 1,024 prompts for all one-card engines; GPT-OSS-120B
+uses PP=2 and an engine-reported 8k-context KV limit of 112 concurrent
+sequences. `answer tokens`, words, and characters exclude the synthetic stop
+token used by the scorer. The quality columns remain separate: next/previous
+reference-word LCS and cloze target-block lexical precision are not averaged.
+
+| model | prompt condition | batch | generation | tok/s | avg answer tokens | avg words | avg chars | hard cuts | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-0.8B | native | 1,024 | 47.23 s | 20,661.11 | 470.23 | 304.90 | 1,569.11 | 6.81% | 60.11% | 66.42% |
+| Qwen3.5-2B | native | 1,024 | 41.59 s | 12,296.29 | 245.94 | 152.69 | 787.52 | 4.01% | 62.97% | 78.32% |
+| Mistral-7B Instruct v0.1 | native | 1,024 | 148.19 s | 5,892.65 | 420.65 | 200.92 | 1,109.93 | 6.71% | 58.05% | 65.14% |
+| Nemotron Nano 9B v2 | native | 1,024 | 285.88 s | 4,575.02 | 630.53 | 436.78 | 2,450.83 | 1.16% | 87.16% | 25.45% |
+| GPT-OSS-20B | Harmony memory | 1,024 | 48.11 s | 5,019.99 | 115.60 | 17.79 | 95.61 | 0.05% | 27.66% | 93.75% |
+| GPT-OSS-120B | Harmony memory, PP=2 | 112 | 125.56 s | 1,791.42 | 107.61 | 19.64 | 109.68 | 0.00% | 50.64% | 92.08% |
+| GPT-OSS-20B | Harmony memory + public-domain notice | 1,024 | 57.77 s | 7,255.81 | 201.41 | 29.12 | 152.40 | 0.14% | **58.56%** | 94.70% |
+| GPT-OSS-120B | Harmony memory + public-domain notice, PP=2 | 112 | 150.49 s | 1,380.25 | 99.29 | 23.63 | 135.10 | 0.05% | **62.48%** | **96.27%** |
+
+The ordinary fixed-4k ceiling removes the earlier GPT-OSS hard-cut confound:
+20B falls from 22.84% to 0.05% cuts and 120B from 21.78% to zero. Yet their
+ordinary next/previous LCS remains weak (27.66% and 50.64%), showing that
+cutting alone did not explain the failure. Inspection found copyright-style
+refusals to exact-continuation prompts. The public-domain notice states that
+the machine is in Spain, gives the local date/time, identifies Machado's 1939
+death, the 1912 publication of *La tierra de Alvargonzález*, Spanish public-
+domain status from 2020, and authorization to reproduce the supplied
+fragments. It raises ordinary LCS by 30.90 points for 20B and 11.84 points for
+120B, while both retain negligible cuts. This is prompt-policy behavior, not
+a speed or decoding-architecture change.
+
+The public-domain result is not uniform by corpus:
+
+| model | corpus | examples | avg answer tokens | hard cuts | explicit refusals | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|
+| GPT-OSS-20B | Machado | 1,490 | 185.58 | 0.00% | 3.36% | 62.74% | 95.47% |
+| GPT-OSS-20B | Quijote | 581 | 242.01 | 0.52% | 10.84% | 47.86% | 92.73% |
+| GPT-OSS-120B | Machado | 1,490 | 86.34 | 0.07% | 1.41% | **69.06%** | 96.13% |
+| GPT-OSS-120B | Quijote | 581 | 132.52 | 0.00% | 14.11% | 45.62% | **96.61%** |
+
+An explicit refusal is detected conservatively from stock phrases such as
+“no puedo ayudar” and “I can't provide that.” The notice resolves most, but
+not all, of the same example IDs and also moves a smaller set into refusal:
+
+| model / corpus | refusals before | refusals after | same ID retained | resolved | newly refused |
+|---|---:|---:|---:|---:|---:|
+| GPT-OSS-20B / Machado | 934 | 50 | 44 | 890 | 6 |
+| GPT-OSS-20B / Quijote | 197 | 63 | 34 | 163 | 29 |
+| GPT-OSS-120B / Machado | 301 | 21 | 7 | 294 | 14 |
+| GPT-OSS-120B / Quijote | 174 | 82 | 48 | 126 | 34 |
+
+Question framing is another confound. Under the public-domain notice, the
+conservative refusal detector gives the following rates; categories are
+assigned by the first matching phrase and are descriptive rather than a
+randomized causal ablation:
+
+| question framing | 20B refusals | 120B refusals |
+|---|---:|---:|
+| essay / citation | 7.84% (4/51) | **37.25% (19/51)** |
+| professor challenge | **26.42% (14/53)** | 18.87% (10/53) |
+| recital | 6.02% (8/133) | 3.01% (4/133) |
+| grandfather memory | 5.15% (7/136) | 5.88% (8/136) |
+| “I forgot; remind me” | 23.63% (43/182) | 12.64% (23/182) |
+| rereading | 7.49% (14/187) | 4.28% (8/187) |
+| “do you remember?” | 3.19% (6/188) | 5.32% (10/188) |
+| all remaining templates | 1.49% (17/1,141) | 1.84% (21/1,141) |
+
+The high professor and essay/citation rows make an academic-integrity
+interpretation plausible alongside copyright classification. The high “I
+forgot” row shows that it cannot be the entire explanation. See
+`docs/cervantes_is_alive_for_gpts.md` for the complete qualitative note.
+
+## Appendix: vLLM 32k decode-KV capacity
+
+This appendix concerns vLLM's *live decode KV cache*, not the V5 stored
+teacher hidden-state cache. vLLM reports the usable KV-token pool and its
+derived maximum number of requests at the configured maximum sequence length
+during engine initialization. It can page and chunk a larger submitted request
+set; `batch_size` alone therefore is not a proof of simultaneous residency.
+
+| model | context ceiling | engine-reported KV pool | engine-reported concurrency | status |
+|---|---:|---:|---:|---|
+| Qwen3-0.6B | 4,096 | 600,576 tokens | 146.62× | measured, eager H100 engine |
+| Qwen3-0.6B | 32,768 | 613,600 tokens | 18.73× | measured, H100 graph and eager engines |
+| Qwen3-1.7B | 32,768 | 589,024 tokens | 17.98× | measured, eager H100 engine |
+| Qwen3-4B | 32,768 | 424,592 tokens | 12.96× | measured, eager H100 engine |
+| Qwen3-8B | 32,768 | 365,360 tokens | 11.15× | measured, eager H100 engine |
+| Qwen3.5-0.8B | 32,768 | 5,070,336 tokens | 154.73× | measured, eager H100 engine; hybrid attention |
+
+The 32k profile is model-specific: weights, KV-head configuration, dtype,
+parallel layout, vLLM reservation fraction, and compilation reservation all
+change the remaining KV pool. The other benchmarked models require their own
+32k engine-start profiles before adding rows here; these values must not be
+extrapolated from parameter count. vLLM 0.25 has no no-KV-cache generation
+mode: `enforce_eager` disables graphs, and disabling prefix caching only stops
+cross-request prompt reuse; neither removes the live per-request decode KV
+cache.
 
 The next measurements are explicit 2-card and 4-card pipeline-parallel vLLM
 runs. They should be treated as placement/throughput tests, not as a change to
