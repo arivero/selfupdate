@@ -228,9 +228,12 @@ Torch/FlashInfer collective compilation, with a CUDA illegal-address followed
 by `CUBLAS_STATUS_EXECUTION_FAILED`.  Its first automatic PP2 fallback began
 before the corrupted TP workers released their 76 GiB reservations and failed
 the startup free-memory check; that PP result is contaminated and is not a
-compatibility verdict.  A clean isolated PP2 retry remains required.  The
-incident produced launcher commit `4c79180`, which places each future engine
-in a private process group and reaps residual workers before any fallback.
+compatibility verdict.  The clean isolated PP2 retry subsequently generated
+1,856/2,071 responses (71,063 tokens in 253.7 s, 280.1 tok/s) before vLLM's
+async scheduler asserted `num_output_placeholders >= 0`.  It is a valid
+partial placement result, not a full-run score.  The incident produced
+launcher commit `4c79180`, which places each future engine in a private process
+group and reaps residual workers before any fallback.
 
 ## H100 larger-model and two-card throughput results
 

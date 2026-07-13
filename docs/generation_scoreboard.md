@@ -36,6 +36,7 @@ they remain in `docs/vllm_generation_benchmark.md`.
 | Qwen3.6-35B-A3B | graph exact-token backend, exact-budget subgroups, batch 64 | `e912f2d` | 2,001 / 2,071 | 73,699 | 280.8 s | **262.46** | late OOM at 0.99 reservation; no full score, retrying at `1f28029` with mixed-budget scheduling and margin |
 | Qwen3.5-4B | PyTorch compiled/hybrid, static compile/cache length, fixed physical batch 32 | `e7f930e` | 32 / 2,071 | 840 | 53.32 s | **15.75** | stopped: decisively below target |
 | Qwen3.5-4B | same, fixed physical batch 64 | `e7f930e` | 0 / 2,071 | 0 | >88 s | n/a | stopped before first batch completed |
+| Llama-3.3-70B-Instruct | two-card PP2 graph exact-token backend, mixed per-record budgets | `aa76927` | 1,856 / 2,071 | 71,063 | 253.7 s | **280.1** | vLLM async-scheduler assertion; partial placement score only |
 
 ## Aborted full attempts
 
