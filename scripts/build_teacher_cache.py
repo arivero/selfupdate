@@ -427,6 +427,16 @@ def main() -> None:
             key: value for key, value in timings.items()
             if key.startswith("generation_") or key.startswith("maximum_")
         }, indent=2) + "\n")
+        if cfg.cache.generation_compile:
+            # Transformers retains the torch.compile callable on the model.
+            # Its CUDA-graph private pool is sized by the largest decode batch
+            # and can otherwise leave too little room for output_hidden_states.
+            # Generation is complete, so discard that specialization before
+            # entering the independent teacher-forced cache phase.
+            for attr in ("_compiled_call", "_last_compile_config"):
+                if hasattr(model, attr):
+                    delattr(model, attr)
+            torch.compiler.reset()
         del prompts
         torch.cuda.empty_cache()
 
