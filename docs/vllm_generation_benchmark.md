@@ -24,7 +24,7 @@ ceiling. Peak memory is vLLM's physical-GPU reservation, sampled by
 
 ## L40S full-corpus results
 
-All rows use one L40S, batch 64, and all 2,071 prompts. `Load/setup` is
+**Table batch: 64 prompts.** All rows use one L40S and all 2,071 prompts. `Load/setup` is
 reported separately and includes weight load, KV-cache profiling and, in graph
 mode, compilation/capture. The `peak VRAM` measurement includes vLLM's KV
 reservation; it is not model-weight memory alone.
@@ -62,7 +62,7 @@ substitute for this prompt/model combination.
 
 ## Fable-build speed check: evenly spaced 256-prompt sample
 
-All rows use Qwen3-0.6B, batch 64, the same deterministic evenly spaced V5
+**Table batch: 64 prompts.** All rows use Qwen3-0.6B and the same deterministic evenly spaced V5
 sample, and report generation time only. Engine load/compilation is separate.
 
 | engine | mode | generation time | tokens | tok/s | peak VRAM | next/prev LCS | cloze precision | exact cache text |
@@ -119,7 +119,8 @@ recall; neither is an average of the other. The Qwen3-14B H100 graph audit's
 85.32% task-mixed value remains a diagnostic only, not a recall claim or table
 entry.
 
-The first H100 graph pair has completed with the exact L40S workload. The H100
+The first H100 graph pair has completed with the exact L40S workload.
+**Table batch: 64 prompts.** The H100
 has 80 GiB HBM; at the same 0.85 vLLM reservation fraction it reserves roughly
 70.6 GiB, so its reported peak is intentionally much larger than the L40S
 peak and does not mean the models need 70 GiB of weights.
@@ -170,7 +171,8 @@ workload:
 
 ## H100 larger-model and two-card throughput results
 
-These are the same 2,071-prompt, greedy, full-corpus protocol at batch 64.
+**Table batch: 64 prompts (global, including PP2).** These are the same
+2,071-prompt, greedy, full-corpus protocol.
 `sampled VRAM` is the highest reservation observed on either device, not the
 sum of both devices.  The two GPT-OSS rows differ only in how the supplied
 passage is framed: the guided-memory wording asks the model to remember and
@@ -197,8 +199,9 @@ the full cache build should take the same time.
 
 ## H100 additional one-card graph results
 
-These are the same full-corpus batch-64 protocol.  They are preliminary
-graph-mode baselines; each receives a paired eager control later in the queue.
+**Table batch: 64 prompts.** These are the same full-corpus protocol. They are
+preliminary graph-mode baselines; each receives a paired eager control later
+in the queue.
 
 | model | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
