@@ -93,6 +93,18 @@ For the dense teacher, completed steady phases are 35.22 s generation plus
 86.20 s hidden caching = 121.42 s.  Their independent model load/setup costs
 remain separate and must not be hidden inside that sum.
 
+### Large-model hidden probes (n = 64)
+
+These evenly spaced probes verify one-card capacity and code paths; they do not
+rank above full-corpus rows.  Both requested B=64 and completed without OOM.
+Their effective maxima are below 64 only because 64 sampled examples are split
+across several 128-token length buckets.
+
+| model | commit | layers | effective batch | teacher compute | D2H | storage | hidden bytes | total |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | `41d65c5` | 30 | 1–42 | 10.35 s | 0.023 s | 0.519 s | 1.21 GB | **11.29 s** |
+| Qwen3.6-35B-A3B | `41d65c5` | 40 | 1–44 | 11.23 s | 0.021 s | 0.521 s | 1.08 GB | **12.23 s** |
+
 Per-effective-batch partial progress is available for launches at commit
 `da68d4a` and later.  Hidden-cache progress is persisted every 100 examples at
 commit `fe9fd3c` and later without a CUDA synchronization in the teacher walk.

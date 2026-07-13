@@ -119,6 +119,13 @@ spans for all 2,071 examples plus bit-exact tensors for 32 evenly spaced
 examples.  Cache schema 9 includes `teacher_batch`, because future model
 kernels are not assumed to share this exactness result.
 
+The same requested B=64 path completed 64-example one-card capacity probes for
+both large MoEs without OOM: Gemma-4-26B-A4B-it took 11.29 s total for 30-layer
+cache payloads (effective B 1–42), and Qwen3.6-35B-A3B took 12.23 s for 40
+layers (effective B 1–44).  The maxima reflect sparse length buckets in the
+small evenly spaced sample, not memory backoff.  This verifies the batched
+decoder-body path for dense Qwen, MoE Qwen, and Gemma's wrapped language model.
+
 Operationally, generation progress is logged per engine batch and hidden-pass
 progress is appended to `teacher_progress.jsonl` every 100 examples.  The
 hidden ledger records only wall/queue counters: it adds no `.item()`, CPU tensor
