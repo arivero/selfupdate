@@ -322,6 +322,11 @@ def main() -> None:
                                     # builder can reuse graph/continuous-batch answers
                                     # without a lossy decode→encode round trip.
                                     "token_ids": token_ids,
+                                    # Preserve the exact conditioning protocol too.
+                                    # This is essential for Harmony/GPT-OSS, whose
+                                    # developer-memory prompt is not reconstructible
+                                    # from the native chat-template cache path.
+                                    "prompt_token_ids": item["ids"],
                                     "answer_tokens": len(token_ids) - 1,
                                     "answer_chars": len(text),
                                     "answer_words": len(text.split()),
