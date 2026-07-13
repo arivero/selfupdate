@@ -602,6 +602,9 @@ def main() -> None:
         hidden_dtype=cfg.cache.hidden_dtype)
     copy_stream = (torch.cuda.Stream(device=model.device)
                    if torch.cuda.is_available() else None)
+    teacher_progress_path = root / "teacher_progress.jsonl"
+    teacher_progress_path.write_text("")
+    teacher_wall_started = time.perf_counter()
 
     for item_no, (record, ex) in enumerate(tqdm(
             zip(records, examples), total=len(examples), desc="teacher forward")):
@@ -666,6 +669,21 @@ def main() -> None:
             ready_event=ready_event,
         )
         timings["cache_write_seconds"] += time.perf_counter() - t_phase
+        completed = item_no + 1
+        if completed % 100 == 0 or completed == len(examples):
+            # This is deliberately wall/queue telemetry only: no .item(), CPU
+            # tensor copy, CUDA event wait, or stream synchronization in the
+            # teacher walk.  Exact compute/D2H/storage timings are finalized
+            # from their events after the asynchronous writer drains.
+            elapsed = time.perf_counter() - teacher_wall_started
+            with teacher_progress_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "completed": completed,
+                    "total": len(examples),
+                    "elapsed_seconds": elapsed,
+                    "examples_per_second": completed / elapsed,
+                    "hidden_bytes_queued": hidden_bytes,
+                }) + "\n")
 
     t_phase = time.perf_counter()
     writer.finalize()
