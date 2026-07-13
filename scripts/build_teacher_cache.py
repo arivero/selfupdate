@@ -21,6 +21,7 @@ Usage:
 import argparse
 import json
 import math
+import os
 import random
 import subprocess
 import sys
@@ -44,6 +45,37 @@ from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.teacher.cache import AsyncTeacherCacheWriter, resolve_cache_dir
 from selfupdate.train.runtime import (load_causal_lm, pp_device_map,
                                       uses_pipeline_map)
+
+
+def _source_commit(root: Path) -> str:
+    """Resolve provenance even in the runtime container, which has no git."""
+    explicit = os.environ.get("SELFUPDATE_SOURCE_COMMIT")
+    if explicit:
+        return explicit
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        git_dir = root / ".git"
+        if git_dir.is_file():
+            marker = git_dir.read_text().strip()
+            if marker.startswith("gitdir:"):
+                git_dir = (root / marker.split(":", 1)[1].strip()).resolve()
+        head = (git_dir / "HEAD").read_text().strip()
+        if not head.startswith("ref:"):
+            return head
+        ref = head.split(":", 1)[1].strip()
+        loose_ref = git_dir / ref
+        if loose_ref.exists():
+            return loose_ref.read_text().strip()
+        packed = git_dir / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text().splitlines():
+                if line and not line.startswith(("#", "^")):
+                    value, name = line.split(" ", 1)
+                    if name == ref:
+                        return value
+        return "unknown"
 
 
 def load_records(path: str, tokenizer) -> list[dict]:
@@ -291,9 +323,7 @@ def main() -> None:
     # detached logs/transcripts enormous.  Cache progress is reported by the
     # outer teacher-forward bar and final structured timings instead.
     transformers_logging.disable_progress_bar()
-    source_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parent.parent,
-        text=True).strip()
+    source_commit = _source_commit(Path(__file__).resolve().parent.parent)
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
@@ -457,6 +487,8 @@ def main() -> None:
     teacher_compute_events = []
     started_at = time.perf_counter()
     generated_answers: list[tuple[list[int], bool]] = []
+    generated_prompt_ids: list[list[int] | None] = []
+    imported_answer_texts: list[str | None] = []
     effective_generation_batches: list[int] = []
     if v5:
         prompts = [masker.build(ex).teacher_ids for ex in examples]
@@ -498,7 +530,18 @@ def main() -> None:
                 if len(ids) > budget + 1:
                     raise ValueError(
                         f"generation response {ex.example_id} exceeds its budget")
+                prompt_ids = row.get("prompt_token_ids")
+                if prompt_ids is not None:
+                    if not isinstance(prompt_ids, list) or not prompt_ids:
+                        raise ValueError(
+                            f"generation response {ex.example_id} has invalid "
+                            "prompt_token_ids")
+                    prompt_ids = [int(token_id) for token_id in prompt_ids]
                 generated_answers.append((ids, bool(row["hard_cut"])))
+                generated_prompt_ids.append(prompt_ids)
+                answer_text = row.get("answer_text")
+                imported_answer_texts.append(
+                    answer_text if isinstance(answer_text, str) else None)
             timings["generation_import_seconds"] = (
                 time.perf_counter() - t_import)
             timings["generation_responses_path"] = (
@@ -567,11 +610,15 @@ def main() -> None:
                 cfg.cache.generation_cache_max_tokens,
                 cfg.cache.generation_fixed_batch,
                 record_generation_progress)
+            generated_prompt_ids = [list(prompt) for prompt in prompts]
+            imported_answer_texts = [None] * len(generated_answers)
             sync()
             timings["generation_seconds"] = time.perf_counter() - t_phase
-        for record, ex, (answer_ids, hard_cut) in zip(
-                records, examples, generated_answers):
-            answer_text = tok.decode(answer_ids[:-1])
+        for item_no, (record, ex, (answer_ids, hard_cut)) in enumerate(zip(
+                records, examples, generated_answers)):
+            imported_text = imported_answer_texts[item_no]
+            answer_text = (imported_text if imported_text is not None
+                           else tok.decode(answer_ids[:-1]))
             gen_report.append({
                 "example_id": ex.example_id,
                 "kind": record.get("kind"),
@@ -656,15 +703,38 @@ def main() -> None:
     if cfg.cache.teacher_batch < 1:
         raise ValueError("cache.teacher_batch must be positive")
     teacher_items = []
+    prompt_protocol_overrides = 0
     for item_no, (record, ex) in enumerate(zip(records, examples)):
         extra = None
         if v5:
             answer_ids, hard_cut = generated_answers[item_no]
             pair = masker.build(ex, answer_ids=answer_ids)
             extra = {"answer_ids": answer_ids, "hard_cut": hard_cut}
+            exact_prompt_ids = generated_prompt_ids[item_no]
+            if exact_prompt_ids is not None:
+                native_prompt_ids = pair.teacher_ids[:-len(answer_ids)]
+                if exact_prompt_ids != native_prompt_ids:
+                    # Harmony and other non-native generation protocols can
+                    # place the memory in a developer/tool message that the
+                    # ordinary chat-template renderer cannot reconstruct.
+                    # Preserve the exact teacher conditioning and align only
+                    # the completion tokens, which remain identical on both
+                    # sides.  Never pretend the unlike prompt headers/memory
+                    # spans are a shared hidden-target region.
+                    pair.teacher_ids = exact_prompt_ids + answer_ids
+                    pair.t_aligned = slice(
+                        len(exact_prompt_ids), len(pair.teacher_ids))
+                    pair.t_answer = pair.t_aligned
+                    pair.s_aligned = pair.s_answer
+                    pair.position_gap = (
+                        pair.t_aligned.start - pair.s_aligned.start)
+                    pair.t_privileged = []
+                    extra["teacher_prompt_ids"] = exact_prompt_ids
+                    prompt_protocol_overrides += 1
         else:
             pair = masker.build(ex)
         teacher_items.append((record, ex, pair, extra))
+    timings["prompt_protocol_overrides"] = prompt_protocol_overrides
 
     teacher_indices = list(range(len(teacher_items)))
     teacher_batches: list[list[int]] = []
