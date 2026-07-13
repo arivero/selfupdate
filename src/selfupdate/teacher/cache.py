@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
+import threading
+import time
 from pathlib import Path
 
 import torch
@@ -76,7 +79,17 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          # their index.  The allowance changes those ids, aligned lengths, and
          # every stored h[L] payload, so it must be part of cache identity.
          "generation_extra_tokens": int(cfg.cache.generation_extra_tokens),
-         "schema": 4},
+         # Batched greedy decode can differ from B=1 at exact argmax ties;
+         # inference dtype likewise shapes both answers and hidden targets.
+         "generation_batch": int(cfg.cache.generation_batch),
+         "generation_budget_bucket": int(cfg.cache.generation_budget_bucket),
+         "generation_compile": bool(cfg.cache.generation_compile),
+         "generation_cache_implementation": cfg.cache.generation_cache_implementation,
+         "generation_shuffle_seed": int(cfg.cache.generation_shuffle_seed),
+         "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
+         "limit": int(cfg.cache.limit),
+         "model_dtype": cfg.model.dtype,
+         "schema": 5},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"
@@ -137,6 +150,69 @@ class TeacherCacheWriter:
     def finalize(self) -> None:
         self._flush()
         (self.root / INDEX_NAME).write_text(json.dumps(self._index))
+
+
+class AsyncTeacherCacheWriter:
+    """Single background consumer for D2H-ready cache payloads.
+
+    The producer may attach a CUDA event recorded after a non-blocking copy to
+    pinned CPU memory.  The writer thread waits for that event, then performs
+    finite checks, shard buffering, and safetensors writes while the default
+    CUDA stream advances the next teacher forward.
+    """
+
+    def __init__(self, root: str | Path, config_hash: str,
+                 shard_size: int = 128, hidden_dtype: str = "float16",
+                 queue_size: int = 8):
+        self._writer = TeacherCacheWriter(
+            root, config_hash, shard_size=shard_size,
+            hidden_dtype=hidden_dtype)
+        self.hidden_dtype = self._writer.hidden_dtype
+        self._queue: queue.Queue = queue.Queue(maxsize=queue_size)
+        self._error: BaseException | None = None
+        self.copy_seconds = 0.0
+        self.storage_seconds = 0.0
+        self._thread = threading.Thread(
+            target=self._run, name="teacher-cache-writer", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                copy_start_event, ready_event, args, kwargs = item
+                if self._error is None:
+                    if ready_event is not None:
+                        ready_event.synchronize()
+                        self.copy_seconds += (
+                            copy_start_event.elapsed_time(ready_event) / 1000.0)
+                    started = time.perf_counter()
+                    self._writer.add(*args, **kwargs)
+                    self.storage_seconds += time.perf_counter() - started
+            except BaseException as exc:  # propagate on producer/finalize
+                self._error = exc
+            finally:
+                self._queue.task_done()
+
+    def _raise_if_failed(self) -> None:
+        if self._error is not None:
+            raise RuntimeError("background teacher-cache writer failed") from self._error
+
+    def add(self, *args, copy_start_event=None, ready_event=None, **kwargs) -> None:
+        self._raise_if_failed()
+        self._queue.put((copy_start_event, ready_event, args, kwargs))
+        self._raise_if_failed()
+
+    def finalize(self) -> None:
+        self._queue.put(None)
+        self._queue.join()
+        self._thread.join()
+        self._raise_if_failed()
+        started = time.perf_counter()
+        self._writer.finalize()
+        self.storage_seconds += time.perf_counter() - started
 
 
 class TeacherCache:

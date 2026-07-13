@@ -100,6 +100,26 @@ class CacheConfig:
     # 96-token margin is certified separately by the RAG gate; it prevents
     # conversational framing from truncating the answer span.
     generation_extra_tokens: int = 96
+    # Open-answer teacher generation.  B=1 preserves the historical cache
+    # builder; larger values use left-padded greedy batches with OOM backoff.
+    generation_batch: int = 1
+    # Exact allowance groups at 1. Larger values round allowances up to this
+    # width; zero places each outer batch in one group.
+    generation_budget_bucket: int = 1
+    # Optional Transformers decode compilation.  reduce-overhead uses PyTorch
+    # CUDA graphs where the model/cache permit it; off is the eager baseline.
+    generation_compile: bool = False
+    generation_cache_implementation: str = ""
+    # Zero preserves dataset order.  A positive seed deterministically shuffles
+    # scheduling only; answers are restored to their original example ids.
+    generation_shuffle_seed: int = 0
+    # Optional hard ceiling for prompt + generated answer.  Zero delegates to
+    # the model configuration.  Campaigns benchmarking an 8k deployment pin
+    # 8192 explicitly so an overlong record fails before model.generate.
+    max_sequence_tokens: int = 0
+    # Deterministic evenly-spaced subset for performance probes.  Zero means
+    # the complete dataset and is the only setting used for campaign caches.
+    limit: int = 0
 
 
 @dataclass

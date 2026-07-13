@@ -208,6 +208,27 @@ safetensors writes, and the student premise forward.  Those omitted phases are
 why it is a lower-bound baseline for V5 cache construction, not a claim that
 the full cache build should take the same time.
 
+### One-card large-MoE eager controls (2026-07-13)
+
+The two candidate teachers were rerun concurrently, one per H100, with vLLM
+0.25.0, batch 64, eager execution (`enforce_eager`, hence no CUDA graphs), and
+all 2,071 prompts.  Gemma used a 4,096-token engine ceiling; the observed
+dataset maximum is below 2,000 tokens.  Qwen used 8,192 and required a 0.99
+GPU-memory-utilization reservation to leave a non-negative KV-cache budget on
+one card.  Model loading and generation are timed separately.
+
+| model | placement / mode | load/setup | generation | generated tokens | tok/s | sampled VRAM | hard cuts | next/prev LCS | cloze precision |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | 1 x H100, eager | 243.59 s | 1,679.97 s | 83,560 | 49.74 | 69.73 GiB | 1.35% | 97.11% | 80.94% |
+| Qwen3.6-35B-A3B | 1 x H100, eager | 61.01 s | 2,326.59 s | 74,422 | 31.99 | 78.90 GiB | 0.10% | 94.10% | 97.30% |
+
+These are the native one-card speed targets for the in-repo cache builder.
+On this run they are far from the earlier two-card graph results: generation
+is 5.62x slower for Gemma and 8.17x slower for Qwen.  Low sampled utilization
+(typically about 25%) is consistent with CPU/launch-bound eager decoding.  The
+comparison is generation-only; cache-builder hidden-state extraction and
+storage are measured as separate phases.
+
 ## H100 additional one-card graph results
 
 **Table batch: 64 prompts.** These are the same full-corpus protocol. They are
