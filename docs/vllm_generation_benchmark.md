@@ -223,6 +223,25 @@ dominant change.  The speed column is not a quality ranking: Nemotron's 99.71%
 hard-cut rate and GPT-OSS-20B's 28.66% next/previous LCS make those conditions
 poor teacher candidates despite their throughput.
 
+### Matched graph ablations on the mixed-budget driver
+
+These controls keep the one-call mixed batch-64 scheduler and remove only
+vLLM compilation/CUDA graphs (`enforce_eager=True`).  This separates the
+scheduling repair from graph acceleration.  Setup is reported but not used in
+the steady-generation ratio; caches and page cache are necessarily warm after
+the graph campaign.
+
+| model | placement / mode | commit | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-0.8B | 1 × H100, graphs | `ee2c63a` | 94.92 s | 19.93 s | 245,263 | 12,304.16 | 58.52% | 50.89% | 65.07% |
+| Qwen3.5-0.8B | 1 × H100, eager | `8e47788` | 49.94 s | 119.90 s | 244,814 | 2,041.75 | 58.43% | 50.81% | 63.95% |
+
+True mixed batching makes the eager path 13.67× faster than the old fragmented
+eager result (1,639.19 s), while graphs make the repaired driver another 6.02×
+faster.  Eager minus graph quality is -0.08 LCS and -1.12 cloze percentage
+points; the latter is retained as a real observed difference on the 249 cloze
+questions, not dismissed as equivalent.
+
 Llama-3.3-70B TP2 failed during engine initialization after the cold
 Torch/FlashInfer collective compilation, with a CUDA illegal-address followed
 by `CUBLAS_STATUS_EXECUTION_FAILED`.  Its first automatic PP2 fallback began
