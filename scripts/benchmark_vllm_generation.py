@@ -83,7 +83,8 @@ def cached_report(model: str, examples: Path, expected_ids: set[str]) -> dict[st
 
 def gpt_oss_prompt(record: dict, expected_chars: int, extra_tokens: int,
                    *, guided_memory: bool = False,
-                   public_domain_notice: bool = False):
+                   public_domain_notice: bool = False,
+                   reasoning_effort: str = "low"):
     """Render one V5 question/passage with GPT-OSS's native Harmony protocol.
 
     V5 ``rag_system`` records put the passage *inside a Qwen system turn* and
@@ -104,8 +105,13 @@ def gpt_oss_prompt(record: dict, expected_chars: int, extra_tokens: int,
         gpt_oss_prompt.encoding = load_harmony_encoding(  # type: ignore[attr-defined]
             HarmonyEncodingName.HARMONY_GPT_OSS)
     encoding = gpt_oss_prompt.encoding  # type: ignore[attr-defined]
+    effort = {
+        "low": ReasoningEffort.LOW,
+        "medium": ReasoningEffort.MEDIUM,
+        "high": ReasoningEffort.HIGH,
+    }[reasoning_effort]
     system = (SystemContent.new()
-              .with_reasoning_effort(ReasoningEffort.LOW)
+              .with_reasoning_effort(effort)
               .with_conversation_start_date("2026-07-13"))
     passage = record.get("privileged", "")
     if guided_memory:
@@ -188,6 +194,8 @@ def main() -> None:
                     help="override config's conversational generation margin")
     ap.add_argument("--generation-max-tokens", type=int, default=None,
                     help="fixed per-answer generation ceiling; overrides the V5 per-record budget")
+    ap.add_argument("--reasoning-effort", choices=("low", "medium", "high"),
+                    default="low", help="GPT-OSS Harmony reasoning effort")
     ap.add_argument("--use-cudagraphs", action="store_true",
                     help="performance mode: permit vLLM compilation/CUDA graphs")
     ap.add_argument("--out", default=None)
@@ -222,7 +230,8 @@ def main() -> None:
             ids, budget, decoder, prompt_stop_id = gpt_oss_prompt(
                 record, int(record.get("expected_answer_chars", 64)), extra_tokens,
                 guided_memory=(args.prompt_format == "gpt_oss_guided_memory"),
-                public_domain_notice=(args.prompt_format == "gpt_oss_public_domain"))
+                public_domain_notice=(args.prompt_format == "gpt_oss_public_domain"),
+                reasoning_effort=args.reasoning_effort)
             prompts.append({"example_id": ex.example_id, "record": record, "ids": ids,
                             "budget": budget, "decoder": decoder, "stop_id": prompt_stop_id})
         else:
@@ -342,6 +351,7 @@ def main() -> None:
                "limit": args.limit,
                "generation_extra_tokens": extra_tokens,
                "generation_max_tokens": args.generation_max_tokens,
+               "reasoning_effort": args.reasoning_effort,
                "results": rows}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(f"wrote {out_dir / 'summary.json'}")
