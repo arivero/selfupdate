@@ -275,10 +275,14 @@ def main() -> None:
         for bs in args.batch_sizes:
             t0 = time.perf_counter()
             outputs = []
+            response_path = out_dir / f"responses_bs{bs}.jsonl"
+            partial_response_path = out_dir / f"responses_bs{bs}.partial.jsonl"
+            partial_response_path.write_text("")
             completed = 0
             completed_tokens = 0
             for start in range(0, len(prompts), bs):
                 chunk = prompts[start:start + bs]
+                chunk_output_start = len(outputs)
                 # vLLM accepts one SamplingParams object per prompt.  Keep the
                 # exact per-record V5 ceiling without fragmenting a physical
                 # batch into many tiny same-budget engine calls.  The engine
@@ -322,6 +326,10 @@ def main() -> None:
                                     "matches_cached_text": text == old.get("answer_text") if old else None})
                     completed += 1
                     completed_tokens += len(token_ids)
+                with partial_response_path.open("a", encoding="utf-8") as handle:
+                    handle.write("".join(
+                        json.dumps(item, ensure_ascii=False) + "\n"
+                        for item in outputs[chunk_output_start:]))
                 if args.progress:
                     print(
                         f"progress batch_size={bs} completed={completed}/{len(prompts)} "
@@ -356,9 +364,12 @@ def main() -> None:
                          "mean_containment": sum(containment_scores) / max(len(containment_scores), 1),
                          "containment_examples": len(containment_scores),
                          "cached_text_match_fraction": sum(x.get("matches_cached_text") is True for x in batch_outputs) / max(sum(x.get("matches_cached_text") is not None for x in batch_outputs), 1)})
-            (out_dir / f"responses_bs{bs}.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in outputs))
+            partial_response_path.replace(response_path)
             print(json.dumps(rows[-1]), flush=True)
-    summary = {"model": args.model, "vllm": __import__("vllm").__version__, "torch": torch.__version__,
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    summary = {"model": args.model, "source_commit": source_commit,
+               "vllm": __import__("vllm").__version__, "torch": torch.__version__,
                "cuda": torch.version.cuda, "load_seconds": load_seconds, "prompt_count": len(prompts),
                "tensor_parallel_size": args.tensor_parallel_size, "pipeline_parallel_size": args.pipeline_parallel_size,
                "use_cudagraphs": args.use_cudagraphs,
