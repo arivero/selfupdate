@@ -212,6 +212,7 @@ cloze, in percentage points.
 | Mistral-7B-Instruct-v0.1 | 1 × H100 | `5fac972` | 98.02 s | 61.83 s | 236,299 | 3,821.83 | 29.65% | 57.45% | 65.70% | 10.76× | +0.15 / -0.52 pp |
 | Gemma-4-31B-it | 1 × H100 | `68e27fc` | 225.60 s | 175.53 s | 78,598 | 447.78 | 0.34% | 98.86% | 74.91% | 6.60× | -0.05 / -0.13 pp |
 | ALIA-40B-FC-2606 | 2 × H100, PP2 | `876675a` | 124.46 s | 172.49 s | 93,708 | 543.28 | 3.09% | 61.21% | 90.40% | 8.71× | +0.03 / +0.25 pp |
+| GPT-OSS-120B | 2 × H100, PP2 Harmony low | `d27003b` | 100.35 s | 118.07 s | 188,613 | 1,597.48 | 22.55% | 51.00% | 75.44% | 4.28× | +1.30 / -0.98 pp |
 
 Each artifact contains 2,071 unique example IDs, non-empty exact token-ID
 lists, and matching recorded token lengths.  The largest absolute LCS change
