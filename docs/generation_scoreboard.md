@@ -29,6 +29,13 @@ answer lengths.
 vLLM baselines and targets are deliberately excluded from this scoreboard;
 they remain in `docs/vllm_generation_benchmark.md`.
 
+## Partial batch scores
+
+| model | runtime / mode | commit | completed | tokens | elapsed | running tok/s | disposition |
+|---|---|---|---:|---:|---:|---:|---|
+| Qwen3.5-4B | PyTorch compiled/hybrid, static compile/cache length, fixed physical batch 32 | `e7f930e` | 32 / 2,071 | 840 | 53.32 s | **15.75** | stopped: decisively below target |
+| Qwen3.5-4B | same, fixed physical batch 64 | `e7f930e` | 0 / 2,071 | 0 | >88 s | n/a | stopped before first batch completed |
+
 ## Aborted full attempts
 
 | model | runtime / mode | commit | observed wall lower bound | tok/s | disposition |
