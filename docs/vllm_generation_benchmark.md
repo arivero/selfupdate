@@ -258,13 +258,15 @@ run substantially longer.
 | model | placement / mode | commit | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
 | GPT-OSS-20B | 1 × H100, graphs, Harmony high, fixed 4K | `d285abb` | 48.96 s | **1,087.58 s** | 6,899,120 | **6,343.57** | 71.56% | 41.29% | 35.36% |
+| GPT-OSS-120B | 2 × H100 PP2, graphs, Harmony high, fixed 4K | `d285abb` | 53.41 s | **1,672.80 s** | 2,958,011 | **1,768.30** | 8.79% | 78.63% | 89.95% |
 
 All 2,071 response rows and prompt-token rows passed the independent old
-cut/LCS/cloze evaluator.  Relative to the old low-reasoning reference, LCS is
-13.87 percentage points higher but cloze precision is 40.11 points lower.
-The 71.56% hard-cut rate shows that high reasoning commonly consumes even the
-4,096-token ceiling; its higher token throughput does not compensate for the
-18× increase in generated work when full-run latency is the objective.
+cut/LCS/cloze evaluator.  Relative to the old low-reasoning references, the
+20B high run gains 13.87 LCS points but loses 40.11 cloze points; the 120B
+high run gains 28.94 LCS points and 13.53 cloze points while reducing hard cuts
+by 12.99 points.  The 20B 71.56% hard-cut rate shows that high reasoning can
+consume even the 4,096-token ceiling; its higher token throughput does not
+compensate for the much larger full-run latency.
 
 Llama-3.3-70B TP2 failed during engine initialization after the cold
 Torch/FlashInfer collective compilation, with a CUDA illegal-address followed

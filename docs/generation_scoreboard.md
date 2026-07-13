@@ -118,10 +118,17 @@ across several 128-token length buckets.
 |---|---|---:|---:|---:|---:|---:|---:|---:|
 | Gemma-4-26B-A4B-it | `41d65c5` | 30 | 1–42 | 10.35 s | 0.023 s | 0.519 s | 1.21 GB | **11.29 s** |
 | Qwen3.6-35B-A3B | `41d65c5` | 40 | 1–44 | 11.23 s | 0.021 s | 0.521 s | 1.08 GB | **12.23 s** |
+| Qwen3-1.7B | single-card probe | `d285abb` | 64 | 3.585 s | 0.021 s | 0.605 s | 1.11 GB | **5.438 s** |
+| Qwen3-1.7B | PP2 probe, split 14/14 | `5c7bad7` | 64 | 3.548 s | 0.032 s | 0.708 s | 1.11 GB | **4.723 s** |
 
 Per-effective-batch partial progress is available for launches at commit
 `da68d4a` and later.  Hidden-cache progress is persisted every 100 examples at
 commit `fe9fd3c` and later without a CUDA synchronization in the teacher walk.
+The single-card and PP2 Qwen3-1.7B probes contain 1,792 corresponding hidden
+tensors (554,057,728 elements) and are bit-exact, with maximum absolute
+difference 0.0.  The PP2 probe also fixed a Singularity 3.7 launcher bug:
+comma-separated `CUDA_VISIBLE_DEVICES` values must use the `SINGULARITYENV_`
+bridge rather than `--env` (`5c7bad7`).
 
 Primary objective: beat each matching one-card eager time with no meaningful
 quality loss, then reduce the remaining gap to the graph target.  Do not mix
