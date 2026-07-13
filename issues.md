@@ -497,6 +497,38 @@ STILL OPEN — deferred with explicit reasons:
   next to the existing premise-check contrast in build_teacher_cache.py,
   before deciding whether to act on it by truncating targets. Do not
   implement without a further owner decision.
+- IDEA, NOT IMPLEMENTED (owner, 2026-07-13): **system-memory prompt
+  rotation**. The v5 `rag_system` passage is intentionally embedded in a
+  fixed system-message scaffold. That makes some scaffold tokens potentially
+  load-bearing: a teacher or student could use their fixed positions/wording
+  as a switch into the privileged-memory subspace, rather than representing
+  the remembered text itself. Test this as a controlled prompt-family
+  intervention: preserve role, meaning, privileged passage, question, answer
+  budget, and tokenized passage span, while rotating semantically equivalent
+  system wording, sentence order, and harmless padding/position across
+  examples. Compare real-memory, no-memory, and random-memory controls under
+  matched rotations. Do not call a result robust unless recall and premise
+  separation survive unseen scaffold variants. This is not permission to move
+  the passage into a user/tool/document turn: it must remain system-scoped
+  memory. A stronger companion ablation is **full-system censoring**: give the
+  teacher the complete system-memory turn but censor that entire turn in the
+  student view, rather than deleting only the poem span. It removes every
+  fixed scaffold token and its position as a possible subspace trigger.
+  Compare it with passage-only censoring at matched question/answer geometry;
+  it is a different student context and must be reported as such, not folded
+  into the ordinary `rag_system` result.
+- IDEA, NOT IMPLEMENTED (owner, 2026-07-13): **teacher-correct-only cache
+  subset**.  Train on only those V5 examples for which the teacher's generated
+  answer passes a predeclared reference-recall / task-appropriate correctness
+  gate.  This may prevent a weak or misframed teacher from distilling obvious
+  retrieval failures into the student.  It is also a selection intervention:
+  it changes corpus coverage, answer-length mix, poem/location difficulty,
+  and potentially the teacher's damage profile.  Any experiment must retain
+  the rejected-example ledger and report acceptance rate plus recall/damage
+  separately on accepted and rejected strata; compare against a same-item-
+  budget random subset and the full teacher cache.  It must not use the
+  original reference text as a training target: the reference is only the
+  offline gate used to select teacher-sourced targets.
 
 STILL OPEN — research (owner's C3 program, EXPERIMENTS.md): loss-grid
 analysis (the original grid closed; the expanded Jacobian/lens queue and its

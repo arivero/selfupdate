@@ -13,3 +13,4 @@ containers/*.sif
 containers/*.sqsh
 containers/*.ext4
 containers/dev-python/
+archive/
