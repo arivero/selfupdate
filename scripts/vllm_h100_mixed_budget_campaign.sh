@@ -18,6 +18,24 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 stamp() { date '+%F %T'; }
 slug() { printf '%s' "$1" | tr '/.' '__'; }
 
+run_isolated() {
+  # vLLM multiprocess initialization failures can return from the Python
+  # leader while CUDA-corrupted workers survive as PPID-1 orphans.  Give each
+  # engine a private process group, then clean only that group before a
+  # placement fallback or the next model is allowed to start.
+  setsid "$@" &
+  local leader=$!
+  local rc=0
+  wait "$leader" || rc=$?
+  kill -TERM -- "-$leader" 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    kill -0 -- "-$leader" 2>/dev/null || break
+    sleep 0.2
+  done
+  kill -KILL -- "-$leader" 2>/dev/null || true
+  return "$rc"
+}
+
 run_single() {
   local gpu="$1" model="$2" tag="$3" format="${4:-native}" util="${5:-0.85}"
   local out="runs/vllm_benchmark_h100/mixed_budget_campaign/$tag"
@@ -27,7 +45,8 @@ run_single() {
     return 0
   fi
   printf '%s START single GPU%s %s\n' "$(stamp)" "$gpu" "$model" >>"$MAINLOG"
-  CUDA_VISIBLE_DEVICES="$gpu" "$PY" "$ROOT/scripts/benchmark_vllm_generation.py" \
+  run_isolated env CUDA_VISIBLE_DEVICES="$gpu" \
+    "$PY" "$ROOT/scripts/benchmark_vllm_generation.py" \
     --model "$model" --batch-sizes 64 --max-num-seqs 64 \
     --gpu-memory-utilization "$util" --max-model-len 4096 \
     --use-cudagraphs --progress --prompt-format "$format" --out "$out" \
@@ -53,7 +72,8 @@ run_dual() {
     parallel_args=(--pipeline-parallel-size 2)
   fi
   printf '%s START dual %s %s\n' "$(stamp)" "$placement" "$model" >>"$MAINLOG"
-  CUDA_VISIBLE_DEVICES=0,1 "$PY" "$ROOT/scripts/benchmark_vllm_generation.py" \
+  run_isolated env CUDA_VISIBLE_DEVICES=0,1 \
+    "$PY" "$ROOT/scripts/benchmark_vllm_generation.py" \
     --model "$model" --batch-sizes 64 --max-num-seqs 64 \
     --gpu-memory-utilization "$util" --max-model-len 4096 \
     --use-cudagraphs --progress --prompt-format "$format" \
