@@ -31,6 +31,7 @@ fi
 
 exec singularity exec --nv \
   --cleanenv \
+  --pwd /work \
   "${overlay_args[@]}" \
   --home "$CONTAINER_HOME:/home/$USER" \
   --env PYTHONPATH="$DEV_PYTHON_CONTAINER:/opt/selfupdate-python:/work/src" \
@@ -38,6 +39,9 @@ exec singularity exec --nv \
   --env SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}" \
   --env HF_HOME="$HF_CACHE_CONTAINER" \
   --env TRANSFORMERS_CACHE="$HF_CACHE_CONTAINER" \
+  --env HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}" \
+  --env TQDM_DISABLE="${TQDM_DISABLE:-1}" \
+  --env TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}" \
   --env MPLCONFIGDIR=/tmp/matplotlib \
   --env XDG_CACHE_HOME=/tmp/xdg-cache \
   --bind "$DEV_PYTHON_HOST:$DEV_PYTHON_CONTAINER" \

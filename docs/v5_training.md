@@ -13,6 +13,30 @@ claim in the PDF is accompanied by a gray source excerpt and file/line
 reference.  The numbers are regenerated from the active v5 cache indexes and
 model configs, not inferred from a failure log.
 
+## Question-suite source coverage
+
+The active window-RAG suite
+`data/combined/examples_v5rs_window.jsonl` contains 2,071 questions: 1,490
+for Machado (716 source lines) and 581 for Quijote (280 source lines).  A
+2026-07-13 audit counted each record's half-open `target_lines` span against
+the source named by `examples_v5rs_window_coverage.json`.  “Direct” below
+means only `next` and `prev` questions.  Cloze records are reported separately
+because their metadata identifies the target block, not the exact deleted
+words; treating every word in that block as a cloze answer would overclaim.
+
+| corpus | source lines | normalized word types | direct hits per line (min / median / mean / max) | hits including cloze block | uncovered direct lines | uncovered direct word types |
+|---|---:|---:|---:|---:|---:|---:|
+| Machado | 716 | 1,245 | 1 / 3 / 3.327 / 4 | 2 / 4 / 4.327 / 5 | 0 | 0 |
+| Quijote | 280 | 2,295 | 1 / 3 / 3.311 / 4 | 2 / 4 / 4.311 / 5 | 0 | 0 |
+
+Thus every supplied source line, every normalized word occurrence, and every
+normalized vocabulary type appears in at least one direct answer target; the
+suite's full-text coverage does not depend on the cloze questions.  The
+least-repeated targets are boundary cases: the first and last Machado lines,
+the first Quijote line, and the last few long Quijote lines.  The generated
+coverage manifest's coarser invariant (`covered_lines == n_lines`) agrees with
+this audit for both corpora.
+
 The document intentionally distinguishes:
 
 - persistent cache storage on disk;
