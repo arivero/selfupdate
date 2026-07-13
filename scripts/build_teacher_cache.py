@@ -36,8 +36,9 @@ cap_cpu_threads()
 
 import torch
 from tqdm import tqdm
-from transformers import AutoTokenizer, CompileConfig
+from transformers import AutoConfig, AutoTokenizer, CompileConfig, Mxfp4Config
 from transformers.utils import logging as transformers_logging
+from transformers.utils import is_kernels_available, is_triton_available
 
 from selfupdate.chatfmt import adapt_records, stop_token_id
 from selfupdate.config import load_config
@@ -76,6 +77,37 @@ def _source_commit(root: Path) -> str:
                     if name == ref:
                         return value
         return "unknown"
+
+
+def _native_mxfp4_load_overrides(model_name: str) -> dict:
+    """Keep GPT-OSS MXFP4 checkpoints quantized instead of bf16 fallback.
+
+    Transformers silently flips pre-quantized MXFP4 checkpoints to bf16
+    dequantization when the `kernels` package is absent. That fallback is
+    harmless for 20B-class models but fatal for 120B on 80GB cards, where the
+    load later fails as a CUDA materialization error. Fail early with the local
+    pinned remedy instead.
+    """
+    cfg = AutoConfig.from_pretrained(model_name)
+    qc = getattr(cfg, "quantization_config", None) or getattr(
+        getattr(cfg, "text_config", None), "quantization_config", None)
+    if not (isinstance(qc, dict) and qc.get("quant_method") == "mxfp4"):
+        return {}
+    if not is_triton_available("3.4.0"):
+        raise RuntimeError(
+            "MXFP4 teacher cache requires Triton >= 3.4.0; keep torch fixed "
+            "and repair the container/dev layer instead.")
+    if not is_kernels_available():
+        raise RuntimeError(
+            "MXFP4 teacher cache requires kernels==0.12.0 in this repo's "
+            "container dev layer. Run: scripts/container_pip.sh install "
+            "--no-deps 'kernels==0.12.0'")
+    return {
+        "quantization_config": Mxfp4Config(
+            modules_to_not_convert=qc.get("modules_to_not_convert"),
+            dequantize=False,
+        )
+    }
 
 
 def load_records(path: str, tokenizer) -> list[dict]:
@@ -432,6 +464,7 @@ def main() -> None:
         except AttributeError as exc:
             raise ValueError(f"unknown model.dtype {cfg.model.dtype!r}") from exc
         load_kwargs = {"dtype": model_dtype, "low_cpu_mem_usage": True}
+        load_kwargs.update(_native_mxfp4_load_overrides(cfg.model.name))
         if uses_pipeline_map(cfg):
             load_kwargs["device_map"] = pp_device_map(cfg)
         elif cfg.model.device_map:
