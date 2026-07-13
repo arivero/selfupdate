@@ -211,6 +211,7 @@ cloze, in percentage points.
 | Nemotron Nano 9B v2 | 1 × H100 | `c32e750` | 109.20 s | 102.97 s | 328,511 | 3,190.25 | 99.71% | 68.62% | 21.89% | 9.52× | +0.36 / -0.04 pp |
 | Mistral-7B-Instruct-v0.1 | 1 × H100 | `5fac972` | 98.02 s | 61.83 s | 236,299 | 3,821.83 | 29.65% | 57.45% | 65.70% | 10.76× | +0.15 / -0.52 pp |
 | Gemma-4-31B-it | 1 × H100 | `68e27fc` | 225.60 s | 175.53 s | 78,598 | 447.78 | 0.34% | 98.86% | 74.91% | 6.60× | -0.05 / -0.13 pp |
+| ALIA-40B-FC-2606 | 2 × H100, PP2 | `876675a` | 124.46 s | 172.49 s | 93,708 | 543.28 | 3.09% | 61.21% | 90.40% | 8.71× | +0.03 / +0.25 pp |
 
 Each artifact contains 2,071 unique example IDs, non-empty exact token-ID
 lists, and matching recorded token lengths.  The largest absolute LCS change
@@ -220,6 +221,15 @@ confirming that true mixed-length batching—not merely enabling graphs—is the
 dominant change.  The speed column is not a quality ranking: Nemotron's 99.71%
 hard-cut rate and GPT-OSS-20B's 28.66% next/previous LCS make those conditions
 poor teacher candidates despite their throughput.
+
+Llama-3.3-70B TP2 failed during engine initialization after the cold
+Torch/FlashInfer collective compilation, with a CUDA illegal-address followed
+by `CUBLAS_STATUS_EXECUTION_FAILED`.  Its first automatic PP2 fallback began
+before the corrupted TP workers released their 76 GiB reservations and failed
+the startup free-memory check; that PP result is contaminated and is not a
+compatibility verdict.  A clean isolated PP2 retry remains required.  The
+incident produced launcher commit `4c79180`, which places each future engine
+in a private process group and reaps residual workers before any fallback.
 
 ## H100 larger-model and two-card throughput results
 
