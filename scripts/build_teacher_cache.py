@@ -86,6 +86,7 @@ def generate_answers_batched(
     compile_generation: bool = False,
     cache_implementation: str = "",
     shuffle_seed: int = 0,
+    progress_callback=None,
 ) -> tuple[list[tuple[list[int], bool]], list[int]]:
     """Left-padded batched greedy decode with per-record answer ceilings.
 
@@ -115,6 +116,8 @@ def generate_answers_batched(
     answers: list[tuple[list[int], bool] | None] = [None] * len(prompts)
     effective_batches: list[int] = []
     safe_batch_size = batch_size
+    completed_rows = 0
+    generated_token_count = 0
     order = list(range(len(prompts)))
     outer_batches: list[list[int]] = []
     if shuffle_seed:
@@ -211,6 +214,13 @@ def generate_answers_batched(
                         hard_cut = True
                     answers[index] = (ids, hard_cut)
                 effective_batches.append(len(indices))
+                completed_rows += len(indices)
+                generated_token_count += sum(
+                    len(answers[index][0]) for index in indices)
+                if progress_callback is not None:
+                    progress_callback(
+                        completed_rows, len(prompts), generated_token_count,
+                        len(indices), group_budget)
                 offset += len(indices)
                 current = min(len(group) - offset, safe_batch_size)
                 del input_ids, attention_mask, out, generated
@@ -390,13 +400,31 @@ def main() -> None:
             sync()
             timings["generation_setup_seconds"] = (
                 time.perf_counter() - t_setup)
+        progress_path = root / "generation_progress.jsonl"
+        progress_path.write_text("")
         t_phase = time.perf_counter()
+
+        def record_generation_progress(completed, total, tokens,
+                                       effective_batch, allowance):
+            elapsed = time.perf_counter() - t_phase
+            with progress_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "completed": completed,
+                    "total": total,
+                    "generated_tokens": tokens,
+                    "elapsed_seconds": elapsed,
+                    "tokens_per_second": tokens / elapsed if elapsed else 0.0,
+                    "effective_batch": effective_batch,
+                    "allowance": allowance,
+                }) + "\n")
+
         generated_answers, effective_generation_batches = generate_answers_batched(
             model, prompts, budgets, stop_id, cfg.cache.generation_batch,
             cfg.cache.max_sequence_tokens, cfg.cache.generation_budget_bucket,
             cfg.cache.generation_compile,
             cfg.cache.generation_cache_implementation,
-            cfg.cache.generation_shuffle_seed)
+            cfg.cache.generation_shuffle_seed,
+            record_generation_progress)
         sync()
         timings["generation_seconds"] = time.perf_counter() - t_phase
         for record, ex, (answer_ids, hard_cut) in zip(
