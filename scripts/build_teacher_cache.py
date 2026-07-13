@@ -413,7 +413,18 @@ def main() -> None:
             default=0)
         if cfg.cache.generation_compile and prompts:
             order = list(range(len(prompts)))
-            if cfg.cache.generation_shuffle_seed:
+            if cfg.cache.generation_fixed_batch:
+                warm_groups: dict[int, list[int]] = {}
+                for index in order:
+                    budget = budgets[index]
+                    key = (budget if cfg.cache.generation_budget_bucket == 1
+                           else 0 if cfg.cache.generation_budget_bucket == 0
+                           else math.ceil(
+                               budget / cfg.cache.generation_budget_bucket)
+                           * cfg.cache.generation_budget_bucket)
+                    warm_groups.setdefault(key, []).append(index)
+                order = max(warm_groups.values(), key=len)
+            elif cfg.cache.generation_shuffle_seed:
                 generator = torch.Generator().manual_seed(
                     cfg.cache.generation_shuffle_seed)
                 order = torch.randperm(
