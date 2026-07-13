@@ -54,18 +54,20 @@ and preserve exact response token IDs for lossless reuse by the in-repo
 
 | model | runtime / mode | commit | requested batch | setup | generation | tokens | tok/s | hard cuts | next/prev LCS | cloze precision |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Gemma-4-26B-A4B-it | one-card graph exact-token backend, mixed per-record budgets | `1f28029` | 64 | 94.48 s | **47.30 s** | 85,028 | **1,797.58** | 1.45% | 97.33% | 81.15% |
 | Gemma-4-26B-A4B-it | one-card graph exact-token backend, exact-budget subgroups | `e912f2d` | 64 | 142.99 s | **297.22 s** | 84,276 | **283.55** | 1.45% | 97.11% | 81.45% |
 | Qwen3.6-35B-A3B | one-card graph exact-token backend, mixed per-record budgets | `1f28029` | 64 | 143.70 s | **50.80 s** | 75,219 | **1,480.78** | 0.24% | 93.94% | 96.96% |
 | Qwen3.5-4B | one-card graph exact-token backend, mixed per-record budgets | `1f28029` | 64 | 106.32 s | **35.22 s** | 87,306 | **2,478.57** | 2.12% | 91.96% | 92.55% |
 
-The Gemma artifact contains 2,071 unique rows; every row contains a non-empty
-`token_ids` list whose length matches `gen_tokens`.  Its 297.22-second answer
-phase meets the approximately 300-second generation objective on one card.
+Each winning artifact contains 2,071 unique rows; every row contains a
+non-empty `token_ids` list whose length matches `gen_tokens`.  Gemma's earlier
+297.22-second exact-budget-subgroup answer phase met the approximately
+300-second generation objective on one card; the mixed-budget implementation
+then reduced the same phase to 47.30 seconds.
 The mixed-budget change is the dominant speedup: it retains a separate exact
 ceiling and stop ID for every record while allowing all 64 differently sized
 requests into one engine call.  The Qwen rows preserve the same quality window
-while finishing far below both the eager and prior graph timings.  A matched
-Gemma mixed-budget attempt at commit `1f28029` is live.
+while finishing far below both the eager and prior graph timings.
 
 Per-effective-batch partial progress is available for launches at commit
 `da68d4a` and later.
