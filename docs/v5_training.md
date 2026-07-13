@@ -87,3 +87,39 @@ ids. Future queues also run `scripts/cache_generation_gate.py` after the cache
 build, checking the hard-cut rate in the actual `generation_report.json` before
 an arm can start. This complements, rather than replaces, the RAG retrieval
 gate.
+
+## Single-card cache construction, 2026-07-13
+
+The teacher cache has two independent phases.  A graph-capable continuous
+generation backend produces exact response token IDs with one per-record
+allowance and stop ID; `build_teacher_cache.py --generation-responses` then
+uses those IDs directly for the teacher-forced hidden-state pass.  There is no
+decode/re-encode round trip.  The response file content hash is part of cache
+identity.  `--generation-only --generation-responses` validates and scores a
+response artifact without loading teacher weights; the full 2,071-row Gemma
+artifact imported in 0.029 s and its complete CPU audit took 1.66 s.
+
+This division does not introduce a student dependency.  Cache construction
+loads only the frozen teacher, and its forward input is the teacher prompt plus
+the teacher's own generated answer.  No student premise/contrast forward is
+part of this phase.
+
+The dense Qwen3.5-4B single-card measurement used batch 64 for both generation
+and requested hidden forwards.  Generation took 35.22 s for 87,306 tokens
+(2,478.57 token/s).  The original B=1 hidden walk took 623.64 s; length-aligned
+randomized hidden batches with persistent OOM backoff reduced it to 86.20 s
+(effective batches 5–64, no OOM).  The 36.63 GB cache copied to CPU in 0.924 s
+at 36.92 GiB/s.  Thus D2H was only 1.34% of teacher compute; after batching,
+storage/backpressure, not PCIe, is the secondary bottleneck.
+
+The batching refactor preserves `teacher_batch: 1` bit-exactly.  Against the
+completed B=1 reference, a 64-example all-layer certification was bit-exact
+for all 2,048 tensors, and a full-cache audit confirmed identical semantic
+spans for all 2,071 examples plus bit-exact tensors for 32 evenly spaced
+examples.  Cache schema 9 includes `teacher_batch`, because future model
+kernels are not assumed to share this exactness result.
+
+Operationally, generation progress is logged per engine batch and hidden-pass
+progress is appended to `teacher_progress.jsonl` every 100 examples.  The
+hidden ledger records only wall/queue counters: it adds no `.item()`, CPU tensor
+copy, CUDA-event wait, or stream synchronization to the teacher walk.

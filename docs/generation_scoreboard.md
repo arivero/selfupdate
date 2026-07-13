@@ -69,8 +69,33 @@ ceiling and stop ID for every record while allowing all 64 differently sized
 requests into one engine call.  The Qwen rows preserve the same quality window
 while finishing far below both the eager and prior graph timings.
 
+## Full hidden-state cache phase (n = 2,071)
+
+Generation is imported as exact token IDs in both rows, so these numbers cover
+only the in-repo teacher-forced hidden-state pass and its asynchronous write.
+Model loading is outside `total`, just as graph-backend setup is outside the
+generation time above.  `storage` is worker time and overlaps compute; `total`
+is the phase wall clock.
+
+| model | hidden mode | commit | requested / effective batch | teacher compute | D2H | storage | hidden bytes | total |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.5-4B | one forward per example | `e35594a` | 1 / 1 | 612.43 s | 0.715 s | 24.48 s | 36.63 GB | **623.64 s** |
+| Qwen3.5-4B | length-aligned randomized batches, OOM backoff | `41d65c5` | 64 / 5–64 | 68.76 s | 0.924 s | 16.08 s | 36.63 GB | **86.20 s** |
+
+The batched row is 7.23× faster in wall time.  D2H is 1.34% of teacher compute
+even after compute was accelerated, so PCIe transfer is not the bottleneck;
+storage/backpressure is now the secondary cost.  All 2,071 semantic index
+entries match the B=1 cache.  A full-cache audit sampled 32 examples × 32
+layers bit-exactly, and the preceding 64-example certification compared all
+2,048 tensors bit-exactly (zero maximum and mean absolute difference).
+
+For the dense teacher, completed steady phases are 35.22 s generation plus
+86.20 s hidden caching = 121.42 s.  Their independent model load/setup costs
+remain separate and must not be hidden inside that sum.
+
 Per-effective-batch partial progress is available for launches at commit
-`da68d4a` and later.
+`da68d4a` and later.  Hidden-cache progress is persisted every 100 examples at
+commit `fe9fd3c` and later without a CUDA synchronization in the teacher walk.
 
 Primary objective: beat each matching one-card eager time with no meaningful
 quality loss, then reduce the remaining gap to the graph target.  Do not mix
