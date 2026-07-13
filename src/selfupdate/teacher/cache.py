@@ -85,11 +85,14 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "generation_budget_bucket": int(cfg.cache.generation_budget_bucket),
          "generation_compile": bool(cfg.cache.generation_compile),
          "generation_cache_implementation": cfg.cache.generation_cache_implementation,
+         "generation_compile_dynamic": bool(cfg.cache.generation_compile_dynamic),
+         "generation_cache_max_tokens": int(cfg.cache.generation_cache_max_tokens),
+         "generation_fixed_batch": bool(cfg.cache.generation_fixed_batch),
          "generation_shuffle_seed": int(cfg.cache.generation_shuffle_seed),
          "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
          "limit": int(cfg.cache.limit),
          "model_dtype": cfg.model.dtype,
-         "schema": 6},
+         "schema": 7},
     )
     model_short = cfg.model.name.split("/")[-1]
     root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"

@@ -110,6 +110,11 @@ class CacheConfig:
     # CUDA graphs where the model/cache permit it; off is the eager baseline.
     generation_compile: bool = False
     generation_cache_implementation: str = ""
+    # Graph-shape controls. Dynamic is the safe default; dense-model probes
+    # can pin cache and physical batch shapes to amortize one capture.
+    generation_compile_dynamic: bool = True
+    generation_cache_max_tokens: int = 0
+    generation_fixed_batch: bool = False
     # Zero preserves dataset order.  A positive seed deterministically shuffles
     # within allowance buckets and shuffles aligned batches; answers are
     # restored to their original example ids.

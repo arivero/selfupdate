@@ -86,6 +86,9 @@ def generate_answers_batched(
     compile_generation: bool = False,
     cache_implementation: str = "",
     shuffle_seed: int = 0,
+    compile_dynamic: bool = True,
+    cache_max_tokens: int = 0,
+    fixed_batch: bool = False,
     progress_callback=None,
 ) -> tuple[list[tuple[list[int], bool]], list[int]]:
     """Left-padded batched greedy decode with per-record answer ceilings.
@@ -159,15 +162,24 @@ def generate_answers_batched(
             current = min(len(group), safe_batch_size)
             while offset < len(group):
                 indices = group[offset:offset + current]
-                chunk_prompts = [prompts[index] for index in indices]
+                physical_indices = list(indices)
+                if fixed_batch and physical_indices:
+                    physical_indices.extend(
+                        [physical_indices[-1]]
+                        * (safe_batch_size - len(physical_indices)))
+                chunk_prompts = [prompts[index] for index in physical_indices]
                 width = max(map(len, chunk_prompts))
                 if (max_sequence_tokens
                         and width + group_budget > max_sequence_tokens):
                     raise ValueError(
                         f"padded generation needs {width + group_budget} tokens, "
                         f"above cache.max_sequence_tokens={max_sequence_tokens}")
+                if cache_max_tokens and width + group_budget > cache_max_tokens:
+                    raise ValueError(
+                        f"padded generation needs {width + group_budget} tokens, "
+                        f"above cache.generation_cache_max_tokens={cache_max_tokens}")
                 input_ids = torch.full(
-                    (len(indices), width), stop_id, dtype=torch.long,
+                    (len(physical_indices), width), stop_id, dtype=torch.long,
                     device=model.device)
                 attention_mask = torch.zeros_like(input_ids)
                 for row, prompt in enumerate(chunk_prompts):
@@ -178,9 +190,12 @@ def generate_answers_batched(
                     generation_options = {}
                     if cache_implementation:
                         generation_options["cache_implementation"] = cache_implementation
+                    if cache_max_tokens:
+                        generation_options["cache_config"] = {
+                            "max_cache_len": cache_max_tokens}
                     if compile_generation:
                         generation_options["compile_config"] = CompileConfig(
-                            mode="reduce-overhead", dynamic=True)
+                            mode="reduce-overhead", dynamic=compile_dynamic)
                     out = model.generate(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -192,17 +207,21 @@ def generate_answers_batched(
                         **generation_options,
                     )
                 except RuntimeError as exc:
-                    if not _is_cuda_oom(exc) or len(indices) <= 1:
+                    cannot_reduce = (safe_batch_size <= 1 if fixed_batch
+                                     else len(indices) <= 1)
+                    if not _is_cuda_oom(exc) or cannot_reduce:
                         raise
                     del input_ids, attention_mask
-                    current = max(1, len(indices) // 2)
+                    current = max(
+                        1, (safe_batch_size if fixed_batch else len(indices)) // 2)
                     safe_batch_size = min(safe_batch_size, current)
+                    current = min(len(group) - offset, safe_batch_size)
                     torch.cuda.empty_cache()
                     print(
                         f"generation OOM: retrying allowance {group_budget} at "
                         f"batch {current}", flush=True)
                     continue
-                generated = out[:, width:].to("cpu")
+                generated = out[:len(indices), width:].to("cpu")
                 for row, index in enumerate(indices):
                     budget = budgets[index]
                     ids = generated[row, :budget].tolist()
@@ -282,6 +301,12 @@ def main() -> None:
                     help="compile decode with PyTorch reduce-overhead/CUDA graphs")
     ap.add_argument("--generation-cache-implementation", default=None,
                     help="Transformers cache implementation, e.g. hybrid or static")
+    ap.add_argument("--generation-static-shapes", action="store_true",
+                    help="compile decode with dynamic=False")
+    ap.add_argument("--generation-cache-max-tokens", type=int, default=None,
+                    help="pin Transformers cache max length for graph reuse")
+    ap.add_argument("--generation-fixed-batch", action="store_true",
+                    help="duplicate padding rows to keep the physical batch fixed")
     ap.add_argument("--generation-shuffle-seed", type=int, default=None,
                     help="deterministically shuffle generation scheduling")
     ap.add_argument("--cache-root", default=None,
@@ -302,6 +327,12 @@ def main() -> None:
         cfg.cache.generation_compile = True
     if args.generation_cache_implementation is not None:
         cfg.cache.generation_cache_implementation = args.generation_cache_implementation
+    if args.generation_static_shapes:
+        cfg.cache.generation_compile_dynamic = False
+    if args.generation_cache_max_tokens is not None:
+        cfg.cache.generation_cache_max_tokens = args.generation_cache_max_tokens
+    if args.generation_fixed_batch:
+        cfg.cache.generation_fixed_batch = True
     if args.generation_shuffle_seed is not None:
         cfg.cache.generation_shuffle_seed = args.generation_shuffle_seed
     if args.cache_root is not None:
@@ -396,7 +427,10 @@ def main() -> None:
                 stop_id, cfg.cache.generation_batch,
                 cfg.cache.max_sequence_tokens,
                 cfg.cache.generation_budget_bucket,
-                True, cfg.cache.generation_cache_implementation, 0)
+                True, cfg.cache.generation_cache_implementation, 0,
+                cfg.cache.generation_compile_dynamic,
+                cfg.cache.generation_cache_max_tokens,
+                cfg.cache.generation_fixed_batch)
             sync()
             timings["generation_setup_seconds"] = (
                 time.perf_counter() - t_setup)
@@ -424,6 +458,9 @@ def main() -> None:
             cfg.cache.generation_compile,
             cfg.cache.generation_cache_implementation,
             cfg.cache.generation_shuffle_seed,
+            cfg.cache.generation_compile_dynamic,
+            cfg.cache.generation_cache_max_tokens,
+            cfg.cache.generation_fixed_batch,
             record_generation_progress)
         sync()
         timings["generation_seconds"] = time.perf_counter() - t_phase
@@ -469,6 +506,28 @@ def main() -> None:
             torch.compiler.reset()
         del prompts
         torch.cuda.empty_cache()
+
+    timings["examples"] = len(examples)
+    timings["generated_tokens"] = sum(
+        len(answer_ids) for answer_ids, _ in generated_answers)
+    timings["generation_tokens_per_second"] = (
+        timings["generated_tokens"] / timings["generation_seconds"]
+        if timings["generation_seconds"] else 0.0)
+    timings["requested_generation_batch"] = cfg.cache.generation_batch
+    timings["generation_budget_bucket"] = cfg.cache.generation_budget_bucket
+    timings["generation_compile"] = cfg.cache.generation_compile
+    timings["generation_cache_implementation"] = (
+        cfg.cache.generation_cache_implementation)
+    timings["generation_compile_dynamic"] = (
+        cfg.cache.generation_compile_dynamic)
+    timings["generation_cache_max_tokens"] = (
+        cfg.cache.generation_cache_max_tokens)
+    timings["generation_fixed_batch"] = cfg.cache.generation_fixed_batch
+    timings["generation_shuffle_seed"] = cfg.cache.generation_shuffle_seed
+    timings["minimum_effective_generation_batch"] = (
+        min(effective_generation_batches) if effective_generation_batches else 0)
+    timings["maximum_effective_generation_batch"] = (
+        max(effective_generation_batches) if effective_generation_batches else 0)
 
     if args.generation_only:
         timings["total_seconds"] = time.perf_counter() - started_at
