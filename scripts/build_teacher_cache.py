@@ -278,6 +278,8 @@ def main() -> None:
                     help="override cache.root (use node-local /tmp for the hot path)")
     ap.add_argument("--limit", type=int, default=None,
                     help="evenly-spaced cache subset for a performance probe")
+    ap.add_argument("--generation-only", action="store_true",
+                    help="benchmark/write teacher answers without hidden-state caching")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     if args.generation_batch is not None:
@@ -298,6 +300,7 @@ def main() -> None:
         cfg.cache.limit = args.limit
 
     root, chash = resolve_cache_dir(cfg)
+    root.mkdir(parents=True, exist_ok=True)
     print(f"cache dir: {root}")
 
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
@@ -313,6 +316,8 @@ def main() -> None:
     if any(open_answer) and not all(open_answer):
         sys.exit("mixed open-answer/legacy records in one jsonl — rebuild")
     v5 = all(open_answer) and bool(examples)
+    if args.generation_only and not v5:
+        sys.exit("--generation-only requires an open-answer V5 dataset")
     try:
         model_dtype = getattr(torch, cfg.model.dtype)
     except AttributeError as exc:
@@ -337,11 +342,6 @@ def main() -> None:
             torch.cuda.synchronize(model.device)
 
     masker = ContextMasker(tok, pad_random=(cfg.mask.compaction == "pad_random"))
-    writer = AsyncTeacherCacheWriter(
-        root, chash, shard_size=cfg.cache.shard_size,
-        hidden_dtype=cfg.cache.hidden_dtype)
-    copy_stream = (torch.cuda.Stream(device=model.device)
-                   if torch.cuda.is_available() else None)
     stop_id = stop_token_id(tok)
     corpora = _corpus_texts(Path(cfg.data.examples_path)) if v5 else {}
 
@@ -441,6 +441,22 @@ def main() -> None:
             torch.compiler.reset()
         del prompts
         torch.cuda.empty_cache()
+
+    if args.generation_only:
+        timings["total_seconds"] = time.perf_counter() - started_at
+        (root / "timings.json").write_text(json.dumps(timings, indent=2) + "\n")
+        print(f"generated {len(examples)} answers to {root}")
+        print(f"teacher generation — {timings['generation_seconds']:.1f}s steady, "
+              f"{timings['generation_setup_seconds']:.1f}s setup, "
+              f"next/prev word-LCS {gen_summary['mean_word_acc_nextprev']:.3f}, "
+              f"hard-cut {gen_summary['hard_cut_fraction']:.1%}")
+        return
+
+    writer = AsyncTeacherCacheWriter(
+        root, chash, shard_size=cfg.cache.shard_size,
+        hidden_dtype=cfg.cache.hidden_dtype)
+    copy_stream = (torch.cuda.Stream(device=model.device)
+                   if torch.cuda.is_available() else None)
 
     for item_no, (record, ex) in enumerate(tqdm(
             zip(records, examples), total=len(examples), desc="teacher forward")):
