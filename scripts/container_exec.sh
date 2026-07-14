@@ -9,8 +9,11 @@ DEV_PYTHON_CONTAINER="/dev-python"
 # Prefer an explicitly completed node-local snapshot stage.  Otherwise use
 # the account cache; never create an accidental third cache under /work.
 HF_STAGE_HOST="${SELFUPDATE_HF_STAGE:-/tmp/$USER/selfupdate-hf-cache}"
+HF_STAGE_SHM="/dev/shm/$USER/selfupdate-hf-cache"
 if [[ -n "${SELFUPDATE_HF_CACHE_HOST:-}" ]]; then
   HF_CACHE_HOST="$SELFUPDATE_HF_CACHE_HOST"
+elif [[ -f "$HF_STAGE_SHM/.selfupdate-hf-stage-ready" ]]; then
+  HF_CACHE_HOST="$HF_STAGE_SHM"
 elif [[ -f "$HF_STAGE_HOST/.selfupdate-hf-stage-ready" ]]; then
   HF_CACHE_HOST="$HF_STAGE_HOST"
 else

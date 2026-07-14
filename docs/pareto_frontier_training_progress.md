@@ -48,6 +48,11 @@ Recorded 2026-07-14 13:34 CEST from allocation 418174 on `agpul02`:
 - 4 × NVIDIA L40S, 46,068 MiB each; all four were idle at inspection.
 - Compute-node `/tmp`: 367 GiB free of 434 GiB; inode use 1%.
 - Host memory: approximately 1.5 TiB, mostly free.
+- Pipeline-v2 load staging may use Unix tmpfs at
+  `/dev/shm/$USER/selfupdate-hf-cache`: 756 GiB was available on `agpul02`.
+  Base snapshots and transient checkpoint copies are ordinary safetensors
+  files there, shared through the kernel page cache; durable copies remain on
+  Lustre.
 - The durable caches below were generated previously on H100 capacity probes;
   their provenance commits are ancestors of the current checkout
   (`393719d`); the five `artifacts_exact_full` caches use

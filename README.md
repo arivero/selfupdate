@@ -66,6 +66,12 @@ same prompt construction and scoring path used for its base reference. The
 retired Transformers `model.generate` implementation is intentionally not
 kept in-tree; it remains recoverable from Git history.
 
+For repeated base-model or checkpoint loads, stage snapshots into Unix tmpfs
+with `scripts/stage_hf_cache.sh --shm <org/model>`. Container launches prefer
+the completed RAM stage automatically. Direct vLLM launches set `HF_HOME` to
+`/dev/shm/$USER/selfupdate-hf-cache`; ordinary safetensors file access then
+benefits from kernel-shared resident pages without a custom model object.
+
 ## Current Finding
 
 Storage and readout dissociate. Hidden matching writes distributed,
