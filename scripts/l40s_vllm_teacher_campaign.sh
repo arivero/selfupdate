@@ -18,6 +18,16 @@ export TRANSFORMERS_VERBOSITY=error TOKENIZERS_PARALLELISM=false
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export SSL_CERT_FILE="/fs/agustina/arivero/supercomplex/.local/lib/python3.11/site-packages/certifi/cacert.pem"
 
+run_isolated() {
+  setsid "$@" &
+  local leader=$! rc=0
+  wait "$leader" || rc=$?
+  kill -TERM -- "-$leader" 2>/dev/null || true
+  sleep 0.2
+  kill -KILL -- "-$leader" 2>/dev/null || true
+  return "$rc"
+}
+
 run_one() {
   local tag="$1" model="$2" visible="$3" placement="$4" format="${5:-native}"
   local out="$VLLMROOT/$tag" log="$LOGROOT/$tag.log"
@@ -37,7 +47,7 @@ run_one() {
   rm -rf "$tmp"
   mkdir -p "$out" "$CACHEROOT/$tag"
   if [[ ! -f "$out/responses_bs64.jsonl" ]]; then
-    setsid env CUDA_VISIBLE_DEVICES="$visible" "$PY" \
+    run_isolated env CUDA_VISIBLE_DEVICES="$visible" "$PY" \
       "$ROOT/scripts/benchmark_vllm_generation.py" \
       --model "$model" --batch-sizes 64 --max-num-seqs 64 \
       --gpu-memory-utilization 0.85 --max-model-len 4096 \
@@ -63,10 +73,10 @@ run_one() {
   local crc=$?
   local timing
   timing="$(find "$tmp" -name timings.json -print -quit 2>/dev/null || true)"
-  if [[ "$crc" == 0 && -n "$timing" ]]; then
+  if [[ -n "$timing" ]]; then
     cp "$timing" "$CACHEROOT/$tag/timings.json"
     cp "$out/summary.json" "$CACHEROOT/$tag/vllm_summary.json" 2>/dev/null || true
-    echo "DONE $tag" >> "$OUTROOT/campaign.log"
+    echo "DONE $tag cache_rc=$crc" >> "$OUTROOT/campaign.log"
   else
     echo "CACHE_FAIL $tag rc=$crc" >> "$OUTROOT/campaign.log"
   fi
