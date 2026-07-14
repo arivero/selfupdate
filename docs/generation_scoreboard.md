@@ -88,6 +88,7 @@ time and overlaps compute; `total` is the cache phase wall clock.
 | Qwen3.5-0.8B | single card, length-aligned | `d285abb` | 64 / 23–64 | 50.80 s | 0.376 s | 8.50 s | 18.75 GB | **57.00 s** |
 | Qwen3.5-2B | single card, length-aligned | `d285abb` | 64 / 23–64 | 54.72 s | 0.751 s | 13.24 s | 29.31 GB | **63.25 s** |
 | GPT-OSS-20B | single card, exact response IDs | `8cededa` | 64 / 7–64 | 44.02 s | 1.050 s | 39.19 s | 39.25 GB | **86.16 s** |
+| GPT-OSS-120B | two-card auto device map, native MXFP4, bfloat16 cache | `7201891` | 64 / 1–64 | 86.82 s | 0.614 s | 28.75 s | 39.11 GB | **113.37 s** |
 | Gemma-4-26B-A4B-it | single card, exact response IDs | `8cededa` | 64 / 26–64 | 66.28 s | 0.746 s | 33.99 s | 37.06 GB | **92.03 s** |
 | Llama-3.1-8B-Instruct | single card, length-aligned | `b3ed8df` | 64 / 23–64 | 56.83 s | 1.362 s | 55.95 s | 72.53 GB | **94.32 s** |
 | Qwen3.5-9B | single card, length-aligned | `d285abb` | 64 / 23–64 | 88.15 s | 1.088 s | 38.46 s | 56.52 GB | **101.08 s** |
@@ -121,12 +122,12 @@ unavoidable CUDA copy is therefore not the throughput bottleneck.  The writer
 overlaps storage with the teacher walk, so `storage` is worker time and must
 not be added to `total`.
 
-The exact-ID ladder covers 20 complete full-corpus caches.  GPT-OSS-120B is
-not included: two PP2 attempts failed during Transformers mxfp4 weight
-conversion, before the first teacher batch, with a CUDA illegal-memory-access
-error.  Its exact-token vLLM response artifact exists, so this is a loader
-compatibility gap rather than a missing generated-answer dataset; it needs a
-specialized 120B Torch loader before a cache timing can be reported.
+The exact-ID ladder now covers 21 complete full-corpus caches, including
+GPT-OSS-120B.  The 120B row uses native MXFP4 weights with `kernels==0.12.0`
+and bfloat16 hidden-state storage; the first attempt was rejected because
+float16 storage overflowed an outlier channel.  The exact-token response
+artifact was imported from the vLLM campaign, so the 113.37-second figure is
+hidden-cache construction only, not answer generation.
 
 ### Large-model hidden probes (n = 64)
 
