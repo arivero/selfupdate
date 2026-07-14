@@ -5,7 +5,10 @@ cd "$(dirname "$0")/.." || exit 1
 refresh() {
     for run in runs/pareto_v2_*; do
         [[ -d "$run/checkpoint" && -f "$run/eval/signal_attribution.json" ]] || continue
-        [[ -f "$run/report_manifest.json" ]] && continue
+        # A v2 report is not publishable until its printable individual PDF
+        # accompanies the Markdown, figure assets, and manifest.
+        [[ -f "$run/report_manifest.json" && -f "$run/report.pdf" ]] \
+            && grep -q '"pdf":' "$run/report_manifest.json" && continue
         scripts/l40s_exec.sh scripts/report_v2.py "$run" >/dev/null 2>&1 || true
     done
     scripts/l40s_exec.sh scripts/group_reports_v2.py --group-by all >/dev/null 2>&1 || true

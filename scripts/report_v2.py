@@ -1,9 +1,10 @@
 """Generate the pipeline-v2 report for one completed training.
 
-The report is deliberately run-local: ``runs/<run>/report.md`` plus PNG/CSV
-assets under ``runs/<run>/eval/report_v2``.  It reads only the run's frozen
-config and append-only metrics.  Missing evidence is rendered as coverage,
-never used as a reason to omit the run.
+The report is deliberately run-local: ``runs/<run>/report.md`` and
+``runs/<run>/report.pdf`` plus PNG/CSV assets under
+``runs/<run>/eval/report_v2``.  It reads only the run's frozen config and
+append-only metrics.  Missing evidence is rendered as coverage, never used as
+a reason to omit the run.
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 from matplotlib import cm, colors
+
+from report_pdf_v2 import write_individual_pdf
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
@@ -290,6 +293,10 @@ def _signal_asset(frame: pd.DataFrame, out_dir: Path) -> Path | None:
 
 
 def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
+    # The CLI passes an absolute path, while refreshers often discover relative
+    # ``runs/...`` paths.  Normalize once so artifact paths in the manifest are
+    # independent of the caller.
+    run_dir = run_dir.resolve()
     config_path, metrics_path = run_dir / "config.yaml", run_dir / "metrics.jsonl"
     if not config_path.exists() or not metrics_path.exists():
         raise FileNotFoundError("report v2 requires config.yaml and metrics.jsonl")
@@ -428,6 +435,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
               ["- All mandatory epoch telemetry is present."])
     md += [
         "", "## Artifact index", "",
+        "- Printable individual report: [`report.pdf`](report.pdf)",
         f"- Raw metrics: [`metrics.jsonl`](metrics.jsonl)",
         f"- Frozen config: [`config.yaml`](config.yaml)",
         f"- Report assets: [`eval/report_v2/`](eval/report_v2/)",
@@ -438,12 +446,67 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     report_tmp = run_dir / ".report.md.tmp"
     report_tmp.write_text("\n".join(x for x in md if x is not None), encoding="utf-8")
     report_tmp.replace(report)
+    figures = [
+        ("Recall by corpus", out_dir / "recall_by_corpus.png"),
+        ("Standard-benchmark retention", out_dir / "standard_damage.png"),
+        ("Recall–damage trajectory", out_dir / "recall_damage_frontier.png"),
+        ("Per-layer loss by epoch", out_dir / "layer_loss_temporal.png"),
+        ("Per-layer loss heatmap", out_dir / "layer_loss_heatmap.png"),
+        ("One-row per-layer loss density", out_dir / "layer_loss_one_row_density.png"),
+        ("Per-layer parameter modification by epoch",
+         out_dir / "parameter_delta_temporal.png"),
+        ("Per-layer parameter-modification heatmap",
+         out_dir / "parameter_delta_heatmap.png"),
+        ("One-row parameter-modification density",
+         out_dir / "parameter_delta_one_row_density.png"),
+        ("Per-layer training-signal attribution",
+         out_dir / "signal_attribution_by_layer.png"),
+    ]
+    pdf = write_individual_pdf(
+        run_dir / "report.pdf",
+        title=f"Individual training report v2 — {run_dir.name}",
+        identity=[
+            f"Status: {'complete' if complete else 'incomplete diagnostic rendering'}",
+            f"Model/base: {model.get('name', 'missing')}",
+            f"Dataset: {data.get('examples_path', 'missing')}",
+            f"Pipeline: v{train.get('pipeline_version', 'missing')}",
+            f"Censorship: {mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}",
+            f"Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
+            f"Update geometry/aggregation: {update_identity}",
+            ("Batching: "
+             f"{train.get('batching', 'missing')}; micro-batch "
+             f"{train.get('micro_batch', 'missing')}; gradient accumulation "
+             f"{train.get('grad_accum', 'missing')}."),
+            ("Connected hidden window: width "
+             f"{train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
+             "final-logit training disabled."),
+            (f"Items observed: {max_items:,}; elapsed telemetry span: "
+             f"{elapsed_min:.1f} min."),
+            ("Strict-local certification: "
+             f"{'PASS' if signal.get('passed') else 'MISSING OR FAIL'}; "
+             "the frozen vocabulary and cross-block gradients are audited."),
+        ],
+        recall=recall,
+        standard=standard,
+        coverage=[
+            f"Optimizer loss measure: {loss_measure}",
+            f"Parameter-change representation: {delta_representation}",
+            (f"Teacher target source: {signal.get('teacher_target_source', 'missing')}; "
+             f"cache hash: {signal.get('teacher_cache_hash', 'missing')}"),
+            "Missing evidence:" if missing else "All mandatory epoch telemetry is present.",
+            *[f"- {item}" for item in missing],
+            ("Source artifacts: report.md, config.yaml, metrics.jsonl, "
+             "eval/report_v2/, and eval/signal_attribution.json when present."),
+        ],
+        figures=figures,
+    )
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "run": run_dir.name,
         "campaign": "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None,
         "complete": complete,
         "report": str(report.relative_to(ROOT)),
+        "pdf": str(pdf.relative_to(ROOT)),
         "model": model.get("name"),
         "dataset": data.get("examples_path"),
         "pipeline_version": train.get("pipeline_version"),

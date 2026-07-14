@@ -5,12 +5,13 @@ tuple
 
 `dataset × model × censorship × loss type × update geometry × reduction × strategy sources`.
 
-The generated report will live at `runs/<run_name>/report.md` immediately after
-that training completes. It contains all information supplied by the
-collective v1 report for that training. Cross-run heatmaps and density plots
-retain their visual encoding but contain one row. Final synthesis is a
-selection and aggregation layer over these atomic reports, not a second source
-of truth.
+The generated report will live at `runs/<run_name>/report.md` and
+`runs/<run_name>/report.pdf` immediately after that training completes. The
+Markdown is the navigable/source representation; the PDF is the required
+offline-readable rendition of the same individual evidence. Cross-run
+heatmaps and density plots retain their visual encoding but contain one row.
+Final synthesis is a selection and aggregation layer over these atomic
+reports, not a second source of truth.
 
 The campaign-wide live ledger is
 `docs/pareto_frontier_training_progress.md`. Epoch-zero teacher controls are written
@@ -85,7 +86,8 @@ measures rather than silently comparing different reductions.
 
 ## Local report contents
 
-Each completed training report includes:
+Each completed training report includes, in both its Markdown source and
+required PDF rendition:
 
 - identity, provenance, configuration, timing, placement, and coverage;
 - recall by corpus from epoch 0 through the final epoch;
@@ -98,7 +100,8 @@ Each completed training report includes:
 
 The generator must show missing observations rather than silently dropping a
 section or a training. Per-run report generation happens immediately after
-training finishes; the underlying epoch telemetry is written during training.
+training finishes; the completion condition is the published Markdown, PDF,
+assets, and manifest. The underlying epoch telemetry is written during training.
 Readout-bearing historical diagnostics are labeled and excluded from strict
 block-local frontier synthesis.
 

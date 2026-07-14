@@ -62,7 +62,7 @@ update geometry refines phase 3 and does not replace the campaign sequence.
    `1 × all`, and the one-token-across-batch timing corner.  Record reduction
    (`answer_mean` or `token_mean`) independently from geometry.
 5. **Individual report v2 — continuous.** Generate `runs/<training>/report.md`
-   immediately after every completed training, with epoch-zero and per-epoch
+   and `runs/<training>/report.pdf` immediately after every completed training, with epoch-zero and per-epoch
    recall/damage, layer loss, parameter delta, timing, provenance, and signal
    attribution. Final synthesis selects these atomic reports by campaign,
    model, loss, censorship, or update geometry.
@@ -205,6 +205,7 @@ Cache finalization timestamps:
 | 2026-07-14 18:41:54 CEST | Qwen3.5 4B Huber/remove full training | complete/superseded historical diagnostic | GPU 0; six epochs, 12,426 answer observations; metrics span 660.3 s (11.0 min), scheduler wall 12.2 min; checkpoint `runs/pareto_v2_qwen35_4b_huber_remove_token/checkpoint/` (101 MB LoRA); epoch 0–6 recall, standard damage, and parameter deltas present. |
 | 2026-07-14 18:48:06 CEST | Qwen3.5 4B Huber/pad-random full training | complete/superseded historical diagnostic | GPU 1; six epochs, 12,426 answer observations; metrics span 1,032.3 s (17.2 min), scheduler wall 18.4 min; checkpoint `runs/pareto_v2_qwen35_4b_huber_pad_random_token/checkpoint/` (101 MB LoRA); epoch 0–6 recall, standard damage, and parameter deltas present. |
 | 2026-07-14 18:57–19:01 CEST | First individual reports v2 | complete | `runs/pareto_v2_qwen35_4b_huber_{remove,pad_random}_token/report.md`; each report has recall/damage, temporal and heatmap layer loss, one-row density, temporal/heatmap/one-row parameter delta, and exact-cache signal attribution. Coverage pages declare all mandatory epoch telemetry present. |
+| 2026-07-14 23:33 CEST | Printable individual report-v2 publication | complete | Every completed strict-local B×K run now publishes `runs/<run>/report.pdf` alongside `report.md`, figures, and `report_manifest.json`; the manifest is written only after the PDF succeeds, and the refresher retries legacy Markdown-only manifests. |
 | 2026-07-14 19:00 CEST | Huber-arm signal attribution | historical readout-dominated diagnostic | Across 16 sampled items, hidden/readout gradient L2 norms are 1.58/65.2 (2.36% hidden share) for remove and 1.59/61.9 (2.51%) for pad-random. Targets came from exact pipeline-v2 cache `885f57b6f4eb9221`. These are valid measured historical arms but must not be described as hidden-loss-dominated layerwise or frontier evidence. |
 | 2026-07-14 18:59 CEST | Explicit three-dimensional update grid | coding/probe | Typed answer/token tile geometry, independent answer/token reduction, mandatory forward layer walk, exact coordinate ranges, and cumulative selected-loss/full-causal layer cells implemented locally. The requested `B=8 × K=1 × layers` timing is running on free GPU 0 before accepting the design. |
 | 2026-07-14 18:57–19:05 CEST | Production-like `B=8 × K=1` tile timing | complete/superseded historical diagnostic | 256 real Huber + teacher-KL readout updates, full causal prefixes and forward 32-layer walk: 0.1454 s median (0.1546 s mean) per tile, 39.92 selected aligned cells/s, 8.93 GiB peak reserved, no errors. Full dataset-v5 aligned-token coverage projects to 5,600.9 s (93.3 min) per epoch, about 74× the 76.1 s `B=8 × K=all` reference. |
@@ -307,8 +308,8 @@ timing/provenance rather than only a rounded summary.
 
 ## Per-training report v2
 
-The atomic artifact is `runs/<run_name>/report.md`, generated immediately after
-each run, with one report per
+The atomic artifact is `runs/<run_name>/report.md` plus `runs/<run_name>/report.pdf`,
+generated immediately after each run, with one report per
 `dataset × model × censorship × loss type × update geometry` training. The
 collection contract is in `docs/report_v2.md`. Campaign training configs must
 collect recall and standard damage at epoch 0 and every epoch, per-layer losses

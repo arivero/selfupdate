@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,7 +28,15 @@ def main() -> None:
     run_dir = ROOT / "runs" / cfg.run_name
     checkpoint = run_dir / "checkpoint"
     manifest = run_dir / "report_manifest.json"
-    if manifest.is_file():
+    pdf = run_dir / "report.pdf"
+    published = False
+    if manifest.is_file() and pdf.is_file():
+        try:
+            published = json.loads(manifest.read_text(encoding="utf-8")).get("pdf") == str(
+                pdf.relative_to(ROOT))
+        except (json.JSONDecodeError, ValueError):
+            published = False
+    if published:
         print(f"run and individual report already complete: {cfg.run_name}")
         return
     if not checkpoint.is_dir():
