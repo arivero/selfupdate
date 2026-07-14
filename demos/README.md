@@ -54,6 +54,13 @@ python3 demos/compare_results.py demos/out/torch_cpu_b32 demos/out/vllm_cpu
 Runs are sequential on an otherwise idle-CPU node so the two engines never
 contend for cores.
 
+**Scoring rule: initialization is discounted.** `tokens_per_second` =
+`gen_tokens / generate_seconds`; engine construction, weight load, warmup,
+JIT and CUDA-graph capture are reported separately as `load_seconds` and do
+not enter the competition. (They matter operationally — vLLM CPU paid 118 s
+of init for 16.7 s of generation — but the question here is steady-state
+generation speed.)
+
 ## Results — demo 1: CPU (2026-07-14, Xeon 8462Y+, 32 cores/engine)
 
 | engine | tok/s | generate | prefill | decode | notes |
@@ -91,12 +98,16 @@ Caveats measured the hard way (kept because they are the actual lesson):
 
 ## Results — demo 2: GPU race (torch eager GPU0 vs standard vLLM GPU1)
 
-First round, H100 80GB, same 64 v5 prompts:
+H100 80GB, same 64 v5 prompts, initialization discounted:
 
-| engine | tok/s | generate | prefill | decode |
-|---|---|---|---|---|
-| torch eager b64, GPU0 | 38.96 | 122.4 s | 11.0 s | 111.0 s |
-| vLLM 0.25.0 standard, GPU1 | (running) | | | |
+| engine | tok/s | generate | prefill | decode | init/load |
+|---|---|---|---|---|---|
+| vLLM 0.25.0 standard (graphs), GPU1 | **7079** | 0.66 s | — | — | 141.9 s |
+| torch eager b64 no-cuDNN-SDPA, GPU0 | 758 | 6.19 s | 0.98 s | 5.17 s | 3.6 s |
+| torch eager b64, first round | 38.96 | 122.4 s | 11.0 s | 111.0 s | 4.7 s |
+
+Output agreement torch-vs-vLLM: 43/64 token-identical, mean word overlap
+0.910 (greedy divergence cascades on numerics differences; expected).
 
 **39 tok/s on an H100 — barely above the CPU number — and the profiler
 explains it.** One decode step shows 515 ms of CPU time against 12.8 ms of
@@ -109,4 +120,27 @@ rebuilds execution plans. Neither host syncs nor mask construction matter
 
 This is a beautiful negative result for eager HF-on-GPU generation: the
 bottleneck is not kernels, batching, or graphs — it is a backend-selection
-footgun. Fix attempt in the next commit: exclude the cuDNN SDPA backend.
+footgun. The fix (`torch.backends.cuda.enable_cudnn_sdp(False)`, one line)
+took the loop from 39 to 758 tok/s.
+
+## Verdict
+
+Can a plain torch generator match vLLM's generation speed, discounting
+initialization? **No, on both fronts, and the reasons are structural:**
+
+- **CPU:** vLLM CPU wins ~8x (286 vs 34.5 tok/s) even though the raw
+  decode-step math on the same cores is at parity (317 tok/s microbench).
+  The loss is `DynamicCache`'s copy-per-step and the padded-mask math path —
+  fixing them properly means rebuilding paged KV + mask-free kernels, i.e.
+  vLLM's core.
+- **GPU:** standard vLLM wins ~9.3x (7079 vs 758 tok/s). Continuous
+  batching, PagedAttention, CUDA graphs and fused kernels each contribute;
+  none is available to an eager HF forward loop.
+
+The operational counterweight is initialization: vLLM paid 142 s (GPU,
+graphs+warmup) / 118 s (CPU) before the first token, the torch loop ~4 s.
+For a one-shot job of this sample's size the torch loop wins end-to-end
+(10 s vs 143 s); the crossover is around ~25 batches of 64 prompts. For
+campaign-scale generation (thousands of prompts per cache build), vLLM's
+init amortizes to nothing — which is exactly why the v5 pipeline's
+vLLM-generate + torch-teacher-forward split is the right architecture.
