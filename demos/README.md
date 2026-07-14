@@ -54,6 +54,41 @@ python3 demos/compare_results.py demos/out/torch_cpu_b32 demos/out/vllm_cpu
 Runs are sequential on an otherwise idle-CPU node so the two engines never
 contend for cores.
 
-## Results
+## Results — demo 1: CPU (2026-07-14, Xeon 8462Y+, 32 cores/engine)
 
-(to be filled by the first complete comparison run)
+| engine | tok/s | generate | prefill | decode | notes |
+|---|---|---|---|---|---|
+| vLLM 0.25.0 CPU | **285.9** | 16.7 s | — | — | +118 s engine init/warmup |
+| torch b32, cores 0-31 | 34.5 | 137.3 s | 18.2 s | 119.1 s | clean, pinned |
+| torch b32, unpinned | 29.0 | 163.5 s | — | — | threads drift across sockets |
+| torch b64, one batch | 6.9 | 681.7 s | — | — | everyone pads to 1052 tokens |
+| torch decode-only microbench | 317 (per step) | — | — | 101 ms/step | B=32, K≈260, pinned |
+
+Both engines produce essentially the same greedy answers (4740 vs 4779
+tokens; the small delta is numerics-induced early/late stop-token timing).
+
+**Verdict so far: vLLM CPU wins by ~8x on wall clock.** The gap is NOT the
+per-step math — the microbenchmark shows the same 32 cores sustain 317
+tok/s of batched decode compute, above vLLM's 286 — it is cache and mask
+management:
+
+1. `DynamicCache` does `torch.cat` per layer per step: the entire multi-GB
+   KV cache is reallocated and copied every token. vLLM's paged KV cache
+   (and HF's `StaticCache`) exists precisely to avoid this.
+2. Left-padding needs an explicit attention mask, which forces SDPA off the
+   fused flash-CPU kernel onto the materializing math path — most visible in
+   prefill (18 s for ~16k prompt tokens).
+3. Static batches pay for stragglers; retirement compaction recovers only
+   part of what continuous batching gets for free.
+
+Caveats measured the hard way (kept because they are the actual lesson):
+- **Pin your cores.** Unpinned threads drift across the two sockets (3.5x
+  slower steps); pinning into a range shared with someone else's job pinned
+  to cores 32-39 was worse still (0.83 s/step: OpenMP static scheduling runs
+  at the pace of the most-contended thread). Check `taskset -pc` of your
+  neighbours before choosing a range.
+- **bf16 beats fp32 by 3.5x** on this AMX machine (101 vs 352 ms/step).
+
+## Results — demo 2: GPU race (torch eager GPU0 vs standard vLLM GPU1)
+
+(running)

@@ -18,6 +18,8 @@ def main() -> None:
     ap.add_argument("--prompts", required=True)
     ap.add_argument("--model", default=None)
     ap.add_argument("--max-model-len", type=int, default=4096)
+    ap.add_argument("--label", default="vllm_cpu",
+                    help="engine label in summary.json (e.g. vllm_gpu_standard)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -61,7 +63,7 @@ def main() -> None:
         "".join(json.dumps(x, ensure_ascii=False) + "\n" for x in results),
         encoding="utf-8")
     summary = {
-        "engine": "vllm_cpu", "model": model_name,
+        "engine": args.label, "model": model_name,
         "prompts": len(prompts), "load_seconds": round(load_seconds, 2),
         "generate_seconds": round(gen_seconds, 2), "gen_tokens": total,
         "tokens_per_second": round(total / gen_seconds, 2),
