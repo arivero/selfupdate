@@ -76,6 +76,30 @@ def _summary_row(manifest: dict) -> dict:
     }
 
 
+def _markdown_table(rows: pd.DataFrame) -> str:
+    """Render reports without the optional pandas ``tabulate`` extra."""
+    if rows.empty:
+        return "_None._"
+
+    def cell(value) -> str:
+        if pd.isna(value):
+            return ""
+        if isinstance(value, float):
+            return f"{value:.4f}"
+        return str(value).replace("|", r"\|").replace("\n", "<br>")
+
+    columns = list(rows.columns)
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    lines.extend(
+        "| " + " | ".join(cell(value) for value in row) + " |"
+        for row in rows.itertuples(index=False, name=None)
+    )
+    return "\n".join(lines)
+
+
 def _plots(rows: pd.DataFrame, manifests: list[dict], out: Path) -> None:
     finite = rows.dropna(subset=["standard_damage", "final_recall"])
     if not finite.empty:
@@ -128,7 +152,7 @@ def _write_group(name: str, value: str, manifests: list[dict], pending: list[str
     rows = pd.DataFrame([_summary_row(m) for m in manifests])
     rows.to_csv(out / "runs.csv", index=False)
     _plots(rows, manifests, out)
-    table = rows.to_markdown(index=False, floatfmt=".4f") if not rows.empty else "_None._"
+    table = _markdown_table(rows)
     md = [
         f"# Pipeline-v2 grouped report — {name}: {value}", "",
         f"Inclusion rule: published `report_manifest.json`, campaign `pareto_v2`, "
