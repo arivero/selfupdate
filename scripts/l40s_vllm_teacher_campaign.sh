@@ -52,12 +52,13 @@ run_one() {
     echo "REUSE_VLLM $tag" >> "$OUTROOT/campaign.log"
   fi
   rm -rf "$tmp"
+  local response_rel="runs/l40s_benchmark/vllm/$tag/responses_bs64.jsonl"
   CUDA_VISIBLE_DEVICES="$visible" scripts/container_exec.sh python \
     scripts/build_teacher_cache.py \
     --config configs/teacher_references/teacher_cache_qwen36_35b_a3b_v5rs.yaml \
     --model "$model" --teacher-batch 64 --max-sequence-tokens 8192 \
     --hidden-dtype bfloat16 --cache-root "$tmp" \
-    --generation-responses "$out/responses_bs64.jsonl" \
+    --generation-responses "$response_rel" \
     "${parallel[@]}" >> "$log" 2>&1
   local crc=$?
   local timing
