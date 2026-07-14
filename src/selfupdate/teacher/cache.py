@@ -74,9 +74,10 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     response_sha = (hashlib.sha256(
         Path(cfg.cache.generation_responses_path).read_bytes()).hexdigest()[:16]
         if cfg.cache.generation_responses_path else "")
+    source_compaction = cfg.cache.source_compaction or cfg.mask.compaction
     chash = cache_config_hash(
         cfg.model.name, cfg.mask.mode,
-        {"compaction": cfg.mask.compaction, "examples": examples_sha,
+        {"compaction": source_compaction, "examples": examples_sha,
          "hdtype": _dtype_hash_token(cfg.cache.hidden_dtype),
          # Open-answer caches include the teacher's generated answer ids in
          # their index.  The allowance changes those ids, aligned lengths, and
@@ -100,7 +101,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "schema": 9},
     )
     model_short = cfg.model.name.split("/")[-1]
-    root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{cfg.mask.compaction}-{chash}"
+    root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{source_compaction}-{chash}"
     return root, chash
 
 

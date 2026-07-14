@@ -94,6 +94,12 @@ class MaskConfig:
 @dataclass
 class CacheConfig:
     root: str = "caches"
+    # Optional student-view-independent cache selector.  Teacher hidden states
+    # and generated answer ids do not depend on how the privileged RAG block
+    # is censored for the student.  Setting this to (for example) ``remove``
+    # lets a pad_random arm consume the already-certified remove cache while
+    # recomputing all student offsets from its active masking view.
+    source_compaction: str = ""
     shard_size: int = 128
     hidden_dtype: str = "float16"
     # Extra generation allowance for question-only RAG teacher targets.  The

@@ -440,6 +440,12 @@ def main() -> None:
     if args.generation_responses is not None:
         cfg.cache.generation_responses_path = args.generation_responses
 
+    if (cfg.cache.source_compaction
+            and cfg.cache.source_compaction != cfg.mask.compaction):
+        raise ValueError(
+            "cache.source_compaction is a training-reader selector; cache "
+            "generation must leave it empty or equal mask.compaction")
+
     root, chash = resolve_cache_dir(cfg)
     root.mkdir(parents=True, exist_ok=True)
     print(f"cache dir: {root}")

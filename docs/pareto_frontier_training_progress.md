@@ -41,6 +41,19 @@ The response IDs are therefore part of the per-model cache provenance; there
 is no decode/re-encode round trip. Student training will consume these frozen
 teacher caches through the v2 training path.
 
+The cache payload is teacher-side: generated answer token IDs and hidden
+states over the teacher's aligned `shared_mid + answer` suffix. Both student
+censorship arms therefore explicitly select the certified `remove` cache via
+`cache.source_compaction: remove`. This is cross-view reuse, not a relaxation
+of cache identity. The loader resolves and verifies the original model,
+dataset, mask mode, dtype, response-file digest, generation settings, and
+schema hash; for every example it additionally requires identical teacher
+`t0` and aligned length. It recomputes student `s0`, position gap, and token
+sequence from the active `remove` or `pad_random` intervention. A synthetic
+full-dataset audit on 2026-07-14 proved all 2,071 teacher token sequences and
+teacher spans identical between the two views, all 2,071 student sequences
+different, and an undeclared cross-view load rejected.
+
 ## Environment snapshot
 
 Recorded 2026-07-14 13:34 CEST from allocation 418174 on `agpul02`:

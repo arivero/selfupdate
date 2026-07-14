@@ -38,6 +38,11 @@ def validate_knob_schedule(cfg) -> None:
         "remove", "stub", "stub_gap", "remove_gap", "pad_random",
     ):
         raise ValueError(f"unknown mask.compaction {cfg.mask.compaction!r}")
+    if cfg.cache.source_compaction and cfg.cache.source_compaction not in (
+        "remove", "stub", "stub_gap", "remove_gap", "pad_random",
+    ):
+        raise ValueError(
+            f"unknown cache.source_compaction {cfg.cache.source_compaction!r}")
     if cfg.eval.every_epochs <= 0:
         raise ValueError("eval.every_epochs must be positive")
     if cfg.eval.standard_damage_every_epochs < 0:

@@ -88,6 +88,8 @@ class DistillDataset(Dataset):
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
         pad_random: bool = False,
+        cache_source_compaction: str = "",
+        student_compaction: str = "remove",
     ):
         # re-render segments if this tokenizer's chat template differs from
         # the one examples.jsonl was built with (identity for Qwen)
@@ -132,12 +134,22 @@ class DistillDataset(Dataset):
                 # and narrows the tokenizer-drift window (a re-tokenized
                 # prefix can move t0 while A and s0 stay equal). .get keeps
                 # any pre-field cache index readable.
-                assert (span["A"] == pair.aligned_len
-                        and span["s0"] == pair.s_aligned.start
-                        and span.get("t0", pair.t_aligned.start)
-                            == pair.t_aligned.start
-                        and span.get("position_gap", pair.position_gap)
-                            == pair.position_gap), (
+                # A cache may be explicitly sourced from another censorship
+                # view.  Its payload is teacher-aligned h[L] plus generated
+                # answer ids, so t0/A remain mandatory; s0/position_gap are
+                # student-view metadata and are recomputed from ``pair``.
+                teacher_match = (
+                    span["A"] == pair.aligned_len
+                    and span.get("t0", pair.t_aligned.start)
+                        == pair.t_aligned.start)
+                student_match = (
+                    span["s0"] == pair.s_aligned.start
+                    and span.get("position_gap", pair.position_gap)
+                        == pair.position_gap)
+                cross_view = bool(
+                    cache_source_compaction
+                    and cache_source_compaction != student_compaction)
+                assert teacher_match and (cross_view or student_match), (
                     f"cache/examples mismatch for {pair.example_id}; rebuild the cache"
                 )
             self.pairs.append(pair)
