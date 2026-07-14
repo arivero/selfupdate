@@ -123,6 +123,36 @@ bottleneck is not kernels, batching, or graphs — it is a backend-selection
 footgun. The fix (`torch.backends.cuda.enable_cudnn_sdp(False)`, one line)
 took the loop from 39 to 758 tok/s.
 
+## Round 2: StaticCache + torch.compile (generate_torch_v2.py)
+
+Attempt to buy back the bookkeeping losses with HF-level machinery:
+`StaticCache` (in-place KV writes), a preallocated full-width mask updated
+in place, power-of-two retirement compaction, and optional `torch.compile`
+with globally fixed shapes (compile/warmup in the discounted load phase).
+
+Every variant LOST to round 1's best eager loop:
+
+| | v1 eager (DynamicCache) | v2 StaticCache | v2 + compile | vLLM |
+|---|---|---|---|---|
+| GPU H100 | **758** | 606 | 392 | 7079 |
+| CPU 32c | **34.5** | 28.0 | 20.6 | 285.9 |
+
+The mechanism is symmetric and instructive: `DynamicCache` pays a full
+cache copy per token but attends only over real tokens; `StaticCache`
+writes in place but attends over the full preallocated width (~1800 here,
+median true K ~400) every step — and the second trade is worse on both
+devices. `torch.compile` on top cannot help because the graph it fuses is
+the wide-attention graph (and fixed shapes force all-batch padding, which
+also doubles prefill: 18.8 -> 34.3 s on CPU). A first compile attempt with
+toy-shaped warmup recompiled inside the timed region (37.7 tok/s on H100)
+— warm up with the exact production shapes or don't bother.
+
+**PagedAttention is precisely the data structure that pays neither cost**
+(block-sparse KV: no copy, no dead width). That is the part of vLLM you
+cannot reproduce from HF-level building blocks, and after removing every
+removable overhead it still accounts for essentially all of the remaining
+~8-9x on both devices.
+
 ## Verdict
 
 Can a plain torch generator match vLLM's generation speed, discounting
@@ -131,8 +161,9 @@ initialization? **No, on both fronts, and the reasons are structural:**
 - **CPU:** vLLM CPU wins ~8x (286 vs 34.5 tok/s) even though the raw
   decode-step math on the same cores is at parity (317 tok/s microbench).
   The loss is `DynamicCache`'s copy-per-step and the padded-mask math path —
-  fixing them properly means rebuilding paged KV + mask-free kernels, i.e.
-  vLLM's core.
+  and round 2 shows the HF-level alternatives (StaticCache, compile) are
+  worse, not better: fixing this properly means paged KV + mask-free
+  kernels, i.e. vLLM's core.
 - **GPU:** standard vLLM wins ~9.3x (7079 vs 758 tok/s). Continuous
   batching, PagedAttention, CUDA graphs and fused kernels each contribute;
   none is available to an eager HF forward loop.
