@@ -173,7 +173,13 @@ while :; do
                 fi
                 log "GPU[$devset] budget_free=${fm}MB -> launch [$done] (need ${need}MB x$ngpu)"
                 (
-                    echo "$BASHPID $devset $need" > "$lk"
+                    # Publish the scheduler-PID -> worker-PID lock handoff
+                    # atomically. A truncating rewrite briefly exposes an
+                    # empty lock; another GPU iteration can reap that as dead
+                    # and launch the same done_file a second time.
+                    lk_tmp="$lk.$BASHPID.tmp"
+                    echo "$BASHPID $devset $need" > "$lk_tmp"
+                    mv -f "$lk_tmp" "$lk"
                     job_log="${JOBLOG:-runs/pipeline_sched.log}"
                     if [ -n "$JOBLOG_DIR" ]; then
                         job_log="$JOBLOG_DIR/$(lock_name "$done").log"

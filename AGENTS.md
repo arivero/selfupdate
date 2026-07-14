@@ -283,6 +283,15 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   rebuilt, use `scripts/vendor_standard_eval.py` once with
   `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`; commit and review the resulting
   data before launching an offline campaign.
+- Model-weight staging and teacher-state staging are separate. The former is
+  `/dev/shm/$USER/selfupdate-hf-cache`; the latter is
+  `/dev/shm/$USER/selfupdate-teacher-cache`. Layerwise training lazily maps
+  multi-GB safetensor shards, so leaving teacher states on Lustre can show
+  near-zero CPU and GPU utilization while both wait on storage page faults.
+  Stage only campaign caches with `scripts/stage_teacher_cache_shm.sh`; its
+  ready marker makes `scripts/l40s_exec.sh` export
+  `SELFUPDATE_TEACHER_CACHE_ROOT` for subsequent workers. Never copy the whole
+  historical root (943 GB measured 2026-07-14); Qwen3.5-4B alone is ~35 GB.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the
@@ -292,11 +301,40 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   measured near 64 OS threads after CPU matmul. The trainer already uses
   `num_workers=0`, so extra CPU load comes from runtime pools, not DataLoader
   workers.
+- TorchInductor has a separate compiler pool and ignores those native-thread
+  caps. Its default is up to 32 workers per trainer; four shape-varying
+  Qwen3.5 jobs created roughly 128 compiler workers and left the GPUs mostly
+  waiting. `scripts/l40s_exec.sh` therefore defaults
+  `TORCHINDUCTOR_COMPILE_THREADS=2` and puts its reusable cache in node-local
+  `/tmp/$USER/selfupdate-torchinductor`. A speed probe must cover the real
+  sequence-length distribution long enough to expose compilation churn; a
+  six-step warm-up is not an epoch-time certificate.
 - Scheduler pattern:
 
 ```bash
 GPUS="0 1 2 3" MAX_PER_GPU=3 nohup setsid bash scripts/gpu_scheduler.sh >> runs/pipeline_sched_main.log 2>&1 &
 ```
+
+Live-process inspection on L40S (real abbreviated shape from the 2026-07-14
+Qwen3.5-4B campaign):
+
+```bash
+ps auxww | rg 'gpu_scheduler.sh|scripts/train.py' | rg -v 'rg '
+# arivero 965283 ... bash scripts/gpu_scheduler.sh
+# arivero 965331 ... bash scripts/gpu_scheduler.sh
+# arivero 965337 ... ld-linux-x86-64.so.2 --library-path ... python scripts/train.py ...remove_answer.yaml
+# arivero 965382 ... bash scripts/gpu_scheduler.sh
+# arivero 965414 ... ld-linux-x86-64.so.2 --library-path ... python scripts/train.py ...remove_token.yaml
+```
+
+The first line is the detached scheduler. Each arm then appears as a small
+scheduler-owned bash subshell plus a glibc-loader/Python process; seeing the
+loader as the process executable is expected. Cross-check physical placement
+with `nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory,process_name
+--format=csv,noheader`. Two live `scripts/train.py` PIDs with the same
+`--experiment`, especially on different GPUs, are a duplicate launch and both
+write the same run directory. Stop the extra process immediately and inspect
+the scheduler lock; the lock PID handoff is atomic in current code.
 
 ## Bootstrap
 

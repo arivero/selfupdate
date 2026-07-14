@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_PYTHON="${SELFUPDATE_L40S_PYTHON:-$ROOT/../jacobian-lens/.venv/bin/python}"
 DEPS="${SELFUPDATE_L40S_DEPS:-/tmp/$USER/selfupdate-l40-python}"
 SHM_HF="/dev/shm/$USER/selfupdate-hf-cache"
+SHM_TEACHER="/dev/shm/$USER/selfupdate-teacher-cache"
 
 [[ -x "$BASE_PYTHON" ]] || { echo "missing cu126 Python: $BASE_PYTHON" >&2; exit 2; }
 [[ -d "$DEPS/transformers" && -d "$DEPS/peft" ]] || {
@@ -25,11 +26,19 @@ fi
 
 export PYTHONPATH="$ROOT/runtime/l40s:$DEPS:$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HOME="$SHM_HF"
+if [[ -f "$SHM_TEACHER/.selfupdate-teacher-stage-ready" ]]; then
+  export SELFUPDATE_TEACHER_CACHE_ROOT="$SHM_TEACHER"
+fi
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TQDM_DISABLE="${TQDM_DISABLE:-1}"
 export HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}"
 export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
+# TorchInductor otherwise creates min(32, CPU count) compiler workers per
+# trainer. Four concurrent L40S arms produced ~128 workers and starved the
+# shape-varying Qwen3.5 training walk while GPUs waited for compilation.
+export TORCHINDUCTOR_COMPILE_THREADS="${TORCHINDUCTOR_COMPILE_THREADS:-2}"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/tmp/$USER/selfupdate-torchinductor}"
 
 # The host glibc is older than the compiled causal-conv1d wheel.  Lmod's
 # glibc module must be entered through its dynamic loader; `module load` alone

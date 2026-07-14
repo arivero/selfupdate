@@ -70,6 +70,13 @@ The same wrapper resolves model weights from the RAM-backed offline HF cache.
 The standard-damage subsets are consequently vendored under `data/eval/` at
 their pinned revisions; `scripts/vendor_standard_eval.py` is the explicit,
 one-time online rebuild path rather than a hidden training-time download.
+For a concrete annotated `ps auxww` example of a live L40S scheduler and its
+glibc-loader/Python workers, including the duplicate-worker warning, see the
+L40S Cluster Environment section of `AGENTS.md`.
+Model weights and teacher hidden-state caches are staged independently; use
+`scripts/stage_teacher_cache_shm.sh` for the latter. An idle CPU and idle GPU
+during layerwise training commonly means Lustre-backed teacher shard faults,
+not a slow GPU kernel.
 
 ## Evaluation generation pipeline v2
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import queue
 import threading
 import time
@@ -101,7 +102,8 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "schema": 9},
     )
     model_short = cfg.model.name.split("/")[-1]
-    root = Path(cfg.cache.root) / f"{model_short}-{cfg.mask.mode}-{source_compaction}-{chash}"
+    cache_root = os.environ.get("SELFUPDATE_TEACHER_CACHE_ROOT", cfg.cache.root)
+    root = Path(cache_root) / f"{model_short}-{cfg.mask.mode}-{source_compaction}-{chash}"
     return root, chash
 
 
