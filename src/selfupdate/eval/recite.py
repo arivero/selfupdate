@@ -22,6 +22,9 @@ def character_error_rate(reference: str, hypothesis: str) -> float:
     Keeping this tiny dynamic-programming primitive local avoids making every
     training runtime carry an otherwise optional text-metrics package.
     """
+    # jiwer's CER default applies Strip before reducing to characters.
+    reference = reference.strip()
+    hypothesis = hypothesis.strip()
     if not reference:
         if not hypothesis:
             return 0.0
