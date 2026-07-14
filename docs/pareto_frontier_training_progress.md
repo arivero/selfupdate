@@ -212,7 +212,7 @@ Cache finalization timestamps:
 | 2026-07-14 19:20–19:22 CEST | Constant-area B×K diagonals | complete/fast-K verdict | All 18 power-of-two cells completed with real nonzero L2-normalized-MSE gradients, AdamW at 1e-5, no readout, full causal prefixes, and the forward 32-layer walk; no OOM through `B=64`. At fixed 64 selected cells, `1×64` = 0.1089 s/588 cells/s versus `64×1` = 1.5407 s/41.6 cells/s (about 14× slower). Fast direction is larger K/smaller B; fill the `B={1,2,4,8} × K={8,16,32,64}` rectangle. Artifact: `runs/pareto_v2_grid_tile_table_20260714/diagonals.{json,csv,md}`. |
 | 2026-07-14 19:22–19:24 CEST | Fast-side B×K rectangle | complete | Seven missing cells completed without OOM. At fixed B, widening K is nearly free: B=1 takes 0.107–0.109 s for K=8–64, B=4 takes 0.134–0.139 s for K=4–64, and B=8 takes 0.178–0.193 s for K=2–64. Best selected-cell rate is `8×64` at 2,726 cells/s; `64×1` is 41.6 cells/s. Combined table: `runs/pareto_v2_grid_tile_table_20260714/combined_fast_rectangle.{json,csv,md}`. Engineering verdict: make K wide and use B for occupancy; K=1 repeats causal trajectories for almost no additional signal throughput. |
 | 2026-07-14 | Strict-local runtime and report-v2 publication | committed/gating | Commits `6d7a2f1` and `38ee461`: behavioral readout/final-logit training deleted; one grid tile is exactly one optimizer update (`grad_accum: 1`); every pipeline-v2 checkpoint requires model-resident proof of positive local gradient in every block, zero cross-block leakage, and zero frozen-vocabulary leakage. Individual and typed grouped report-v2 generators replace the readout-era collective generator. |
-| 2026-07-14 | One-day Qwen3.5-4B strict-local screen | configured | 40 full trainings: four local losses × two censorship modes × five B×K geometries. Every arm runs six complete v5 epochs (12,426 source-answer completions) and publishes `report.md` plus `report_manifest.json` immediately. Queue scheduling estimates total 35.3 GPU-hours, approximately 8.8 hours on four L40S before variance; they are scheduling hints, not measured runtime. |
+| 2026-07-14 | Broad-tile Qwen3.5-4B control screen | launched/historical control | The original 40-arm broad geometry screen was estimated at 35.3 GPU-hours (8.8 hours on four L40S). Its early `B=8 × all` results are retained as controls, but no further `K=all` arm is queued. |
 | 2026-07-14 20:40 CEST | Strict-local Qwen3.5-4B prelaunch gate | pass | 16 sampled v5 items across every block: local gradient L2 1.58, cross-block leakage 0, frozen-vocabulary leakage 0; certifier also requires positive finite signal in every block. First delegated attempt inherited generic Qwen3-0.6B and failed offline before model load; corrected command used `base_qwen35_4b.yaml` and exited 0 with no warnings. |
 | 2026-07-14 20:42:11 CEST | Strict-local 4B screen launched | live | Source commit `6c161b2`; shared lease scheduler PID 1017631 on `agpul02`, physical GPUs 0–3. First cohort: Huber/remove, Huber/pad-random, cosine/remove, cosine/pad-random at `B=8 × K=all`; initial residency 10.3–10.9 GiB/card and measured utilization 47–59%. Launch delegated to Luna; parent supervision retained. |
 | 2026-07-14 20:54–20:56 CEST | First strict-local screen completions | complete | Huber/remove completed six v5 epochs in 11.7 min and cosine/remove in 12.2 min. Both published a 16-item model-resident locality certificate (positive signal in every block; zero cross-block and frozen-vocabulary leakage) and their individual report-v2 manifests. Initial report rendering failed only because the thin L40S environment omits optional `tabulate`; commit `16e4ace` makes report-v2 self-contained, and report-only retries succeeded without rerunning training. |
@@ -227,7 +227,7 @@ Future entries must record the start/end timestamp, model/config, GPU
 placement, dataset identity, pipeline-v2 commit, checkpoint path, item
 count, and any failure or restart reason.
 
-### One-day strict-local 4B screen
+### Strict-local 4B tile screen
 
 The original broad-tile controls live in
 `configs/experiments/pareto_v2/screen_4b/`. Their successors live in
@@ -263,6 +263,13 @@ Per the logged-launch rule, an agent delegates that launch to a small worker
 and then retains parent-level supervision. Completion means the individual
 `report_manifest.json` exists; a checkpoint without its strict-local evidence
 cannot be reported or satisfy the queue row.
+
+The finite successor has 80 matched arms (four losses × two censorship modes
+× ten geometries): 40 128-cell comparisons followed by 40 16/32-cell
+microtile comparisons. Its nominal scheduler sum is 136.7 GPU-hours, or 34.2
+hours on four cards, before measured runtime and evaluation overhead. This is
+a phased follow-on, not the original one-day broad-tile batch; priority keeps
+the 128-cell decision evidence first.
 
 ### Superseded Qwen3.5-4B readout cohort
 
