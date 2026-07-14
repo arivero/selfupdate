@@ -147,7 +147,8 @@ Cache finalization timestamps:
 | 2026-07-14 15:32–16:14 CEST | Remaining epoch-zero vLLM queue | complete | Seven controls completed from RAM-staged HF cache; final Gemma4 31B randomized control used corrected synchronous scheduling |
 | 2026-07-14 | Six exact-cache training bases and 4B probe grid | validated | `configs/experiments/pareto_v2/`; every base resolves its certified 2,071-example cache hash, eight probe overlays pass typed dispatch validation |
 | 2026-07-14 | Gemma4 31B randomized control async-scheduler diagnosis | corrected/requeue | vLLM 0.25 async pipeline scheduling twice violated output-placeholder accounting; evaluator now defaults to synchronous scheduling and records the choice |
-| 2026-07-14 | Initial 4B probe runtime launch | corrected/requeue | L40S driver 560 rejects container torch 2.11/cu128 at CUDA initialization; queue switched to the host venv already certified on L40S |
+| 2026-07-14 | Initial 4B probe runtime launches | superseded | L40S driver 560 rejects torch 2.11/cu128 in both the container and shared venv at CUDA initialization; neither attempt loaded weights |
+| 2026-07-14 | L40S training runtime correction | validated | Thin `/tmp` layer over torch 2.7.1+cu126; bf16 matmul, Transformers 5.12.1, PEFT 0.19.1, kernels 0.12.0, and Qwen3.5 config resolution pass without installing torch |
 | pending | Qwen3.5 4B student training | pending | — |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |

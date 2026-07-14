@@ -257,8 +257,14 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 - `$HOME` is on Lustre. Use `~/...`, not `/home/...`.
 - `/usr/bin/python3` is 3.6.8. Use the venv or
   `/opt/ohpc/pub/apps/anaconda/anaconda-2025/bin/python3`.
-- Driver 560.35 = CUDA 12.6. Install PyTorch wheels with the cu128 index when
-  rebuilding the venv.
+- Driver 560.35 = CUDA 12.6. The repo container and shared `.venv` now carry
+  torch 2.11/cu128 and fail CUDA initialization on this driver
+  (`reset_peak_memory_stats: invalid argument`). For L40S campaign work use
+  `scripts/l40s_exec.sh`, which reuses the existing torch 2.7.1+cu126
+  interpreter and shadows only Transformers 5.12.1, PEFT 0.19.1, and kernels
+  0.12.0 from `/tmp/$USER/selfupdate-l40-python`. Build that thin layer with
+  `scripts/l40s_setup.sh` through a small delegated agent. Never install torch
+  into the layer. The cu128 container remains the H100/new-driver runtime.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the

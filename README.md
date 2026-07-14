@@ -60,6 +60,11 @@ is specified in [docs/training_pipeline_v2.md](docs/training_pipeline_v2.md).
 Completed pipeline-v2 trainings get their atomic individual report with
 `scripts/report_v2.py`; see [docs/report_v2.md](docs/report_v2.md).
 
+On driver-560 L40S nodes, launch training through `scripts/l40s_exec.sh`; the
+cu128 container is reserved for nodes with a compatible newer driver. The
+thin cu126 dependency layer and its no-second-torch invariant are documented
+in `AGENTS.md`.
+
 ## Evaluation generation pipeline v2
 
 Epoch-zero censorship controls and post-training checkpoint recall use
