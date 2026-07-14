@@ -1,44 +1,45 @@
-"""Teacher/RAG ceiling: base model recall WITH the RAG passage in context.
+"""Epoch-zero RAG censorship evaluation through programmatic vLLM.
 
-The copying ceiling for every student arm: the UNTRAINED model given the
-full corpus file as a retrieved document ("Documento recuperado", same
-convention as ``masking.render_rag``), scored on the SAME three-task battery
-(next/prev/cloze; exact + word_acc, owner directive 2026-07-10) as every
-checkpoint and the epoch-0 no-RAG baseline (``evaluate.py --base``). Thin
-RAG-context sibling of that baseline: identical corpus resolution and
-``tasks_eval`` call, only ``with_context=True`` differs — so a ceiling score
-is directly comparable to any other ``tasks.json`` result, never CER against
-an incomparable metric.
-
-Usage:
-    CUDA_VISIBLE_DEVICES=0 python scripts/teacher_ceiling.py \
-        --experiment configs/experiments/lw_r_slide8_0p6b_rag.yaml \
-        --n-per-task 24
+This is the pipeline-v2 replacement for the historical Transformers
+``model.generate`` evaluator.  The old implementation is recoverable from
+Git history.  It builds the same deterministic next/prev/cloze prompts,
+censorship contexts, budgets, and JSON result surface as ``tasks_eval``, but
+submits mixed per-prompt budgets to vLLM's continuous scheduler.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import re
+import math
+import subprocess
 import sys
+import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
 
-from selfupdate.utils.env import cap_cpu_threads  # noqa: E402
+from transformers import AutoTokenizer  # noqa: E402
+from vllm import LLM, SamplingParams  # noqa: E402
 
-cap_cpu_threads()
+from selfupdate.chatfmt import stop_token_id  # noqa: E402
+from selfupdate.config import load_config  # noqa: E402
+from selfupdate.eval.recite import strip_think  # noqa: E402
+from selfupdate.eval.tasks import (  # noqa: E402
+    QUESTIONS,
+    build_tasks,
+    corpus_blocks,
+    retrieve_chapter,
+    retrieve_window,
+    score,
+)
+from selfupdate.masking import (  # noqa: E402
+    random_fill_ids,
+    render_rag_system,
+    render_rag_tool,
+)
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-from selfupdate.config import load_config
-from selfupdate.eval.tasks import tasks_eval
-
-# Mirrors evaluate.py's CORPUS_PATHS / quijote_rung. Duplicated rather than
-# imported: this repo's scripts/ entries each pin their own small helpers
-# (see CLAUDE.md) instead of cross-importing another script's module.
 CORPUS_PATHS = {
     "machado": "data/poem/raw.txt",
     "quijote_ch1": "data/quijote/raw_ch1.txt",
@@ -48,169 +49,255 @@ CORPUS_PATHS = {
 }
 
 
-def quijote_rung(path: str | None) -> str | None:
-    """'quijote_ch8' from '.../raw_ch8.txt' or '.../examples_ch8.jsonl'."""
-    m = re.search(r"ch(\d+)", str(path or "").lower())
-    return f"quijote_ch{m.group(1)}" if m else None
+def _contexts(tokenizer, poem_path: str, items: list[dict], scope: str,
+              *, window_lines: int, pad_random: bool, wrong: bool,
+              seed: int) -> list[str] | None:
+    if scope == "none":
+        contexts = None
+    elif scope == "full":
+        contexts = [Path(poem_path).read_text(encoding="utf-8")] * len(items)
+    elif scope == "window":
+        lines = [line for block in corpus_blocks(poem_path) for line in block]
+        contexts = [retrieve_window(lines, item["block"], pad=window_lines)
+                    for item in items]
+    elif scope == "chapter":
+        contexts = [retrieve_chapter(poem_path, item["block"]) for item in items]
+    else:
+        raise ValueError(f"unknown context scope {scope!r}")
+    if pad_random and wrong:
+        raise ValueError("context-pad-random and context-wrong are exclusive")
+    if pad_random:
+        if contexts is None:
+            raise ValueError("context-pad-random needs a real context scope for sizing")
+        contexts = [
+            tokenizer.decode(random_fill_ids(
+                tokenizer, f"evalfloor-{seed}-{i}",
+                len(tokenizer.encode(text, add_special_tokens=False))))
+            for i, text in enumerate(contexts)
+        ]
+    elif wrong:
+        if contexts is None:
+            raise ValueError("context-wrong needs a real context scope")
+        k = len(contexts) // 2
+        contexts = contexts[k:] + contexts[:k]
+    return contexts
+
+
+def _prepare(tokenizer, poem_path: str, *, seed: int, n_per_task: int,
+             max_extra_tokens: int, budget_multiplier: float,
+             context_scope: str, context_window_lines: int,
+             context_pad_random: bool, context_wrong: bool,
+             prompt_regime: str) -> list[dict]:
+    items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
+    contexts = _contexts(
+        tokenizer, poem_path, items, context_scope,
+        window_lines=context_window_lines, pad_random=context_pad_random,
+        wrong=context_wrong, seed=seed)
+    stop_id = stop_token_id(tokenizer)
+    prepared = []
+    for i, item in enumerate(items):
+        question = QUESTIONS[item["kind"]].format(x=item["x"], n=item["n"])
+        context = contexts[i] if contexts is not None else ""
+        if prompt_regime == "rag_system":
+            ex = render_rag_system(f"eval-{i}", question, context,
+                                   answer="", open_answer=True)
+            prompt = ex.shared_prefix + ex.privileged + ex.shared_mid
+        elif prompt_regime == "rag_tool":
+            ex = render_rag_tool(f"eval-{i}", question, context,
+                                 answer="", open_answer=True)
+            prompt = ex.shared_prefix + ex.privileged + ex.shared_mid
+        else:
+            content = (f"{question}\n\nDocumento recuperado:\n{context}"
+                       if contexts is not None else question)
+            prompt = tokenizer.apply_chat_template(
+                [{"role": "user", "content": content}], tokenize=False,
+                add_generation_prompt=True, enable_thinking=False)
+        basis = context if contexts is not None else item["reference"]
+        budget = (math.ceil(len(tokenizer.encode(basis)) * budget_multiplier)
+                  + max_extra_tokens)
+        prepared.append({"item": item, "question": question,
+                         "prompt_ids": tokenizer.encode(
+                             prompt, add_special_tokens=False),
+                         "budget": budget, "stop_id": stop_id})
+    return prepared
+
+
+def _score(prepared: list[dict], answers: list[str], completions: list[dict],
+           *, seed: int, n_per_task: int, context_scope: str,
+           context_window_lines: int, context_pad_random: bool,
+           context_wrong: bool, prompt_regime: str, keep_examples: int = 6) -> dict:
+    aggregate: dict[str, list[dict]] = {}
+    examples = []
+    for row, raw, completion in zip(prepared, answers, completions):
+        item = row["item"]
+        answer = strip_think(raw)
+        metrics = score(item["reference"], answer)
+        metrics["n_deleted"] = item["n"]
+        aggregate.setdefault(item["task"], []).append(metrics)
+        if len(examples) < keep_examples:
+            examples.append({"kind": item["kind"], "q": row["question"],
+                             "reference": item["reference"],
+                             "answer": answer.strip()[:200],
+                             **completion, **metrics})
+    tasks = {}
+    for task, rows in aggregate.items():
+        tasks[task] = {
+            "n": len(rows),
+            "exact": sum(row["exact"] for row in rows) / len(rows),
+            "word_acc": sum(row["word_acc"] for row in rows) / len(rows),
+        }
+    if "cloze" in aggregate:
+        grouped: dict[int, list[float]] = {}
+        for row in aggregate["cloze"]:
+            grouped.setdefault(row["n_deleted"], []).append(row["word_acc"])
+        tasks["cloze"]["by_deletions"] = {
+            str(n): sum(values) / len(values)
+            for n, values in sorted(grouped.items())}
+    bounded = [meta for row, meta in zip(prepared, completions)
+               if row["item"]["kind"] not in {"start_block", "end_block"}]
+    return {
+        "seed": seed,
+        "n_per_task": n_per_task,
+        "generation_backend": "vllm",
+        "with_context": False if context_scope == "none" else context_scope,
+        "context_pad_random": context_pad_random,
+        "context_wrong": context_wrong,
+        "prompt_regime": prompt_regime,
+        **({"context_window_lines": context_window_lines}
+           if context_scope == "window" else {}),
+        "tasks": tasks,
+        "overall_word_acc": (
+            sum(row["word_acc"] for rows in aggregate.values() for row in rows)
+            / max(1, sum(len(rows) for rows in aggregate.values()))),
+        "generation": {
+            "n": len(completions),
+            "mean_generated_tokens": sum(x["generated_tokens"] for x in completions) / len(completions),
+            "mean_budget_tokens": sum(x["budget_tokens"] for x in completions) / len(completions),
+            "stopped_fraction": sum(x["stopped"] for x in completions) / len(completions),
+            "hard_cut_fraction": sum(x["hard_cut"] for x in completions) / len(completions),
+            "n_bounded": len(bounded),
+            "hard_cut_fraction_bounded": sum(x["hard_cut"] for x in bounded) / max(1, len(bounded)),
+        },
+        "examples": examples,
+    }
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="configs/base.yaml")
-    ap.add_argument("--experiment", required=True)
-    ap.add_argument("--n-per-task", type=int, default=24)
-    ap.add_argument("--max-extra-tokens", type=int, default=32,
-                    help="FIXED generation allowance added on top of the "
-                         "(possibly scaled) reference length; increase only "
-                         "to diagnose/repair conversational framing cuts, "
-                         "never by relaxing the gate")
-    ap.add_argument("--budget-multiplier", type=float, default=1.0,
-                    help="scale the reference-length term before adding "
-                         "--max-extra-tokens. A flat additive alone starves "
-                         "long chapter-scope references (Quijote chapters "
-                         "run to hundreds of tokens) while over-padding "
-                         "short next-line ones; >1 makes the margin grow "
-                         "with the answer instead of a one-size-fits-all "
-                         "constant")
-    ap.add_argument("--generation-batch", type=int, default=1,
-                    help="batched greedy decode for the battery; the ceiling's "
-                         "with_context prompts pay a corpus-length prefill per "
-                         "item, so big teachers want 4-8 here")
-    ap.add_argument("--context-scope", choices=("none", "full", "window", "chapter"),
-                    default="full",
-                    help="ceiling RAG form: none = same tool-shaped prompt "
-                         "without retrieval; full corpus file (historical), "
-                         "per-item exact-match retrieval of the source block "
-                         "±--context-window-lines (pair with window-scope v5 "
-                         "arms), or the containing chapter/part (pair with "
-                         "chapter-scope arms; issues.md 2026-07-12: "
-                         "full-document copying is not reliable — report "
-                         "scopes separately, never conflate)")
-    ap.add_argument("--context-window-lines", type=int, default=4)
-    ap.add_argument("--context-pad-random", action="store_true",
-                    help="FLOOR variant: replace the retrieved document by a "
-                         "seeded random distinct-token fill of matched length "
-                         "(the epoch-0 reference paired with pad_random arms)")
-    ap.add_argument("--context-wrong", action="store_true",
-                    help="counterfactual diagnostic: rotate real retrieved "
-                         "passages between questions")
-    ap.add_argument(
-        "--recall-corpora", nargs="+", default=None,
-        help="recall corpora to measure. By default this is inferred from "
-             "the experiment's data paths, same as evaluate.py --base.")
-    ap.add_argument("--auto-map", action="store_true",
-                    help="load with device_map=auto for large two-card teacher references")
-    # Accepted for CLI compatibility with existing queue rows only: the
-    # recite_eval-era batching/scoring knobs have no equivalent in tasks_eval
-    # (single-item greedy loop), same as evaluate.py's own --base path.
-    # They are IGNORED and warn below (knob-flow law).
-    ap.add_argument("--batch-size", type=int, default=None,
-                    help="ignored (retired recite/CER engine flag)")
-    ap.add_argument("--score-workers", type=int, default=None,
-                    help="ignored (retired recite/CER engine flag)")
-    ap.add_argument("--shuffle-seed", type=int, default=None,
-                    help="ignored (retired recite/CER engine flag)")
-    ap.add_argument("--bucket-by-length", action="store_true",
-                    help="ignored (retired recite/CER engine flag)")
-    ap.add_argument("--out", default=None)
-    args = ap.parse_args()
-    retired = [flag for flag, val, default in (
-        ("--batch-size", args.batch_size, None),
-        ("--bucket-by-length", args.bucket_by_length, False),
-        ("--score-workers", args.score_workers, None),
-        ("--shuffle-seed", args.shuffle_seed, None),
-    ) if val != default]
-    if retired:
-        print("WARNING: ignoring " + " ".join(retired) + " — retired with the "
-              "recite/CER engine (2026-07-10); the three-task battery "
-              "generates item-by-item.", file=sys.stderr)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/base.yaml")
+    parser.add_argument("--experiment", required=True)
+    parser.add_argument("--checkpoint", default="",
+                        help="published student checkpoint to evaluate; empty uses the base model")
+    parser.add_argument("--n-per-task", type=int, default=24)
+    parser.add_argument("--max-extra-tokens", type=int, default=32)
+    parser.add_argument("--budget-multiplier", type=float, default=1.0)
+    parser.add_argument("--context-scope", choices=("none", "full", "window", "chapter"), default="full")
+    parser.add_argument("--context-window-lines", type=int, default=4)
+    parser.add_argument("--context-pad-random", action="store_true")
+    parser.add_argument("--context-wrong", action="store_true")
+    parser.add_argument("--recall-corpora", nargs="+", default=["machado", "quijote_ch1", "quijote_ch4"])
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--pipeline-parallel-size", type=int, default=1)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    parser.add_argument("--max-model-len", type=int, default=8192)
+    parser.add_argument("--max-num-seqs", type=int, default=64)
+    parser.add_argument("--use-cudagraphs", action="store_true")
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+
     cfg = load_config(args.config, args.experiment)
+    model_source = args.checkpoint or cfg.model.name
+    tokenizer = AutoTokenizer.from_pretrained(model_source)
+    prompt_regime = "rag_system" if cfg.mask.mode == "rag_system" else "rag_tool"
+    corpus_rows = {}
+    all_prepared = []
+    slices = {}
+    for corpus in args.recall_corpora:
+        start = len(all_prepared)
+        rows = _prepare(
+            tokenizer, CORPUS_PATHS[corpus], seed=17,
+            n_per_task=args.n_per_task, max_extra_tokens=args.max_extra_tokens,
+            budget_multiplier=args.budget_multiplier,
+            context_scope=args.context_scope,
+            context_window_lines=args.context_window_lines,
+            context_pad_random=args.context_pad_random,
+            context_wrong=args.context_wrong, prompt_regime=prompt_regime)
+        all_prepared.extend(rows)
+        slices[corpus] = slice(start, len(all_prepared))
 
-    tok = AutoTokenizer.from_pretrained(cfg.model.name)
-    model = AutoModelForCausalLM.from_pretrained(
-        cfg.model.name, dtype=torch.bfloat16,
-        device_map="auto" if args.auto_map else None)
-    if not args.auto_map:
-        model.to(cfg.model.device)
-    model.eval()
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    started = time.perf_counter()
+    llm = LLM(
+        model=model_source, dtype="bfloat16",
+        tensor_parallel_size=args.tensor_parallel_size,
+        pipeline_parallel_size=args.pipeline_parallel_size,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs,
+        enforce_eager=not args.use_cudagraphs, disable_log_stats=True)
+    load_seconds = time.perf_counter() - started
+    generated_at = time.perf_counter()
+    outputs = llm.generate(
+        [{"prompt_token_ids": row["prompt_ids"]} for row in all_prepared],
+        [SamplingParams(temperature=0.0, top_p=1.0,
+                        max_tokens=row["budget"],
+                        stop_token_ids=[row["stop_id"]], ignore_eos=False)
+         for row in all_prepared], use_tqdm=False)
+    answers, completions = [], []
+    for row, result in zip(all_prepared, outputs):
+        ids = list(result.outputs[0].token_ids)
+        stopped = bool(ids and ids[-1] == row["stop_id"])
+        answers.append(tokenizer.decode(ids, skip_special_tokens=True))
+        completions.append({"generated_tokens": len(ids),
+                            "budget_tokens": row["budget"],
+                            "stopped": stopped,
+                            "hard_cut": len(ids) >= row["budget"] and not stopped})
+    generation_seconds = time.perf_counter() - generated_at
 
-    if args.recall_corpora:
-        corpus_names = list(dict.fromkeys(args.recall_corpora))
-    else:
-        # Same inference evaluate.py --base uses: examples_path is
-        # authoritative for combined configs, which intentionally inherit
-        # base.yaml's Machado poem_path.
-        examples_path = str(cfg.data.examples_path)
-        poem_path = str(cfg.data.poem_path)
-        if "combined" in examples_path:
-            corpus_names = ["machado",
-                            quijote_rung(examples_path) or "quijote_ch1"]
-        elif "quijote" in examples_path or "quijote" in poem_path:
-            corpus_names = [quijote_rung(examples_path)
-                            or quijote_rung(poem_path) or "quijote_ch1"]
-        else:
-            corpus_names = ["machado"]
-
-    corpus_results = {}
-    for corpus in corpus_names:
-        context_scope = False if args.context_scope == "none" else args.context_scope
-        result = tasks_eval(model, tok, CORPUS_PATHS[corpus],
-                            n_per_task=args.n_per_task,
-                            max_extra_tokens=args.max_extra_tokens,
-                            budget_multiplier=args.budget_multiplier,
-                            with_context=context_scope,
-                            context_window_lines=args.context_window_lines,
-                            context_pad_random=args.context_pad_random,
-                            context_wrong=args.context_wrong,
-                            # certify the exact campaign conversation: the
-                            # config's mask.mode picks the prompt regime
-                            rag_tool_prompt=(cfg.mask.mode != "rag_system"),
-                            rag_system_prompt=(cfg.mask.mode == "rag_system"),
-                            generation_batch=args.generation_batch)
+    for corpus, span in slices.items():
+        result = _score(
+            all_prepared[span], answers[span], completions[span], seed=17,
+            n_per_task=args.n_per_task, context_scope=args.context_scope,
+            context_window_lines=args.context_window_lines,
+            context_pad_random=args.context_pad_random,
+            context_wrong=args.context_wrong, prompt_regime=prompt_regime)
         result["poem_path"] = CORPUS_PATHS[corpus]
-        corpus_results[corpus] = result
-        parts = "  ".join(
-            f"{t}: exact {v['exact']:.2f} words {v['word_acc']:.2f}"
-            for t, v in result["tasks"].items())
-        print(f"{corpus}: {parts}")
+        corpus_rows[corpus] = result
 
-    model_short = cfg.model.name.split("/")[-1]
     kind = ("teacher_epoch0_native_no_rag" if args.context_scope == "none"
-            else "teacher_epoch0_rag_context" if args.context_scope == "full"
             else f"teacher_epoch0_rag_{args.context_scope}")
     if args.context_pad_random:
         kind += "_padfloor"
-    r = {
+    artifact = {
         "schema_version": 2,
         "teacher_reference_kind": kind,
+        "generation_backend": "vllm",
+        "generation_backend_version": __import__("vllm").__version__,
+        "source_commit": source_commit,
         "context_scope": args.context_scope,
         "context_pad_random": args.context_pad_random,
         "context_wrong": args.context_wrong,
         "max_extra_tokens": args.max_extra_tokens,
         "budget_multiplier": args.budget_multiplier,
         "model": cfg.model.name,
-        "corpora_measured": corpus_names,
-        "corpus_selection": ("cli_override" if args.recall_corpora
-                             else "inferred_from_training_data"),
-        "corpora": corpus_results,
+        "model_source": model_source,
+        "checkpoint": args.checkpoint or None,
+        "corpora_measured": args.recall_corpora,
+        "corpus_selection": "cli_override",
+        "timings": {"load_seconds": load_seconds,
+                    "generation_seconds": generation_seconds,
+                    "total_seconds": time.perf_counter() - started},
+        "parallelism": {"tensor_parallel_size": args.tensor_parallel_size,
+                        "pipeline_parallel_size": args.pipeline_parallel_size,
+                        "max_num_seqs": args.max_num_seqs,
+                        "use_cudagraphs": args.use_cudagraphs},
+        "corpora": corpus_rows,
     }
-    # training_scope is only honest when inferred from the experiment's own
-    # data paths; a --recall-corpora override says what the operator measured.
-    if not args.recall_corpora:
-        r["training_scope"] = corpus_names
-    # One-corpus artifacts retain the v1 surface for downstream compatibility
-    # with evaluate.py's tasks.json shape.
-    if len(corpus_results) == 1:
-        only = next(iter(corpus_results.values()))
-        r.update({k: only[k] for k in
-                  ("seed", "n_per_task", "tasks", "overall_word_acc", "examples")})
-        r["poem_path"] = only["poem_path"]
-
-    data_stem = Path(cfg.data.examples_path).stem
-    out = Path(args.out or f"runs/teacher_ref_rag_{model_short}_{data_stem}.json")
+    out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(r, ensure_ascii=False, indent=1))
-    print(f"wrote {out}")
+    out.write_text(json.dumps(artifact, ensure_ascii=False, indent=1) + "\n")
+    print(f"wrote {out} ({len(all_prepared)} prompts, "
+          f"load {load_seconds:.1f}s, generation {generation_seconds:.1f}s)")
     return 0
 
 

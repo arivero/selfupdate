@@ -339,6 +339,15 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
   than raw `tail`: it removes token-heavy loading/progress-bar updates while
   preserving warnings, tracebacks, commands, completion, and failure lines.
   Worker logs remain the source for a detailed progress diagnosis.
+- **Logged-launch delegation (owner, 2026-07-14):** any launch expected to
+  generate a log must be delegated to a small-class subagent (Luna level, or
+  Haiku/Sonnet level). The subagent owns launching the command and reporting
+  back only the relevant log lines: the exact command and start marker,
+  material warnings/errors or tracebacks, progress/completion evidence, and
+  the exit or failure state. Do not stream routine progress bars, model-loading
+  chatter, or large raw log tails into the parent transcript. This delegation
+  keeps log handling compact; it does not transfer the parent agent's campaign
+  supervision, diagnosis, or scientific-review responsibility.
 - **RAG target-generation gate (owner, 2026-07-12):** a failed RAG gate is a
   diagnosis obligation, never a threshold-relaxation or queue-bypass event.
   The agent must inspect completion cuts and exact tokenized tool conversation,

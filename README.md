@@ -56,6 +56,16 @@ tests/              alignment / cache / locality / layerwise hybrid tests
 See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 [docs/scaling.md](docs/scaling.md) for the large-model plan.
 
+## Evaluation generation pipeline v2
+
+Epoch-zero censorship controls and post-training checkpoint recall use
+`scripts/teacher_ceiling.py`, which submits the deterministic evaluation
+prompts and their individual token budgets directly to vLLM. Pass
+`--checkpoint runs/<run>/checkpoint` to evaluate a trained model through the
+same prompt construction and scoring path used for its base reference. The
+retired Transformers `model.generate` implementation is intentionally not
+kept in-tree; it remains recoverable from Git history.
+
 ## Current Finding
 
 Storage and readout dissociate. Hidden matching writes distributed,
