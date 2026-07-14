@@ -363,6 +363,8 @@ def main() -> None:
                     help="override model.name for cache benchmark campaigns")
     ap.add_argument("--pipeline-split", type=int, default=None,
                     help="place decoder blocks before/after this index on two GPUs")
+    ap.add_argument("--pipeline-splits", type=int, nargs="+", default=None,
+                    help="decoder block boundaries for N-way pipeline placement")
     ap.add_argument("--device-map-auto", action="store_true",
                     help="use Hugging Face automatic model placement")
     ap.add_argument("--generation-batch", type=int, default=None,
@@ -402,6 +404,8 @@ def main() -> None:
         cfg.model.name = args.model
     if args.pipeline_split is not None:
         cfg.model.pipeline_split = args.pipeline_split
+    if args.pipeline_splits is not None:
+        cfg.model.pipeline_splits = args.pipeline_splits
     if args.device_map_auto:
         cfg.model.device_map = "auto"
     if uses_pipeline_map(cfg) and cfg.model.device_map:
