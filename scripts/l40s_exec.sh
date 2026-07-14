@@ -57,6 +57,14 @@ module load glibc/2.35 >/dev/null
 }
 LIBRARY_PATH="$GLIB235_LIB:/lib64:/usr/lib64"
 [[ -z "$OLD_LD_LIBRARY_PATH" ]] || LIBRARY_PATH="$LIBRARY_PATH:$OLD_LD_LIBRARY_PATH"
+# `--library-path` configures the glibc-2.35 loader for this Python process.
+# Do not export the module's LD_LIBRARY_PATH: subprocesses such as Triton's
+# host gcc start through the host loader and must see the original host paths.
+if [[ -n "$OLD_LD_LIBRARY_PATH" ]]; then
+  export LD_LIBRARY_PATH="$OLD_LD_LIBRARY_PATH"
+else
+  unset LD_LIBRARY_PATH
+fi
 unset SELFUPDATE_DISABLE_CAUSAL_CONV1D
 export SELFUPDATE_CAUSAL_CONV_BACKEND=compiled
 exec "$GLIB235_LINUX_SO" --library-path "$LIBRARY_PATH" "$BASE_PYTHON" "$@"

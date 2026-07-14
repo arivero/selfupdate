@@ -272,6 +272,9 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   libc and fails on a `GLIBC_PRIVATE` symbol. The slower torch implementation
   is an explicit diagnostic mode only:
   `SELFUPDATE_L40S_CAUSAL_CONV=torch scripts/l40s_exec.sh ...`.
+  The wrapper restores the pre-module `LD_LIBRARY_PATH` before entering
+  Python. This is required because child tools such as Triton's `gcc` use the
+  host loader and otherwise fail on the same `GLIBC_PRIVATE` mismatch.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the
