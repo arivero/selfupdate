@@ -60,8 +60,9 @@ gpu_lease_mutex_owner_path() {
 gpu_lease_mutex_release_if_owner() {
     local owner host pid start actual self_pid
     owner="$(gpu_lease_mutex_owner_path)"
-    [ -e "$owner" ] || return 0
-    read -r host pid start < "$owner" 2>/dev/null || return 0
+    # The owner and lock directory are removed together by the releasing
+    # process.  Treat a vanished owner as an ordinary race, not shell noise.
+    read -r host pid start 2>/dev/null < "$owner" || return 0
     [ "$host" = "$GPU_LEASE_HOST" ] || return 0
     self_pid="${BASHPID:-$$}"
     actual="$(gpu_lease_proc_start "$self_pid" || true)"
@@ -77,8 +78,7 @@ gpu_lease_mutex_acquire() {
     owner="$(gpu_lease_mutex_owner_path)"
     mkdir -p "$GPU_LEASE_ROOT"
     while ! mkdir "$mutex" 2>/dev/null; do
-        if [ -r "$owner" ]; then
-            read -r host pid start < "$owner" 2>/dev/null || true
+        if read -r host pid start 2>/dev/null < "$owner"; then
             if [ "$host" = "$GPU_LEASE_HOST" ] &&
                 ! gpu_lease_pid_live "$host" "$pid" "$start"; then
                 rm -f "$owner"
