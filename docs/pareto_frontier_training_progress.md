@@ -144,7 +144,7 @@ Cache finalization timestamps:
 | 2026-07-14 | Individual report v2 data contract initialized | complete | `docs/report_v2.md`; local `runs/<run_name>/report.md` is generated after each training completes |
 | 2026-07-14 | Explicit cross-censorship teacher-cache reuse | complete | Commit `74a8900`; all 2,071 teacher sequences/spans identical, all student views changed, undeclared reuse and forged teacher mismatch rejected |
 | 2026-07-14 | Pipeline-v2 trainer mechanics and telemetry | validated | Answer/token update boundaries, dual loss measures, effective LoRA/full-weight epoch deltas; five legacy variants certified unchanged on L40S |
-| 2026-07-14 15:32 CEST | Remaining epoch-zero vLLM queue launched | running | Two concurrent 2-GPU jobs from RAM-staged HF cache; Gemma4 26B deletion and randomized controls first |
+| 2026-07-14 15:32–16:14 CEST | Remaining epoch-zero vLLM queue | complete | Seven controls completed from RAM-staged HF cache; final Gemma4 31B randomized control used corrected synchronous scheduling |
 | 2026-07-14 | Six exact-cache training bases and 4B probe grid | validated | `configs/experiments/pareto_v2/`; every base resolves its certified 2,071-example cache hash, eight probe overlays pass typed dispatch validation |
 | 2026-07-14 | Gemma4 31B randomized control async-scheduler diagnosis | corrected/requeue | vLLM 0.25 async pipeline scheduling twice violated output-placeholder accounting; evaluator now defaults to synchronous scheduling and records the choice |
 | 2026-07-14 | Initial 4B probe runtime launch | corrected/requeue | L40S driver 560 rejects container torch 2.11/cu128 at CUDA initialization; queue switched to the host venv already certified on L40S |
@@ -173,7 +173,7 @@ timing/provenance rather than only a rounded summary.
 | Gemma4 26B-A4B | complete: ARC-E 0.28, ARC-C 0.33, HellaSwag 0.32; macro 0.310 | complete: M/Q1/Q4 word accuracy 0.103/0.176/0.178 | complete: M/Q1/Q4 word accuracy 0.137/0.266/0.213 |
 | Qwen3.6 35B-A3B | complete: ARC-E 0.69, ARC-C 0.58, HellaSwag 0.68; macro 0.650 | complete: M/Q1/Q4 word accuracy 0.162/0.205/0.179 | complete: M/Q1/Q4 word accuracy 0.136/0.202/0.182 |
 | Qwen3.6 27B | complete: ARC-E 0.72, ARC-C 0.58, HellaSwag 0.68; macro 0.660 | complete: M/Q1/Q4 word accuracy 0.185/0.225/0.221 | complete: M/Q1/Q4 word accuracy 0.241/0.244/0.270 |
-| Gemma4 31B | complete: ARC-E 0.32, ARC-C 0.26, HellaSwag 0.38; macro 0.320 | complete: M/Q1/Q4 word accuracy 0.000/0.001/0.005 | synchronous retry running |
+| Gemma4 31B | complete: ARC-E 0.32, ARC-C 0.26, HellaSwag 0.38; macro 0.320 | complete: M/Q1/Q4 word accuracy 0.000/0.001/0.005 | complete: M/Q1/Q4 word accuracy 0.042/0.092/0.118 |
 
 ## Per-training report v2
 
@@ -209,6 +209,12 @@ Qwen3.6 27B loaded/generated in 189.7/40.3 seconds (`remove`) and
 took 84.6/67.1 seconds and produced near-zero recall with
 0.986/0.931/0.931 hard cuts; this bounded failure mode is retained as the
 corruption baseline rather than discarded.
+
+Gemma4 31B randomized censorship completed with synchronous pipeline-parallel
+vLLM scheduling: load 100.9 seconds, generation 670.5 seconds, and M/Q1/Q4
+hard-cut fractions 0.875/0.639/0.667. Its artifact records
+`async_scheduling: false`; the earlier failed async attempts produced no JSON
+and are retained only in the worker log as failure provenance.
 
 ## Loss and censorship plan
 
