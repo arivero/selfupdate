@@ -168,8 +168,9 @@ rows import the exact response token IDs from the corresponding vLLM run.
 The L40S table records the actual capacity controls.  Large models often
 require a smaller `max_model_len`, a balanced pipeline split, or lower
 effective teacher batch even when the requested batch remains 64.  Gemma-31B
-required `max_num_seqs=32` to avoid a late vLLM async-scheduler failure.  The
-ALIA-40B row is still pending after two partial scheduler-failure attempts.
+required `max_num_seqs=32` to avoid a late vLLM async-scheduler failure.  ALIA
+required the same reduced concurrency and a balanced 24/24 cache split after
+two partial scheduler-failure attempts.
 
 | model | GPUs | max model len | vLLM max seqs | setup (s) | generation (s) | generated tokens | vLLM tok/s | cache total (s) | forward (s) | D2H (s) | storage (s) | effective cache batch | cache split |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -192,7 +193,7 @@ ALIA-40B row is still pending after two partial scheduler-failure attempts.
 | Qwen3-32B | 2 | 4096 | 64 | 345.1 | 658.0 | 135,481 | 205.9 | 434.7 | 357.9 | 5.2 | 108.7 | 2–64 | 32/32 |
 | Gemma-4-31B-it | 2 | 2048 | 32 | 234.3 | 612.6 | 78,433 | 128.0 | 430.4 | 359.2 | 4.3 | 82.7 | 1–64 | 30/30 |
 | GPT-OSS-120B | 4 | 4096 | 64 | 339.3 | 240.5 | 186,032 | 773.5 | 278.6 | 247.4 | 0.5 | 31.6 | 4–64 | 9/18/27 |
-| ALIA-40B-FC-2606 | 2 | 2048 | 32 | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending |
+| ALIA-40B-FC-2606 | 2 | 2048 | 32 | 419.1 | 2,036.6 | 94,710 | 46.5 | 398.4 | 335.3 | 3.5 | 96.9 | 1–6 | 24/24 |
 
 The L40S cache timings confirm that D2H is not the dominant cost: storage
 worker time is usually much larger than the measured device-to-host copy.
