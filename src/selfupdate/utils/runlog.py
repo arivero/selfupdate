@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -11,12 +13,14 @@ import yaml
 
 
 class RunLog:
-    def __init__(self, run_dir: str | Path):
+    def __init__(self, run_dir: str | Path, defaults: dict | None = None):
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self._f = (self.run_dir / "metrics.jsonl").open("a", encoding="utf-8")
+        self.defaults = dict(defaults or {})
 
     def log(self, **kv) -> None:
+        kv = {**self.defaults, **kv}
         kv.setdefault("t", round(time.time(), 3))
         self._f.write(json.dumps(kv, ensure_ascii=False) + "\n")
         self._f.flush()
@@ -36,10 +40,43 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
     if old.exists() and old.stat().st_size > 0:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         old.rename(run_dir / f"metrics.prev-{stamp}.jsonl")
-    (run_dir / "config.yaml").write_text(
+    config_path = run_dir / "config.yaml"
+    config_path.write_text(
         yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
     )
-    return run_dir, RunLog(run_dir)
+    defaults = {}
+    if cfg.train.pipeline_version == 2:
+        examples = Path(cfg.data.examples_path)
+        defaults = {
+            "run_name": cfg.run_name,
+            "source_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True).strip(),
+            "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+            "dataset_path": cfg.data.examples_path,
+            "dataset_sha256": (
+                hashlib.sha256(examples.read_bytes()).hexdigest()
+                if examples.is_file() else None),
+            "model_base_identity": cfg.model.name,
+            "student_init_identity": cfg.train.init_from or cfg.model.name,
+            "pipeline_version": cfg.train.pipeline_version,
+            "update_granularity": cfg.train.update_granularity,
+            "trajectory_source": cfg.train.trajectory_source,
+            "attention_source": cfg.train.attention_source,
+            "expert_routing_source": cfg.train.expert_routing_source,
+            "mask_mode": cfg.mask.mode,
+            "censorship_compaction": cfg.mask.compaction,
+            "loss_kind": cfg.train.hidden_loss,
+            "seed": cfg.train.seed,
+            "batching": cfg.train.batching,
+            "micro_batch": cfg.train.micro_batch,
+            "grad_accum": cfg.train.grad_accum,
+            "conn_window": cfg.train.conn_window,
+            "conn_stride": cfg.train.conn_stride,
+            "pipeline_split": cfg.model.pipeline_split,
+            "pipeline_splits": cfg.model.pipeline_splits,
+            "device_map": cfg.model.device_map,
+        }
+    return run_dir, RunLog(run_dir, defaults=defaults)
 
 
 def read_metrics(run_dir: str | Path) -> list[dict]:

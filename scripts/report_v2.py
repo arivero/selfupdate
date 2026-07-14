@@ -278,6 +278,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     max_items = max((int(r.get("items_seen", 0)) for r in rows), default=0)
     times = [float(r["t"]) for r in rows if "t" in r]
     elapsed_min = (max(times) - min(times)) / 60 if len(times) > 1 else float("nan")
+    provenance = next((r for r in rows if r.get("source_commit")), {})
     rel = lambda name: f"eval/report_v2/{name}"
     md = [
         f"# Individual training report v2 — {run_dir.name}", "",
@@ -287,6 +288,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Dataset: `{data.get('examples_path', 'missing')}`"
         + (f"; SHA-256 `{_sha(examples_path)}`" if examples_path.is_file() else " (missing)"),
         f"- Frozen run config SHA-256: `{_sha(config_path)}`",
+        f"- Training source commit: `{provenance.get('source_commit', 'missing')}`",
+        f"- Student initialization: `{provenance.get('student_init_identity', train.get('init_from') or model.get('name', 'missing'))}`",
         f"- Pipeline: v{train.get('pipeline_version', 'missing')}",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",

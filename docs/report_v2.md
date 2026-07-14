@@ -39,6 +39,10 @@ carry the training identity, config hash, dataset identity, pipeline version,
 checkpoint/base identity, seed, batching regime, connected-window width,
 censorship mode, loss kind, and evaluation source.
 
+Pipeline-v2 `RunLog` injects this immutable identity into every telemetry row,
+so a partial JSONL extract remains typed and attributable without relying on
+directory names or mutable campaign state.
+
 Pipeline-v2 identity additionally pins gradient aggregation, trajectory-state
 source, attention source, and expert-routing source. Pipeline-v1 runs are
 historical and must not be selected into a pipeline-v2 report. Reserved but
