@@ -34,22 +34,26 @@ run_one() {
     return 0
   fi
   echo "START $tag model=$model visible=$visible placement=$placement" >> "$OUTROOT/campaign.log"
-  rm -rf "$out" "$tmp"
+  rm -rf "$tmp"
   mkdir -p "$out" "$CACHEROOT/$tag"
-  setsid env CUDA_VISIBLE_DEVICES="$visible" "$PY" \
-    "$ROOT/scripts/benchmark_vllm_generation.py" \
-    --model "$model" --batch-sizes 64 --max-num-seqs 64 \
-    --gpu-memory-utilization 0.85 --max-model-len 4096 \
-    --use-cudagraphs --progress --prompt-format "$format" \
-    "${parallel[@]}" --out "$out" >> "$log" 2>&1
-  local vrc=$?
-  if [[ "$vrc" != 0 || ! -f "$out/responses_bs64.jsonl" ]]; then
-    echo "VLLM_FAIL $tag rc=$vrc" >> "$OUTROOT/campaign.log"
-    return "$vrc"
+  if [[ ! -f "$out/responses_bs64.jsonl" ]]; then
+    setsid env CUDA_VISIBLE_DEVICES="$visible" "$PY" \
+      "$ROOT/scripts/benchmark_vllm_generation.py" \
+      --model "$model" --batch-sizes 64 --max-num-seqs 64 \
+      --gpu-memory-utilization 0.85 --max-model-len 4096 \
+      --use-cudagraphs --progress --prompt-format "$format" \
+      "${parallel[@]}" --out "$out" >> "$log" 2>&1
+    local vrc=$?
+    if [[ "$vrc" != 0 || ! -f "$out/responses_bs64.jsonl" ]]; then
+      echo "VLLM_FAIL $tag rc=$vrc" >> "$OUTROOT/campaign.log"
+      return "$vrc"
+    fi
+  else
+    echo "REUSE_VLLM $tag" >> "$OUTROOT/campaign.log"
   fi
   rm -rf "$tmp"
   CUDA_VISIBLE_DEVICES="$visible" scripts/container_exec.sh python \
-    "$ROOT/scripts/build_teacher_cache.py" \
+    scripts/build_teacher_cache.py \
     --config configs/teacher_references/teacher_cache_qwen36_35b_a3b_v5rs.yaml \
     --model "$model" --teacher-batch 64 --max-sequence-tokens 8192 \
     --hidden-dtype bfloat16 --cache-root "$tmp" \
