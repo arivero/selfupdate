@@ -149,6 +149,7 @@ Cache finalization timestamps:
 | 2026-07-14 | Gemma4 31B randomized control async-scheduler diagnosis | corrected/requeue | vLLM 0.25 async pipeline scheduling twice violated output-placeholder accounting; evaluator now defaults to synchronous scheduling and records the choice |
 | 2026-07-14 | Initial 4B probe runtime launches | superseded | L40S driver 560 rejects torch 2.11/cu128 in both the container and shared venv at CUDA initialization; neither attempt loaded weights |
 | 2026-07-14 | L40S training runtime correction | validated | Thin `/tmp` layer over torch 2.7.1+cu126; bf16 matmul, Transformers 5.12.1, PEFT 0.19.1, kernels 0.12.0, and Qwen3.5 config resolution pass without installing torch |
+| 2026-07-14 | Optional causal-conv1d ABI guard | corrected/requeue | Base cu126 venv wheel requires glibc 2.32; L40S wrapper hides it so Transformers selects the supported torch fallback |
 | pending | Qwen3.5 4B student training | pending | — |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
