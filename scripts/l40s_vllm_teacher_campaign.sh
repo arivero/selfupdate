@@ -32,11 +32,11 @@ run_one() {
   local tag="$1" model="$2" visible="$3" placement="$4" format="${5:-native}"
   local out="$VLLMROOT/$tag" log="$LOGROOT/$tag.log"
   local tmp="/tmp/arivero/l40s-cache-$tag"
-  local -a parallel=()
+  local -a vllm_parallel=() cache_parallel=()
   case "$placement" in
     single) ;;
-    pp2) parallel=(--pipeline-split 18) ;;
-    pp4) parallel=(--pipeline-splits 9 18 27) ;;
+    pp2) vllm_parallel=(--pipeline-parallel-size 2); cache_parallel=(--pipeline-split 18) ;;
+    pp4) vllm_parallel=(--pipeline-parallel-size 4); cache_parallel=(--pipeline-splits 9 18 27) ;;
     *) echo "unknown placement $placement" >&2; return 2 ;;
   esac
   if [[ -f "$CACHEROOT/$tag/timings.json" ]]; then
@@ -52,7 +52,7 @@ run_one() {
       --model "$model" --batch-sizes 64 --max-num-seqs 64 \
       --gpu-memory-utilization 0.85 --max-model-len 4096 \
       --use-cudagraphs --progress --prompt-format "$format" \
-      "${parallel[@]}" --out "$out" >> "$log" 2>&1
+      "${vllm_parallel[@]}" --out "$out" >> "$log" 2>&1
     local vrc=$?
     if [[ "$vrc" != 0 || ! -f "$out/responses_bs64.jsonl" ]]; then
       echo "VLLM_FAIL $tag rc=$vrc" >> "$OUTROOT/campaign.log"
@@ -69,7 +69,7 @@ run_one() {
     --model "$model" --teacher-batch 64 --max-sequence-tokens 8192 \
     --hidden-dtype bfloat16 --cache-root "$tmp" \
     --generation-responses "$response_rel" \
-    "${parallel[@]}" >> "$log" 2>&1
+    "${cache_parallel[@]}" >> "$log" 2>&1
   local crc=$?
   local timing
   timing="$(find "$tmp" -name timings.json -print -quit 2>/dev/null || true)"

@@ -155,3 +155,47 @@ bridge rather than `--env` (`5c7bad7`).
 Primary objective: beat each matching one-card eager time with no meaningful
 quality loss, then reduce the remaining gap to the graph target.  Do not mix
 setup time into the generation column; report it alongside each new row.
+
+## L40S full-corpus vLLM + hidden-cache campaign (n = 2,071)
+
+These rows are the July 2026 four-L40S campaign on `agpul01`.  vLLM 0.25
+generation used CUDA graphs and requested batch 64; `generation` excludes
+model loading, while `setup` is reported separately.  `cache total` is the
+in-repo teacher-forced hidden-state pass, including asynchronous writes;
+`forward`, `D2H`, and `storage` are its measured component times.  The cache
+rows import the exact response token IDs from the corresponding vLLM run.
+
+The L40S table records the actual capacity controls.  Large models often
+require a smaller `max_model_len`, a balanced pipeline split, or lower
+effective teacher batch even when the requested batch remains 64.  Gemma-31B
+required `max_num_seqs=32` to avoid a late vLLM async-scheduler failure.  The
+ALIA-40B row is still pending after two partial scheduler-failure attempts.
+
+| model | GPUs | max model len | vLLM max seqs | setup (s) | generation (s) | generated tokens | vLLM tok/s | cache total (s) | forward (s) | D2H (s) | storage (s) | effective cache batch | cache split |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Qwen3-0.6B | 1 | 4096 | 64 | 156.2 | 31.9 | 159,383 | 5,000.3 | 30.7 | 18.3 | 0.9 | 8.8 | 1–64 | — |
+| Qwen3.5-0.8B | 1 | 4096 | 64 | 219.9 | 46.7 | 245,397 | 5,256.1 | 73.2 | 59.5 | 0.8 | 9.0 | 1–64 | — |
+| Qwen3-1.7B | 1 | 4096 | 64 | 21.1 | 58.4 | 170,025 | 2,910.1 | 47.1 | 32.0 | 1.7 | 15.6 | 1–64 | — |
+| Qwen3.5-2B | 1 | 4096 | 64 | 116.9 | 64.7 | 163,370 | 2,524.8 | 71.7 | 54.7 | 1.2 | 13.1 | 5–64 | — |
+| Qwen3-4B | 1 | 4096 | 64 | 155.6 | 106.4 | 164,431 | 1,545.6 | 93.6 | 68.7 | 2.5 | 24.6 | 2–64 | — |
+| Qwen3.5-9B | 1 | 4096 | 64 | 256.9 | 169.0 | 79,836 | 472.4 | 188.7 | 156.0 | 2.3 | 22.1 | 2–64 | — |
+| Qwen3-8B | 1 | 4096 | 64 | 172.5 | 177.5 | 130,901 | 737.4 | 136.5 | 100.0 | 3.3 | 34.5 | 3–64 | — |
+| Llama-3.1-8B-Instruct | 1 | 4096 | 64 | 175.8 | 175.3 | 138,576 | 790.7 | 130.5 | 94.3 | 3.0 | 30.9 | 1–64 | — |
+| Qwen3-14B | 1 | 4096 | 64 | 286.8 | 289.8 | 95,490 | 329.5 | 196.4 | 156.9 | 4.0 | 41.9 | 1–64 | — |
+| Phi-4 | 1 | 4096 | 64 | 293.2 | 345.2 | 162,245 | 470.0 | 222.9 | 165.6 | 4.9 | 50.0 | 1–22 | — |
+| GPT-OSS-20B | 1 | 4096 | 64 | 188.2 | 123.2 | 314,844 | 2,556.6 | 220.2 | 187.9 | 2.5 | 26.6 | 1–64 | — |
+| Mistral-7B-Instruct | 1 | 4096 | 64 | 110.4 | 225.0 | 236,239 | 1,049.7 | 160.1 | 109.7 | 4.1 | 37.6 | 1–64 | — |
+| NVIDIA Nemotron Nano 9B v2 | 1 | 4096 | 64 | 220.7 | 384.7 | 328,476 | 853.9 | 261.6 | 161.5 | 9.6 | 83.3 | 1–64 | — |
+| Gemma-4-26B-A4B-it | 2 | 4096 | 64 | 395.6 | 150.0 | 84,137 | 561.0 | 129.2 | 109.0 | 1.2 | 24.9 | 4–64 | 18/remaining |
+| Qwen3.6-27B | 2 | 4096 | 64 | 490.1 | 437.5 | 70,534 | 161.2 | 420.9 | 364.7 | 3.9 | 85.3 | 1–9 | 18/remaining |
+| Qwen3.6-35B-A3B | 2 | 4096 | 64 | 522.3 | 184.5 | 74,528 | 404.0 | 184.3 | 154.4 | 1.2 | 27.1 | 1–64 | 18/remaining |
+| Qwen3-32B | 2 | 4096 | 64 | 345.1 | 658.0 | 135,481 | 205.9 | 434.7 | 357.9 | 5.2 | 108.7 | 2–64 | 32/32 |
+| Gemma-4-31B-it | 2 | 2048 | 32 | 234.3 | 612.6 | 78,433 | 128.0 | 430.4 | 359.2 | 4.3 | 82.7 | 1–64 | 30/30 |
+| GPT-OSS-120B | 4 | 4096 | 64 | 339.3 | 240.5 | 186,032 | 773.5 | 278.6 | 247.4 | 0.5 | 31.6 | 4–64 | 9/18/27 |
+| ALIA-40B-FC-2606 | 2 | 2048 | 32 | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending |
+
+The L40S cache timings confirm that D2H is not the dominant cost: storage
+worker time is usually much larger than the measured device-to-host copy.
+Cache construction is therefore valuable primarily because it amortizes the
+teacher forward over repeated student epochs or ablations, not because it is
+cheaper than a one-shot online teacher call.
