@@ -91,4 +91,22 @@ Caveats measured the hard way (kept because they are the actual lesson):
 
 ## Results — demo 2: GPU race (torch eager GPU0 vs standard vLLM GPU1)
 
-(running)
+First round, H100 80GB, same 64 v5 prompts:
+
+| engine | tok/s | generate | prefill | decode |
+|---|---|---|---|---|
+| torch eager b64, GPU0 | 38.96 | 122.4 s | 11.0 s | 111.0 s |
+| vLLM 0.25.0 standard, GPU1 | (running) | | | |
+
+**39 tok/s on an H100 — barely above the CPU number — and the profiler
+explains it.** One decode step shows 515 ms of CPU time against 12.8 ms of
+CUDA time; 347 ms of it is `aten::_cudnn_attention_forward` **self-CPU**
+(12.5 ms × 28 layers). torch 2.11's SDPA dispatches to the cuDNN attention
+backend, whose CPU-side plan cache misses at every step because the KV
+length grows by one token each time — the H100 idles while cuDNN's frontend
+rebuilds execution plans. Neither host syncs nor mask construction matter
+(measured: removing them changes nothing).
+
+This is a beautiful negative result for eager HF-on-GPU generation: the
+bottleneck is not kernels, batching, or graphs — it is a backend-selection
+footgun. Fix attempt in the next commit: exclude the cuDNN SDPA backend.
