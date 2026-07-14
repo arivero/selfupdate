@@ -32,8 +32,12 @@ BENCHMARK_REVISIONS = {
 
 
 def _arc_examples(config: str, split: str, limit: int | None) -> list[dict]:
-    if config == "ARC-Easy":
-        pinned = Path("data/eval/arc_easy_v1.json")
+    pinned_name = {
+        "ARC-Easy": "arc_easy_v1.json",
+        "ARC-Challenge": "arc_challenge_v1.json",
+    }.get(config)
+    if pinned_name:
+        pinned = Path("data/eval") / pinned_name
         if pinned.exists():
             rows = json.loads(pinned.read_text())["items"]
             return rows[:limit] if limit else rows
@@ -62,6 +66,10 @@ def _arc_examples(config: str, split: str, limit: int | None) -> list[dict]:
 
 
 def _hellaswag_examples(split: str, limit: int | None) -> list[dict]:
+    pinned = Path("data/eval/hellaswag_v1.json")
+    if pinned.exists():
+        rows = json.loads(pinned.read_text())["items"]
+        return rows[:limit] if limit else rows
     ds = load_dataset("Rowan/hellaswag", split=split,
                       revision=BENCHMARK_REVISIONS["Rowan/hellaswag"])
     rows = []
@@ -186,7 +194,7 @@ def evaluate_standard(model, tok, *, tasks: tuple[str, ...] = STANDARD_TASKS,
         "batch_size": batch_size,
         "benchmark_revisions": {
             "arc_easy": "data/eval/arc_easy_v1.json",
-            "arc_challenge": BENCHMARK_REVISIONS["allenai/ai2_arc"],
-            "hellaswag": BENCHMARK_REVISIONS["Rowan/hellaswag"],
+            "arc_challenge": "data/eval/arc_challenge_v1.json",
+            "hellaswag": "data/eval/hellaswag_v1.json",
         },
     }

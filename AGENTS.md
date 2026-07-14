@@ -275,6 +275,14 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   The wrapper restores the pre-module `LD_LIBRARY_PATH` before entering
   Python. This is required because child tools such as Triton's `gcc` use the
   host loader and otherwise fail on the same `GLIBC_PRIVATE` mismatch.
+- `scripts/l40s_exec.sh` deliberately sets Hugging Face offline mode: model
+  snapshots resolve from `/dev/shm/$USER/selfupdate-hf-cache`. Standard-damage
+  evaluation must therefore not fetch datasets during training. Its fixed
+  100-item inputs are vendored in `data/eval/{arc_easy,arc_challenge,
+  hellaswag}_v1.json` with source revisions embedded. If those files must be
+  rebuilt, use `scripts/vendor_standard_eval.py` once with
+  `HF_HUB_OFFLINE=0 HF_DATASETS_OFFLINE=0`; commit and review the resulting
+  data before launching an offline campaign.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the

@@ -66,6 +66,10 @@ thin cu126 dependency layer and its no-second-torch invariant are documented
 in `AGENTS.md`. The wrapper enters the cluster's `glibc/2.35` module through
 its supplied dynamic loader so the compiled causal-convolution CUDA kernel is
 available; loading that module without its loader is not sufficient.
+The same wrapper resolves model weights from the RAM-backed offline HF cache.
+The standard-damage subsets are consequently vendored under `data/eval/` at
+their pinned revisions; `scripts/vendor_standard_eval.py` is the explicit,
+one-time online rebuild path rather than a hidden training-time download.
 
 ## Evaluation generation pipeline v2
 
