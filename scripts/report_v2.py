@@ -232,7 +232,27 @@ def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
 def _markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
     if df.empty:
         return "_Missing._"
-    return df[columns].to_markdown(index=False, floatfmt=".4f")
+    # pandas delegates ``to_markdown`` to optional ``tabulate``.  The lean
+    # L40S runtime intentionally omits it, and a report must never make a
+    # completed training look incomplete merely because a table formatter is
+    # absent.
+    def cell(value) -> str:
+        if pd.isna(value):
+            return ""
+        if isinstance(value, float):
+            return f"{value:.4f}"
+        return str(value).replace("|", r"\|").replace("\n", "<br>")
+
+    selected = df.loc[:, columns]
+    lines = [
+        "| " + " | ".join(columns) + " |",
+        "| " + " | ".join("---" for _ in columns) + " |",
+    ]
+    lines.extend(
+        "| " + " | ".join(cell(value) for value in row) + " |"
+        for row in selected.itertuples(index=False, name=None)
+    )
+    return "\n".join(lines)
 
 
 def _signal_frame(signal: dict) -> pd.DataFrame:
