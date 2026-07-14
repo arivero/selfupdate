@@ -1,8 +1,8 @@
 """Recitation evaluation: can the student produce the poem without context?
 
 Greedy generation from the student prompt (shared_prefix + student_stub +
-shared_mid — no privileged block), compared to the reference answer text with CER
-(jiwer), line-level exact match, and longest-correct-prefix length.
+shared_mid — no privileged block), compared to the reference answer text with
+character error rate, line-level exact match, and longest-correct-prefix length.
 """
 
 from __future__ import annotations
@@ -11,10 +11,32 @@ import os
 import random
 from concurrent.futures import Future, ThreadPoolExecutor
 
-import jiwer
 import torch
 
 from ..chatfmt import adapt_records, stop_token_id
+
+
+def character_error_rate(reference: str, hypothesis: str) -> float:
+    """Levenshtein character error rate with jiwer-compatible semantics.
+
+    Keeping this tiny dynamic-programming primitive local avoids making every
+    training runtime carry an otherwise optional text-metrics package.
+    """
+    if not reference:
+        if not hypothesis:
+            return 0.0
+        raise ValueError("reference must not be empty when hypothesis is non-empty")
+    previous = list(range(len(hypothesis) + 1))
+    for i, ref_char in enumerate(reference, 1):
+        current = [i]
+        for j, hyp_char in enumerate(hypothesis, 1):
+            current.append(min(
+                current[-1] + 1,
+                previous[j] + 1,
+                previous[j - 1] + (ref_char != hyp_char),
+            ))
+        previous = current
+    return previous[-1] / len(reference)
 
 
 def _is_cuda_oom(exc: BaseException) -> bool:
@@ -129,10 +151,11 @@ def score_recitation(record: dict, raw: str) -> dict:
     text = normalize_verse(strip_think(raw))
     ref = normalize_verse(record["answer_text"])
 
-    cer = jiwer.cer(ref, text) if text else 1.0
+    cer = character_error_rate(ref, text) if text else 1.0
     # prose corpora: newline placement is arbitrary wrapping, not content —
     # cer_flat scores recall independent of line breaks (additive metric)
-    cer_flat = (jiwer.cer(ref.replace("\n", " "), text.replace("\n", " "))
+    cer_flat = (character_error_rate(
+                    ref.replace("\n", " "), text.replace("\n", " "))
                 if text else 1.0)
     ref_lines = ref.split("\n")
     got_lines = text.split("\n")

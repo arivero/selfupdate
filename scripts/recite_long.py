@@ -19,14 +19,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import jiwer
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.chatfmt import render_rag_for, stop_token_id
 from selfupdate.config import load_config
 from selfupdate.data.poem import _continuation_question, load_poem
-from selfupdate.eval.recite import normalize_verse
+from selfupdate.eval.recite import character_error_rate, normalize_verse
 
 
 @torch.no_grad()
@@ -62,7 +61,8 @@ def chain(model, tok, reference: list[str], window: int, self_chained: bool) -> 
         pos += len(lines)
     hyp = "\n".join(got)
     ref = "\n".join(reference[1: 1 + len(got)]) if got else ""
-    cer = jiwer.cer(normalize_verse(ref), normalize_verse(hyp)) if hyp and ref else 1.0
+    cer = (character_error_rate(normalize_verse(ref), normalize_verse(hyp))
+           if hyp and ref else 1.0)
     prefix = 0
     for g, h in zip(reference[1:], got):
         if g.strip() != h.strip():

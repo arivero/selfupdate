@@ -9,10 +9,8 @@ safetensors==0.8.0
 accelerate==1.14.0
 peft==0.19.1
 PyYAML==6.0.3
-jiwer==4.0.0
 pandas==3.0.3
 tabulate==0.10.0
 matplotlib==3.11.0
 tqdm==4.68.3
 pytest==9.1.1
-

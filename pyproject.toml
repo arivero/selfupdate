@@ -14,7 +14,6 @@ dependencies = [
     "accelerate>=1.6",
     "peft>=0.18",
     "pyyaml",
-    "jiwer>=3",
     "pandas",
     "tabulate",
     "matplotlib",
