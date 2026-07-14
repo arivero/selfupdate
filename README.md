@@ -57,6 +57,8 @@ See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 [docs/scaling.md](docs/scaling.md) for the large-model plan. The typed
 answer/token aggregation and future state/attention/routing strategy surface
 is specified in [docs/training_pipeline_v2.md](docs/training_pipeline_v2.md).
+Completed pipeline-v2 trainings get their atomic individual report with
+`scripts/report_v2.py`; see [docs/report_v2.md](docs/report_v2.md).
 
 ## Evaluation generation pipeline v2
 

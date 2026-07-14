@@ -82,3 +82,13 @@ Each completed training report includes:
 The generator must show missing observations rather than silently dropping a
 section or a training. Report generation happens only after training finishes;
 the underlying epoch telemetry is written during training.
+
+Generate one completed report with:
+
+```bash
+PYTHONPATH=src .venv/bin/python scripts/report_v2.py <run_name>
+```
+
+`--allow-incomplete` exists only for diagnostic rendering and labels the
+result incomplete; campaign reports are generated after the checkpoint and
+`kind=done` telemetry row both exist.
