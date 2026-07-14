@@ -2,6 +2,7 @@ run_name: pareto_v2_micro_qwen35_4b_delta_cosine_pad_random_b1_k128
 mask:
   compaction: pad_random
 train:
+  run_class: method
   pipeline_version: 2
   hidden_loss: delta_cosine
   update_granularity: grid

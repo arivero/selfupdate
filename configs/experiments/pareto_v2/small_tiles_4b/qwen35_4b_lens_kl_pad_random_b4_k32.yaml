@@ -2,6 +2,7 @@ run_name: pareto_v2_micro_qwen35_4b_lens_kl_pad_random_b4_k32
 mask:
   compaction: pad_random
 train:
+  run_class: method
   pipeline_version: 2
   hidden_loss: lens_kl
   update_granularity: grid

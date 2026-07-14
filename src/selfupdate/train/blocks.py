@@ -70,6 +70,10 @@ class BlockStack:
         self._block_calls = self.blocks
         self._pe_src = None
         self._pe_map: dict = {}
+        # Fallback for architectures that accept shared_kv_states without a
+        # per-layer rotary bundle. Gemma4 supplies a fresh mapping in rope();
+        # this path is latent on the current models but must still initialize.
+        self._shared_kv_states = None
         if hook_free_walk and not self.rotary_needs_layer_type:
             devices, calls, plain = [], [], True
             for b in self.blocks:

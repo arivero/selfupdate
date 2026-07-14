@@ -2,6 +2,7 @@ run_name: pareto_v2_screen_qwen35_4b_huber_remove_b8_all
 mask:
   compaction: remove
 train:
+  run_class: control
   pipeline_version: 2
   hidden_loss: huber
   update_granularity: grid

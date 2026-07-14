@@ -13,6 +13,13 @@ heatmaps and density plots retain their visual encoding but contain one row.
 Final synthesis is a selection and aggregation layer over these atomic
 reports, not a second source of truth.
 
+For sequential browsing, `runs/report_v2_index/` contains one relative symlink
+per completed PDF, named `YYYYMMDD-HHMMSS__<run_name>.pdf`. The timestamp is
+the stable training-completion time from the `kind=done` telemetry row, so
+alphabetical order is completion/publication order and regenerating a report
+does not reorder history. Every individual report generation refreshes this
+index; it can also be rebuilt with `scripts/refresh_report_v2_index.py`.
+
 The campaign-wide live ledger is
 `docs/pareto_frontier_training_progress.md`. Epoch-zero teacher controls are written
 there as soon as they complete; they do not wait for a training or its local
@@ -40,6 +47,15 @@ Epoch numbers mean completed training epochs. The pre-training model is epoch
 carry the training identity, config hash, dataset identity, pipeline version,
 checkpoint/base identity, seed, batching regime, connected-window width,
 censorship mode, loss kind, and evaluation source.
+
+Reports distinguish nominal geometry from realized geometry. Nominal `B` and
+`K` come from the frozen config (`K=all`, not `K=0`); realized telemetry gives
+the mean, median, minimum, and maximum active answers and selected valid
+aligned-token cells per optimizer update, plus the fraction of full nominal
+tiles where that quantity is defined. Ragged tails therefore remain visible
+instead of being presented as padding or as complete rectangles. Reports also
+carry the explicit `run_class` (`method`, `control`, or another declared
+class), epoch-zero recall, and final recall change from epoch zero.
 
 For current Pareto v2, the report must make the strict-local contract visible:
 `conn_window: 1`, no behavioral readout/final-logit objective, and—when the
@@ -114,6 +130,7 @@ groupings by:
 - loss type;
 - censorship mode; and
 - update geometry (including reduction and explicit B/K widths).
+- declared run class.
 
 Every grouping records its inclusion rule and excludes superseded historical
 readout-bearing arms from frontier claims. Missing artifacts remain visible in

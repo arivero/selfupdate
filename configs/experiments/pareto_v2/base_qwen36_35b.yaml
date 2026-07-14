@@ -25,7 +25,7 @@ train:
   attention_source: student_attention
   expert_routing_source: black_box
   method: layerwise
-  run_class: method
+  run_class: open
   schedule: summed
   epochs: 6
   lr: 1.0e-5

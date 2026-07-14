@@ -51,6 +51,10 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("grid aggregation requires answers_per_update > 0")
             if cfg.train.tokens_per_answer_update < 0:
                 bad.append("grid aggregation requires tokens_per_answer_update >= 0 (0 means all)")
+            if (run_class == "method"
+                    and cfg.train.tokens_per_answer_update == 0):
+                bad.append("grid method arms require finite tokens_per_answer_update > 0; "
+                           "unbounded K is reserved for explicitly typed controls")
             if cfg.train.update_reduction not in ("answer_mean", "token_mean"):
                 bad.append("grid aggregation requires update_reduction=answer_mean or token_mean")
             if cfg.train.micro_batch != cfg.train.answers_per_update:

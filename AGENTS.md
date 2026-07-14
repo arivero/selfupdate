@@ -367,6 +367,14 @@ with `nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory,process_name
 write the same run directory. Stop the extra process immediately and inspect
 the scheduler lock; the lock PID handoff is atomic in current code.
 
+Remote scheduler leases are deliberately not reaped automatically: a process
+on another node cannot be declared dead from this node's PID namespace. Before
+manually removing a remote lease, identify its recorded host/PID, verify on
+that host that both scheduler and worker are absent, then remove only that
+lease. Edit a live queue by writing the complete replacement to a sibling
+temporary file and atomically renaming it over the queue; never expose a
+partially rewritten queue to a scheduler.
+
 ## Bootstrap
 
 ```bash

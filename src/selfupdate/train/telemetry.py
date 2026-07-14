@@ -303,11 +303,11 @@ def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
 
 
 def _epoch_zero_telemetry(cfg, stack, tok, log, started_at: float) -> dict | None:
-    """Record the paired epoch-0 reference when standard gating is enabled."""
-    if not cfg.eval.standard_damage_every_epochs:
-        return None
+    """Always record recall; gate only the optional standard-damage probe."""
     _log_epoch_recall(cfg, stack, tok, log, epoch=0, phase="epoch0",
                       started_at=started_at)
+    if not cfg.eval.standard_damage_every_epochs:
+        return None
     return _log_standard_damage(cfg, stack, tok, log, epoch=0, phase="epoch0",
                                 baseline=None, started_at=started_at)
 

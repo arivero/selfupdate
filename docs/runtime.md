@@ -142,6 +142,9 @@ loading a directory while it is still being populated on Lustre.
   comparison keys on a semantic config hash that EXCLUDES placement knobs,
   so one single-device recording certifies PP runs;
   `--override model.pipeline_split=14` runs the same variants under PP.
+  Its locality replay deliberately uses B=1 examples. It certifies block-local
+  credit and frozen-vocabulary invariants, but is not a replay of a batched
+  grid tile and does not by itself certify ragged gather/reduction behavior.
 - `scripts/train_batch_bench.py` — "how fast?": the real summed path,
   timing and memory JSON, no checkpoint.
 - `scripts/memory_plan.py` — "will it fit?": meta-device instantiation +

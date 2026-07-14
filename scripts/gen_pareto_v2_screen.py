@@ -54,6 +54,7 @@ def render() -> tuple[dict[Path, str], str]:
                     "run_name": run,
                     "mask": {"compaction": censorship},
                     "train": {
+                        "run_class": "method",
                         "pipeline_version": 2,
                         "hidden_loss": loss,
                         "update_granularity": "grid",

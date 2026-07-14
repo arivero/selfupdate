@@ -50,25 +50,42 @@ def _summary_row(manifest: dict) -> dict:
     recall = _read_csv(run, "recall_by_epoch.csv")
     standard = _read_csv(run, "standard_by_epoch.csv")
     final_recall = float("nan")
+    recall_epoch0 = float("nan")
+    recall_delta = float("nan")
     final_standard = float("nan")
     damage = float("nan")
     if not recall.empty:
+        epoch_means = recall.groupby("epoch").overall_word_acc.mean()
         final_epoch = recall.epoch.max()
-        final_recall = recall[recall.epoch == final_epoch].overall_word_acc.mean()
+        final_recall = float(epoch_means.loc[final_epoch])
+        if 0 in epoch_means.index:
+            recall_epoch0 = float(epoch_means.loc[0])
+            recall_delta = final_recall - recall_epoch0
     if not standard.empty:
         standard = standard.sort_values("epoch")
         final_standard = float(standard.iloc[-1].macro_accuracy)
         damage = float(standard.iloc[0].macro_accuracy) - final_standard
     geometry = manifest.get("geometry") or {}
+    realized = geometry.get("realized") or {}
+    lanes = realized.get("lanes_per_update") or {}
+    tokens = realized.get("aligned_tokens_per_update") or {}
     return {
         "run": manifest["run"],
         "model": manifest.get("model"),
+        "run_class": manifest.get("run_class"),
         "loss": manifest.get("hidden_loss"),
         "censorship": manifest.get("censorship"),
+        "batching": manifest.get("batching"),
         "B": geometry.get("answers"),
         "K": geometry.get("tokens"),
         "reduction": geometry.get("reduction"),
+        "realized_B_mean": lanes.get("mean"),
+        "realized_B_median": lanes.get("median"),
+        "realized_cells_mean": tokens.get("mean"),
+        "realized_cells_median": tokens.get("median"),
+        "recall_epoch0": recall_epoch0,
         "final_recall": final_recall,
+        "recall_delta_vs_epoch0": recall_delta,
         "final_standard": final_standard,
         "standard_damage": damage,
         "elapsed_minutes": _elapsed_minutes(run),
@@ -179,8 +196,8 @@ def _write_group(name: str, value: str, manifests: list[dict], pending: list[str
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--campaign", default="pareto_v2")
-    ap.add_argument("--group-by", choices=("all", "campaign", "model", "loss",
-                                             "censorship", "geometry"),
+    ap.add_argument("--group-by", choices=("all", "campaign", "model", "run_class",
+                                             "loss", "censorship", "geometry"),
                     default="all")
     ap.add_argument("--out", default="runs/grouped_reports_v2")
     args = ap.parse_args()
@@ -201,13 +218,14 @@ def main() -> None:
             pending.append(run.name)
 
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
-    wanted = ("campaign", "model", "loss", "censorship", "geometry") \
+    wanted = ("campaign", "model", "run_class", "loss", "censorship", "geometry") \
         if args.group_by == "all" else (args.group_by,)
     for manifest in manifests:
         geometry = manifest.get("geometry") or {}
         values = {
             "campaign": manifest.get("campaign"),
             "model": manifest.get("model"),
+            "run_class": manifest.get("run_class"),
             "loss": manifest.get("hidden_loss"),
             "censorship": manifest.get("censorship"),
             "geometry": (f"B{geometry.get('answers')}_K{geometry.get('tokens')}_"

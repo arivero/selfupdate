@@ -72,6 +72,15 @@ replaced inside that source batch: replacement would change update membership
 and the experiment's grouping semantics. Missing tail cells contribute
 neither to the loss numerator nor to its reduction denominator.
 
+The 2026-07-14 masking audit traced collation through aligned-row gathering
+and both grid reductions, then poisoned every padded/invalid hidden row in a
+synthetic ragged tile: gradients outside selected valid rows remained exactly
+zero. A full coordinate audit also passed for all 1,572 updates of the
+padding-heavy `B=8,K=all` Huber/remove control and all 16,368 updates of the
+finite `B=1,K=128` cosine/remove run. Right padding is therefore neither
+trained nor summed; because it is to the right, it also cannot enter a real
+token's causal prefix.
+
 ### Independent reduction
 
 - `answer_mean`: mean the selected tokens within each answer, then give each
@@ -90,6 +99,12 @@ tile is one optimizer update. A future logical tile split across several
 physical forward micro-batches needs exact global reduction denominators and
 will receive a separate implementation/certification rather than silently
 changing this contract.
+
+The initial geometry screen uses padded batching for B=1 and B=2, and
+length-bucketed batching for B>=4. That boundary is a declared throughput and
+quality confound. Inspect the geometry curve first; if a discontinuity appears
+at the B=2/B=4 boundary, run a matched padded-versus-bucketed crossover at the
+same finite B, K, seed, and loss before attributing the change to tile shape.
 
 ### Compatibility regimes
 

@@ -13,7 +13,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -28,6 +30,7 @@ from report_pdf_v2 import write_individual_pdf
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
+REPORT_INDEX = RUNS / "report_v2_index"
 
 
 def _sha(path: Path) -> str:
@@ -44,9 +47,92 @@ def _rows(path: Path) -> list[dict]:
     return rows
 
 
+def _completed_at(run_dir: Path) -> float | None:
+    metrics = run_dir / "metrics.jsonl"
+    if metrics.is_file():
+        done = [float(row["t"]) for row in _rows(metrics)
+                if row.get("kind") == "done" and row.get("t") is not None]
+        if done:
+            return max(done)
+    pdf = run_dir / "report.pdf"
+    return pdf.stat().st_mtime if pdf.is_file() else None
+
+
+def refresh_report_index() -> int:
+    """Publish stable completion-ordered links to every individual PDF."""
+    REPORT_INDEX.mkdir(parents=True, exist_ok=True)
+    wanted: dict[str, Path] = {}
+    for manifest_path in sorted(RUNS.glob("*/report_manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        run_dir = manifest_path.parent
+        pdf = run_dir / "report.pdf"
+        completed_at = _completed_at(run_dir)
+        if not manifest.get("complete") or not pdf.is_file() or completed_at is None:
+            continue
+        stamp = datetime.fromtimestamp(completed_at).strftime("%Y%m%d-%H%M%S")
+        wanted[f"{stamp}__{run_dir.name}.pdf"] = pdf
+
+    for old in REPORT_INDEX.glob("*.pdf"):
+        if old.name not in wanted and old.is_symlink():
+            old.unlink()
+    for name, target in wanted.items():
+        link = REPORT_INDEX / name
+        relative = os.path.relpath(target, start=REPORT_INDEX)
+        if link.is_symlink() and os.readlink(link) == relative:
+            continue
+        tmp = REPORT_INDEX / f".{name}.tmp"
+        if os.path.lexists(tmp):
+            tmp.unlink()
+        tmp.symlink_to(relative)
+        tmp.replace(link)
+    return len(wanted)
+
+
 def _finite_mean(values) -> float:
     vals = [float(v) for v in values if v is not None and math.isfinite(float(v))]
     return sum(vals) / len(vals) if vals else float("nan")
+
+
+def _realized_geometry(rows: list[dict], configured_b: int | None,
+                       configured_k: int | str | None) -> dict:
+    """Summarize the physical tiles that actually reached AdamW.
+
+    Nominal B/K are ceilings: bucket tails, DataLoader tails, and ragged final
+    token strips may all be smaller.  Keep both identities in every report so
+    grouped science never silently treats a configured rectangle as realized.
+    """
+    updates = [row for row in rows if row.get("kind") == "train"
+               and row.get("aligned_tokens_per_update") is not None]
+
+    def stats(key: str) -> dict:
+        values = [float(row[key]) for row in updates if row.get(key) is not None]
+        if not values:
+            return {"mean": None, "median": None, "min": None, "max": None}
+        series = pd.Series(values)
+        return {
+            "mean": float(series.mean()),
+            "median": float(series.median()),
+            "min": float(series.min()),
+            "max": float(series.max()),
+        }
+
+    realized = {
+        "updates": len(updates),
+        "lanes_per_update": stats("answer_visits_per_update"),
+        "aligned_tokens_per_update": stats("aligned_tokens_per_update"),
+    }
+    if (updates and isinstance(configured_b, int) and configured_b > 0
+            and isinstance(configured_k, int) and configured_k > 0):
+        nominal_cells = configured_b * configured_k
+        realized["nominal_cells"] = nominal_cells
+        realized["full_nominal_tile_fraction"] = sum(
+            int(row["aligned_tokens_per_update"]) == nominal_cells
+            for row in updates
+        ) / len(updates)
+    return realized
 
 
 def _loss_name(kind: str) -> str:
@@ -362,6 +448,31 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"`{train.get('update_granularity', 'missing')}`; logged measure "
             f"`{loss_measure}`"
         )
+    configured_b = train.get("answers_per_update", train.get("micro_batch"))
+    configured_k_raw = train.get("tokens_per_answer_update", "all")
+    configured_k = "all" if configured_k_raw == 0 else configured_k_raw
+    realized_geometry = _realized_geometry(rows, configured_b, configured_k_raw)
+    lane_stats = realized_geometry["lanes_per_update"]
+    token_stats = realized_geometry["aligned_tokens_per_update"]
+    if (realized_geometry["updates"] and lane_stats.get("mean") is not None
+            and token_stats.get("mean") is not None):
+        realized_identity = (
+            f"{realized_geometry['updates']:,} updates; lanes/update mean "
+            f"{lane_stats['mean']:.2f}, median {lane_stats['median']:.2f}; "
+            f"aligned tokens/update mean {token_stats['mean']:.2f}, median "
+            f"{token_stats['median']:.2f}"
+        )
+    else:
+        realized_identity = "missing"
+    configured_run_class = train.get("run_class", "missing")
+    reported_run_class = configured_run_class
+    run_class_source = "frozen_config"
+    if run_dir.name.startswith("pareto_v2_screen_"):
+        # The first broad controls predate explicit run_class pinning.  Their
+        # immutable run configs say method through inheritance, but the launch
+        # ledger and run naming typed this cohort as controls from inception.
+        reported_run_class = "control"
+        run_class_source = "2026-07-14_screen_name_fallback"
     rel = lambda name: f"eval/report_v2/{name}"
     md = [
         f"# Individual training report v2 — {run_dir.name}", "",
@@ -376,7 +487,10 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Pipeline: v{train.get('pipeline_version', 'missing')}",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
+        f"- Run class: `{reported_run_class}` (source `{run_class_source}`; "
+        f"frozen-config value `{configured_run_class}`)",
         f"- Update geometry/aggregation: {update_identity}",
+        f"- Realized update geometry: {realized_identity}",
         f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
@@ -472,7 +586,10 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"Pipeline: v{train.get('pipeline_version', 'missing')}",
             f"Censorship: {mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}",
             f"Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
+            (f"Run class: {reported_run_class} (source {run_class_source}; "
+             f"frozen-config value {configured_run_class})."),
             f"Update geometry/aggregation: {update_identity}",
+            f"Realized update geometry: {realized_identity}",
             ("Batching: "
              f"{train.get('batching', 'missing')}; micro-batch "
              f"{train.get('micro_batch', 'missing')}; gradient accumulation "
@@ -510,12 +627,17 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "model": model.get("name"),
         "dataset": data.get("examples_path"),
         "pipeline_version": train.get("pipeline_version"),
+        "run_class": reported_run_class,
+        "configured_run_class": configured_run_class,
+        "run_class_source": run_class_source,
         "censorship": mask.get("compaction"),
         "hidden_loss": train.get("hidden_loss"),
+        "batching": train.get("batching"),
         "geometry": {
-            "answers": train.get("answers_per_update", train.get("micro_batch")),
-            "tokens": train.get("tokens_per_answer_update", "all"),
+            "answers": configured_b,
+            "tokens": configured_k,
             "reduction": train.get("update_reduction", train.get("update_granularity")),
+            "realized": realized_geometry,
         },
         "strict_local": bool(signal.get("passed")) if signal else False,
         "source_commit": provenance.get("source_commit"),
@@ -525,6 +647,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     manifest_tmp = run_dir / ".report_manifest.json.tmp"
     manifest_tmp.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
     manifest_tmp.replace(manifest_path)
+    refresh_report_index()
     return report
 
 

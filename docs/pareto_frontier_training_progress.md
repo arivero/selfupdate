@@ -425,6 +425,11 @@ full causal `sequence token × layer` compute cells, padding, and throughput.
 Quality comparisons are made at matched item/token budgets and by epoch,
 including epoch zero. Full semantics are in `docs/training_pipeline_v2.md`.
 
+The 2026-07-14 padding audit passed a poisoned synthetic ragged-gradient probe
+and exhaustive coordinate checks for the 1,572-update `B=8,K=all`
+Huber/remove control and the 16,368-update `B=1,K=128` cosine/remove run.
+Only real selected aligned rows contribute loss or gradient.
+
 ### Speed gate
 
 Before the loss/censorship matrix expands, Qwen3.5 4B measures training-only

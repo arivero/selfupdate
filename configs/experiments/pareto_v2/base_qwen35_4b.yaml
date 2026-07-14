@@ -29,7 +29,8 @@ train:
   attention_source: student_attention
   expert_routing_source: black_box
   method: layerwise
-  run_class: method
+  # Template sentinel. Every arm must pin method/control explicitly.
+  run_class: open
   schedule: summed
   epochs: 6
   lr: 1.0e-5
