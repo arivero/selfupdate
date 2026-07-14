@@ -213,6 +213,11 @@ def main() -> int:
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--max-num-seqs", type=int, default=64)
     parser.add_argument("--use-cudagraphs", action="store_true")
+    parser.add_argument(
+        "--async-scheduling", action="store_true",
+        help=("opt into vLLM asynchronous scheduling; synchronous is the "
+              "evaluation default because vLLM 0.25 async+pipeline parallel "
+              "can mis-account heterogeneous output placeholders"))
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
@@ -245,7 +250,8 @@ def main() -> int:
         pipeline_parallel_size=args.pipeline_parallel_size,
         gpu_memory_utilization=args.gpu_memory_utilization,
         max_model_len=args.max_model_len, max_num_seqs=args.max_num_seqs,
-        enforce_eager=not args.use_cudagraphs, disable_log_stats=True)
+        enforce_eager=not args.use_cudagraphs, disable_log_stats=True,
+        async_scheduling=args.async_scheduling)
     load_seconds = time.perf_counter() - started
     generated_at = time.perf_counter()
     outputs = llm.generate(
@@ -301,7 +307,8 @@ def main() -> int:
         "parallelism": {"tensor_parallel_size": args.tensor_parallel_size,
                         "pipeline_parallel_size": args.pipeline_parallel_size,
                         "max_num_seqs": args.max_num_seqs,
-                        "use_cudagraphs": args.use_cudagraphs},
+                        "use_cudagraphs": args.use_cudagraphs,
+                        "async_scheduling": args.async_scheduling},
         "corpora": corpus_rows,
     }
     out = Path(args.out)
