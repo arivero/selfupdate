@@ -17,7 +17,10 @@ cache:
   max_sequence_tokens: 8192
 train:
   pipeline_version: 2
-  update_granularity: token
+  update_granularity: grid
+  answers_per_update: 4
+  tokens_per_answer_update: 0
+  update_reduction: token_mean
   trajectory_source: student_hidden
   attention_source: student_attention
   expert_routing_source: black_box
@@ -27,15 +30,12 @@ train:
   epochs: 6
   lr: 1.0e-5
   micro_batch: 4
-  grad_accum: 4
+  grad_accum: 1
   batching: bucketed
   hidden_loss: huber
   conn_window: 1
   conn_stride: 1
-  readout_window_blocks: 1
-  readout_weight: 0.5
   window_hidden_weight: 1.0
-  readout_source: teacher_kl
   moe_mode: dense_or_black_box
   lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
 eval:

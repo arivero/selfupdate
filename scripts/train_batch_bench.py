@@ -13,17 +13,26 @@ import importlib.util
 import json
 import os
 import platform
+import statistics
 import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from selfupdate.utils.env import cap_cpu_threads
+
+cap_cpu_threads()
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-
 from selfupdate.config import load_config
-from selfupdate.data.dataset import Batch, collate_padded_items
+from selfupdate.data.dataset import (
+    Batch,
+    collate_padded_items,
+    iter_batch_grid_tiles,
+)
 from selfupdate.teacher.cache import TeacherCache, resolve_cache_dir
 from selfupdate.train.blocks import BlockStack
 from selfupdate.train.layerwise import (
@@ -130,6 +139,50 @@ def bench(args) -> dict:
     next_step = cfg.train.grad_accum
     pending_losses = []
     for items in loader:
+        if cfg.train.update_granularity == "grid":
+            if not isinstance(items, Batch):
+                raise ValueError("grid benchmark requires padded/bucketed batches")
+            for tile in iter_batch_grid_tiles(
+                    items, cfg.train.tokens_per_answer_update):
+                batch = tile.batch
+                _sync(args.device)
+                t0 = time.perf_counter()
+                layer_losses = _summed_batch(
+                    cfg, stack, loss_fn, batch, batch.hidden, args.device)
+                _extend_pending_from_batch(pending_losses, layer_losses)
+                plan.step()
+                _sync(args.device)
+                elapsed = time.perf_counter() - t0
+                token_count = int(batch.lengths.sum())
+                aligned_count = tile.aligned_token_count
+                steps.append({
+                    "step": step,
+                    "answer_visits": tile.answer_count,
+                    "completed_answers": tile.completed_answer_count,
+                    "tokens": token_count,
+                    "aligned_tokens": aligned_count,
+                    "layer_loss_cells": aligned_count * n,
+                    "max_seq": int(batch.lengths.max()),
+                    "pad_tokens": int(batch.student_ids.numel() - batch.lengths.sum()),
+                    "seconds": elapsed,
+                    "tiles_per_second": 1.0 / elapsed,
+                    "answer_visits_per_second": tile.answer_count / elapsed,
+                    "aligned_tokens_per_second": aligned_count / elapsed,
+                    "grid_coordinates": tile.coordinate_ranges,
+                })
+                _flush_train_log(
+                    NullLog(), epoch=0, step=step,
+                    accum=sum(x["completed_answers"] for x in steps),
+                    pending=pending_losses, n_layers=n,
+                    update_granularity="grid",
+                    update_reduction=cfg.train.update_reduction,
+                )
+                step += 1
+                if step >= args.steps:
+                    break
+            if step >= args.steps:
+                break
+            continue
         _sync(args.device)
         t0 = time.perf_counter()
         if isinstance(items, Batch):
@@ -187,8 +240,11 @@ def bench(args) -> dict:
 
     steady = steps[1:] if len(steps) > 1 else steps
     steady_seconds = sum(x["seconds"] for x in steady)
-    steady_items = sum(x["items"] for x in steady)
+    steady_items = sum(x.get("items", x.get("answer_visits", 0))
+                       for x in steady)
     steady_aligned = sum(x["aligned_tokens"] for x in steady)
+    total_aligned = sum(pair.aligned_len for pair in ds.pairs)
+    steady_tile_seconds = [x["seconds"] for x in steady]
     out = {
         "model": cfg.model.name,
         "runtime": {
@@ -208,17 +264,26 @@ def bench(args) -> dict:
         "hidden_loss": cfg.train.hidden_loss,
         "pipeline_version": cfg.train.pipeline_version,
         "update_granularity": cfg.train.update_granularity,
+        "answers_per_update": cfg.train.answers_per_update,
+        "tokens_per_answer_update": cfg.train.tokens_per_answer_update,
+        "update_reduction": cfg.train.update_reduction,
         "conn_window": cfg.train.conn_window,
-        "readout_window_blocks": cfg.train.readout_window_blocks,
+        "final_logit_training": False,
         "load_seconds": t_load1 - t_load0,
         "steps": steps,
         "steady_state": {
             "warmup_steps_excluded": max(len(steps) - len(steady), 0),
             "items_per_second": steady_items / steady_seconds,
+            "answer_visits_per_second": steady_items / steady_seconds,
             "aligned_tokens_per_second": steady_aligned / steady_seconds,
+            "mean_tile_seconds": statistics.mean(steady_tile_seconds),
+            "median_tile_seconds": statistics.median(steady_tile_seconds),
             "projected_epoch_examples": len(ds),
+            "projected_epoch_aligned_tokens": total_aligned,
             "projected_epoch_seconds": (
-                len(ds) * steady_seconds / steady_items),
+                total_aligned * steady_seconds / steady_aligned
+                if cfg.train.update_granularity == "grid"
+                else len(ds) * steady_seconds / steady_items),
         },
     }
     if torch.device(args.device).type == "cuda":

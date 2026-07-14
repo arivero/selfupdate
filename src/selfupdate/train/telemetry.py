@@ -207,7 +207,8 @@ def _flush_train_log(log, *, epoch: int, step: int, accum: int,
     answer_loss, per_layer_answer, token_loss, per_layer_token = (
         _summarize_pending_losses(pending, n_layers, token_counts))
     aggregation = extra.get("update_granularity", "legacy_answer_sum")
-    use_token = aggregation == "token"
+    reduction = extra.get("update_reduction", aggregation)
+    use_token = reduction in ("token", "token_mean")
     log.log(kind="train", epoch=epoch, step=step, items_seen=accum,
             accum_items=len(pending),
             loss=(token_loss if use_token else answer_loss),

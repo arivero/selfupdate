@@ -154,7 +154,15 @@ class TrainConfig:
     # Pipeline 1 is historical. Pipeline 2 requires an explicit gradient
     # aggregation strategy and records the reserved strategy axes below.
     pipeline_version: int = 1
-    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token
+    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid
+    # Pipeline-v2 grid geometry.  ``grid`` is an optimizer tile in the
+    # answer x aligned-token plane followed by the mandatory forward layer
+    # walk 1..n.  Zero tokens means all remaining aligned tokens in each
+    # answer.  The legacy answer/token values above remain readable so old
+    # configs retain their exact meaning; new experiments should use grid.
+    answers_per_update: int = 0
+    tokens_per_answer_update: int = 0
+    update_reduction: str = ""  # answer_mean | token_mean (grid only)
     trajectory_source: str = "student_hidden"      # future: teacher_hidden
     attention_source: str = "student_attention"    # future: teacher_attention
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
@@ -211,25 +219,13 @@ class TrainConfig:
     # Raw multi-layer displacement offsets; legal only inside a faithful
     # connected window and averaged uniformly across eligible offsets.
     multi_delta_scales: list[int] = field(default_factory=lambda: [1, 2, 4])
-    # Top readout term attached ONLY to sanctioned sliding windows:
-    # conn_window > 0, conn_stride == 1, and readout_window_blocks == conn_window.
-    # The connected graph is still a gradient-isolation unit rooted at a
-    # detached window input; nothing below the window receives gradient.
-    readout_window_blocks: int = 0
-    readout_weight: float = 0.0
     # Hidden-loss weight inside a connected window. Method arms keep this 1.0;
     # zero or reduced values are ablations only.
     window_hidden_weight: float = 1.0
-    # readout-term source (owner correction 2026-07-05): 'teacher_kl' =
-    # KL(teacher || student) on the TEACHER'S context-conditioned logits
-    # (derived from targets[n] through the frozen head — zero extra
-    # compute, 100% teacher-sourced. No reference-text source is allowed.
-    # No base config default is allowed; readout runs must pin this explicitly.
-    readout_source: str = 'UNSET'
-    # sliding k-connected windows over the BODY (owner proposal 2026-07-04):
+    # sliding k-connected windows over the hidden-state trajectory:
     # every layer gets k-deep credit assignment, peak activation graph
-    # stays k blocks. 0/1 = classic block-local. The top readout is just
-    # the last sliding window position — the only one where logits exist.
+    # stays k blocks. 0/1 = classic block-local.  There is no behavioral
+    # readout or final-logit training path on this branch.
     conn_window: int = 0
     # 0 = DISJOINT windows (detach every k blocks; walk compute unchanged;
     # credit depth depends on position inside the window). 1 = FAITHFUL
@@ -248,11 +244,8 @@ class TrainConfig:
     # Memory price of this and every 2026-07-06 speed fix: docs/memory.md
     # "Speed/Memory Ledger" (this one is zero; batching is the VRAM dial).
     window_dedup: bool = False
-    # anchor-KL: KL(teacher/base || student) on anchor fragments through the
-    # top readout window. Needs an online teacher for base logits.
-    anchor_kl_weight: float = 0.0
     # Depth-uniform, block-local preservation of frozen-base hidden states on
-    # generic anchor fragments (separate from output anchor KL).
+    # generic anchor fragments.
     anchor_hidden_weight: float = 0.0
     anchor_path: str = "data/anchors_es.txt"
     # sequential schedule
@@ -367,4 +360,15 @@ def load_config(base: str | Path, experiment: str | Path | None = None) -> Exper
     cfg = _load_yaml_mapping(base)
     if experiment:
         cfg = _merge_deep(cfg, _load_yaml_mapping(experiment))
+    removed = sorted(
+        set((cfg.get("train") or {}))
+        & {"readout_window_blocks", "readout_weight", "readout_source",
+           "anchor_kl_weight"}
+    )
+    if removed:
+        raise ValueError(
+            "removed output-readout training key(s): " + ", ".join(removed)
+            + "; this branch is strictly hidden-state layerwise. The old "
+              "runtime and configs are recoverable from git history."
+        )
     return _from_dict(ExperimentConfig, cfg)

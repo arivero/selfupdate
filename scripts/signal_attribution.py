@@ -1,16 +1,9 @@
-"""Signal attribution: what fraction of the training gradient comes from
-the per-layer hidden losses vs teacher-sourced behavioral readout?
+"""Certify and quantify strictly block-local training gradients.
 
-The naming contract (CLAUDE.md) requires this number: a project called
-"layerwise distillation" must show the hidden matching is the primary
-signal — not a 100%-weight auxiliary wearing a costume. For each block
-we backward the hidden loss and the auxiliary SEPARATELY (retain_graph)
-and report per-block and aggregate gradient-norm shares.
-
-Usage:
-    signal_attribution.py --experiment configs/experiments/X.yaml \
-        --checkpoint runs/X/checkpoint [--items 16] [--device cuda]
-Writes runs/<run>/eval/signal_attribution.json.
+For each sampled item and layer this reproduces the configured hidden-state
+loss, backpropagates it in isolation, and records the intended block norm,
+largest foreign-block norm, and frozen-vocabulary leakage.  The branch has no
+behavioral readout or final-logit training component.
 """
 
 import argparse
@@ -20,13 +13,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from selfupdate.utils.env import cap_cpu_threads
+
+cap_cpu_threads()
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from selfupdate.config import load_config
 from selfupdate.data.dataset import DistillDataset
+from selfupdate.teacher.cache import TeacherCache, resolve_cache_dir
 from selfupdate.train.blocks import BlockStack
-from selfupdate.train.teacher_source import OnlineTeacherSource
 from selfupdate.train.losses import HiddenLoss
 
 
@@ -38,30 +35,22 @@ def load_student(cfg, checkpoint: str, dev: str):
         tok = AutoTokenizer.from_pretrained(checkpoint)
         base = AutoModelForCausalLM.from_pretrained(
             cfg.model.name, dtype=torch.bfloat16).to(dev)
-        peft_model = PeftModel.from_pretrained(
-            base, checkpoint, is_trainable=True)
+        peft_model = PeftModel.from_pretrained(base, checkpoint, is_trainable=True)
         model = peft_model.get_base_model()
         model.to(dev)
-        return model, tok, peft_model
+        return model, tok
     tok = AutoTokenizer.from_pretrained(checkpoint)
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint, dtype=torch.bfloat16).to(dev)
-    return model, tok, None
+    return model, tok
 
 
-def grad_norm2(stack, L):
-    return sum(float((p.grad ** 2).sum()) for p in stack.block_params(L)
-               if p.grad is not None)
+def grad_norm2(params) -> float:
+    return sum(float((p.grad.float() ** 2).sum())
+               for p in params if p.grad is not None)
 
 
-def backward_if_grad(loss, *, retain_graph=False):
-    if loss is None or not loss.requires_grad:
-        return False
-    loss.backward(retain_graph=retain_graph)
-    return True
-
-
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--experiment", required=True)
     ap.add_argument("--config", default="configs/base.yaml")
@@ -70,112 +59,100 @@ def main():
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
-    dev = args.device
 
-    model, tok, peft_model = load_student(cfg, args.checkpoint, dev)
+    model, tok = load_student(cfg, args.checkpoint, args.device)
     stack = BlockStack(model)
     stack.freeze_non_blocks()
     model.eval()
-    if peft_model is not None:
-        teacher = OnlineTeacherSource(stack, peft_model=peft_model)
-    else:
-        t_model = AutoModelForCausalLM.from_pretrained(
-            cfg.model.name, dtype=torch.bfloat16).to(dev)
-        t_model.eval().requires_grad_(False)
-        teacher = OnlineTeacherSource(stack, frozen_stack=BlockStack(t_model))
     loss_fn = HiddenLoss(cfg.train.hidden_loss, stack.final_norm, stack.lm_head)
-
-    ds = DistillDataset(cfg.data.examples_path, None, tok, [],
-                        with_teacher_ids=True)
     n = stack.n_layers
-    readout0 = (n - cfg.train.readout_window_blocks + 1
-                if cfg.train.readout_window_blocks > 0 else n + 1)
-    hid2 = {L: 0.0 for L in range(1, n + 1)}
-    aux2 = {L: 0.0 for L in range(1, n + 1)}
 
-    for it in [ds[i] for i in range(0, len(ds), max(1, len(ds) // args.items))][: args.items]:
-        targets = teacher.aligned_targets(it, dev)
-        ids = it.student_ids.to(dev)[None]
-        pos = it.position_ids.to(dev)[None]
+    cache_root, cache_hash = resolve_cache_dir(cfg)
+    cache = TeacherCache(cache_root, expect_hash=cache_hash)
+    ds = DistillDataset(
+        cfg.data.examples_path, cache, tok, list(range(1, n + 1)),
+        cache_source_compaction=cfg.cache.source_compaction,
+        student_compaction=cfg.mask.compaction,
+        pad_random=(cfg.mask.compaction == "pad_random"),
+        rebase_gap=(cfg.mask.compaction in ("stub_gap", "remove_gap")),
+    )
+
+    local2 = {L: 0.0 for L in range(1, n + 1)}
+    foreign2 = {L: 0.0 for L in range(1, n + 1)}
+    frozen2 = {L: 0.0 for L in range(1, n + 1)}
+    stride = max(1, len(ds) // args.items)
+    sampled = [ds[i] for i in range(0, len(ds), stride)][:args.items]
+
+    for it in sampled:
+        targets = {L: value.to(args.device) for L, value in it.hidden.items()}
+        ids = it.student_ids.to(args.device)[None]
+        pos = it.position_ids.to(args.device)[None]
         h = stack.embed(ids)
         pos_emb = stack.rope(h, pos)
-        L = 1
-        while L <= n:
-            if L == readout0:
-                # connected window: attribute hidden-sum vs readout jointly
-                with torch.autocast(dev, dtype=torch.bfloat16):
-                    hh = h.detach()
-                    losses = []
-                    for LL in range(readout0, n + 1):
-                        hh = stack.run_block(LL, hh, pos_emb)
-                        losses.append(loss_fn(
-                            stack.loss_view(LL, hh)[0, it.s0: it.s0 + it.A],
-                            targets[LL], normed=(LL == n)))
-                    logits = stack.lm_head(stack.final_norm(hh)[
-                        0, it.ans0 - 1: it.s0 + it.A - 1])
-                    if cfg.train.readout_source != "teacher_kl":
-                        raise ValueError(
-                            f"unknown readout_source {cfg.train.readout_source!r}; "
-                            "only teacher_kl is allowed"
-                        )
-                    with torch.no_grad():
-                        t_logits = stack.lm_head(
-                            targets[n][it.ans0 - it.s0 - 1: it.A - 1]
-                            .to(logits.dtype)
-                        )
-                    readout = cfg.train.readout_weight * torch.nn.functional.kl_div(
-                        torch.nn.functional.log_softmax(logits.float(), dim=-1),
-                        torch.nn.functional.log_softmax(t_logits.float(), dim=-1),
-                        log_target=True, reduction="batchmean",
-                    )
-                    hid = cfg.train.window_hidden_weight * sum(losses)
-                model.zero_grad(set_to_none=True)
-                if backward_if_grad(hid, retain_graph=True):
-                    for LL in range(readout0, n + 1):
-                        hid2[LL] += grad_norm2(stack, LL)
-                model.zero_grad(set_to_none=True)
-                if backward_if_grad(readout):
-                    for LL in range(readout0, n + 1):
-                        aux2[LL] += grad_norm2(stack, LL)
-                break
-            with torch.autocast(dev, dtype=torch.bfloat16):
-                h_out = stack.run_block(L, h.detach(), pos_emb)
-                hid = loss_fn(stack.loss_view(L, h_out)[0, it.s0: it.s0 + it.A],
-                              targets[L], normed=(L == n))
-                aux = None
+        for L in range(1, n + 1):
+            h_in = h.detach()
+            with torch.autocast(args.device, dtype=torch.bfloat16):
+                h_out = stack.run_block(L, h_in, pos_emb)
+                if loss_fn.is_delta and 1 < L < n:
+                    loss = loss_fn.delta(
+                        h_out[0, it.s0:it.s0 + it.A],
+                        h_in[0, it.s0:it.s0 + it.A],
+                        targets[L], targets[L - 1])
+                else:
+                    loss = loss_fn(
+                        stack.loss_view(L, h_out)[0, it.s0:it.s0 + it.A],
+                        targets[L], normed=(L == n), layer=L)
             model.zero_grad(set_to_none=True)
-            if backward_if_grad(hid, retain_graph=aux is not None):
-                hid2[L] += grad_norm2(stack, L)
-            if aux is not None:
-                model.zero_grad(set_to_none=True)
-                if backward_if_grad(aux):
-                    aux2[L] += grad_norm2(stack, L)
+            loss.backward()
+            local2[L] += grad_norm2(stack.block_params(L))
+            foreign2[L] += max(
+                (grad_norm2(stack.block_params(other))
+                 for other in range(1, n + 1) if other != L),
+                default=0.0)
+            frozen2[L] += grad_norm2(
+                list(stack.embed_tokens.parameters())
+                + list(stack.final_norm.parameters())
+                + list(stack.lm_head.parameters()))
             h = h_out.detach()
-            L += 1
 
-    tot_h = sum(hid2.values()) ** 0.5
-    tot_a = sum(aux2.values()) ** 0.5
-    share = tot_h / max(tot_h + tot_a, 1e-12)
-    per_block = {L: {"hidden_gn": hid2[L] ** 0.5, "aux_gn": aux2[L] ** 0.5}
-                 for L in range(1, n + 1)}
-    out = {"run": cfg.run_name, "items": args.items,
-           "run_class": cfg.train.run_class,
-           "readout_source": cfg.train.readout_source,
-           "readout_window_blocks": cfg.train.readout_window_blocks,
-           "readout_weight": cfg.train.readout_weight,
-           "window_hidden_weight": cfg.train.window_hidden_weight,
-           "hidden_grad_norm": tot_h, "aux_grad_norm": tot_a,
-           "hidden_share": share, "per_block": per_block}
+    total_local = sum(local2.values()) ** 0.5
+    total_foreign = sum(foreign2.values()) ** 0.5
+    total_frozen = sum(frozen2.values()) ** 0.5
+    passed = total_foreign == 0.0 and total_frozen == 0.0
+    per_block = {
+        str(L): {
+            "local_grad_norm": local2[L] ** 0.5,
+            "max_foreign_grad_norm": foreign2[L] ** 0.5,
+            "frozen_vocab_grad_norm": frozen2[L] ** 0.5,
+        }
+        for L in range(1, n + 1)
+    }
+    out = {
+        "schema_version": 2,
+        "run": cfg.run_name,
+        "items": len(sampled),
+        "teacher_target_source": "pipeline_v2_disk_cache",
+        "teacher_cache": str(cache_root),
+        "teacher_cache_hash": cache_hash,
+        "run_class": cfg.train.run_class,
+        "hidden_loss": cfg.train.hidden_loss,
+        "gradient_contract": "strict_block_local_hidden_state",
+        "final_logit_training": False,
+        "local_grad_norm": total_local,
+        "cross_block_leak_grad_norm": total_foreign,
+        "frozen_vocab_grad_norm": total_frozen,
+        "passed": passed,
+        "per_block": per_block,
+    }
     out_dir = Path(args.checkpoint).parent / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "signal_attribution.json").write_text(json.dumps(out, indent=1))
-    print(f"{cfg.run_name}: hidden share of total gradient norm = {share:.1%} "
-          f"(hidden {tot_h:.3g} vs aux {tot_a:.3g})")
-    top = sorted(per_block.items(), key=lambda kv: -(kv[1]["aux_gn"]))[:5]
-    for L, v in top:
-        h_, a_ = v["hidden_gn"], v["aux_gn"]
-        print(f"  block {L:2d}: hidden {h_:.3g}  aux {a_:.3g}  "
-              f"({h_ / max(h_ + a_, 1e-12):.0%} hidden)")
+    (out_dir / "signal_attribution.json").write_text(
+        json.dumps(out, indent=1) + "\n")
+    print(f"{cfg.run_name}: locality={'PASS' if passed else 'FAIL'} "
+          f"(local {total_local:.3g}, cross-block {total_foreign:.3g}, "
+          f"frozen-vocab {total_frozen:.3g})")
+    if not passed:
+        raise SystemExit("strict block-local gradient certification failed")
 
 
 if __name__ == "__main__":

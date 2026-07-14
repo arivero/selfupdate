@@ -42,11 +42,14 @@ already post-norm):
 MSE in logit space, computed through the precomputed Gram matrix
 `M = WᵀW` ([H,H], one 4 MB buffer). Equivalently: `Δhᵀ M Δh`.
 
-`lens_kl`: `KL(lens(h_t) ‖ lens(h_s))` through the frozen norm + head.
+`lens_kl`: `KL(lens(h_t) ‖ lens(h_s))` through the frozen norm + head. It is a
+local metric for the current block, not a behavioral readout: the head is
+frozen, no logits are trained, and the graph is detached at both block
+boundaries.
 `vocab_mse` is the flat local approximation of `lens_kl` (the exact local
 metric of KL is the Fisher pullback `Wᵀ(diag(p) - ppᵀ)W`). Wave H's failed
-lens-KL was a *behavioral auxiliary without tail-CE*; these kinds replace
-the *storage* metric and compose with tail-CE — a different question.
+lens-KL was a *behavioral auxiliary without tail-CE*; that historical result
+does not define the current Pareto method.
 
 Both vocab kinds depend on the Frozen-Vocabulary Principle below: the
 metric is only meaningful because the vocabulary never moves.
@@ -84,13 +87,11 @@ normalization from being mistaken for a transformer-block update. A future
 state+delta objective needs an explicit, matched-update-norm coefficient; it
 is not silently folded into these kinds.
 
-The only behavioral readout term is teacher-sourced KL through the frozen
-final norm and LM head. It is permitted only at the top position of a
-sanctioned sliding window:
-
-- `readout_source: teacher_kl` + `readout_window_blocks == conn_window`
-
-Reference-text cross-entropy is not a training objective on this branch.
+There is no behavioral readout term in the current branch. Final-logit
+training, `readout_*` configuration, and teacher-KL readout are retired. A
+frozen-head `lens_kl` measurement is allowed only as the local loss for the
+intended block; it does not update the head or cross blocks. Reference-text
+cross-entropy is not a training objective on this branch.
 
 ## The Frozen-Vocabulary Principle
 
@@ -126,16 +127,17 @@ next_input = h_out.detach()
 
 The graph starts at block `L`'s detached input and ends at block `L`'s
 parameters. No gradient reaches any other block, the embedding, final norm, or
-LM head. Tests enforce:
+LM head. Runtime tripwires and the on-demand certification instrument enforce:
 
 - block gradients are confined to the intended block/window
 - isolated single-block replay matches the in-trainer gradient
-- strict hidden-matching steps do not invoke logits
+- pure state-space hidden-matching steps do not invoke logits; local `lens_kl`
+  uses the frozen head only as a no-gradient metric
 
-The top teacher-KL readout is the named locality concession: blocks below the
-sanctioned sliding window are detached, while its final `k` blocks train in
-one connected graph so the teacher-sourced behavioral signal can assign credit
-within that bounded window. A tail-only readout is banned.
+The former top teacher-KL readout was a connected-window locality concession;
+that runtime is being deleted and is recoverable from Git history only. The
+current path has no such concession: `conn_window: 1`, detached inputs, and a
+backward pass confined to one block.
 
 ## Schedules
 
@@ -146,7 +148,11 @@ within that bounded window. A tail-only readout is banned.
 - `teacher_censored`: each block consumes the teacher stream with privileged
   rows removed, making layers independent and stationary.
 
-## Current Mechanistic Picture (2026-07-04 campaign-final)
+## Historical Mechanistic Picture (2026-07-04 campaign-final)
+
+Everything in this section is readout-era evidence. It is preserved for
+interpreting historical checkpoints, but it is not a current training recipe
+or Pareto-frontier evidence.
 
 Storage and readout dissociate, causally:
 
@@ -176,7 +182,7 @@ Final recipe and closing table: EXPERIMENTS.md. The 0.6B one-phase
 champion recites the full 715-verse romance self-chained, first error at
 verse 708.
 
-## The reader/writer distinction (owner challenge, 2026-07-05)
+## Historical reader/writer distinction (owner challenge, 2026-07-05)
 
 Worry: the teacher FAILS the task behaviorally (ceiling 0.52-0.67 across
 0.6-4B) while students succeed (0.013) — is the student then trained on

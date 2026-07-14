@@ -37,8 +37,7 @@ class Batch:
 
     Aligned hidden targets are padded separately from token sequences because
     each example has its own ``s0``/``A`` span. ``hidden_mask`` marks valid
-    aligned rows; ``readout_mask`` marks shifted answer rows for readout/lens
-    losses.
+    aligned rows.
     """
 
     example_ids: list[str]
@@ -51,11 +50,62 @@ class Batch:
     aligned_index: torch.Tensor      # [B, Amax]
     hidden_mask: torch.Tensor        # [B, Amax] bool
     hidden: dict[int, torch.Tensor]  # L -> [B, Amax, H]
-    readout_index: torch.Tensor      # [B, Rmax]
-    readout_mask: torch.Tensor       # [B, Rmax] bool
     teacher_ids: torch.Tensor | None = None
     t0: torch.Tensor | None = None
     t_priv: list | None = None
+    # Coordinate metadata for an aligned-token tile.  ``aligned_offset`` is
+    # the teacher-cache row represented by hidden[:, 0]; ``source_A`` is the
+    # complete aligned length before tiling.  Ordinary collated batches use
+    # offset zero and source_A == A.
+    aligned_offset: torch.Tensor | None = None
+    source_A: torch.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class BatchGridTile:
+    """One optimizer tile in answer x aligned-token x layer space.
+
+    ``batch`` contains full causal token sequences but only the selected
+    aligned teacher rows.  The layer coordinate is deliberately not sliced:
+    the trainer must walk layers in forward order so layer L consumes the
+    student state produced by L-1.
+    """
+
+    batch: Batch
+    source_answer_indices: tuple[int, ...]
+    aligned_starts: tuple[int, ...]
+    aligned_stops: tuple[int, ...]
+    source_aligned_lengths: tuple[int, ...]
+
+    @property
+    def answer_count(self) -> int:
+        return len(self.source_answer_indices)
+
+    @property
+    def aligned_token_count(self) -> int:
+        return sum(stop - start for start, stop in
+                   zip(self.aligned_starts, self.aligned_stops))
+
+    @property
+    def completed_answer_count(self) -> int:
+        return sum(stop == total for stop, total in
+                   zip(self.aligned_stops, self.source_aligned_lengths))
+
+    @property
+    def coordinate_ranges(self) -> list[dict]:
+        return [
+            {
+                "example_id": example_id,
+                "answer_index": source_i,
+                "aligned_start": start,
+                "aligned_stop": stop,
+                "source_aligned_length": total,
+            }
+            for example_id, source_i, start, stop, total in zip(
+                self.batch.example_ids, self.source_answer_indices,
+                self.aligned_starts, self.aligned_stops,
+                self.source_aligned_lengths)
+        ]
 
 
 def load_jsonl(path: str | Path) -> list[dict]:
@@ -208,7 +258,7 @@ def collate_padded_items(items: list[Item]) -> Batch:
     block runner: causal attention prevents valid positions from seeing future
     pad rows, so the valid hidden states are identical to the unpadded path.
 
-    Invariant: every mask marks a PREFIX of valid rows (``[:A]`` / ``[:rlen]``).
+    Invariant: every mask marks a PREFIX of valid rows (``[:A]``).
     The trainer's per-example losses rely on this to slice by CPU-side lengths
     instead of bool-mask indexing (which would sync the GPU via nonzero()).
     """
@@ -218,8 +268,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
     lengths = torch.tensor([len(it.student_ids) for it in items], dtype=torch.long)
     T = int(lengths.max())
     Amax = max(it.A for it in items)
-    ans_lens = [it.s0 + it.A - it.ans0 for it in items]
-    Rmax = max(ans_lens) if ans_lens else 0
 
     student_ids = torch.zeros(B, T, dtype=torch.long)
     position_ids = torch.zeros(B, T, dtype=torch.long)
@@ -228,8 +276,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
     ans0 = torch.tensor([it.ans0 for it in items], dtype=torch.long)
     aligned_index = torch.zeros(B, Amax, dtype=torch.long)
     hidden_mask = torch.zeros(B, Amax, dtype=torch.bool)
-    readout_index = torch.zeros(B, Rmax, dtype=torch.long)
-    readout_mask = torch.zeros(B, Rmax, dtype=torch.bool)
 
     layers = sorted(items[0].hidden)
     hidden: dict[int, torch.Tensor] = {}
@@ -251,21 +297,6 @@ def collate_padded_items(items: list[Item]) -> Batch:
         hidden_mask[i, :it.A] = True
         for L in layers:
             hidden[L][i, :it.A] = it.hidden[L]
-        rlen = ans_lens[i]
-        if rlen > 0:
-            if it.ans0 <= it.s0:
-                # The trainer maps readout rows to teacher rows via
-                # (readout_index - s0).clamp_min(0); the clamp exists for the
-                # zero pad rows below, but a REAL first readout row before s0
-                # (empty mid) would be silently retargeted to teacher row 0.
-                # Masking guarantees a nonempty mid — enforce it where the
-                # rows are built, on CPU, not with a sync in the hot loop.
-                raise ValueError(
-                    f"example {it.example_id}: ans0 ({it.ans0}) <= s0 "
-                    f"({it.s0}) — readout row precedes the aligned span "
-                    "(empty mid); rebuild the dataset")
-            readout_index[i, :rlen] = torch.arange(it.ans0 - 1, it.s0 + it.A - 1)
-            readout_mask[i, :rlen] = True
         if teacher_ids is not None:
             teacher_ids[i, :len(it.teacher_ids)] = it.teacher_ids
 
@@ -280,11 +311,109 @@ def collate_padded_items(items: list[Item]) -> Batch:
         aligned_index=aligned_index,
         hidden_mask=hidden_mask,
         hidden=hidden,
-        readout_index=readout_index,
-        readout_mask=readout_mask,
         teacher_ids=teacher_ids,
         t0=torch.tensor([it.t0 for it in items], dtype=torch.long),
         t_priv=[it.t_priv for it in items],
+        aligned_offset=torch.zeros(B, dtype=torch.long),
+        source_A=A.clone(),
+    )
+
+
+def iter_batch_grid_tiles(batch: Batch, tokens_per_answer: int) -> list[BatchGridTile]:
+    """Partition a padded batch along aligned-token coordinates.
+
+    Every returned batch retains each selected answer's complete causal input
+    sequence.  Only loss/teacher rows are sliced.  Short answers fall out of
+    later tiles and are deliberately not replaced: missing tail cells enter
+    neither the numerator nor denominator of the update reduction. Bucketed
+    batching keeps those tails small without changing which grid cells are
+    visited. ``tokens_per_answer == 0`` means one tile containing every valid
+    aligned row.
+    """
+    if tokens_per_answer < 0:
+        raise ValueError("tokens_per_answer must be >= 0")
+    offsets = (batch.aligned_offset if batch.aligned_offset is not None
+               else torch.zeros_like(batch.A))
+    if bool(offsets.ne(0).any()):
+        raise ValueError("cannot tile an already tiled batch")
+    source_A = batch.source_A if batch.source_A is not None else batch.A
+    max_A = int(source_A.max())
+    if tokens_per_answer == 0:
+        starts = tuple(int(v) for v in offsets.tolist())
+        stops = tuple(start + int(count)
+                      for start, count in zip(starts, batch.A.tolist()))
+        return [BatchGridTile(
+            batch=batch,
+            source_answer_indices=tuple(range(len(batch.example_ids))),
+            aligned_starts=starts,
+            aligned_stops=stops,
+            source_aligned_lengths=tuple(int(v) for v in source_A.tolist()),
+        )]
+    width = tokens_per_answer
+    starts = [0] if max_A == 0 else range(0, max_A, width)
+    return [_slice_batch_grid_tile(batch, int(start), width, source_A)
+            for start in starts
+            if bool(source_A.gt(start).any())]
+
+
+def _slice_batch_grid_tile(
+    batch: Batch, start: int, width: int, source_A: torch.Tensor,
+) -> BatchGridTile:
+    source_indices = [i for i, total in enumerate(source_A.tolist())
+                      if total > start]
+    row_index = torch.tensor(source_indices, dtype=torch.long)
+    totals = [int(source_A[i]) for i in source_indices]
+    counts = [min(width, total - start) for total in totals]
+    stops = [start + count for count in counts]
+    B = len(source_indices)
+    Amax = max(counts)
+
+    lengths = batch.lengths.index_select(0, row_index)
+    T = int(lengths.max())
+    student_ids = batch.student_ids.index_select(0, row_index)[:, :T]
+    position_ids = batch.position_ids.index_select(0, row_index)[:, :T]
+    s0 = batch.s0.index_select(0, row_index)
+    ans0 = batch.ans0.index_select(0, row_index)
+    A = torch.tensor(counts, dtype=torch.long)
+    aligned_index = torch.zeros(B, Amax, dtype=torch.long)
+    hidden_mask = torch.zeros(B, Amax, dtype=torch.bool)
+    for j, (source_i, count) in enumerate(zip(source_indices, counts)):
+        aligned_index[j, :count] = batch.aligned_index[source_i, start:start + count]
+        hidden_mask[j, :count] = True
+
+    hidden = {}
+    for layer, value in batch.hidden.items():
+        selected = value.index_select(0, row_index)[:, start:start + Amax]
+        hidden[layer] = selected.clone()
+
+    teacher_ids = (None if batch.teacher_ids is None else
+                   batch.teacher_ids.index_select(0, row_index))
+    t0 = None if batch.t0 is None else batch.t0.index_select(0, row_index)
+    t_priv = (None if batch.t_priv is None else
+              [batch.t_priv[i] for i in source_indices])
+    tiled = Batch(
+        example_ids=[batch.example_ids[i] for i in source_indices],
+        student_ids=student_ids,
+        position_ids=position_ids,
+        lengths=lengths,
+        s0=s0,
+        A=A,
+        ans0=ans0,
+        aligned_index=aligned_index,
+        hidden_mask=hidden_mask,
+        hidden=hidden,
+        teacher_ids=teacher_ids,
+        t0=t0,
+        t_priv=t_priv,
+        aligned_offset=torch.full((B,), start, dtype=torch.long),
+        source_A=torch.tensor(totals, dtype=torch.long),
+    )
+    return BatchGridTile(
+        batch=tiled,
+        source_answer_indices=tuple(source_indices),
+        aligned_starts=(start,) * B,
+        aligned_stops=tuple(stops),
+        source_aligned_lengths=tuple(totals),
     )
 
 

@@ -3,13 +3,14 @@
 Report v2 has one atomic subject: one training, identified by the complete
 tuple
 
-`dataset × model × censorship × loss type`.
+`dataset × model × censorship × loss type × update geometry × reduction × strategy sources`.
 
-The generated report will live at `runs/<run_name>/report.md` after that
-training is complete. It contains all information supplied by the collective
-v1 report for that training. Cross-run heatmaps and density plots retain their
-visual encoding but contain one row. Later collective reports are selections
-and aggregations of these individual reports, not a second source of truth.
+The generated report will live at `runs/<run_name>/report.md` immediately after
+that training completes. It contains all information supplied by the
+collective v1 report for that training. Cross-run heatmaps and density plots
+retain their visual encoding but contain one row. Final synthesis is a
+selection and aggregation layer over these atomic reports, not a second source
+of truth.
 
 The campaign-wide live ledger is
 `docs/pareto_frontier_training_progress.md`. Epoch-zero teacher controls are written
@@ -39,12 +40,18 @@ carry the training identity, config hash, dataset identity, pipeline version,
 checkpoint/base identity, seed, batching regime, connected-window width,
 censorship mode, loss kind, and evaluation source.
 
+For current Pareto v2, the report must make the strict-local contract visible:
+`conn_window: 1`, no behavioral readout/final-logit objective, and—when the
+loss is `lens_kl`—a frozen head used only as a local metric with no head update
+or cross-block credit.
+
 Pipeline-v2 `RunLog` injects this immutable identity into every telemetry row,
 so a partial JSONL extract remains typed and attributable without relying on
 directory names or mutable campaign state.
 
-Pipeline-v2 identity additionally pins gradient aggregation, trajectory-state
-source, attention source, and expert-routing source. Pipeline-v1 runs are
+Pipeline-v2 identity additionally pins answer width, aligned-token width,
+reduction, mandatory forward layer order, trajectory-state source, attention
+source, and expert-routing source. Pipeline-v1 runs are
 historical and must not be selected into a pipeline-v2 report. Reserved but
 unimplemented strategy values are errors, never missing metadata or silent
 fallbacks.
@@ -63,6 +70,12 @@ Frobenius norm of the corresponding frozen base matrices. The collector uses
 rank-sized Gram products and does not materialize dense adapter deltas. For
 full training, it streams immutable epoch-zero parameter references from host
 RAM one tensor at a time.
+
+Grid rows distinguish completed source answers from repeated answer visits and
+record the exact selected aligned range for each example. They carry selected
+answer-token cells, selected loss cells after expansion over layers, and full
+causal sequence-token/layer cells. This keeps scientific coverage separate
+from repeated compute when `K` is narrower than a complete answer.
 
 Training-loss rows retain two explicit layerwise measures: the equal-answer
 mean and the valid-token-weighted mean. The row's `loss_measure` identifies
@@ -84,13 +97,29 @@ Each completed training report includes:
   explicit missing-artifact notices.
 
 The generator must show missing observations rather than silently dropping a
-section or a training. Report generation happens only after training finishes;
-the underlying epoch telemetry is written during training.
+section or a training. Per-run report generation happens immediately after
+training finishes; the underlying epoch telemetry is written during training.
+Readout-bearing historical diagnostics are labeled and excluded from strict
+block-local frontier synthesis.
+
+## Final synthesis groupings
+
+The final synthesis may be emitted at campaign level or as like-for-like
+groupings by:
+
+- model;
+- loss type;
+- censorship mode; and
+- update geometry (including reduction and explicit B/K widths).
+
+Every grouping records its inclusion rule and excludes superseded historical
+readout-bearing arms from frontier claims. Missing artifacts remain visible in
+the relevant group rather than being silently dropped.
 
 Generate one completed report with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python scripts/report_v2.py <run_name>
+scripts/l40s_exec.sh scripts/report_v2.py <run_name>
 ```
 
 `--allow-incomplete` exists only for diagnostic rendering and labels the

@@ -41,7 +41,23 @@ optimizer construction:
   Every policy preserves the historical PER-BLOCK clip norm: clipping is
   part of the experiment, not of the execution policy.
 
-## One walk, batched; items are B=1
+## Current strict-local objective contract
+
+The current branch trains one block at a time. Each block consumes a detached
+student input, compares its output with the matching cached teacher state, and
+backpropagates only through that block. Pareto v2 bases pin `conn_window: 1`.
+
+There is no behavioral readout or final-logit training path. `readout_*` keys
+and the former teacher-KL readout runtime are being deleted; the implementation
+is recoverable from Git history for historical checkpoint interpretation only.
+`lens_kl` may call the frozen final norm and vocabulary head as a measurement
+device, but neither is updated and the graph may not cross a block boundary.
+
+The report and campaign machinery must classify any old readout-bearing run as
+a historical diagnostic, never as current strict-local or Pareto-frontier
+evidence.
+
+## One forward layer walk per optimizer tile
 
 The summed schedule has a single code path (`_summed_batch`): teacher stage
 (cached slices or online forward) → trajectory → loss/backward → update.
@@ -49,15 +65,22 @@ The summed schedule has a single code path (`_summed_batch`): teacher stage
 against the historical item loop (no pad rows, gather == slice, same kernel
 shapes; verified empirically on L40S). B>1 padded batches differ from B=1
 only by bf16 kernel-shape rounding (up to ~3e-2 max-relative at deep
-layers; tolerances in tests/test_online_teacher.py document this).
+layers; the on-demand certification instrument records this comparison).
 
-Sliding-window trajectory states are released at their last root use.
-Precisely (2026-07-11 correction of an overstated claim): the per-window
-GRAPH activations follow the window width W, and each detached trajectory
-state is freed once no remaining window roots at it — but peak
-detached-state residency is still FULL DEPTH (every h_L exists while the
-walk crosses it; the -180 MB measured at 0.6B slide8 B=8 comes from the
-early releases, not from a W-bounded envelope).
+Pipeline-v2 grid mode selects a tile in `answer × aligned-token` coordinates,
+then runs this same walk over the ordered layer coordinate. Full causal token
+sequences enter every tile; only aligned loss rows and cached teacher targets
+are sliced. Block `L` consumes the detached student output from `L-1`, and
+the optimizer steps after `L=n`, never between layers. Narrow token tiles
+therefore reduce selected backward rows and memory but repeat the full causal
+forward layer walk. Exact answer/token ranges and both selected-loss and
+full-causal layer-cell counts are telemetry, not inferred after the run.
+
+Historical connected-window trajectory states were released at their last root
+use. Precisely (2026-07-11 correction of an overstated claim): per-window
+graph activations followed width W, while peak detached-state residency was
+still FULL DEPTH. That accounting applies to archived window experiments, not
+to the current `conn_window: 1` strict-local contract.
 
 ## Streamed optimizer offload
 
@@ -68,7 +91,7 @@ SLOWER than the copies it hides; see the negative-result note in issues.md).
 block i+1's H2D prefetch rides a side stream under block i's step kernels,
 and the D2H writeback overlaps block i+1. Measured at 0.6B on L40S:
 0.949 → 0.358 s/step (grad_accum 8); step math is bitwise identical to the
-resident path (tests/test_offload_adam.py).
+resident path (an archived certification result).
 
 ## Pipeline parallelism
 

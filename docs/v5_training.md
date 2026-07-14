@@ -3,7 +3,8 @@
 Companion source for `docs/v5_training.pdf`, generated with:
 
 ```bash
-.venv/bin/python scripts/build_v5_training_pdf.py
+The former readout-era PDF generator was removed when this branch became
+strictly hidden-state layerwise. It remains recoverable from Git history.
 ```
 
 This is an implementation note for the active v5 RAG layerwise runs.  It

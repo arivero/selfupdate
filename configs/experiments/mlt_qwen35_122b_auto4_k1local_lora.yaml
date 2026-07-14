@@ -25,10 +25,7 @@ train:
   hidden_loss: vocab_mse
   conn_window: 0
   conn_stride: 0
-  readout_window_blocks: 0
-  readout_weight: 0.0
   window_hidden_weight: 1.0
-  anchor_kl_weight: 0.0
   moe_mode: dense_or_black_box
   online_teacher: true
   run_class: method

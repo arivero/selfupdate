@@ -74,8 +74,6 @@ def _variants() -> dict[str, dict]:
     """Tiny-budget configs covering every trainer path. Values are top-level
     section overrides merged onto configs/base.yaml (load_config semantics)."""
     slide = {"conn_window": 4, "conn_stride": 1}
-    readout = dict(slide, readout_window_blocks=4, readout_source="teacher_kl",
-                   readout_weight=0.35)
     v = {
         "summed_item": {"train": {"max_steps": 4, "grad_accum": 4}},
         "summed_padded": {"train": {"batching": "padded", "micro_batch": 4,
@@ -86,13 +84,15 @@ def _variants() -> dict[str, dict]:
         "slide4_item": {"train": dict(slide, max_steps=3, grad_accum=4)},
         "slide4_dedup": {"train": dict(slide, window_dedup=True, max_steps=3,
                                        grad_accum=4)},
-        "slide4_readout": {"train": dict(readout, max_steps=3, grad_accum=4)},
-        "slide4_readout_padded": {"train": dict(readout, batching="padded",
-                                                micro_batch=4, grad_accum=8,
-                                                max_steps=2)},
-        "anchor_readout": {"train": dict(readout, anchor_kl_weight=0.15,
-                                         frozen_teacher_copy=True,
-                                         max_steps=2, grad_accum=4)},
+        "cosine_local": {"train": {"hidden_loss": "cosine", "max_steps": 3,
+                                      "grad_accum": 4}},
+        "delta_cosine_local": {"train": {"hidden_loss": "delta_cosine",
+                                            "max_steps": 3, "grad_accum": 4}},
+        "lens_kl_local": {"train": {"hidden_loss": "lens_kl", "max_steps": 3,
+                                       "grad_accum": 4}},
+        "anchor_hidden": {"train": {"anchor_hidden_weight": 0.15,
+                                       "frozen_teacher_copy": True,
+                                       "max_steps": 2, "grad_accum": 4}},
         "offload_adam": {"train": {"offload_adam": True, "max_steps": 2,
                                    "grad_accum": 4}},
         "lora_online": {"train": {"online_teacher": True, "max_steps": 3,

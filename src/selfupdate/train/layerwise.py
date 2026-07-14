@@ -26,7 +26,7 @@ Schedules (one function per variant):
                  their outputs precomputed into an activation cache; blocks
                  <= L never run again in later stages. This is the contract
                  that streams one 120B block at a time.
-- Connected WINDOWS (conn_window / readout_window_blocks) are gradient-isolation
+- Connected hidden-state WINDOWS (conn_window) are gradient-isolation
   units, NOT memory management: backward exists only inside [L0..L1] and
   stops at the detached input of L0 — see docs/windows.md for the precise
   2x2 semantics (loss placement x window-input stream) before editing.
@@ -55,20 +55,22 @@ from torch.utils.data import DataLoader
 from ..config import ExperimentConfig
 from ..data.dataset import (
     Batch,
+    BatchGridTile,
     DistillDataset,
     LengthBucketBatchSampler,
     collate_items,
     collate_padded_items,
+    iter_batch_grid_tiles,
     is_open_answer_dataset,
 )
 from ..eval.tasks import tasks_eval
 from ..utils.runlog import setup_run_dir
 from ..utils.seeding import seed_everything
 from .losses import HiddenLoss
+from .locality import certify_locality_resident
 from .moe import MoEController, dequantize_overrides
 from .anchor import (  # noqa: F401  (AnchorBank re-exported for scripts)
     AnchorBank,
-    anchor_step,
     anchor_trajectory_step,
     make_anchor as _make_anchor,
 )
@@ -123,7 +125,7 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     # n_layers is only known once the model is loaded. Oversized windows
     # previously KeyError'd deep in the walk (readout0 < 1 indexes a
     # nonexistent layer) instead of naming the misconfiguration.
-    for knob in ("conn_window", "readout_window_blocks"):
+    for knob in ("conn_window",):
         val = getattr(cfg.train, knob)
         if val > stack.n_layers:
             raise ValueError(
@@ -189,6 +191,17 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     else:
         raise ValueError(f"unknown layerwise schedule {cfg.train.schedule!r}")
 
+    if cfg.train.pipeline_version == 2:
+        if cfg.train.schedule != "summed" or cache is None:
+            raise ValueError(
+                "pipeline-v2 strict-local publication requires summed cached training")
+        locality = certify_locality_resident(cfg, stack, tok, cache, run_dir)
+        log.log(kind="locality_certification", **{
+            key: locality[key] for key in (
+                "items", "gradient_contract", "final_logit_training",
+                "local_grad_norm", "cross_block_leak_grad_norm",
+                "frozen_vocab_grad_norm",
+                "local_signal_present_in_every_block", "passed")})
     rt.save_checkpoint(run_dir)
     log.log(kind="done", **rt.memory_summary())
     log.close()
@@ -394,6 +407,30 @@ def _moe_row_maps(x, device):
 # -- summed schedule ----------------------------------------------------------
 
 
+def _update_reduction(cfg) -> str:
+    """Resolve historical aggregation names to the scalar grid measure."""
+    if cfg.train.update_granularity == "grid":
+        return cfg.train.update_reduction
+    return cfg.train.update_granularity
+
+
+def _whole_batch_grid_tile(batch: Batch) -> BatchGridTile:
+    """Coordinate wrapper for historical full-span physical batches."""
+    offsets = (batch.aligned_offset if batch.aligned_offset is not None
+               else torch.zeros_like(batch.A))
+    source_A = batch.source_A if batch.source_A is not None else batch.A
+    starts = tuple(int(v) for v in offsets.tolist())
+    stops = tuple(start + int(count)
+                  for start, count in zip(starts, batch.A.tolist()))
+    return BatchGridTile(
+        batch=batch,
+        source_answer_indices=tuple(range(len(batch.example_ids))),
+        aligned_starts=starts,
+        aligned_stops=stops,
+        source_aligned_lengths=tuple(int(v) for v in source_A.tolist()),
+    )
+
+
 def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
     """Batched summed-schedule pass over padded examples.
 
@@ -405,25 +442,13 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
     pos = batch.position_ids.to(device)
     h = stack.embed(ids)
     pos_emb = stack.rope(h, pos)
-    readout0 = n - cfg.train.readout_window_blocks + 1 if cfg.train.readout_window_blocks > 0 else n + 1
     W = max(cfg.train.conn_window, 1)
+    reduction = _update_reduction(cfg)
     layer_losses = []
     L = 1
     while L <= n:
-        if L == readout0:
-            readout_targets = {LL: targets[LL] for LL in range(readout0, n + 1)}
-            readout_losses, h = window_step_batch(
-                stack, readout0, h.detach(), pos_emb, readout_targets,
-                batch, loss_fn, cfg.train.readout_weight,
-                hidden_w=cfg.train.window_hidden_weight,
-                readout_source=cfg.train.readout_source,
-                all_targets=targets,
-                update_granularity=cfg.train.update_granularity,
-            )
-            layer_losses.extend(readout_losses)
-            break
         if W > 1 and cfg.train.conn_stride == 1:
-            last_body = min(readout0 - 1, n)
+            last_body = n
             with torch.no_grad():
                 h_traj = {L - 1: h.detach()}
                 t = h
@@ -437,7 +462,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                         targets.get(L1 - 1), batch,
                     )
                     return (_reduce_example_losses(
-                        per_ex, batch, cfg.train.update_granularity),
+                        per_ex, batch, reduction),
                         per_ex.detach())
                 layer_losses.extend(_sliding_windows_dedup(
                     stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
@@ -446,9 +471,9 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                     L0 = max(1, L1 - W + 1)
                     win_losses, _ = window_step_batch(
                         stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
-                        batch, loss_fn, readout_w=0.0, L1=L1,
+                        batch, loss_fn, L1=L1,
                         all_targets=targets,
-                        update_granularity=cfg.train.update_granularity,
+                        update_reduction=reduction,
                     )
                     layer_losses.extend(win_losses)
                     # trajectory lifetime: roots below the NEXT window's root
@@ -461,13 +486,13 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
             L = last_body + 1
             continue
         if W > 1:
-            L1 = min(L + W - 1, readout0 - 1, n)
+            L1 = min(L + W - 1, n)
             win_targets = {LL: targets[LL] for LL in range(L, L1 + 1)}
             win_losses, h = window_step_batch(
                 stack, L, h.detach(), pos_emb, win_targets,
-                batch, loss_fn, readout_w=0.0, L1=L1,
+                batch, loss_fn, L1=L1,
                 all_targets=targets,
-                update_granularity=cfg.train.update_granularity,
+                update_reduction=reduction,
             )
             layer_losses.extend(win_losses)
             L = L1 + 1
@@ -477,13 +502,13 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
         if L == n:
             loss_vals, h = last_block_step_batch(
                 stack, h.detach(), pos_emb, target, batch, loss_fn,
-                update_granularity=cfg.train.update_granularity,
+                update_reduction=reduction,
             )
         else:
             loss_vals, h = local_block_step_batch(
                 stack, L, h.detach(), pos_emb, target,
                 batch, loss_fn, previous_target=targets.get(L - 1),
-                update_granularity=cfg.train.update_granularity,
+                update_reduction=reduction,
             )
         layer_losses.append(loss_vals)
         L += 1
@@ -509,13 +534,13 @@ def _update_boundary(cfg, accum: int, next_step: int) -> bool:
     """Whether the just-completed physical batch must update parameters."""
     return bool(
         (cfg.train.pipeline_version == 2
-         and cfg.train.update_granularity == "token")
+         and cfg.train.update_granularity in ("token", "grid"))
         or accum >= next_step)
 
 
 def _advance_update_boundary(cfg, accum: int, next_step: int) -> int:
     if (cfg.train.pipeline_version == 2
-            and cfg.train.update_granularity == "token"):
+            and cfg.train.update_granularity in ("token", "grid")):
         return accum + cfg.train.grad_accum
     return next_step + cfg.train.grad_accum
 
@@ -544,6 +569,7 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
                      if cfg.train.pipeline_version == 2 else None)
 
     step = accum = aligned_tokens = 0
+    answer_visits = layer_loss_cells = causal_token_layer_cells = 0
     next_step = cfg.train.grad_accum
     pending_losses: list[list[torch.Tensor]] = []
     pending_token_counts: list[int] = []
@@ -564,86 +590,119 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
             # grad-accum increment exactly as before
             batches = ([items] if isinstance(items, Batch)
                        else [collate_padded_items([it]) for it in items])
-            for batch in batches:
+            for full_batch in batches:
                 if done:
                     break
-                # teacher stage: aligned targets from the online teacher or
-                # the collated disk-cache slices
-                with (moe.teacher_phase() if moe else contextlib.nullcontext()):
-                    targets = (teacher.aligned_targets_batch(
-                                   batch, device,
-                                   capture_components=(cfg.train.hidden_loss == "component_nmse"))
-                               if online else batch.hidden)
-                if cfg.train.scramble_targets:
-                    # audit control: layer-permuted targets (see config)
-                    perm = list(range(1, n + 1))
-                    random.Random(cfg.train.seed).shuffle(perm)
-                    targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
-                if moe is not None:
-                    moe.set_maps(*_moe_row_maps(batch, device))
-                # trajectory + loss stages: the summed walk (backward happens
-                # inside _summed_batch, block-local by detach discipline)
-                with (moe.student_phase() if moe else contextlib.nullcontext()):
-                    layer_losses = _summed_batch(cfg, stack, loss_fn, batch,
-                                                 targets, device)
-                accum += len(batch.example_ids)
-                aligned_tokens += int(batch.A.sum())
-                _extend_pending_from_batch(
-                    pending_losses, layer_losses,
-                    token_counts=pending_token_counts, batch=batch)
-                # update stage: per-block clip + optimizer policy step at
-                # grad-accum boundaries
-                # Token aggregation defines one physical padded/bucketed
-                # mini-batch as one update. Bucket tails may contain fewer
-                # than micro_batch examples and must not leak into the next
-                # batch or epoch through the historical item threshold.
-                if _update_boundary(cfg, accum, next_step):
+                tiles = (iter_batch_grid_tiles(
+                             full_batch, cfg.train.tokens_per_answer_update)
+                         if cfg.train.update_granularity == "grid"
+                         else [_whole_batch_grid_tile(full_batch)])
+                for tile in tiles:
+                    if done:
+                        break
+                    batch = tile.batch
+                    # Teacher stage: aligned targets from the online teacher
+                    # or selected disk-cache grid rows.  Every tile retains
+                    # the complete causal student sequence.
+                    with (moe.teacher_phase() if moe else contextlib.nullcontext()):
+                        targets = (teacher.aligned_targets_batch(
+                                       batch, device,
+                                       capture_components=(cfg.train.hidden_loss == "component_nmse"))
+                                   if online else batch.hidden)
+                    if cfg.train.scramble_targets:
+                        # audit control: layer-permuted targets (see config)
+                        perm = list(range(1, n + 1))
+                        random.Random(cfg.train.seed).shuffle(perm)
+                        targets = {L: targets[perm[L - 1]] for L in range(1, n + 1)}
+                    if moe is not None:
+                        moe.set_maps(*_moe_row_maps(batch, device))
+                    # Mandatory layer coordinate walk: L consumes the student
+                    # h[L-1] just produced above it and compares against the
+                    # selected teacher h[L] rows (plus h[L-1] for deltas).
+                    with (moe.student_phase() if moe else contextlib.nullcontext()):
+                        layer_losses = _summed_batch(cfg, stack, loss_fn, batch,
+                                                     targets, device)
+                    selected_tokens = tile.aligned_token_count
                     sequence_tokens = int(batch.lengths.sum())
                     padded_tokens = batch.student_ids.numel() - sequence_tokens
-                    _flush_train_log(log, epoch=epoch, step=step,
-                                     accum=accum, pending=pending_losses,
-                                     n_layers=n,
-                                     token_counts=pending_token_counts,
-                                     batch_size=len(batch.example_ids),
-                                     batching=cfg.train.batching,
-                                     pipeline_version=cfg.train.pipeline_version,
-                                     update_granularity=cfg.train.update_granularity,
-                                     trajectory_source=cfg.train.trajectory_source,
-                                     attention_source=cfg.train.attention_source,
-                                     expert_routing_source=cfg.train.expert_routing_source,
-                                     aligned_tokens_seen=aligned_tokens,
-                                     answers_per_update=len(batch.example_ids),
-                                     aligned_tokens_per_update=int(batch.A.sum()),
-                                     sequence_tokens_per_update=sequence_tokens,
-                                     padding_tokens_per_update=padded_tokens,
-                                     padding_fraction=(
-                                         padded_tokens / batch.student_ids.numel()),
-                                     **({"router_overlap": moe.overlap_flush()}
-                                        if moe else {}))
-                    if anchor is not None:
-                        a_ids, a_logits, a_states = anchor[0].next()
-                        if cfg.train.anchor_kl_weight > 0:
-                            anchor_step(stack, n - cfg.train.readout_window_blocks + 1,
-                                        a_ids, cfg.train.anchor_kl_weight,
-                                        base_logits=a_logits)
-                        if cfg.train.anchor_hidden_weight > 0:
-                            anchor_trajectory_step(stack, a_ids, a_states,
-                                                   cfg.train.anchor_hidden_weight)
-                    plan.step()
-                    step += 1
-                    next_step = _advance_update_boundary(
-                        cfg, accum, next_step)
-                    if cfg.train.max_steps and step >= cfg.train.max_steps:
-                        done = True
+                    answer_visits += tile.answer_count
+                    accum += tile.completed_answer_count
+                    aligned_tokens += selected_tokens
+                    layer_loss_cells += selected_tokens * n
+                    causal_token_layer_cells += sequence_tokens * n
+                    _extend_pending_from_batch(
+                        pending_losses, layer_losses,
+                        token_counts=pending_token_counts, batch=batch)
+                    # Grid/token aggregation defines one physical tile as one
+                    # optimizer update. Bucket/tile tails never leak into the
+                    # next update or epoch.
+                    if _update_boundary(cfg, accum, next_step):
+                        _flush_train_log(
+                            log, epoch=epoch, step=step, accum=accum,
+                            pending=pending_losses, n_layers=n,
+                            token_counts=pending_token_counts,
+                            batch_size=tile.answer_count,
+                            batching=cfg.train.batching,
+                            pipeline_version=cfg.train.pipeline_version,
+                            update_granularity=cfg.train.update_granularity,
+                            update_reduction=_update_reduction(cfg),
+                            trajectory_source=cfg.train.trajectory_source,
+                            attention_source=cfg.train.attention_source,
+                            expert_routing_source=cfg.train.expert_routing_source,
+                            configured_answers_per_update=(
+                                cfg.train.answers_per_update or cfg.train.micro_batch),
+                            configured_tokens_per_answer_update=(
+                                cfg.train.tokens_per_answer_update),
+                            answer_visits_seen=answer_visits,
+                            completed_answers_seen=accum,
+                            aligned_tokens_seen=aligned_tokens,
+                            layer_loss_cells_seen=layer_loss_cells,
+                            causal_token_layer_cells_seen=causal_token_layer_cells,
+                            answer_visits_per_update=tile.answer_count,
+                            completed_answers_per_update=tile.completed_answer_count,
+                            aligned_tokens_per_update=selected_tokens,
+                            layer_loss_cells_per_update=selected_tokens * n,
+                            causal_token_layer_cells_per_update=sequence_tokens * n,
+                            sequence_tokens_per_update=sequence_tokens,
+                            padding_tokens_per_update=padded_tokens,
+                            padding_fraction=(
+                                padded_tokens / batch.student_ids.numel()),
+                            grid_coordinates=tile.coordinate_ranges,
+                            layer_start=1,
+                            layer_stop_exclusive=n + 1,
+                            layer_order="forward",
+                            causal_context="full_prefix",
+                            student_trajectory_edge="h[L-1] -> h[L]",
+                            teacher_target_edge=(
+                                "teacher_h[L-1] -> teacher_h[L]"
+                                if loss_fn.is_delta else "teacher_h[L]"),
+                            **({"router_overlap": moe.overlap_flush()}
+                               if moe else {}))
+                        if anchor is not None:
+                            a_ids, a_states = anchor[0].next()
+                            if cfg.train.anchor_hidden_weight > 0:
+                                anchor_trajectory_step(stack, a_ids, a_states,
+                                                       cfg.train.anchor_hidden_weight)
+                        plan.step()
+                        step += 1
+                        next_step = _advance_update_boundary(
+                            cfg, accum, next_step)
+                        if cfg.train.max_steps and step >= cfg.train.max_steps:
+                            done = True
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True,
                          token_counts=pending_token_counts,
                          pipeline_version=cfg.train.pipeline_version,
                          update_granularity=cfg.train.update_granularity,
+                         update_reduction=_update_reduction(cfg),
                          trajectory_source=cfg.train.trajectory_source,
                          attention_source=cfg.train.attention_source,
                          expert_routing_source=cfg.train.expert_routing_source,
                          aligned_tokens_seen=aligned_tokens,
+                         answer_visits_seen=answer_visits,
+                         completed_answers_seen=accum,
+                         layer_loss_cells_seen=layer_loss_cells,
+                         causal_token_layer_cells_seen=causal_token_layer_cells,
                          **({"router_overlap": moe.overlap_flush()}
                             if moe else {}))
         standard_baseline = _epoch_end_telemetry(

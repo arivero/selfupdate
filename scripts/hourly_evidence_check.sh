@@ -73,11 +73,8 @@ check_once() {
     echo
     echo "[artifact refresh]"
     if [[ -x .venv/bin/python ]]; then
-        run_step "build loss-grid scorecard" .venv/bin/python scripts/lossgrid_report.py
-        run_step "build run results and curves" .venv/bin/python scripts/analyze.py
         run_step "summarize standard destruction" .venv/bin/python scripts/summarize_standard_destruction.py
-        run_step "build experiment report assets" .venv/bin/python scripts/experiment_report_assets.py
-        run_step "build report pdf" .venv/bin/python scripts/report.py
+        run_step "build pipeline-v2 grouped reports" scripts/l40s_exec.sh scripts/group_reports_v2.py --group-by all
     else
         echo "missing .venv/bin/python"
     fi

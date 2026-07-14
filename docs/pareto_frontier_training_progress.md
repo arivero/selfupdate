@@ -5,8 +5,12 @@ This is the running record for the six-model Pareto-frontier campaign. Qwen3.5
 campaign as a whole. The campaign is
 explicitly pinned to **dataset v5** and **training pipeline v2**.
 
-Status at initialization: the teacher-answer and hidden-state cache phase is
-complete for all six models; student training has not yet started.
+Status at 2026-07-14: teacher caches and epoch-zero controls are complete for
+all six models. The first four Qwen3.5 4B full trainings completed, but they
+used the then-present behavioral readout runtime. They are retained as
+superseded historical diagnostics and are not frontier evidence. Individual
+report-v2 artifacts are immediate per-run records; new frontier arms must use
+the strict block-local contract below.
 
 All pre-existing trained runs are pipeline-v1 historical artifacts. They may
 inform hypotheses and mechanics, but they are obsolete as evidence for this
@@ -27,6 +31,45 @@ Dataset v5 is the 2,071-example RAG/window suite at
 `data/combined/examples_v5rs_window.jsonl` (SHA-256
 `575b9dea35e0179dcdf7a513416e640db899c9bf9584236088f2921cce7a7042`).
 The teacher prompt mask is `rag_system` with `remove` compaction.
+
+The current training contract is strict block-local forward distillation:
+Pareto bases pin `conn_window: 1`; every block receives detached input and
+only its own cached teacher target; and no behavioral readout or final-logit
+training is permitted. `lens_kl` may use the frozen norm and vocabulary head as
+a local metric, but neither is updated and the objective never crosses block
+boundaries. The former readout runtime has been deleted and is recoverable
+from Git history only.
+
+## Execution plan and current phase
+
+The campaign follows the plan fixed at initialization; implementation work on
+update geometry refines phase 3 and does not replace the campaign sequence.
+
+1. **Environment and cache certification — complete.** Audit the four L40S
+   devices, node-local storage/RAM, six model snapshots, and six exact
+   2,071-example dataset-v5 teacher caches built through the vLLM-plus-cache
+   pipeline.
+2. **Epoch-zero controls — complete.** Record standard-model baselines plus
+   deleted-RAG and randomized-token-RAG answers for all six models.
+3. **Qwen3.5 4B strict-local runtime and strategy gate — active.** Replace
+   the superseded readout-bearing cohort with strict block-local arms, then
+   make update geometry explicit as an `answer × aligned token × layer` grid.
+   A tile retains every token's full causal prefix and walks layers strictly
+   forward so student `h[L]` is produced from student `h[L-1]`; cached teacher
+   `h[L]` remains the target.
+4. **Matched update-geometry experiment — coding/probing.** Compare equal
+   token budgets across rectangles such as `20 × 16`, `10 × 32`, `5 × 64`,
+   `1 × all`, and the one-token-across-batch timing corner.  Record reduction
+   (`answer_mean` or `token_mean`) independently from geometry.
+5. **Individual report v2 — continuous.** Generate `runs/<training>/report.md`
+   immediately after every completed training, with epoch-zero and per-epoch
+   recall/damage, layer loss, parameter delta, timing, provenance, and signal
+   attribution. Final synthesis selects these atomic reports by campaign,
+   model, loss, censorship, or update geometry.
+6. **Six-model expansion — pending gate.** Apply only the measured, validated
+   recipes to Qwen3.5 9B, Gemma4 26B-A4B, Qwen3.6 35B-A3B, Qwen3.6 27B, and
+   Gemma4 31B; checkpoint evaluation will use the same programmatic vLLM
+   manager design as epoch-zero evaluation.
 
 For this document, training pipeline v2 means the two-stage teacher-target
 path:
@@ -157,7 +200,17 @@ Cache finalization timestamps:
 | 2026-07-14 | Six-step speed projection | invalidated/live-negative | Compiled causal-conv and RAM staging are active, but the full Qwen3.5 walk exposed shape-driven TorchInductor compilation absent from the short probe: each trainer spawned 32 compiler workers (~128 total), GPUs waited, and observed throughput projected roughly 5–7 hours for six Huber epochs rather than 24–33 minutes of pure-step time. Future launches cap compiler workers at 2 and reuse a node-local cache; campaign timing must come from a distribution-covering probe. |
 | 2026-07-14 | Teacher-state RAM staging | correcting/live | The original 252 GB tmpfs stage covered HF model snapshots, not the 35 GB Qwen3.5-4B hidden-state cache. Live workers showed multi-GB physical reads from the 943 GB Lustre cache root while CPU and GPU were idle. A separate selected-cache tmpfs stage and `SELFUPDATE_TEACHER_CACHE_ROOT` override now protect subsequent arms. |
 | 2026-07-14 | Distribution-covering post-stage speed gate | split verdict | Tokenwise bucketed: 27.23 examples/s, 76.1 s/projected epoch, healthy. Answerwise B=1: 1.14 examples/s, 1,824.5 s/projected epoch, rejected for production pending variable-shape repair. Launch the four tokenwise arms now; retain answerwise as required strategy work, not as a slow runtime artifact. |
-| 2026-07-14 | Qwen3.5 4B eight-arm student grid | queued | Six epochs = 12,426 examples per arm; remove/pad-random × Huber/lens-KL × answer/token aggregation; compiled causal-conv L40S runtime |
+| 2026-07-14 | Qwen3.5 4B eight-arm student grid | historical/superseded | Six epochs = 12,426 examples per arm; remove/pad-random × Huber/lens-KL × answer/token aggregation; compiled causal-conv L40S runtime. The four readout-bearing arms are not frontier evidence. |
+| 2026-07-14 18:29:42 CEST | First Qwen3.5 4B full-training cohort | complete/superseded historical diagnostics | Four `B=8 × all aligned tokens` pipeline-v2 arms on physical GPUs 0–3; dataset SHA `575b9d…a7042`, source commit `2d4e066`, RAM-staged model and exact teacher cache. This cohort is the full-minibatch reference, not a claim that the token axis has been traversed one row at a time, and it is excluded from the frontier. |
+| 2026-07-14 18:41:54 CEST | Qwen3.5 4B Huber/remove full training | complete/superseded historical diagnostic | GPU 0; six epochs, 12,426 answer observations; metrics span 660.3 s (11.0 min), scheduler wall 12.2 min; checkpoint `runs/pareto_v2_qwen35_4b_huber_remove_token/checkpoint/` (101 MB LoRA); epoch 0–6 recall, standard damage, and parameter deltas present. |
+| 2026-07-14 18:48:06 CEST | Qwen3.5 4B Huber/pad-random full training | complete/superseded historical diagnostic | GPU 1; six epochs, 12,426 answer observations; metrics span 1,032.3 s (17.2 min), scheduler wall 18.4 min; checkpoint `runs/pareto_v2_qwen35_4b_huber_pad_random_token/checkpoint/` (101 MB LoRA); epoch 0–6 recall, standard damage, and parameter deltas present. |
+| 2026-07-14 18:57–19:01 CEST | First individual reports v2 | complete | `runs/pareto_v2_qwen35_4b_huber_{remove,pad_random}_token/report.md`; each report has recall/damage, temporal and heatmap layer loss, one-row density, temporal/heatmap/one-row parameter delta, and exact-cache signal attribution. Coverage pages declare all mandatory epoch telemetry present. |
+| 2026-07-14 19:00 CEST | Huber-arm signal attribution | historical readout-dominated diagnostic | Across 16 sampled items, hidden/readout gradient L2 norms are 1.58/65.2 (2.36% hidden share) for remove and 1.59/61.9 (2.51%) for pad-random. Targets came from exact pipeline-v2 cache `885f57b6f4eb9221`. These are valid measured historical arms but must not be described as hidden-loss-dominated layerwise or frontier evidence. |
+| 2026-07-14 18:59 CEST | Explicit three-dimensional update grid | coding/probe | Typed answer/token tile geometry, independent answer/token reduction, mandatory forward layer walk, exact coordinate ranges, and cumulative selected-loss/full-causal layer cells implemented locally. The requested `B=8 × K=1 × layers` timing is running on free GPU 0 before accepting the design. |
+| 2026-07-14 18:57–19:05 CEST | Production-like `B=8 × K=1` tile timing | complete/superseded historical diagnostic | 256 real Huber + teacher-KL readout updates, full causal prefixes and forward 32-layer walk: 0.1454 s median (0.1546 s mean) per tile, 39.92 selected aligned cells/s, 8.93 GiB peak reserved, no errors. Full dataset-v5 aligned-token coverage projects to 5,600.9 s (93.3 min) per epoch, about 74× the 76.1 s `B=8 × K=all` reference. |
+| 2026-07-14 19:11–19:20 CEST | First constant-area diagonal launch | stopped/corrected | The benchmark omitted the repository CPU-thread bootstrap and its B=32 compile phase expanded to roughly 55 CPU cores, risking contention with live lens-KL training. Its Luna owner terminated only benchmark PIDs 994107/994093. `grid_tile_bench.py`, `train_batch_bench.py`, and `signal_attribution.py` now call `cap_cpu_threads()` before importing torch; the diagonal table restarted at 19:20 with `SELFUPDATE_CPU_THREADS=8`. |
+| 2026-07-14 19:20–19:22 CEST | Constant-area B×K diagonals | complete/fast-K verdict | All 18 power-of-two cells completed with real nonzero L2-normalized-MSE gradients, AdamW at 1e-5, no readout, full causal prefixes, and the forward 32-layer walk; no OOM through `B=64`. At fixed 64 selected cells, `1×64` = 0.1089 s/588 cells/s versus `64×1` = 1.5407 s/41.6 cells/s (about 14× slower). Fast direction is larger K/smaller B; fill the `B={1,2,4,8} × K={8,16,32,64}` rectangle. Artifact: `runs/pareto_v2_grid_tile_table_20260714/diagonals.{json,csv,md}`. |
+| 2026-07-14 19:22–19:24 CEST | Fast-side B×K rectangle | complete | Seven missing cells completed without OOM. At fixed B, widening K is nearly free: B=1 takes 0.107–0.109 s for K=8–64, B=4 takes 0.134–0.139 s for K=4–64, and B=8 takes 0.178–0.193 s for K=2–64. Best selected-cell rate is `8×64` at 2,726 cells/s; `64×1` is 41.6 cells/s. Combined table: `runs/pareto_v2_grid_tile_table_20260714/combined_fast_rectangle.{json,csv,md}`. Engineering verdict: make K wide and use B for occupancy; K=1 repeats causal trajectories for almost no additional signal throughput. |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
 | pending | Qwen3.6 35B student training | pending | — |
@@ -167,6 +220,23 @@ Cache finalization timestamps:
 Future entries must record the start/end timestamp, model/config, GPU
 placement, dataset identity, pipeline-v2 commit, checkpoint path, item
 count, and any failure or restart reason.
+
+### Superseded Qwen3.5-4B readout cohort
+
+These four completed runs are retained for provenance and diagnosis only. They
+were trained before the strict block-local policy and include behavioral
+readout/final-logit training. They are superseded historical diagnostics, not
+members of the Pareto frontier and not controls for new strict-local arms:
+
+| run | historical status |
+|---|---|
+| `pareto_v2_qwen35_4b_huber_remove_token` | complete; superseded |
+| `pareto_v2_qwen35_4b_huber_pad_random_token` | complete; superseded |
+| `pareto_v2_qwen35_4b_lens_kl_remove_token` | complete; superseded |
+| `pareto_v2_qwen35_4b_lens_kl_pad_random_token` | complete; superseded |
+
+Their individual reports remain useful as historical per-run records, but
+final synthesis must exclude them from strict-local frontier evidence.
 
 ## Epoch-zero teacher controls
 
@@ -178,7 +248,7 @@ timing/provenance rather than only a rounded summary.
 | model | standard baseline | deleted RAG | randomized-token RAG |
 |---|---|---|---|
 | Qwen3.5 4B | complete: ARC-E 0.70, ARC-C 0.60, HellaSwag 0.59; macro 0.630 | complete: M/Q1/Q4 word accuracy 0.156/0.156/0.147 | complete: M/Q1/Q4 word accuracy 0.211/0.170/0.136 |
-| Qwen3.5 9B | complete: ARC-E 0.70, ARC-C 0.57, HellaSwag 0.64; macro 0.637 | complete: M/Q1/Q4 word accuracy 0.198/0.205/0.173 | queued |
+| Qwen3.5 9B | complete: ARC-E 0.70, ARC-C 0.57, HellaSwag 0.64; macro 0.637 | complete: M/Q1/Q4 word accuracy 0.198/0.205/0.173 | complete: M/Q1/Q4 word accuracy 0.183/0.192/0.182 |
 | Gemma4 26B-A4B | complete: ARC-E 0.28, ARC-C 0.33, HellaSwag 0.32; macro 0.310 | complete: M/Q1/Q4 word accuracy 0.103/0.176/0.178 | complete: M/Q1/Q4 word accuracy 0.137/0.266/0.213 |
 | Qwen3.6 35B-A3B | complete: ARC-E 0.69, ARC-C 0.58, HellaSwag 0.68; macro 0.650 | complete: M/Q1/Q4 word accuracy 0.162/0.205/0.179 | complete: M/Q1/Q4 word accuracy 0.136/0.202/0.182 |
 | Qwen3.6 27B | complete: ARC-E 0.72, ARC-C 0.58, HellaSwag 0.68; macro 0.660 | complete: M/Q1/Q4 word accuracy 0.185/0.225/0.221 | complete: M/Q1/Q4 word accuracy 0.241/0.244/0.270 |
@@ -186,14 +256,15 @@ timing/provenance rather than only a rounded summary.
 
 ## Per-training report v2
 
-The future atomic artifact is `runs/<run_name>/report.md`, with one report per
-`dataset × model × censorship × loss type` training. The collection contract
-is in `docs/report_v2.md`. Campaign training configs must collect recall and
-standard damage at epoch 0 and every epoch, per-layer losses every epoch, and
-per-layer parameter modification from the epoch-0/base reference every epoch.
-Collective one-row density plots are retained in each individual report so
-later reports can synthesize arbitrary selections by model, loss, censorship,
-or dataset.
+The atomic artifact is `runs/<run_name>/report.md`, generated immediately after
+each run, with one report per
+`dataset × model × censorship × loss type × update geometry` training. The
+collection contract is in `docs/report_v2.md`. Campaign training configs must
+collect recall and standard damage at epoch 0 and every epoch, per-layer losses
+every epoch, and per-layer parameter modification from the epoch-0/base
+reference every epoch. One-row density plots are retained in each individual
+report so final synthesis can produce campaign-wide or grouped views by model,
+loss, censorship, or geometry.
 
 Completed controls above are stored under
 `runs/flagship_teacher_evals/<model>/`. Standard baselines use 100 examples per
@@ -241,10 +312,12 @@ The proposed first complete loss matrix is:
   student distributions through the model's frozen final norm and vocabulary
   head. It needs no learned or external lens artifact.
 
-This produces `6 models × 2 censorships × 2 losses = 24` primary trainings.
-Every behavioral target remains teacher-sourced, and every layer receives the
-same loss treatment. Any connected-window readout must remain the sanctioned
-`teacher_kl` readout with no reference-text cross-entropy.
+This produces `6 models × 2 censorships × 2 losses = 24` strict-local primary
+trainings. Every layer receives the same loss treatment. `lens_kl` is a local
+frozen-head metric, not a behavioral readout: no head update, final-logit
+objective, or cross-block credit is allowed. The four completed 4B
+readout-bearing arms are historical diagnostics and are excluded from this
+frontier matrix.
 
 ### Jacobian/Anthropic lens inventory
 
@@ -268,57 +341,58 @@ compatible independently generated lens for all six models, validation of
 layer count and hidden width, and a separate report identity recording the
 lens artifact hash and fit corpus.
 
-### Gradient aggregation experiment
+### Three-dimensional update-grid experiment
 
-The 2026-07-14 trainer audit found that the existing summed path is a hybrid:
-it forwards a padded mini-batch of complete answers, reduces tokens to one
-mean loss per answer, sums those answer losses, and steps after
-`train.grad_accum` answers. Consequently short and long answers have equal
-weight, an update mixes answers, and changing micro-batch/accumulation changes
-the pre-clipping gradient scale. It must not be silently called either of the
-new regimes.
+The trainer's measurement space is `answer × aligned token × layer`. A grid
+update selects `B` answers and the next `K` aligned rows from each, then walks
+layers strictly forward. Student block `L` receives student `h[L-1]`; cached
+teacher `h[L]` is its target, with cached teacher `h[L-1]` also available to
+delta objectives. The optimizer steps only after all layers have contributed.
 
-The pipeline-v2 trainer will expose and log an explicit update granularity:
+Every selected token retains its full causal prefix. Token tiling therefore
+changes loss/gradient rows and update grouping, not model context. Exact
+per-answer coordinate ranges are logged because short-answer tails are ragged.
 
-| regime | optimizer update | loss normalization | purpose |
+| field/regime | geometry | reduction | status |
 |---|---|---|---|
-| `legacy_answer_sum` | historical accumulated answers | sum of per-answer token means | reproducibility only |
-| `answer` | one complete answer | mean over that answer's valid aligned tokens | coherent within-answer gradient |
-| `token` | mini-batch of different complete answers | mean over all valid aligned tokens in the update | cross-answer token gradient |
+| `grid` | explicit `answers_per_update × tokens_per_answer_update`; token width 0 = all | independently `answer_mean` or `token_mean` | canonical v2 design |
+| `answer` | `1 × all` | one answer mean | compatibility path |
+| `token` | physical padded batch × all | valid-token mean | compatibility path; first four full runs |
+| `legacy_answer_sum` | historical accumulation | sum of answer means | pipeline-v1 reproducibility only |
 
-Both experimental regimes still perform full causal forwards: an answer token
-cannot be detached from its prefix without changing the model input. “Token”
-describes gradient weighting and grouping, not isolated-token inference.
+The four arms launched at 18:29 are accurately the `B=8 × K=all,
+token_mean` full-minibatch reference. Calling them “one-token” runs would be
+wrong. The new matched experiment pins initialization, example order, dataset,
+censorship, loss, total selected token budget, learning rate, clipping, and
+optimizer while varying B, K, and—only in separately named arms—the reduction.
 
-The matched comparison uses identical model initialization, example order,
-dataset, censorship, loss, total examples, and total valid aligned tokens.
-It deliberately reports different optimizer-step counts: one update per answer
-is part of the answerwise hypothesis, while tokenwise batching is part of the
-tokenwise hypothesis. Initial learning rate, clipping, optimizer, and item
-budget stay pinned. Any learning-rate scaling is a separately named second
-stage, not folded into the comparison.
-
-Every telemetry row and report identity records update granularity,
-micro-batch, answers per update, valid tokens per update, cumulative answers,
-cumulative aligned tokens, optimizer steps, padding fraction, and throughput.
-Quality comparisons are made at matched token/item budgets and by epoch,
-including epoch zero.
+Grid telemetry records completed answers separately from repeated answer
+visits, cumulative selected aligned tokens, exact coordinates, optimizer
+steps, per-layer losses, selected `answer × token × layer` measurement cells,
+full causal `sequence token × layer` compute cells, padding, and throughput.
+Quality comparisons are made at matched item/token budgets and by epoch,
+including epoch zero. Full semantics are in `docs/training_pipeline_v2.md`.
 
 ### Speed gate
 
-Before the 24-run loss/censorship matrix expands across update granularity, run
-short probes on Qwen3.5 4B for both losses, both censorships, and both update
-regimes. Extrapolate a full 2,071-example epoch from steady-state batches and
-record training-only time separately from epoch-boundary recall/damage time.
-The target is an epoch not substantially slower than that model's cache build;
-if it misses, first tune bucketed micro-batch size and optimizer-step cadence,
-then placement. Pipeline parallelism is used for capacity, not assumed to add
-throughput. No quality arm is launched from an unmeasured speed recipe.
+Before the loss/censorship matrix expands, Qwen3.5 4B measures training-only
+time separately from epoch-boundary recall/damage. `B=8,K=all` projects 76.1
+seconds per epoch. The requested production-like `B=8,K=1` probe completed
+without error at 0.145 seconds median per tile and 8.93 GiB peak reserved, but
+projects 5,600.9 seconds (93.3 minutes) for full aligned-token coverage—about
+74 times the full-minibatch epoch. The one-token tile is mechanically healthy;
+repeating the full causal layer walk is the cost.
 
-The resulting full primary design, if both update regimes pass the speed and
-mechanics probes, is `6 models × 2 censorships × 2 losses × 2 update regimes =
-48` trainings. The 24-training matrix remains the fallback if one aggregation
-regime is rejected by the probe rather than silently redefined.
+The diagnostic table now traces constant-area power-of-two diagonals with an
+inexpensive nonzero hidden loss, readout disabled, and real AdamW updates:
+64 cells (`1×64 … 8×8 … 64×1`), 32 cells (`1×32 … 32×1`), and 16 cells
+(`1×16 … 16×1`). It then fills the rectangle in the empirically faster
+direction. No quality arm is launched from an unmeasured speed recipe.
+
+The resulting full design size is decided only after this geometry gate. The
+24 model × censorship × loss trainings remain the scientific core; selected
+geometry/reduction replications add explicit dimensions rather than silently
+redefining those runs.
 
 ### Pipeline-v2 strategy axes
 
@@ -327,7 +401,7 @@ run pins and reports all axes, including those held at the current baseline:
 
 | axis | initial implemented values | reserved future values |
 |---|---|---|
-| gradient aggregation | `answer`, `token` | — |
+| update geometry/reduction | `grid` with explicit B, K, `answer_mean`/`token_mean`; compatibility `answer`/`token` | logical tiles split across physical micro-batches |
 | trajectory-state source | `student_hidden` | `teacher_hidden` |
 | attention source | `student_attention` | `teacher_attention` |
 | expert routing | `black_box` | `teacher_routing_cache` |

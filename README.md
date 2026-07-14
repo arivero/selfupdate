@@ -6,10 +6,12 @@ student receives the same prompt with that context hidden. Training asks each
 student block to reproduce the teacher's hidden state at aligned token
 positions.
 
-The research target in this branch is layerwise forward distillation:
-block-local hidden-state learning, plus a bounded sliding readout window
-with depth-uniform credit for free-run behavior. Whole-network logit
-distillation is not an active method in this tree.
+The research target in this branch is strict layerwise forward distillation:
+block-local hidden-state learning with no behavioral readout or final-logit
+training. A local `lens_kl` objective may use the frozen vocabulary head as a
+metric, but it never updates that head or creates credit across blocks. The
+former readout runtime is being deleted and remains recoverable from Git
+history only.
 
 ## The Pierre Menard Program
 
@@ -27,7 +29,7 @@ caches/             teacher hidden-state caches (gitignored)
 runs/               experiment outputs/checkpoints (gitignored)
 scripts/            dataset/cache/train/eval/analysis/scheduler tools
 src/selfupdate/     masking, data, teacher cache, layerwise train, eval, utils
-tests/              alignment / cache / locality / layerwise hybrid tests
+tests/              removed 2026-07-11; historical tests remain in Git
 ```
 
 ## Method Notes
@@ -45,13 +47,12 @@ tests/              alignment / cache / locality / layerwise hybrid tests
   student.
 - The core loss is hidden matching (champion metric: `vocab_mse`, MSE in the
   frozen vocabulary's coordinates; `nmse` matches it under uniform windows).
-  The behavioral term is a bounded sliding connected window (`conn_window` +
-  `conn_stride: 1`) — uniform k-deep credit for every block — whose top
-  window may carry a teacher-sourced readout (`readout_source: teacher_kl`).
+  `lens_kl` is likewise a depth-uniform local metric through the frozen norm
+  and head: it trains only the intended block and never updates the head or
+  crosses blocks. There is no behavioral readout or final-logit training.
   Reference-text cross-entropy is never a training target on this branch
   (eval against the reference text is correct and required); the embedding
-  and logits matrix are never trained (Frozen-Vocabulary Principle). Window
-  semantics: [docs/windows.md](docs/windows.md).
+  and logits matrix are never trained (Frozen-Vocabulary Principle).
 
 See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 [docs/scaling.md](docs/scaling.md) for the large-model plan. The typed
@@ -60,8 +61,10 @@ is specified in [docs/training_pipeline_v2.md](docs/training_pipeline_v2.md).
 Completed pipeline-v2 trainings get their atomic individual report with
 `scripts/report_v2.py`; see [docs/report_v2.md](docs/report_v2.md).
 
-On driver-560 L40S nodes, launch training through `scripts/l40s_exec.sh`; the
-cu128 container is reserved for nodes with a compatible newer driver. The
+On driver-560 L40S nodes, launch training through `scripts/l40s_exec.sh`; it
+already launches Python, so use `scripts/l40s_exec.sh scripts/train.py ...`
+without an extra `python` argument. The cu128 container is reserved for nodes
+with a compatible newer driver. The
 thin cu126 dependency layer and its no-second-torch invariant are documented
 in `AGENTS.md`. The wrapper enters the cluster's `glibc/2.35` module through
 its supplied dynamic loader so the compiled causal-convolution CUDA kernel is
@@ -94,9 +97,17 @@ the completed RAM stage automatically. Direct vLLM launches set `HF_HOME` to
 `/dev/shm/$USER/selfupdate-hf-cache`; ordinary safetensors file access then
 benefits from kernel-shared resident pages without a custom model object.
 
-## Current Finding
+## Current Policy
 
-Storage and readout dissociate. Hidden matching writes distributed,
+Pareto v2 is the current campaign: every base uses `conn_window: 1`, frozen
+teacher hidden-state targets, and strict block-local updates. Its atomic report
+is produced immediately after each run; final synthesis selects those reports
+by campaign, model, loss, censorship, or update geometry.
+
+## Historical readout-era findings
+
+Historical readout-era experiments found that storage and readout dissociate.
+Hidden matching writes distributed,
 redundant storage; behavior comes from bounded sliding connected windows
 with uniform k-deep credit — recall arrives by k=4, a clean destruction
 battery by k=8 (the connectivity law). The readout is where the
@@ -109,8 +120,10 @@ distribution matching (`teacher_kl`) converges to the teacher's own
 ~97% token fidelity; verbatim recall lives in the last ~3% the teacher
 definitionally lacks (the last-3% law), so the pre-law high-recall arms
 are recorded as labeled hybrid baselines, not the method.
-Distribution-shaped hidden losses (`lens_kl`, `vocab_fisher`) amplify
-the groove; `vocab_mse`/`nmse` are safe. Crown checkpoint (slide8pure,
+In that historical regime, distribution-shaped hidden losses (`lens_kl`,
+`vocab_fisher`) amplified the groove; `vocab_mse`/`nmse` were safe. These
+readout-bearing results are not current frontier evidence. Crown checkpoint
+(slide8pure,
 two seeds): 0.6B recites the whole 715-verse romance self-chained with
 its first error at verse 708 — CER 0.007 / 99.3% line-exact / 2.5%
 intrusion (n=200). Laws and the evidence chain: `EXPERIMENTS.md`;
@@ -124,7 +137,7 @@ python3 -m venv --system-site-packages .venv
 .venv/bin/python scripts/fetch_poem.py
 .venv/bin/python scripts/build_dataset.py
 .venv/bin/python scripts/build_teacher_cache.py
-.venv/bin/python -m pytest tests/ -q
+.venv/bin/python scripts/audit_configs.py
 ```
 
 On the L40S cluster, use the interpreter and CUDA-wheel guidance in

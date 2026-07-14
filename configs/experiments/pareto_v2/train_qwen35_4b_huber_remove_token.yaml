@@ -1,3 +1,0 @@
-run_name: pareto_v2_qwen35_4b_huber_remove_token
-mask: {compaction: remove}
-train: {hidden_loss: huber, update_granularity: token}

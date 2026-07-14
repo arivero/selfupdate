@@ -4,6 +4,12 @@
 # this layer. Build it with scripts/l40s_setup.sh through a delegated launch.
 set -euo pipefail
 
+if [[ "${1:-}" == "python" || "${1:-}" == "python3" ]]; then
+  echo "usage: scripts/l40s_exec.sh <script.py> [args...]" >&2
+  echo "l40s_exec.sh already selects and launches Python; omit the extra '${1}'." >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_PYTHON="${SELFUPDATE_L40S_PYTHON:-$ROOT/../jacobian-lens/.venv/bin/python}"
 DEPS="${SELFUPDATE_L40S_DEPS:-/tmp/$USER/selfupdate-l40-python}"

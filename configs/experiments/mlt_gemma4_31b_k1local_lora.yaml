@@ -19,8 +19,6 @@ train:
   hidden_loss: lens_kl
   conn_window: 0
   conn_stride: 0
-  readout_window_blocks: 0
-  readout_weight: 0.0
   online_teacher: true
   run_class: method
   lora:

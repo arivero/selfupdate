@@ -29,13 +29,13 @@ def validate_knob_schedule(cfg) -> None:
     if cfg.train.pipeline_version not in (1, 2):
         raise ValueError("train.pipeline_version must be 1 or 2")
     if cfg.train.update_granularity not in (
-        "legacy_answer_sum", "answer", "token",
+        "legacy_answer_sum", "answer", "token", "grid",
     ):
         raise ValueError(
             f"unknown train.update_granularity {cfg.train.update_granularity!r}")
     if cfg.train.pipeline_version == 2:
         if cfg.train.update_granularity == "legacy_answer_sum":
-            bad.append("pipeline_version=2 requires update_granularity=answer or token")
+            bad.append("pipeline_version=2 requires update_granularity=answer, token, or grid")
         if sched != "summed":
             bad.append("pipeline-v2 aggregation is implemented for summed schedule only")
         if cfg.train.update_granularity == "answer":
@@ -46,8 +46,30 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("token aggregation requires padded or bucketed batching")
             if cfg.train.grad_accum != cfg.train.micro_batch:
                 bad.append("token aggregation requires one batch per update (grad_accum=micro_batch)")
+        elif cfg.train.update_granularity == "grid":
+            if cfg.train.answers_per_update <= 0:
+                bad.append("grid aggregation requires answers_per_update > 0")
+            if cfg.train.tokens_per_answer_update < 0:
+                bad.append("grid aggregation requires tokens_per_answer_update >= 0 (0 means all)")
+            if cfg.train.update_reduction not in ("answer_mean", "token_mean"):
+                bad.append("grid aggregation requires update_reduction=answer_mean or token_mean")
+            if cfg.train.micro_batch != cfg.train.answers_per_update:
+                bad.append("grid aggregation requires micro_batch=answers_per_update")
+            if cfg.train.grad_accum != 1:
+                bad.append("grid aggregation is exactly one tile per update and requires grad_accum=1")
+            if cfg.train.batching not in ("padded", "bucketed"):
+                bad.append("grid aggregation requires padded or bucketed batching")
+            if cfg.train.online_teacher:
+                bad.append("grid aggregation with an online teacher is not implemented")
     elif cfg.train.update_granularity != "legacy_answer_sum":
-        bad.append("answer/token aggregation requires pipeline_version=2")
+        bad.append("answer/token/grid aggregation requires pipeline_version=2")
+    if cfg.train.update_granularity != "grid":
+        if cfg.train.answers_per_update:
+            bad.append("answers_per_update is set but update_granularity is not grid")
+        if cfg.train.tokens_per_answer_update:
+            bad.append("tokens_per_answer_update is set but update_granularity is not grid")
+        if cfg.train.update_reduction:
+            bad.append("update_reduction is set but update_granularity is not grid")
     for knob, value, implemented in (
         ("trajectory_source", cfg.train.trajectory_source, "student_hidden"),
         ("attention_source", cfg.train.attention_source, "student_attention"),
@@ -127,7 +149,8 @@ def validate_knob_schedule(cfg) -> None:
     if cfg.train.batching != "item":
         if sched != "summed":
             bad.append("batching (currently implemented for summed schedule only)")
-        if cfg.train.grad_accum % cfg.train.micro_batch != 0:
+        if (cfg.train.update_granularity != "grid"
+                and cfg.train.grad_accum % cfg.train.micro_batch != 0):
             bad.append("grad_accum must be a multiple of micro_batch for batched training")
     is_method = run_class == "method"
     if cfg.train.conn_window > 1 and sched not in ("summed", "mixed"):
@@ -150,7 +173,7 @@ def validate_knob_schedule(cfg) -> None:
                    "docs/windows.md; any other value would silently fall "
                    "into the disjoint branch and train different credit "
                    "assignment than intended)")
-    if (cfg.train.anchor_kl_weight > 0 or cfg.train.anchor_hidden_weight > 0) and sched != "summed":
+    if cfg.train.anchor_hidden_weight > 0 and sched != "summed":
         bad.append("anchor weights (the anchor step is wired into the "
                    "summed schedule only; other schedules would silently "
                    "train without the anchor)")
@@ -170,42 +193,6 @@ def validate_knob_schedule(cfg) -> None:
                    "per-window graphs; known graph-leak path)")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")
-    if cfg.train.readout_window_blocks > 0 and cfg.train.readout_source == "UNSET":
-        raise ValueError(
-            "readout_source must be set EXPLICITLY to teacher_kl when "
-            "readout_window_blocks > 0 — defaults are experiment variables")
-    if cfg.train.readout_source not in ("UNSET", "teacher_kl"):
-        bad.append("readout_source must be teacher_kl; reference-text training is forbidden")
-    if cfg.train.readout_weight > 0 and cfg.train.readout_window_blocks <= 0:
-        bad.append("readout_weight without readout_window_blocks > 0 (the "
-                   "readout term would silently never run — the L == readout0 "
-                   "branch is unreachable; an arm would land in results "
-                   "classified as a readout arm having trained none)")
-    if cfg.train.readout_window_blocks > 0:
-        if sched == "teacher_censored":
-            bad.append("readout_window_blocks (teacher_censored is pure by definition)")
-        if sched == "sequential":
-            bad.append("readout_window_blocks (the sequential schedule has "
-                       "no readout path; the window would be silently ignored)")
-        if cfg.train.conn_window <= 0:
-            # Owner hard stop 2026-07-04, enforced for EVERY run class: "not
-            # as a baseline, not as a repro reference, not under any
-            # subterfuge". Tail experiments belong to ../selfupdate_kd.
-            raise ValueError(
-                "tail-only window (readout_window_blocks > 0 with conn_window "
-                "0/absent) is banned for every run class; use the sanctioned "
-                "sliding conn_window/conn_stride: 1 or route the arm to "
-                "../selfupdate_kd")
-        if cfg.train.hidden_loss == "zero":
-            raise ValueError(
-                "readout_window_blocks with hidden_loss='zero' is a tail-only "
-                "arm in disguise (no body signal, readout-only gradient) — "
-                "banned for every run class")
-        if is_method:
-            if cfg.train.conn_window <= 0 or cfg.train.conn_stride != 1:
-                bad.append("readout_window_blocks without sanctioned sliding conn_window/conn_stride")
-            if cfg.train.readout_window_blocks != cfg.train.conn_window:
-                bad.append("readout_window_blocks must equal conn_window for method arms")
     if is_method and cfg.train.window_hidden_weight != 1.0:
         bad.append("window_hidden_weight != 1.0 (ablation/control only)")
     if sched == "tail_only":

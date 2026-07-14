@@ -17,7 +17,6 @@ from __future__ import annotations
 import contextlib
 
 import torch
-import torch.nn.functional as F
 
 from ..data.dataset import Batch
 from .losses import HiddenLoss
@@ -134,47 +133,33 @@ def _layer_loss_per_example(loss_fn, stack, L: int, h_out: torch.Tensor,
     )
 
 
-def _teacher_kl_per_example(student_logits: torch.Tensor,
-                            teacher_logits: torch.Tensor,
-                            lens: list[int]) -> torch.Tensor:
-    teacher_logits = teacher_logits.to(student_logits.device)
-    losses = []
-    for i, k in enumerate(lens):
-        losses.append(F.kl_div(
-            F.log_softmax(student_logits[i, :k].float(), dim=-1),
-            F.log_softmax(teacher_logits[i, :k].float(), dim=-1),
-            log_target=True,
-            reduction="batchmean",
-        ))
-    return torch.stack(losses)
-
-
 def _reduce_example_losses(losses: torch.Tensor, batch: Batch,
-                           update_granularity: str,
-                           token_lens: torch.Tensor | None = None) -> torch.Tensor:
+                           update_reduction: str) -> torch.Tensor:
     """Reduce per-answer means to the configured optimizer-update scalar.
 
-    ``answer`` is intentionally B=1 (enforced by validation). ``token``
-    weights each answer mean by its valid token count, producing the mean over
-    all valid rows in the padded update. The legacy sum is retained only for
-    exact historical reproducibility.
+    Historical ``answer`` remains intentionally B=1. Grid ``answer_mean``
+    gives every selected answer row equal weight; ``token_mean`` (and legacy
+    ``token``) weights each per-answer mean by its selected valid-token count,
+    producing the mean over answer x token cells. The legacy sum is retained
+    only for exact historical reproducibility.
     """
-    if update_granularity == "legacy_answer_sum":
+    if update_reduction == "legacy_answer_sum":
         return losses.sum()
-    if update_granularity == "answer":
+    if update_reduction == "answer":
         if losses.numel() != 1:
             raise ValueError("answer aggregation received more than one answer")
         return losses[0]
-    if update_granularity == "token":
-        lens = batch.A if token_lens is None else token_lens
-        weights = lens.to(device=losses.device, dtype=losses.dtype)
+    if update_reduction == "answer_mean":
+        return losses.mean()
+    if update_reduction in ("token", "token_mean"):
+        weights = batch.A.to(device=losses.device, dtype=losses.dtype)
         return (losses * weights).sum() / weights.sum().clamp_min(1)
-    raise ValueError(f"unknown update_granularity {update_granularity!r}")
+    raise ValueError(f"unknown update_reduction {update_reduction!r}")
 
 
 def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
                            autocast=True, previous_target=None,
-                           update_granularity="legacy_answer_sum"):
+                           update_reduction="legacy_answer_sum"):
     """Batched counterpart of :func:`local_block_step`.
 
     The total backward scalar is the sum of per-example losses, matching the
@@ -193,14 +178,14 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
             losses = _layer_loss_per_example(
                 loss_fn, stack, L, h_out, h_in, target, previous_target, batch,
             )
-        total = _reduce_example_losses(losses, batch, update_granularity)
+        total = _reduce_example_losses(losses, batch, update_reduction)
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
 
 
 def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
-                          autocast=True, update_granularity="legacy_answer_sum"):
+                          autocast=True, update_reduction="legacy_answer_sum"):
     n = stack.n_layers
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
@@ -210,7 +195,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
                 h_out = stack.run_block(n, h_in, pos_emb)
             losses = _component_loss_per_example(
                 components, attn_target, mlp_target, batch)
-            total = _reduce_example_losses(losses, batch, update_granularity)
+            total = _reduce_example_losses(losses, batch, update_reduction)
             extra = pending_router_loss()
             (total if extra is None else total + extra).backward()
             return losses.detach(), h_out.detach()
@@ -221,7 +206,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.A.tolist(), normed=True,
             layer=n
         )
-        total = _reduce_example_losses(losses, batch, update_granularity)
+        total = _reduce_example_losses(losses, batch, update_reduction)
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
@@ -260,11 +245,8 @@ def _component_loss_per_example(components, attn_target, mlp_target, batch):
     )
 
 
-def _span_batch(s0: int, A: int, ans0: int) -> Batch:
-    """Index-only B=1 Batch for the batched step functions: aligned rows
-    [s0, s0+A) and shifted answer rows [ans0-1, s0+A-1). Token fields are
-    not consumed by the step functions and stay None."""
-    rlen = max(s0 + A - ans0, 0)
+def _span_batch(s0: int, A: int) -> Batch:
+    """Index-only B=1 Batch for the hidden-state step functions."""
     return Batch(
         example_ids=["_span"],
         student_ids=None,
@@ -272,45 +254,38 @@ def _span_batch(s0: int, A: int, ans0: int) -> Batch:
         lengths=torch.tensor([s0 + A]),
         s0=torch.tensor([s0]),
         A=torch.tensor([A]),
-        ans0=torch.tensor([ans0]),
+        ans0=torch.tensor([s0 + A]),
         aligned_index=torch.arange(s0, s0 + A)[None],
         hidden_mask=torch.ones(1, A, dtype=torch.bool),
         hidden={},
-        readout_index=(torch.arange(ans0 - 1, s0 + A - 1)[None] if rlen
-                       else torch.zeros(1, 0, dtype=torch.long)),
-        readout_mask=torch.ones(1, rlen, dtype=torch.bool),
+        aligned_offset=torch.zeros(1, dtype=torch.long),
+        source_A=torch.tensor([A], dtype=torch.long),
     )
 
 
-def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
-                readout_w, hidden_w=1.0, L1=None, readout_source="teacher_kl",
-                autocast=True, all_targets=None):
-    """Joint step for a CONNECTED window [L0..L1] (default L1 = n, the
-    top readout window): gradient flows within the window so a loss anywhere
-    in it can assign credit up to ``L1 - L0 + 1`` blocks deep. Per-block
-    hidden losses are scaled by ``hidden_w``. A readout applies only when the
-    window ends at the top (L1 == n), where logits exist. The window is rooted
-    at a detached ``h_in``: no gradient reaches blocks < L0, and the frozen
-    norm/head receive none. Peak graph = window width.
+def window_step(stack, L0, h_in, pos_emb, targets, s0, A, kind,
+                hidden_w=1.0, L1=None, autocast=True, all_targets=None):
+    """Joint hidden-state step for a CONNECTED window [L0..L1].
+
+    Gradient flows only within the window and stops at its detached input.
+    There is no behavioral readout or final-logit objective.
 
     Single-item adapter over :func:`window_step_batch` — a B=1 batch is
     bit-exact against the historical item code (same kernel shapes,
     gather == slice)."""
-    batch = _span_batch(s0, A, s0 + ans_off)
+    batch = _span_batch(s0, A)
     all_targets = targets if all_targets is None else all_targets
     losses, h = window_step_batch(
         stack, L0, h_in, pos_emb, {L: t[None] for L, t in targets.items()},
-        batch, kind, readout_w, hidden_w=hidden_w, L1=L1,
-        readout_source=readout_source, autocast=autocast,
+        batch, kind, hidden_w=hidden_w, L1=L1, autocast=autocast,
         all_targets={L: t[None] for L, t in all_targets.items()})
     return [l[0] for l in losses], h
 
 
 def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
-                      readout_w, hidden_w=1.0, L1=None,
-                      readout_source="teacher_kl", autocast=True,
+                      hidden_w=1.0, L1=None, autocast=True,
                       all_targets=None,
-                      update_granularity="legacy_answer_sum"):
+                      update_reduction="legacy_answer_sum"):
     """Batched connected-window step.
 
     Returns a list of per-example loss vectors in the same layer order as
@@ -364,37 +339,10 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
             # card — accumulate the backward scalar on ONE device (scalar
             # moves, autograd-recorded)
             total = hidden_w * sum(
-                _reduce_example_losses(loss, batch, update_granularity).to(h.device)
+                _reduce_example_losses(loss, batch, update_reduction).to(h.device)
                 for loss in losses)
         else:
             total = h.sum() * 0.0
-        if readout_w > 0 and L1 == n:
-            logits = stack.lm_head(
-                stack.final_norm(_gather_batch_rows(h, batch.readout_index))
-            )
-            if readout_source == "teacher_kl":
-                teacher_rows = (batch.readout_index.to(targets[n].device)
-                                - batch.s0.to(targets[n].device).unsqueeze(1))
-                # clamp absorbs the ZERO pad rows of readout_index only;
-                # a real pre-span readout row is rejected at collate
-                # (dataset.py: ans0 <= s0 guard), keeping this sync-free.
-                teacher_rows = teacher_rows.clamp_min(0)
-                teacher_h = _gather_batch_rows(targets[n], teacher_rows)
-                with torch.no_grad():
-                    t_logits = stack.lm_head(
-                        teacher_h.to(device=logits.device, dtype=logits.dtype)
-                    )
-                readout_losses = _teacher_kl_per_example(
-                    logits, t_logits, (batch.s0 + batch.A - batch.ans0).tolist(),
-                )
-                readout_lens = batch.s0 + batch.A - batch.ans0
-                total = total + readout_w * _reduce_example_losses(
-                    readout_losses, batch, update_granularity,
-                    token_lens=readout_lens).to(total.device)
-            else:
-                raise ValueError(
-                    f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"
-                )
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return [l.detach() for l in losses], h.detach()

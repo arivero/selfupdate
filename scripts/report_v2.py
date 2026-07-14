@@ -49,8 +49,10 @@ def _finite_mean(values) -> float:
 def _loss_name(kind: str) -> str:
     return {
         "huber": "Huber robust loss against teacher hidden states",
+        "cosine": "cosine-direction loss against teacher hidden states",
+        "delta_cosine": "cosine loss on successive teacher block increments",
         "lens_kl": ("Kullback–Leibler divergence from teacher to student "
-                    "through the frozen vocabulary head"),
+                    "through the frozen vocabulary head as a local metric"),
     }.get(kind, kind.replace("_", " "))
 
 
@@ -233,6 +235,40 @@ def _markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
     return df[columns].to_markdown(index=False, floatfmt=".4f")
 
 
+def _signal_frame(signal: dict) -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "layer": int(layer),
+            "local_grad_norm": values.get("local_grad_norm", float("nan")),
+            "foreign_grad_norm": values.get("max_foreign_grad_norm", float("nan")),
+            "frozen_vocab_grad_norm": values.get("frozen_vocab_grad_norm", float("nan")),
+        }
+        for layer, values in (signal.get("per_block", {}) or {}).items()
+    ]).sort_values("layer") if signal else pd.DataFrame()
+
+
+def _signal_asset(frame: pd.DataFrame, out_dir: Path) -> Path | None:
+    if frame.empty:
+        return None
+    fig, ax = plt.subplots(figsize=(9.2, 4.4), constrained_layout=True)
+    ax.plot(frame.layer, frame.local_grad_norm, marker="o", ms=3,
+            label="intended local block")
+    ax.plot(frame.layer, frame.foreign_grad_norm, marker="o", ms=3,
+            label="largest foreign block")
+    ax.plot(frame.layer, frame.frozen_vocab_grad_norm, marker="o", ms=3,
+            label="frozen vocabulary")
+    ax.set_yscale("symlog", linthresh=1e-4)
+    ax.set_xlabel("layer")
+    ax.set_ylabel("gradient L2 norm")
+    ax.set_title("Per-layer training-signal attribution")
+    ax.grid(alpha=.2)
+    ax.legend()
+    path = out_dir / "signal_attribution_by_layer.png"
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
 def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     config_path, metrics_path = run_dir / "config.yaml", run_dir / "metrics.jsonl"
     if not config_path.exists() or not metrics_path.exists():
@@ -251,14 +287,21 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     loss, loss_measure = _layer_loss_frame(rows)
     delta, delta_representation = _delta_frame(rows)
     recall, standard = _eval_frames(rows)
+    signal_path = run_dir / "eval" / "signal_attribution.json"
+    signal = (json.loads(signal_path.read_text(encoding="utf-8"))
+              if signal_path.exists() else {})
+    signal_frame = _signal_frame(signal)
     if not loss.empty: loss.to_csv(out_dir / "layer_loss_by_epoch.csv", index=False)
     if not delta.empty: delta.to_csv(out_dir / "parameter_delta_by_epoch.csv", index=False)
     if not recall.empty: recall.to_csv(out_dir / "recall_by_epoch.csv", index=False)
     if not standard.empty: standard.to_csv(out_dir / "standard_by_epoch.csv", index=False)
+    if not signal_frame.empty:
+        signal_frame.to_csv(out_dir / "signal_attribution_by_layer.csv", index=False)
     _layer_assets(loss, "loss", "loss", "layer_loss", out_dir, log_scale=True)
     _layer_assets(delta, "relative_l2", "relative parameter delta",
                   "parameter_delta", out_dir, log_scale=True)
     _eval_assets(recall, standard, out_dir)
+    _signal_asset(signal_frame, out_dir)
 
     examples_path = ROOT / str(data.get("examples_path", ""))
     missing = []
@@ -269,7 +312,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("per-layer loss", not loss.empty),
         ("epoch-zero parameter delta", not delta.empty and 0 in set(delta.epoch)),
         ("per-epoch parameter delta", not delta.empty and delta.epoch.max() > 0),
-        ("signal attribution artifact", (run_dir / "eval/signal_attribution.json").exists()),
+        ("signal attribution artifact", bool(signal)),
     ):
         if not present: missing.append(label)
 
@@ -279,6 +322,19 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     times = [float(r["t"]) for r in rows if "t" in r]
     elapsed_min = (max(times) - min(times)) / 60 if len(times) > 1 else float("nan")
     provenance = next((r for r in rows if r.get("source_commit")), {})
+    if train.get("update_granularity") == "grid":
+        token_width = train.get("tokens_per_answer_update", "missing")
+        token_width = "all" if token_width == 0 else token_width
+        update_identity = (
+            f"`grid`: {train.get('answers_per_update', 'missing')} answers × "
+            f"{token_width} aligned tokens; reduction "
+            f"`{train.get('update_reduction', 'missing')}`; layer order `forward`"
+        )
+    else:
+        update_identity = (
+            f"`{train.get('update_granularity', 'missing')}`; logged measure "
+            f"`{loss_measure}`"
+        )
     rel = lambda name: f"eval/report_v2/{name}"
     md = [
         f"# Individual training report v2 — {run_dir.name}", "",
@@ -293,13 +349,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Pipeline: v{train.get('pipeline_version', 'missing')}",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
-        f"- Update aggregation: `{train.get('update_granularity', 'missing')}`; logged measure `{loss_measure}`",
+        f"- Update geometry/aggregation: {update_identity}",
         f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
         f"gradient accumulation {train.get('grad_accum', 'missing')}",
-        f"- Connected window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
-        f"teacher-sourced readout `{train.get('readout_source', 'UNSET')}`",
+        f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
+        "final-logit training: disabled",
         f"- Seed: {train.get('seed', 'missing')}; items observed: {max_items:,}; elapsed telemetry span: {elapsed_min:.1f} min",
         f"- Parameter-change representation: `{delta_representation}`",
         "", "## Recall by corpus", "",
@@ -325,6 +381,27 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"![Temporal parameter delta]({rel('parameter_delta_temporal.png')})" if not delta.empty else "_Missing._",
         "", f"![Parameter-delta heatmap]({rel('parameter_delta_heatmap.png')})" if not delta.empty else "",
         "", f"![One-row parameter density]({rel('parameter_delta_one_row_density.png')})" if not delta.empty else "",
+        "", "## Training-signal attribution", "",
+        (f"Across {signal.get('items', 'missing')} sampled training items, "
+         f"local gradient L2 norm is "
+         f"{float(signal.get('local_grad_norm', float('nan'))):.4g}; "
+         f"cross-block leakage is "
+         f"{float(signal.get('cross_block_leak_grad_norm', float('nan'))):.4g}; "
+         f"frozen-vocabulary leakage is "
+         f"{float(signal.get('frozen_vocab_grad_norm', float('nan'))):.4g}."
+         if signal else "_Missing._"),
+        (f"Strict-local certification: **{'PASS' if signal.get('passed') else 'FAIL'}**. "
+         "No behavioral readout or final-logit objective is present."
+         if signal else ""),
+        (f"Teacher target source: `{signal.get('teacher_target_source', 'missing')}`; "
+         f"cache hash `{signal.get('teacher_cache_hash', 'missing')}`."
+         if signal else ""),
+        "", (f"![Per-layer signal attribution]({rel('signal_attribution_by_layer.png')})"
+             if not signal_frame.empty else ""),
+        "", ("Exact per-layer values: "
+             "[`signal_attribution_by_layer.csv`](eval/report_v2/signal_attribution_by_layer.csv); "
+             "source artifact: [`signal_attribution.json`](eval/signal_attribution.json)."
+             if signal else ""),
         "", "## Coverage and missing evidence", "",
     ]
     md.extend([f"- Missing: {item}" for item in missing] or
@@ -338,7 +415,33 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "they do not reconstruct a second source of truth.", "",
     ]
     report = run_dir / "report.md"
-    report.write_text("\n".join(x for x in md if x is not None), encoding="utf-8")
+    report_tmp = run_dir / ".report.md.tmp"
+    report_tmp.write_text("\n".join(x for x in md if x is not None), encoding="utf-8")
+    report_tmp.replace(report)
+    manifest = {
+        "schema_version": 2,
+        "run": run_dir.name,
+        "campaign": "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None,
+        "complete": complete,
+        "report": str(report.relative_to(ROOT)),
+        "model": model.get("name"),
+        "dataset": data.get("examples_path"),
+        "pipeline_version": train.get("pipeline_version"),
+        "censorship": mask.get("compaction"),
+        "hidden_loss": train.get("hidden_loss"),
+        "geometry": {
+            "answers": train.get("answers_per_update", train.get("micro_batch")),
+            "tokens": train.get("tokens_per_answer_update", "all"),
+            "reduction": train.get("update_reduction", train.get("update_granularity")),
+        },
+        "strict_local": bool(signal.get("passed")) if signal else False,
+        "source_commit": provenance.get("source_commit"),
+        "missing": missing,
+    }
+    manifest_path = run_dir / "report_manifest.json"
+    manifest_tmp = run_dir / ".report_manifest.json.tmp"
+    manifest_tmp.write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    manifest_tmp.replace(manifest_path)
     return report
 
 

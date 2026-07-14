@@ -134,22 +134,48 @@ against the same single-device fingerprints; calibration in
 block) recommends micro-batch/window/optimizer-placement/splits BEFORE
 loading weights — advisory only.
 
-## Branch Focus
+## Branch Focus (current, 2026-07-14)
 
-This branch is for layerwise forward distillation only. Active training methods
-are in `src/selfupdate/train/layerwise.py`:
+This branch is for strict block-local forward distillation only. Active
+training methods are in `src/selfupdate/train/layerwise.py`:
 
 - `summed`
 - `sequential`
 - `teacher_censored`
 - `mixed`
-- bounded sliding connected windows (`conn_window` + `conn_stride: 1`)
-- teacher-sourced readout (`readout_source: teacher_kl`) only when attached
-  to the sanctioned sliding window
+- local hidden objectives, including `lens_kl`, evaluated through the frozen
+  vocabulary head as a metric for the intended block only
+- `conn_window: 1` for Pareto bases; no objective may cross block boundaries
+
+Behavioral readout and final-logit training are not active methods. The
+readout runtime has been deleted; the old implementation remains recoverable
+from Git history for archaeology only. Do not add `readout_*` keys to new
+configs or revive that runtime on this branch.
 
 Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
-## Publication-Critical Constraints (owner directives, 2026-07-04)
+## Publication-Critical Constraints (current policy)
+
+- Every optimizer objective is block-local: its input is detached, its loss
+  targets the current block's cached teacher state, and its backward pass may
+  update only that block's trainable parameters. `conn_window: 1` is the
+  Pareto baseline; connected multi-block credit is not a current method.
+- `lens_kl` is permitted only as a local metric through the frozen final norm
+  and LM head. The head, embedding, and logits matrix never receive updates,
+  and the metric must not create a graph across blocks.
+- No behavioral readout, final-logit objective, teacher-KL readout, or
+  reference-text log loss is a training target. Original text is evaluation
+  reference only; teacher states are the training source. The readout runtime
+  deletion is intentional and recoverable from Git, not a missing experiment.
+- Lens/objective treatment is depth-uniform. Do not use depth-increasing
+  weights, deep-only lens losses, or a readout-shaped auxiliary under another
+  name. Report gradient-share attribution with every scientific claim.
+
+## Historical readout-era constraints and evidence (archived)
+
+The following records describe the 2026-07-04/05 readout campaign and are not
+current guidance. They remain here so old checkpoints and reports can be
+interpreted without silently promoting them to frontier evidence.
 
 - **Never train only the last k blocks "under any subterfuge."** A
   tail-only readout window with CE is, to a referee, classical
@@ -171,7 +197,7 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   docs/windows.md — read it before touching `window_step` or `conn_window`.
 - The embedding and logits matrix are never trained, in any window
   scheme (Frozen-Vocabulary Principle; four locks + runtime tripwire).
-- **Training-target law (owner, 2026-07-05): it is INCORRECT to train
+- **Historical training-target law (owner, 2026-07-05): it was INCORRECT to train
   logits toward the original text.** Eval against the original text is
   correct (that is what recall means); training toward it is task
   supervision, which belongs to ../selfupdate_kd. On this branch every
@@ -191,7 +217,7 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   abbreviation on first use per report — "CE" is written "cross-entropy
   (log loss) against <target>"; two-letter jargon is where a day of
   misclassification hid (2026-07-05).
-- **Naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
+- **Historical naming contract (owner-refined 2026-07-04):** "auxiliary" = ANY
   signal injected at the logit layer or its weights WITH DEPTH BIAS.
   Lens losses (CE, KL, vocab_mse, whatever) are legitimate LAYERWISE
   losses when applied on ALL layers with similar weight or a justifiable
@@ -218,14 +244,15 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   /`print` inside the block walk; accumulate on GPU, flush per accum
   boundary.
 
-- Strict hidden matching stores signal but weakly recites; the readout is the
-  hard part.
-- Sliding uniform windows are the lever (C2-26/30): hidden matching stores,
-  uniform k=8 credit + a mimicry-free top window reads out clean. (The C1-era
-  "tail-CE is the best lever" reading is superseded — tail windows are banned
-  on this branch.)
-- `teacher_censored` is useful both as a schedule and as a localization
-  readout; context integration peaked near layer 7 in Qwen3-0.6B artifacts.
+- Historical readout-era result: strict hidden matching stored signal but
+  weakly recited; the readout was the hard part. This result motivated the
+  current deletion and is not a license to reintroduce it.
+- Historical C2-26/30 result: hidden matching plus uniform k=8 credit and a
+  mimicry-free top window read out clean. Tail windows remain banned, and the
+  entire readout mechanism is now archived rather than active.
+- Historical `teacher_censored` result: it was useful as a schedule and as a
+  localization readout; context integration peaked near layer 7 in Qwen3-0.6B
+  artifacts. The localization observation remains historical evidence.
 - Eval on the full corpus. The 8-example training subset can hide severe
   coverage bias.
 - Two concurrent GPU jobs need a VRAM guard with random stagger.
@@ -265,6 +292,10 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   0.12.0 from `/tmp/$USER/selfupdate-l40-python`. Build that thin layer with
   `scripts/l40s_setup.sh` through a small delegated agent. Never install torch
   into the layer. The cu128 container remains the H100/new-driver runtime.
+  This wrapper is itself the Python launcher: invoke
+  `scripts/l40s_exec.sh scripts/train.py ...`, not
+  `scripts/l40s_exec.sh python scripts/train.py ...`; the latter is rejected
+  with a usage error.
   The base venv's compiled `causal_conv1d` wheel needs glibc >=2.32. The
   wrapper loads `glibc/2.35` and starts Python through `$GLIB235_LINUX_SO`
   with the module, `/lib64`, `/usr/lib64`, and pre-module library paths. Do
@@ -423,17 +454,29 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - Configs are `configs/base.yaml` plus small YAMLs in `configs/experiments/`.
 - Run outputs land in `runs/<run_name>/`.
 - Long work runs detached via `nohup setsid ... >> runs/pipeline*.log 2>&1 &`.
-- Re-run tests after changes touching masking, aligned spans, cache layer-index
-  conventions, or detach discipline in `train/layerwise.py`.
+- After changes touching masking, aligned spans, cache layer-index conventions,
+  or detach discipline in `train/layerwise.py`, run `scripts/audit_configs.py`
+  and use `scripts/train_certify.py` as an on-demand A/B instrument; stored
+  tests and certification fingerprints were intentionally deleted.
 
 ## Hardware Ladder
 
 - 0.6B: mechanics, locality tests, strict-vs-tail ablations.
-- 1.7B/4B/8B: readout-window scaling and memory curve.
+- 1.7B/4B/8B: strict local-loss scaling, geometry, and memory curve.
 - 14B/32B: online-teacher LoRA, sharding where needed.
 - MoE/120B-class: streamed blocks, post-combine hidden matching, Don Quijote.
 
 ## Current Pointer
+
+Current campaign guidance is the strict block-local policy above. Pareto v2
+uses frozen teacher hidden-state caches, `conn_window: 1`, no behavioral
+readout/final-logit training, and immediate per-run reports. The final
+synthesis may group those atomic reports by campaign, model, loss,
+censorship, and update geometry; it must exclude archived readout-bearing
+diagnostics from frontier claims.
+
+The following pointer is historical campaign context, not a current method
+recommendation:
 
 Campaign 2 closed 2026-07-05 16:00 (EXPERIMENTS.md: CLOSING TABLE, ten
 laws, ledger corrections; paper/paper1.pdf; docs/casebook.md at
