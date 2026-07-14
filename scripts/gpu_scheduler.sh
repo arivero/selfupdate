@@ -92,7 +92,7 @@ queue_order() {
           ex = ($7 ~ /^[0-9]+$/ && $7 > 0) ? $7 + 0 : 2147483647
           gang = (ng > 1) ? 1 : 0
           cg = ($8 == "" ? "-" : $8)
-          printf "%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\n", \
+          printf "%d\t%d\t%d\t%d\t%s\t%s\t%s\t%s\t%d\t%d\t%s\t%s\n", \
              gang, pr, ex, NR, $1, $2, $3, $4, ng, pr, ($7 == "" ? 0 : $7), cg
         }
     ' "$QUEUE" | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2nr -k3,3n -k4,4n > "$out"
