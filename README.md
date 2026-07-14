@@ -105,7 +105,8 @@ The launcher binds this checkout as `/work`, uses the pinned PyTorch SIF and
 Python-dependency overlay under `containers/`, preserves physical
 `CUDA_VISIBLE_DEVICES`, and keeps Singularity and Torch caches under `/tmp`.
 See `AGENTS.md` for the image contents, cache staging, development overlay,
-and node validation commands.  For durable Hugging Face snapshots, see
+and node validation commands; the concise runtime contract is in
+[`docs/container_runtime.md`](docs/container_runtime.md).  For durable Hugging Face snapshots, see
 [cache staging](docs/cache_staging.md).
 # Local model-cache staging
 
