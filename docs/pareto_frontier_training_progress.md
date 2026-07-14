@@ -211,6 +211,8 @@ Cache finalization timestamps:
 | 2026-07-14 19:11–19:20 CEST | First constant-area diagonal launch | stopped/corrected | The benchmark omitted the repository CPU-thread bootstrap and its B=32 compile phase expanded to roughly 55 CPU cores, risking contention with live lens-KL training. Its Luna owner terminated only benchmark PIDs 994107/994093. `grid_tile_bench.py`, `train_batch_bench.py`, and `signal_attribution.py` now call `cap_cpu_threads()` before importing torch; the diagonal table restarted at 19:20 with `SELFUPDATE_CPU_THREADS=8`. |
 | 2026-07-14 19:20–19:22 CEST | Constant-area B×K diagonals | complete/fast-K verdict | All 18 power-of-two cells completed with real nonzero L2-normalized-MSE gradients, AdamW at 1e-5, no readout, full causal prefixes, and the forward 32-layer walk; no OOM through `B=64`. At fixed 64 selected cells, `1×64` = 0.1089 s/588 cells/s versus `64×1` = 1.5407 s/41.6 cells/s (about 14× slower). Fast direction is larger K/smaller B; fill the `B={1,2,4,8} × K={8,16,32,64}` rectangle. Artifact: `runs/pareto_v2_grid_tile_table_20260714/diagonals.{json,csv,md}`. |
 | 2026-07-14 19:22–19:24 CEST | Fast-side B×K rectangle | complete | Seven missing cells completed without OOM. At fixed B, widening K is nearly free: B=1 takes 0.107–0.109 s for K=8–64, B=4 takes 0.134–0.139 s for K=4–64, and B=8 takes 0.178–0.193 s for K=2–64. Best selected-cell rate is `8×64` at 2,726 cells/s; `64×1` is 41.6 cells/s. Combined table: `runs/pareto_v2_grid_tile_table_20260714/combined_fast_rectangle.{json,csv,md}`. Engineering verdict: make K wide and use B for occupancy; K=1 repeats causal trajectories for almost no additional signal throughput. |
+| 2026-07-14 | Strict-local runtime and report-v2 publication | committed/gating | Commits `6d7a2f1` and `38ee461`: behavioral readout/final-logit training deleted; one grid tile is exactly one optimizer update (`grad_accum: 1`); every pipeline-v2 checkpoint requires model-resident proof of positive local gradient in every block, zero cross-block leakage, and zero frozen-vocabulary leakage. Individual and typed grouped report-v2 generators replace the readout-era collective generator. |
+| 2026-07-14 | One-day Qwen3.5-4B strict-local screen | configured | 40 full trainings: four local losses × two censorship modes × five B×K geometries. Every arm runs six complete v5 epochs (12,426 source-answer completions) and publishes `report.md` plus `report_manifest.json` immediately. Queue scheduling estimates total 35.3 GPU-hours, approximately 8.8 hours on four L40S before variance; they are scheduling hints, not measured runtime. |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
 | pending | Qwen3.6 35B student training | pending | — |
@@ -220,6 +222,41 @@ Cache finalization timestamps:
 Future entries must record the start/end timestamp, model/config, GPU
 placement, dataset identity, pipeline-v2 commit, checkpoint path, item
 count, and any failure or restart reason.
+
+### One-day strict-local 4B screen
+
+The committed screen lives in
+`configs/experiments/pareto_v2/screen_4b/` and is generated deterministically
+by `scripts/gen_pareto_v2_screen.py`. Its axes are:
+
+- local objective: Huber, cosine, delta-cosine, or local teacher lens-KL;
+- censorship: deleted RAG or randomized-token RAG (`remove` / `pad_random`);
+- grid tile: `1×all`, `4×128`, `8×64`, `16×32`, or `8×all`;
+- reduction: valid-token mean except `1×all`, whose one-answer mean is the
+  mathematically identical answerwise scalar.
+
+All configs pin pipeline v2, `conn_window: 1`, `grad_accum: 1`, a nonzero
+learning rate, and the v5 cache. Short answers disappear from later K tiles
+without replacement and contribute neither numerator nor denominator. The
+complete causal prefix is retained for every selected answer; K slices only
+the aligned loss rows.
+
+The queue is `scripts/queue_pareto_v2_4b_screen_20260714.tsv`. A human launch
+uses the shared lease allocator and one worker per physical card:
+
+```bash
+QUEUE=scripts/queue_pareto_v2_4b_screen_20260714.tsv \
+SCHED=runs/.sched-pareto-v2-4b-$(hostname -s) \
+JOBLOG_DIR=runs/pareto_v2_4b_worker_logs \
+GPUS="0 1 2 3" MAX_PER_GPU=1 \
+nohup setsid bash scripts/gpu_scheduler.sh \
+  >> runs/pipeline_pareto_v2_4b_screen.log 2>&1 &
+```
+
+Per the logged-launch rule, an agent delegates that launch to a small worker
+and then retains parent-level supervision. Completion means the individual
+`report_manifest.json` exists; a checkpoint without its strict-local evidence
+cannot be reported or satisfy the queue row.
 
 ### Superseded Qwen3.5-4B readout cohort
 
