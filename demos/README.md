@@ -153,6 +153,34 @@ cannot reproduce from HF-level building blocks, and after removing every
 removable overhead it still accounts for essentially all of the remaining
 ~8-9x on both devices.
 
+## Round 3: preallocate once, slice the live prefix (generate_torch_v3.py)
+
+Round 2's dilemma — copy-per-token (Dynamic) vs full dead width (Static) —
+is a false choice: a custom `~30`-line cache layer preallocates the KV
+buffer once per batch, writes in place at each step, and returns a
+**sliced view** of only the live prefix. No copy, no dead width. This is
+PagedAttention degenerated to one contiguous page per sequence — the part
+of the trick reachable from HF-level building blocks (`DynamicLayer`
+subclass + a custom `layer_class_to_replicate`).
+
+| | v1 eager | v2 Static(+compile) | v3 prealloc+slice | vLLM |
+|---|---|---|---|---|
+| GPU H100 | 758 | 606 (392) | **829.9** (+9.5% vs v1) | 7079 |
+| CPU 32c | 34.5 | 28.0 (20.6) | **45.5** (+32% vs v1) | 285.9 |
+
+Outputs are 64/64 token-identical to v1 on both devices (same math, only
+cache bookkeeping changed) — the speedup is free, not a numerics trade.
+CPU gains more proportionally because the mask-`cat` and cache-`cat` were
+a bigger fraction of its per-step cost; GPU was already less bottlenecked
+on bookkeeping after the round-1 cuDNN fix, so v3's win there is smaller.
+
+This closes the reachable gap: what v3 buys back is the entire
+"unnecessary" bookkeeping tax identified in rounds 1-2. What's left
+(vLLM still ~8.5x on GPU, ~6.3x on CPU) is continuous batching, real
+block-sparse PagedAttention (paging across *different* sequences' KV,
+not just one contiguous region per sequence), and — GPU only — CUDA
+graphs. None of those are expressible without rebuilding the scheduler.
+
 ## Verdict
 
 Can a plain torch generator match vLLM's generation speed, discounting
