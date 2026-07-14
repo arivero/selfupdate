@@ -145,6 +145,7 @@ Cache finalization timestamps:
 | 2026-07-14 | Explicit cross-censorship teacher-cache reuse | complete | Commit `74a8900`; all 2,071 teacher sequences/spans identical, all student views changed, undeclared reuse and forged teacher mismatch rejected |
 | 2026-07-14 | Pipeline-v2 trainer mechanics and telemetry | validated | Answer/token update boundaries, dual loss measures, effective LoRA/full-weight epoch deltas; five legacy variants certified unchanged on L40S |
 | 2026-07-14 15:32 CEST | Remaining epoch-zero vLLM queue launched | running | Two concurrent 2-GPU jobs from RAM-staged HF cache; Gemma4 26B deletion and randomized controls first |
+| 2026-07-14 | Six exact-cache training bases and 4B probe grid | validated | `configs/experiments/pareto_v2/`; every base resolves its certified 2,071-example cache hash, eight probe overlays pass typed dispatch validation |
 | pending | Qwen3.5 4B student training | pending | — |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |

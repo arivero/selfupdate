@@ -1,0 +1,55 @@
+# Dataset-v5 Pareto campaign, training pipeline v2. Arm overlays must replace
+# the sentinel run name and pin censorship, loss, and update aggregation.
+run_name: pareto_v2_qwen35_4b_base_never_train
+model:
+  name: Qwen/Qwen3.5-4B
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: remove
+cache:
+  root: runs/teacher_cache_h100/artifacts_exact_full
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  teacher_batch: 64
+  generation_budget_bucket: 32
+  generation_responses_path: runs/vllm_benchmark_h100/Qwen3.5-4B_vllm025_single_gpu0_graph64_mixed_tokenids_full_h100/responses_bs64.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 2
+  update_granularity: token
+  trajectory_source: student_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: method
+  schedule: summed
+  epochs: 6
+  lr: 1.0e-5
+  micro_batch: 8
+  grad_accum: 8
+  batching: bucketed
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 1
+  readout_window_blocks: 1
+  readout_weight: 0.5
+  window_hidden_weight: 1.0
+  readout_source: teacher_kl
+  moe_mode: dense_or_black_box
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8

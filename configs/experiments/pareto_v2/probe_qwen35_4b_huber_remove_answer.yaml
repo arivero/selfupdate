@@ -1,0 +1,8 @@
+run_name: pareto_v2_probe_qwen35_4b_huber_remove_answer
+mask: {compaction: remove}
+train:
+  hidden_loss: huber
+  update_granularity: answer
+  batching: item
+  micro_batch: 1
+  grad_accum: 1

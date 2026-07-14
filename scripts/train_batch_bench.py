@@ -53,9 +53,14 @@ def _sync(device: str) -> None:
 def bench(args) -> dict:
     cfg = load_config(args.config, args.experiment)
     cfg.model.device = args.device
-    cfg.train.batching = args.batching
-    cfg.train.micro_batch = args.micro_batch
-    cfg.train.grad_accum = args.grad_accum or args.micro_batch
+    if args.batching:
+        cfg.train.batching = args.batching
+    if args.micro_batch:
+        cfg.train.micro_batch = args.micro_batch
+        if not args.grad_accum:
+            cfg.train.grad_accum = args.micro_batch
+    if args.grad_accum:
+        cfg.train.grad_accum = args.grad_accum
     cfg.train.max_steps = args.steps
     cfg.eval.every_epochs = 999999
     _validate_knob_schedule(cfg)
@@ -131,12 +136,14 @@ def bench(args) -> dict:
             accum += len(items.example_ids)
             item_count = len(items.example_ids)
             token_count = int(items.lengths.sum())
+            aligned_count = int(items.A.sum())
             max_seq = int(items.lengths.max())
             pad_tokens = int(items.student_ids.numel() - items.lengths.sum())
             _extend_pending_from_batch(pending_losses, layer_losses)
         else:
             item_count = len(items)
             token_count = 0
+            aligned_count = 0
             max_seq = 0
             pad_tokens = 0
             for it in items:
@@ -148,6 +155,7 @@ def bench(args) -> dict:
                 _extend_pending_from_batch(pending_losses, layer_losses)
                 accum += 1
                 token_count += len(it.student_ids)
+                aligned_count += it.A
                 max_seq = max(max_seq, len(it.student_ids))
         if accum >= next_step:
             plan.step()
@@ -161,17 +169,23 @@ def bench(args) -> dict:
                 "step": step,
                 "items": item_count,
                 "tokens": token_count,
+                "aligned_tokens": aligned_count,
                 "max_seq": max_seq,
                 "pad_tokens": pad_tokens,
                 "seconds": elapsed,
                 "items_per_second": item_count / elapsed,
                 "tokens_per_second": token_count / elapsed,
+                "aligned_tokens_per_second": aligned_count / elapsed,
             })
             step += 1
             next_step += cfg.train.grad_accum
             if step >= args.steps:
                 break
 
+    steady = steps[1:] if len(steps) > 1 else steps
+    steady_seconds = sum(x["seconds"] for x in steady)
+    steady_items = sum(x["items"] for x in steady)
+    steady_aligned = sum(x["aligned_tokens"] for x in steady)
     out = {
         "model": cfg.model.name,
         "schedule": cfg.train.schedule,
@@ -179,10 +193,20 @@ def bench(args) -> dict:
         "micro_batch": cfg.train.micro_batch,
         "grad_accum": cfg.train.grad_accum,
         "hidden_loss": cfg.train.hidden_loss,
+        "pipeline_version": cfg.train.pipeline_version,
+        "update_granularity": cfg.train.update_granularity,
         "conn_window": cfg.train.conn_window,
         "readout_window_blocks": cfg.train.readout_window_blocks,
         "load_seconds": t_load1 - t_load0,
         "steps": steps,
+        "steady_state": {
+            "warmup_steps_excluded": max(len(steps) - len(steady), 0),
+            "items_per_second": steady_items / steady_seconds,
+            "aligned_tokens_per_second": steady_aligned / steady_seconds,
+            "projected_epoch_examples": len(ds),
+            "projected_epoch_seconds": (
+                len(ds) * steady_seconds / steady_items),
+        },
     }
     if torch.device(args.device).type == "cuda":
         n_dev = torch.cuda.device_count()
@@ -201,8 +225,8 @@ def main() -> None:
     ap.add_argument("--experiment", default=None)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--batching", choices=["item", "padded", "bucketed"],
-                    default="bucketed")
-    ap.add_argument("--micro-batch", type=int, default=2)
+                    default=None)
+    ap.add_argument("--micro-batch", type=int, default=0)
     ap.add_argument("--grad-accum", type=int, default=0)
     ap.add_argument("--steps", type=int, default=3)
     ap.add_argument("--out", default="")
