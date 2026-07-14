@@ -25,7 +25,6 @@ from vllm import LLM, SamplingParams  # noqa: E402
 
 from selfupdate.chatfmt import stop_token_id  # noqa: E402
 from selfupdate.config import load_config  # noqa: E402
-from selfupdate.eval.recite import strip_think  # noqa: E402
 from selfupdate.eval.tasks import (  # noqa: E402
     QUESTIONS,
     build_tasks,
@@ -47,6 +46,18 @@ CORPUS_PATHS = {
     "quijote_ch8": "data/quijote/raw_ch8.txt",
     "quijote_ch16": "data/quijote/raw_ch16.txt",
 }
+
+
+def strip_think(text: str) -> str:
+    """Return the final answer after an optional reasoning envelope."""
+    value = text.lstrip()
+    if value.startswith("<think>"):
+        end = value.find("</think>")
+        return "" if end == -1 else value[end + len("</think>"):]
+    if value.startswith("analysis"):
+        end = value.find("assistantfinal")
+        return "" if end == -1 else value[end + len("assistantfinal"):]
+    return text
 
 
 def _contexts(tokenizer, poem_path: str, items: list[dict], scope: str,
