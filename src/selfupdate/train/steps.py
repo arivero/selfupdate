@@ -149,8 +149,32 @@ def _teacher_kl_per_example(student_logits: torch.Tensor,
     return torch.stack(losses)
 
 
+def _reduce_example_losses(losses: torch.Tensor, batch: Batch,
+                           update_granularity: str,
+                           token_lens: torch.Tensor | None = None) -> torch.Tensor:
+    """Reduce per-answer means to the configured optimizer-update scalar.
+
+    ``answer`` is intentionally B=1 (enforced by validation). ``token``
+    weights each answer mean by its valid token count, producing the mean over
+    all valid rows in the padded update. The legacy sum is retained only for
+    exact historical reproducibility.
+    """
+    if update_granularity == "legacy_answer_sum":
+        return losses.sum()
+    if update_granularity == "answer":
+        if losses.numel() != 1:
+            raise ValueError("answer aggregation received more than one answer")
+        return losses[0]
+    if update_granularity == "token":
+        lens = batch.A if token_lens is None else token_lens
+        weights = lens.to(device=losses.device, dtype=losses.dtype)
+        return (losses * weights).sum() / weights.sum().clamp_min(1)
+    raise ValueError(f"unknown update_granularity {update_granularity!r}")
+
+
 def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
-                           autocast=True, previous_target=None):
+                           autocast=True, previous_target=None,
+                           update_granularity="legacy_answer_sum"):
     """Batched counterpart of :func:`local_block_step`.
 
     The total backward scalar is the sum of per-example losses, matching the
@@ -169,14 +193,14 @@ def local_block_step_batch(stack, L, h_in, pos_emb, target, batch: Batch, kind,
             losses = _layer_loss_per_example(
                 loss_fn, stack, L, h_out, h_in, target, previous_target, batch,
             )
-        total = losses.sum()
+        total = _reduce_example_losses(losses, batch, update_granularity)
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
 
 
 def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
-                          autocast=True):
+                          autocast=True, update_granularity="legacy_answer_sum"):
     n = stack.n_layers
     loss_fn = HiddenLoss(kind) if isinstance(kind, str) else kind
     with torch.autocast(h_in.device.type, dtype=torch.bfloat16, enabled=autocast):
@@ -186,7 +210,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
                 h_out = stack.run_block(n, h_in, pos_emb)
             losses = _component_loss_per_example(
                 components, attn_target, mlp_target, batch)
-            total = losses.sum()
+            total = _reduce_example_losses(losses, batch, update_granularity)
             extra = pending_router_loss()
             (total if extra is None else total + extra).backward()
             return losses.detach(), h_out.detach()
@@ -197,7 +221,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
             loss_fn, aligned, target, batch.A.tolist(), normed=True,
             layer=n
         )
-        total = losses.sum()
+        total = _reduce_example_losses(losses, batch, update_granularity)
     extra = pending_router_loss()
     (total if extra is None else total + extra).backward()
     return losses.detach(), h_out.detach()
@@ -285,7 +309,8 @@ def window_step(stack, L0, h_in, pos_emb, targets, s0, A, ans_off, kind,
 def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                       readout_w, hidden_w=1.0, L1=None,
                       readout_source="teacher_kl", autocast=True,
-                      all_targets=None):
+                      all_targets=None,
+                      update_granularity="legacy_answer_sum"):
     """Batched connected-window step.
 
     Returns a list of per-example loss vectors in the same layer order as
@@ -338,7 +363,9 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
             # loss on the vocab card while in-window losses live on a block
             # card — accumulate the backward scalar on ONE device (scalar
             # moves, autograd-recorded)
-            total = hidden_w * sum(loss.sum().to(h.device) for loss in losses)
+            total = hidden_w * sum(
+                _reduce_example_losses(loss, batch, update_granularity).to(h.device)
+                for loss in losses)
         else:
             total = h.sum() * 0.0
         if readout_w > 0 and L1 == n:
@@ -357,9 +384,13 @@ def window_step_batch(stack, L0, h_in, pos_emb, targets, batch: Batch, kind,
                     t_logits = stack.lm_head(
                         teacher_h.to(device=logits.device, dtype=logits.dtype)
                     )
-                total = total + readout_w * _teacher_kl_per_example(
+                readout_losses = _teacher_kl_per_example(
                     logits, t_logits, (batch.s0 + batch.A - batch.ans0).tolist(),
-                ).sum().to(total.device)
+                )
+                readout_lens = batch.s0 + batch.A - batch.ans0
+                total = total + readout_w * _reduce_example_losses(
+                    readout_losses, batch, update_granularity,
+                    token_lens=readout_lens).to(total.device)
             else:
                 raise ValueError(
                     f"unknown readout_source {readout_source!r}; only teacher_kl is allowed"

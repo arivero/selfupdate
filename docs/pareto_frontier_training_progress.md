@@ -142,6 +142,9 @@ Cache finalization timestamps:
 | 2026-07-14 | Initial Transformers teacher-evaluation queue stopped | superseded | 11 valid completed JSON outputs preserved; slow in-flight generation terminated |
 | 2026-07-14 | Evaluation generation migrated to pipeline v2 | ready | `scripts/teacher_ceiling.py` now uses programmatic vLLM; seven remaining controls are in `scripts/queue_pareto_teacher_evals_v2_20260714.tsv` |
 | 2026-07-14 | Individual report v2 data contract initialized | complete | `docs/report_v2.md`; local `runs/<run_name>/report.md` is generated after each training completes |
+| 2026-07-14 | Explicit cross-censorship teacher-cache reuse | complete | Commit `74a8900`; all 2,071 teacher sequences/spans identical, all student views changed, undeclared reuse and forged teacher mismatch rejected |
+| 2026-07-14 | Pipeline-v2 trainer mechanics and telemetry | validated | Answer/token update boundaries, dual loss measures, effective LoRA/full-weight epoch deltas; five legacy variants certified unchanged on L40S |
+| 2026-07-14 15:32 CEST | Remaining epoch-zero vLLM queue launched | running | Two concurrent 2-GPU jobs from RAM-staged HF cache; Gemma4 26B deletion and randomized controls first |
 | pending | Qwen3.5 4B student training | pending | — |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
@@ -164,8 +167,8 @@ timing/provenance rather than only a rounded summary.
 |---|---|---|---|
 | Qwen3.5 4B | complete: ARC-E 0.70, ARC-C 0.60, HellaSwag 0.59; macro 0.630 | complete: M/Q1/Q4 word accuracy 0.156/0.156/0.147 | complete: M/Q1/Q4 word accuracy 0.211/0.170/0.136 |
 | Qwen3.5 9B | complete: ARC-E 0.70, ARC-C 0.57, HellaSwag 0.64; macro 0.637 | complete: M/Q1/Q4 word accuracy 0.198/0.205/0.173 | queued |
-| Gemma4 26B-A4B | complete: ARC-E 0.28, ARC-C 0.33, HellaSwag 0.32; macro 0.310 | running | queued |
-| Qwen3.6 35B-A3B | queued | queued | queued |
+| Gemma4 26B-A4B | complete: ARC-E 0.28, ARC-C 0.33, HellaSwag 0.32; macro 0.310 | complete: M/Q1/Q4 word accuracy 0.103/0.176/0.178 | complete: M/Q1/Q4 word accuracy 0.137/0.266/0.213 |
+| Qwen3.6 35B-A3B | complete: ARC-E 0.69, ARC-C 0.58, HellaSwag 0.68; macro 0.650 | complete: M/Q1/Q4 word accuracy 0.162/0.205/0.179 | complete: M/Q1/Q4 word accuracy 0.136/0.202/0.182 |
 | Qwen3.6 27B | queued | queued | queued |
 | Gemma4 31B | queued | queued | queued |
 
@@ -186,6 +189,16 @@ task. Censorship controls use 24 examples per task for each of Machado,
 Quijote chapter 1, and Quijote chapter 4. The full JSON, including examples,
 generation cuts, prompt regime, and exact task breakdown, remains the primary
 evidence.
+
+The vLLM timing/provenance for the newly completed controls is retained in
+their JSON. Gemma4 26B loaded/generated in 184.5/22.0 seconds (`remove`) and
+175.0/135.6 seconds (`pad_random`); Qwen3.6 35B `pad_random` took
+195.5/42.2 seconds. The Gemma outputs have high hard-cut fractions under the
+fixed reference-length-plus-48-token evaluation budget (M/Q1/Q4:
+0.972/0.917/0.972 for deletion and 0.833/0.833/0.806 for randomization).
+These are recorded as bounded corruption measurements, not silently treated
+as natural-stop generation; the full example-level cuts remain available for
+later checkpoint-matched interpretation.
 
 ## Loss and censorship plan
 

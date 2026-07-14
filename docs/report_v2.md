@@ -53,6 +53,19 @@ training, comparison is against the immutable base weights. Collection runs
 outside the hot block walk and must not introduce per-block host
 synchronization.
 
+For LoRA, “effective” means the epoch-boundary change in
+`scaling × (B @ A)` relative to its epoch-zero value, aggregated against the
+Frobenius norm of the corresponding frozen base matrices. The collector uses
+rank-sized Gram products and does not materialize dense adapter deltas. For
+full training, it streams immutable epoch-zero parameter references from host
+RAM one tensor at a time.
+
+Training-loss rows retain two explicit layerwise measures: the equal-answer
+mean and the valid-token-weighted mean. The row's `loss_measure` identifies
+the measure used by that optimizer regime (`answer_mean` or
+`valid_token_mean`); plots and cross-report synthesis select like-for-like
+measures rather than silently comparing different reductions.
+
 ## Local report contents
 
 Each completed training report includes:

@@ -26,6 +26,35 @@ def validate_knob_schedule(cfg) -> None:
     sched = cfg.train.schedule
     run_class = cfg.train.run_class
     bad = []
+    if cfg.train.pipeline_version not in (1, 2):
+        raise ValueError("train.pipeline_version must be 1 or 2")
+    if cfg.train.update_granularity not in (
+        "legacy_answer_sum", "answer", "token",
+    ):
+        raise ValueError(
+            f"unknown train.update_granularity {cfg.train.update_granularity!r}")
+    if cfg.train.pipeline_version == 2:
+        if cfg.train.update_granularity == "legacy_answer_sum":
+            bad.append("pipeline_version=2 requires update_granularity=answer or token")
+        if sched != "summed":
+            bad.append("pipeline-v2 aggregation is implemented for summed schedule only")
+        if cfg.train.update_granularity == "answer":
+            if cfg.train.micro_batch != 1 or cfg.train.grad_accum != 1:
+                bad.append("answer aggregation requires micro_batch=1 and grad_accum=1")
+        elif cfg.train.update_granularity == "token":
+            if cfg.train.batching not in ("padded", "bucketed"):
+                bad.append("token aggregation requires padded or bucketed batching")
+            if cfg.train.grad_accum != cfg.train.micro_batch:
+                bad.append("token aggregation requires one batch per update (grad_accum=micro_batch)")
+    elif cfg.train.update_granularity != "legacy_answer_sum":
+        bad.append("answer/token aggregation requires pipeline_version=2")
+    for knob, value, implemented in (
+        ("trajectory_source", cfg.train.trajectory_source, "student_hidden"),
+        ("attention_source", cfg.train.attention_source, "student_attention"),
+        ("expert_routing_source", cfg.train.expert_routing_source, "black_box"),
+    ):
+        if value != implemented:
+            bad.append(f"{knob}={value!r} is reserved but not implemented")
     if run_class not in RUN_CLASSES:
         raise ValueError(f"unknown train.run_class {run_class!r}")
     if run_class == "teacher_reference":

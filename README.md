@@ -54,7 +54,9 @@ tests/              alignment / cache / locality / layerwise hybrid tests
   semantics: [docs/windows.md](docs/windows.md).
 
 See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
-[docs/scaling.md](docs/scaling.md) for the large-model plan.
+[docs/scaling.md](docs/scaling.md) for the large-model plan. The typed
+answer/token aggregation and future state/attention/routing strategy surface
+is specified in [docs/training_pipeline_v2.md](docs/training_pipeline_v2.md).
 
 ## Evaluation generation pipeline v2
 

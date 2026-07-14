@@ -151,6 +151,13 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
+    # Pipeline 1 is historical. Pipeline 2 requires an explicit gradient
+    # aggregation strategy and records the reserved strategy axes below.
+    pipeline_version: int = 1
+    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token
+    trajectory_source: str = "student_hidden"      # future: teacher_hidden
+    attention_source: str = "student_attention"    # future: teacher_attention
+    expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"
     # method | teacher_reference | ablation | control | legacy_archive | confounded | open
     run_class: str = "method"

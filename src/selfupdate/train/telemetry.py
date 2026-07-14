@@ -18,43 +18,209 @@ import torch
 from ..eval.tasks import RECALL_CORPUS_PATHS, tasks_eval
 
 
+class ParameterDeltaTracker:
+    """Epoch-boundary trainable-parameter deltas from the epoch-zero model.
+
+    References live in host RAM. At a boundary they stream to each block's
+    device one tensor at a time; only one scalar stack per block returns to
+    the host. This avoids a second resident GPU model and never touches the
+    hot block walk.
+    """
+
+    def __init__(self, stack):
+        self.stack = stack
+        self.refs: dict[int, list[torch.Tensor]] = {}
+        self.lora_refs: dict[int, list[dict]] = {}
+        self.counts: list[int] = []
+        self.representation = "full_weight_delta_from_epoch0"
+        for layer in range(1, stack.n_layers + 1):
+            lora = []
+            for module in stack.blocks[layer - 1].modules():
+                adapters_a = getattr(module, "lora_A", None)
+                adapters_b = getattr(module, "lora_B", None)
+                scaling = getattr(module, "scaling", None)
+                base_layer = getattr(module, "base_layer", None)
+                if not adapters_a or not adapters_b or scaling is None:
+                    continue
+                for name in adapters_a.keys():
+                    if name not in adapters_b:
+                        continue
+                    a = adapters_a[name].weight
+                    b = adapters_b[name].weight
+                    if not (a.requires_grad or b.requires_grad):
+                        continue
+                    if a.ndim != 2 or b.ndim != 2:
+                        raise NotImplementedError(
+                            "effective LoRA delta telemetry requires matrix adapters")
+                    base_weight = getattr(base_layer, "weight", None)
+                    if base_weight is None:
+                        raise RuntimeError("LoRA module has no base_layer.weight")
+                    lora.append({
+                        "a": a,
+                        "b": b,
+                        "a0": a.detach().float().cpu().clone(),
+                        "b0": b.detach().float().cpu().clone(),
+                        "scale": float(scaling[name]),
+                        "base_sq": float(
+                            base_weight.detach().float().square().sum()),
+                        "effective_count": base_weight.numel(),
+                    })
+            self.lora_refs[layer] = lora
+            params = [p for p in stack.block_params(layer) if p.requires_grad]
+            if lora:
+                self.representation = "effective_lora_weight_delta_from_epoch0"
+                self.refs[layer] = []
+                self.counts.append(sum(x["effective_count"] for x in lora))
+            else:
+                self.refs[layer] = [p.detach().float().cpu().clone() for p in params]
+                self.counts.append(sum(p.numel() for p in params))
+
+        has_lora = any(self.lora_refs.values())
+        has_full = any(self.refs.values())
+        if has_lora and has_full:
+            raise RuntimeError(
+                "mixed LoRA/full trainable blocks need an explicit delta policy")
+
+    @staticmethod
+    def _low_rank_delta_sq(entry: dict) -> torch.Tensor:
+        """||scale * (B A - B0 A0)||_F^2 without materializing out×in."""
+        a, b = entry["a"].detach().float(), entry["b"].detach().float()
+        a0 = entry["a0"].to(a.device)
+        b0 = entry["b0"].to(b.device)
+        # [B, -B0] @ [A; A0] represents BA - B0A0.  Its Frobenius
+        # norm follows from rank-(2r) Gram matrices, keeping telemetry O(r²).
+        left = torch.cat((b, -b0), dim=1)
+        right = torch.cat((a, a0), dim=0)
+        gram_left = left.T @ left
+        gram_right = right @ right.T
+        return (gram_left * gram_right.T).sum().clamp_min(0) * entry["scale"] ** 2
+
+    @torch.no_grad()
+    def log(self, log, *, epoch: int, phase: str, started_at: float) -> None:
+        if epoch == 0:
+            absolute = [0.0] * len(self.counts)
+            relative = [0.0] * len(self.counts)
+        else:
+            absolute, relative = [], []
+            for layer, refs in self.refs.items():
+                lora = self.lora_refs[layer]
+                if lora:
+                    dev = lora[0]["a"].device
+                    delta_sq = torch.zeros((), device=dev, dtype=torch.float64)
+                    base_sq = 0.0
+                    for entry in lora:
+                        delta_sq += self._low_rank_delta_sq(entry).double()
+                        base_sq += entry["base_sq"]
+                    values = torch.stack((
+                        delta_sq.sqrt(),
+                        (delta_sq / max(base_sq, 1e-30)).sqrt(),
+                    )).cpu()
+                    absolute.append(float(values[0]))
+                    relative.append(float(values[1]))
+                    continue
+                params = [p for p in self.stack.block_params(layer)
+                          if p.requires_grad]
+                if len(params) != len(refs):
+                    raise RuntimeError(
+                        f"trainable parameter set changed at layer {layer}")
+                if not params:
+                    absolute.append(0.0)
+                    relative.append(0.0)
+                    continue
+                dev = params[0].device
+                delta_sq = torch.zeros((), device=dev, dtype=torch.float64)
+                base_sq = torch.zeros((), device=dev, dtype=torch.float64)
+                for param, ref_cpu in zip(params, refs):
+                    ref = ref_cpu.to(device=param.device, non_blocking=False)
+                    delta = param.detach().float() - ref
+                    delta_sq += delta.square().sum(dtype=torch.float64)
+                    base_sq += ref.square().sum(dtype=torch.float64)
+                    del delta
+                    del ref
+                values = torch.stack((delta_sq.sqrt(),
+                                      (delta_sq / base_sq.clamp_min(1e-30)).sqrt())).cpu()
+                absolute.append(float(values[0]))
+                relative.append(float(values[1]))
+        log.log(kind="parameter_delta", epoch=epoch, phase=phase,
+                representation=self.representation,
+                per_layer_absolute_l2=absolute,
+                per_layer_relative_l2=relative,
+                per_layer_parameter_count=self.counts,
+                minutes=round((time.time() - started_at) / 60, 1))
+
+
 def _loss_float(v) -> float:
     if torch.is_tensor(v):
         return float(v.detach().float().cpu())
     return float(v)
 
 
-def _summarize_pending_losses(pending: list[list[torch.Tensor]], n_layers: int) -> tuple[float, list[float]]:
+def _summarize_pending_losses(
+    pending: list[list[torch.Tensor]], n_layers: int,
+    token_counts: list[int] | None = None,
+) -> tuple[float, list[float], float, list[float]]:
     sums: list[torch.Tensor | None] = [None] * n_layers
+    token_sums: list[torch.Tensor | None] = [None] * n_layers
     counts = [0] * n_layers
-    for losses in pending:
+    total_tokens = 0
+    for row, losses in enumerate(pending):
+        tokens = token_counts[row] if token_counts is not None else 1
+        total_tokens += tokens
         for i, loss in enumerate(losses[:n_layers]):
             t = loss.detach().float() if torch.is_tensor(loss) else torch.tensor(float(loss))
             sums[i] = t if sums[i] is None else sums[i] + t
+            weighted = t * tokens
+            token_sums[i] = (weighted if token_sums[i] is None
+                             else token_sums[i] + weighted)
             counts[i] += 1
     # single host transfer per flush: gather per-layer means onto one device
     # (async d2d under pipeline parallel) and .cpu() the stack once, instead
     # of one GPU->CPU round-trip per layer
     dev = next((s.device for s in sums if s is not None), torch.device("cpu"))
-    means = [
+    answer_means = [
         (sums[i] / counts[i]).to(dev, non_blocking=True) if counts[i]
         else torch.full((), float("nan"), device=dev)
         for i in range(n_layers)
     ]
-    per_layer = [float(v) for v in torch.stack(means).cpu()]
-    valid = [v for v in per_layer if v == v]
-    mean = sum(valid) / len(valid) if valid else float("nan")
-    return mean, per_layer
+    token_means = [
+        (token_sums[i] / max(total_tokens, 1)).to(dev, non_blocking=True)
+        if counts[i] else torch.full((), float("nan"), device=dev)
+        for i in range(n_layers)
+    ]
+    values = torch.stack(answer_means + token_means).cpu()
+    per_layer_answer = [float(v) for v in values[:n_layers]]
+    per_layer_token = [float(v) for v in values[n_layers:]]
+    valid_answer = [v for v in per_layer_answer if v == v]
+    valid_token = [v for v in per_layer_token if v == v]
+    answer_mean = (sum(valid_answer) / len(valid_answer)
+                   if valid_answer else float("nan"))
+    token_mean = (sum(valid_token) / len(valid_token)
+                  if valid_token else float("nan"))
+    return answer_mean, per_layer_answer, token_mean, per_layer_token
 
 
 def _flush_train_log(log, *, epoch: int, step: int, accum: int,
-                     pending: list[list[torch.Tensor]], n_layers: int, **extra) -> None:
+                     pending: list[list[torch.Tensor]], n_layers: int,
+                     token_counts: list[int] | None = None, **extra) -> None:
     if not pending:
         return
-    loss, per_layer = _summarize_pending_losses(pending, n_layers)
+    answer_loss, per_layer_answer, token_loss, per_layer_token = (
+        _summarize_pending_losses(pending, n_layers, token_counts))
+    aggregation = extra.get("update_granularity", "legacy_answer_sum")
+    use_token = aggregation == "token"
     log.log(kind="train", epoch=epoch, step=step, items_seen=accum,
-            accum_items=len(pending), loss=loss, per_layer=per_layer, **extra)
+            accum_items=len(pending),
+            loss=(token_loss if use_token else answer_loss),
+            per_layer=(per_layer_token if use_token else per_layer_answer),
+            answer_mean_loss=answer_loss,
+            per_layer_answer_mean=per_layer_answer,
+            token_mean_loss=token_loss,
+            per_layer_token_mean=per_layer_token,
+            loss_measure=("valid_token_mean" if use_token else "answer_mean"),
+            **extra)
     pending.clear()
+    if token_counts is not None:
+        token_counts.clear()
 
 
 def _epoch_recall_corpora(cfg) -> list[tuple[str, str]]:

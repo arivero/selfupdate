@@ -85,6 +85,7 @@ from .steps import (  # noqa: F401  (step primitives re-exported for scripts)
     _capture_block_components,
     _gather_batch_rows,
     _layer_loss_per_example,
+    _reduce_example_losses,
     _sliding_windows_dedup,
     _span_batch,
     last_block_step,
@@ -96,6 +97,7 @@ from .steps import (  # noqa: F401  (step primitives re-exported for scripts)
 )
 from .teacher_source import OnlineTeacherSource, _online_targets  # noqa: F401
 from .telemetry import (
+    ParameterDeltaTracker,
     _epoch_end_telemetry,
     _epoch_zero_telemetry,
     _flush_train_log,
@@ -416,6 +418,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                 hidden_w=cfg.train.window_hidden_weight,
                 readout_source=cfg.train.readout_source,
                 all_targets=targets,
+                update_granularity=cfg.train.update_granularity,
             )
             layer_losses.extend(readout_losses)
             break
@@ -433,7 +436,9 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                         loss_fn, stack, L1, y, x, targets[L1],
                         targets.get(L1 - 1), batch,
                     )
-                    return per_ex.sum(), per_ex.detach()
+                    return (_reduce_example_losses(
+                        per_ex, batch, cfg.train.update_granularity),
+                        per_ex.detach())
                 layer_losses.extend(_sliding_windows_dedup(
                     stack, L, last_body, W, h_traj, pos_emb, _endpoint_loss))
             else:
@@ -443,6 +448,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                         stack, L0, h_traj[L0 - 1], pos_emb, {L1: targets[L1]},
                         batch, loss_fn, readout_w=0.0, L1=L1,
                         all_targets=targets,
+                        update_granularity=cfg.train.update_granularity,
                     )
                     layer_losses.extend(win_losses)
                     # trajectory lifetime: roots below the NEXT window's root
@@ -461,6 +467,7 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
                 stack, L, h.detach(), pos_emb, win_targets,
                 batch, loss_fn, readout_w=0.0, L1=L1,
                 all_targets=targets,
+                update_granularity=cfg.train.update_granularity,
             )
             layer_losses.extend(win_losses)
             L = L1 + 1
@@ -470,11 +477,13 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
         if L == n:
             loss_vals, h = last_block_step_batch(
                 stack, h.detach(), pos_emb, target, batch, loss_fn,
+                update_granularity=cfg.train.update_granularity,
             )
         else:
             loss_vals, h = local_block_step_batch(
                 stack, L, h.detach(), pos_emb, target,
                 batch, loss_fn, previous_target=targets.get(L - 1),
+                update_granularity=cfg.train.update_granularity,
             )
         layer_losses.append(loss_vals)
         L += 1
@@ -482,12 +491,33 @@ def _summed_batch(cfg, stack, loss_fn, batch: Batch, targets, device):
 
 
 def _extend_pending_from_batch(pending: list[list[torch.Tensor]],
-                               layer_losses: list[torch.Tensor]) -> None:
+                               layer_losses: list[torch.Tensor],
+                               token_counts: list[int] | None = None,
+                               batch: Batch | None = None) -> None:
     if not layer_losses:
         return
     B = layer_losses[0].shape[0]
+    if token_counts is not None and batch is None:
+        raise ValueError("token-count telemetry requires the source batch")
     for i in range(B):
         pending.append([losses[i] for losses in layer_losses])
+        if token_counts is not None:
+            token_counts.append(int(batch.A[i]))
+
+
+def _update_boundary(cfg, accum: int, next_step: int) -> bool:
+    """Whether the just-completed physical batch must update parameters."""
+    return bool(
+        (cfg.train.pipeline_version == 2
+         and cfg.train.update_granularity == "token")
+        or accum >= next_step)
+
+
+def _advance_update_boundary(cfg, accum: int, next_step: int) -> int:
+    if (cfg.train.pipeline_version == 2
+            and cfg.train.update_granularity == "token"):
+        return accum + cfg.train.grad_accum
+    return next_step + cfg.train.grad_accum
 
 
 def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
@@ -510,13 +540,18 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
                        with_teacher_ids=online)
     loader = _loader(cfg, ds)
     plan = OptimizerPlan.build(stack, cfg)
+    delta_tracker = (ParameterDeltaTracker(stack)
+                     if cfg.train.pipeline_version == 2 else None)
 
-    step = accum = 0
+    step = accum = aligned_tokens = 0
     next_step = cfg.train.grad_accum
     pending_losses: list[list[torch.Tensor]] = []
+    pending_token_counts: list[int] = []
     t0 = time.time()
     done = False
     standard_baseline = _epoch_zero_telemetry(cfg, stack, tok, log, t0)
+    if delta_tracker is not None:
+        delta_tracker.log(log, epoch=0, phase="epoch0", started_at=t0)
     for epoch in range(cfg.train.epochs):
         if done:
             break
@@ -552,15 +587,37 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
                     layer_losses = _summed_batch(cfg, stack, loss_fn, batch,
                                                  targets, device)
                 accum += len(batch.example_ids)
-                _extend_pending_from_batch(pending_losses, layer_losses)
+                aligned_tokens += int(batch.A.sum())
+                _extend_pending_from_batch(
+                    pending_losses, layer_losses,
+                    token_counts=pending_token_counts, batch=batch)
                 # update stage: per-block clip + optimizer policy step at
                 # grad-accum boundaries
-                if accum >= next_step:
+                # Token aggregation defines one physical padded/bucketed
+                # mini-batch as one update. Bucket tails may contain fewer
+                # than micro_batch examples and must not leak into the next
+                # batch or epoch through the historical item threshold.
+                if _update_boundary(cfg, accum, next_step):
+                    sequence_tokens = int(batch.lengths.sum())
+                    padded_tokens = batch.student_ids.numel() - sequence_tokens
                     _flush_train_log(log, epoch=epoch, step=step,
                                      accum=accum, pending=pending_losses,
                                      n_layers=n,
+                                     token_counts=pending_token_counts,
                                      batch_size=len(batch.example_ids),
                                      batching=cfg.train.batching,
+                                     pipeline_version=cfg.train.pipeline_version,
+                                     update_granularity=cfg.train.update_granularity,
+                                     trajectory_source=cfg.train.trajectory_source,
+                                     attention_source=cfg.train.attention_source,
+                                     expert_routing_source=cfg.train.expert_routing_source,
+                                     aligned_tokens_seen=aligned_tokens,
+                                     answers_per_update=len(batch.example_ids),
+                                     aligned_tokens_per_update=int(batch.A.sum()),
+                                     sequence_tokens_per_update=sequence_tokens,
+                                     padding_tokens_per_update=padded_tokens,
+                                     padding_fraction=(
+                                         padded_tokens / batch.student_ids.numel()),
                                      **({"router_overlap": moe.overlap_flush()}
                                         if moe else {}))
                     if anchor is not None:
@@ -574,16 +631,28 @@ def _train_summed(cfg, stack, cache, tok, log, teacher=None, moe=None,
                                                    cfg.train.anchor_hidden_weight)
                     plan.step()
                     step += 1
-                    next_step += cfg.train.grad_accum
+                    next_step = _advance_update_boundary(
+                        cfg, accum, next_step)
                     if cfg.train.max_steps and step >= cfg.train.max_steps:
                         done = True
         _flush_train_log(log, epoch=epoch, step=step, accum=accum,
                          pending=pending_losses, n_layers=n, partial=True,
+                         token_counts=pending_token_counts,
+                         pipeline_version=cfg.train.pipeline_version,
+                         update_granularity=cfg.train.update_granularity,
+                         trajectory_source=cfg.train.trajectory_source,
+                         attention_source=cfg.train.attention_source,
+                         expert_routing_source=cfg.train.expert_routing_source,
+                         aligned_tokens_seen=aligned_tokens,
                          **({"router_overlap": moe.overlap_flush()}
                             if moe else {}))
         standard_baseline = _epoch_end_telemetry(
             cfg, stack, tok, log, epoch=epoch, baseline=standard_baseline,
             started_at=t0)
+        if delta_tracker is not None:
+            completed = epoch + 1
+            delta_tracker.log(log, epoch=completed,
+                              phase=f"after_epoch_{completed}", started_at=t0)
 
 
 # -- mixed schedule -----------------------------------------------------------
