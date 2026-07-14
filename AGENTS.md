@@ -265,9 +265,13 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   0.12.0 from `/tmp/$USER/selfupdate-l40-python`. Build that thin layer with
   `scripts/l40s_setup.sh` through a small delegated agent. Never install torch
   into the layer. The cu128 container remains the H100/new-driver runtime.
-  The wrapper also hides the base venv's optional `causal_conv1d` wheel (built
-  for glibc 2.32) so Transformers selects its supported torch fallback on the
-  older L40S host ABI.
+  The base venv's compiled `causal_conv1d` wheel needs glibc >=2.32. The
+  wrapper loads `glibc/2.35` and starts Python through `$GLIB235_LINUX_SO`
+  with the module, `/lib64`, `/usr/lib64`, and pre-module library paths. Do
+  not merely `module load glibc/2.35`: that mixes the old loader with the new
+  libc and fails on a `GLIBC_PRIVATE` symbol. The slower torch implementation
+  is an explicit diagnostic mode only:
+  `SELFUPDATE_L40S_CAUSAL_CONV=torch scripts/l40s_exec.sh ...`.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the

@@ -9,7 +9,10 @@ writes timing/memory JSON.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import os
+import platform
 import sys
 import time
 from pathlib import Path
@@ -188,6 +191,16 @@ def bench(args) -> dict:
     steady_aligned = sum(x["aligned_tokens"] for x in steady)
     out = {
         "model": cfg.model.name,
+        "runtime": {
+            "python": platform.python_version(),
+            "libc": list(platform.libc_ver()),
+            "torch": torch.__version__,
+            "torch_cuda": torch.version.cuda,
+            "causal_conv_backend": os.environ.get(
+                "SELFUPDATE_CAUSAL_CONV_BACKEND", "unspecified"),
+            "causal_conv1d_importable": (
+                importlib.util.find_spec("causal_conv1d") is not None),
+        },
         "schedule": cfg.train.schedule,
         "batching": cfg.train.batching,
         "micro_batch": cfg.train.micro_batch,

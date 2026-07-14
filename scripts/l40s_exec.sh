@@ -23,7 +23,6 @@ fi
   exit 2
 }
 
-export SELFUPDATE_DISABLE_CAUSAL_CONV1D=1
 export PYTHONPATH="$ROOT/runtime/l40s:$DEPS:$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HOME="$SHM_HF"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
@@ -31,4 +30,33 @@ export TQDM_DISABLE="${TQDM_DISABLE:-1}"
 export HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}"
 export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
-exec "$BASE_PYTHON" "$@"
+
+# The host glibc is older than the compiled causal-conv1d wheel.  Lmod's
+# glibc module must be entered through its dynamic loader; `module load` alone
+# mixes loaders and fails with a GLIBC_PRIVATE symbol error.  Keep the slower
+# torch implementation available only as an explicit diagnostic escape hatch.
+CAUSAL_BACKEND="${SELFUPDATE_L40S_CAUSAL_CONV:-compiled}"
+if [[ "$CAUSAL_BACKEND" == "torch" ]]; then
+  export SELFUPDATE_DISABLE_CAUSAL_CONV1D=1
+  export SELFUPDATE_CAUSAL_CONV_BACKEND=torch
+  exec "$BASE_PYTHON" "$@"
+fi
+[[ "$CAUSAL_BACKEND" == "compiled" ]] || {
+  echo "SELFUPDATE_L40S_CAUSAL_CONV must be compiled or torch" >&2
+  exit 2
+}
+
+OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+set +u
+source /etc/profile.d/lmod.sh
+set -u
+module load glibc/2.35 >/dev/null
+[[ -x "${GLIB235_LINUX_SO:-}" && -d "${GLIB235_LIB:-}" ]] || {
+  echo "glibc/2.35 module did not expose its loader and library directory" >&2
+  exit 2
+}
+LIBRARY_PATH="$GLIB235_LIB:/lib64:/usr/lib64"
+[[ -z "$OLD_LD_LIBRARY_PATH" ]] || LIBRARY_PATH="$LIBRARY_PATH:$OLD_LD_LIBRARY_PATH"
+unset SELFUPDATE_DISABLE_CAUSAL_CONV1D
+export SELFUPDATE_CAUSAL_CONV_BACKEND=compiled
+exec "$GLIB235_LINUX_SO" --library-path "$LIBRARY_PATH" "$BASE_PYTHON" "$@"

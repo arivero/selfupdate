@@ -63,7 +63,9 @@ Completed pipeline-v2 trainings get their atomic individual report with
 On driver-560 L40S nodes, launch training through `scripts/l40s_exec.sh`; the
 cu128 container is reserved for nodes with a compatible newer driver. The
 thin cu126 dependency layer and its no-second-torch invariant are documented
-in `AGENTS.md`.
+in `AGENTS.md`. The wrapper enters the cluster's `glibc/2.35` module through
+its supplied dynamic loader so the compiled causal-convolution CUDA kernel is
+available; loading that module without its loader is not sufficient.
 
 ## Evaluation generation pipeline v2
 
