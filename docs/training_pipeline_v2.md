@@ -106,6 +106,13 @@ quality confound. Inspect the geometry curve first; if a discontinuity appears
 at the B=2/B=4 boundary, run a matched padded-versus-bucketed crossover at the
 same finite B, K, seed, and loss before attributing the change to tile shape.
 
+The cache/read-path null control uses `mask.compaction: intact`: the student
+receives the original privileged RAG block, hence its complete token and
+position-id sequence equals the teacher's. With the base initialization its
+hidden loss should be limited to cached-bfloat16 and batch-kernel numerical
+noise. A structured depth profile or material parameter movement fails the
+cache/alignment gate and invalidates censored-arm interpretation until fixed.
+
 ### Compatibility regimes
 
 `answer` remains the certified B=1/all-token compatibility path.

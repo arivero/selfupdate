@@ -88,6 +88,8 @@ class MaskConfig:
     #                Owner 2026-07-12: fixed pad tokens and repeated fillers
     #                are attendable attractors — random non-repeating fill is
     #                the sanctioned length-preserving censor.
+    #   intact     — diagnostic control: student sees the original privileged
+    #                block, so student_ids == teacher_ids exactly.
     compaction: str = "remove"
 
 

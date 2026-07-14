@@ -363,9 +363,13 @@ class ContextMasker:
     epochs, runs, and cache/training stages.
     """
 
-    def __init__(self, tokenizer, pad_random: bool = False):
+    def __init__(self, tokenizer, pad_random: bool = False,
+                 keep_privileged: bool = False):
+        if pad_random and keep_privileged:
+            raise ValueError("pad_random and keep_privileged are mutually exclusive")
         self.tokenizer = tokenizer
         self.pad_random = pad_random
+        self.keep_privileged = keep_privileged
 
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False) if text else []
@@ -402,6 +406,8 @@ class ContextMasker:
                 t_runs += ids
                 if is_priv:
                     t_priv.append((cursor, cursor + len(ids)))
+                    if self.keep_privileged:
+                        s_runs += ids
                 else:
                     s_runs += ids  # same id list: kept-run identity by construction
                 cursor += len(ids)
@@ -412,7 +418,12 @@ class ContextMasker:
         else:
             priv = self._encode(ex.privileged)
             stub = self._encode(ex.student_stub)
-            if self.pad_random and priv:
+            if self.keep_privileged and priv:
+                assert not stub, (
+                    f"{ex.example_id}: intact context requires an empty "
+                    "student_stub")
+                stub = priv
+            elif self.pad_random and priv:
                 assert not stub, (
                     f"{ex.example_id}: pad_random requires an empty "
                     "student_stub (the fill replaces the block wholesale)")

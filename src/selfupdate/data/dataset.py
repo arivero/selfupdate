@@ -154,7 +154,11 @@ class DistillDataset(Dataset):
         self.need_layers = need_layers  # via setter: validates cache presence
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
-        masker = ContextMasker(tokenizer, pad_random=pad_random)
+        masker = ContextMasker(
+            tokenizer,
+            pad_random=pad_random,
+            keep_privileged=(student_compaction == "intact"),
+        )
         self.pairs = []
         for r in self.records:
             ex = SegmentedExample.from_record(r)

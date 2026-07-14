@@ -90,7 +90,7 @@ def validate_knob_schedule(cfg) -> None:
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
     if cfg.mask.compaction not in (
-        "remove", "stub", "stub_gap", "remove_gap", "pad_random",
+        "remove", "stub", "stub_gap", "remove_gap", "pad_random", "intact",
     ):
         raise ValueError(f"unknown mask.compaction {cfg.mask.compaction!r}")
     if cfg.cache.source_compaction and cfg.cache.source_compaction not in (
