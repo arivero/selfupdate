@@ -171,8 +171,8 @@ timing/provenance rather than only a rounded summary.
 | Qwen3.5 9B | complete: ARC-E 0.70, ARC-C 0.57, HellaSwag 0.64; macro 0.637 | complete: M/Q1/Q4 word accuracy 0.198/0.205/0.173 | queued |
 | Gemma4 26B-A4B | complete: ARC-E 0.28, ARC-C 0.33, HellaSwag 0.32; macro 0.310 | complete: M/Q1/Q4 word accuracy 0.103/0.176/0.178 | complete: M/Q1/Q4 word accuracy 0.137/0.266/0.213 |
 | Qwen3.6 35B-A3B | complete: ARC-E 0.69, ARC-C 0.58, HellaSwag 0.68; macro 0.650 | complete: M/Q1/Q4 word accuracy 0.162/0.205/0.179 | complete: M/Q1/Q4 word accuracy 0.136/0.202/0.182 |
-| Qwen3.6 27B | queued | queued | queued |
-| Gemma4 31B | queued | queued | queued |
+| Qwen3.6 27B | complete: ARC-E 0.72, ARC-C 0.58, HellaSwag 0.68; macro 0.660 | complete: M/Q1/Q4 word accuracy 0.185/0.225/0.221 | complete: M/Q1/Q4 word accuracy 0.241/0.244/0.270 |
+| Gemma4 31B | complete: ARC-E 0.32, ARC-C 0.26, HellaSwag 0.38; macro 0.320 | complete: M/Q1/Q4 word accuracy 0.000/0.001/0.005 | synchronous retry running |
 
 ## Per-training report v2
 
@@ -201,6 +201,13 @@ fixed reference-length-plus-48-token evaluation budget (M/Q1/Q4:
 These are recorded as bounded corruption measurements, not silently treated
 as natural-stop generation; the full example-level cuts remain available for
 later checkpoint-matched interpretation.
+
+Qwen3.6 27B loaded/generated in 189.7/40.3 seconds (`remove`) and
+122.6/168.5 seconds (`pad_random`), with hard-cut fractions
+0.306/0.181/0.292 and 0.208/0.014/0.056 respectively. Gemma4 31B deletion
+took 84.6/67.1 seconds and produced near-zero recall with
+0.986/0.931/0.931 hard cuts; this bounded failure mode is retained as the
+corruption baseline rather than discarded.
 
 ## Loss and censorship plan
 
