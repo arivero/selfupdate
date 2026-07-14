@@ -37,6 +37,12 @@ def main() -> None:
 
     import torch
 
+    # torch 2.11's SDPA prefers the cuDNN attention backend, whose CPU-side
+    # plan cache misses on every decode step (KV length grows each token):
+    # measured 347ms self-CPU per step vs 12.8ms of actual CUDA work.  Flash
+    # and mem-efficient backends have no such per-shape plan rebuild.
+    torch.backends.cuda.enable_cudnn_sdp(False)
+
     from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
 
     meta, prompts = load_prompts(Path(args.prompts))
