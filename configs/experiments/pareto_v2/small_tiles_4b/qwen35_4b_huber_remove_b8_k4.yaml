@@ -1,0 +1,15 @@
+run_name: pareto_v2_micro_qwen35_4b_huber_remove_b8_k4
+mask:
+  compaction: remove
+train:
+  pipeline_version: 2
+  hidden_loss: huber
+  update_granularity: grid
+  answers_per_update: 8
+  tokens_per_answer_update: 4
+  update_reduction: token_mean
+  batching: bucketed
+  micro_batch: 8
+  grad_accum: 1
+  conn_window: 1
+  conn_stride: 1

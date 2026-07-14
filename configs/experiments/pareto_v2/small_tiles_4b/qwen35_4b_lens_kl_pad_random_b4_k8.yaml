@@ -1,0 +1,15 @@
+run_name: pareto_v2_micro_qwen35_4b_lens_kl_pad_random_b4_k8
+mask:
+  compaction: pad_random
+train:
+  pipeline_version: 2
+  hidden_loss: lens_kl
+  update_granularity: grid
+  answers_per_update: 4
+  tokens_per_answer_update: 8
+  update_reduction: token_mean
+  batching: bucketed
+  micro_batch: 4
+  grad_accum: 1
+  conn_window: 1
+  conn_stride: 1

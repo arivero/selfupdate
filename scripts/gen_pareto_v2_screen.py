@@ -1,4 +1,4 @@
-"""Generate the explicit strict-local Qwen3.5-4B one-day screen.
+"""Generate the explicit strict-local Qwen3.5-4B finite-tile screen.
 
 The generated YAML files are ordinary audited experiment configs.  This
 script is only a deterministic authoring aid; the committed files remain the
@@ -14,18 +14,27 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "configs" / "experiments" / "pareto_v2" / "screen_4b"
+OUT = ROOT / "configs" / "experiments" / "pareto_v2" / "small_tiles_4b"
 QUEUE = ROOT / "scripts" / "queue_pareto_v2_4b_screen_20260714.tsv"
 BASE = "configs/experiments/pareto_v2/base_qwen35_4b.yaml"
 
 LOSSES = ("huber", "cosine", "delta_cosine", "lens_kl")
 CENSORSHIPS = ("remove", "pad_random")
+# Every queued successor has a finite K.  The 128-cell diagonal is the
+# controlled fourfold-smaller comparison to the 512-cell broad geometries.
+# The follow-on 16/32-cell diagonal tests the many-small-updates regime.
+# Both preserve answerwise/tokenwise shape as an explicit variable.
 GEOMETRIES = {
-    "b8_all": (8, 0, "token_mean", "bucketed", 100, 1800),
-    "b8_k64": (8, 64, "token_mean", "bucketed", 90, 2100),
-    "b4_k128": (4, 128, "token_mean", "bucketed", 80, 2400),
-    "b16_k32": (16, 32, "token_mean", "bucketed", 70, 2400),
-    "b1_all": (1, 0, "answer_mean", "padded", 60, 7200),
+    "b1_k128": (1, 128, "token_mean", "padded", 120, 7200),
+    "b2_k64": (2, 64, "token_mean", "padded", 115, 5400),
+    "b4_k32": (4, 32, "token_mean", "bucketed", 110, 4500),
+    "b8_k16": (8, 16, "token_mean", "bucketed", 105, 4200),
+    "b16_k8": (16, 8, "token_mean", "bucketed", 100, 4200),
+    "b1_k16": (1, 16, "token_mean", "padded", 90, 10800),
+    "b1_k32": (1, 32, "token_mean", "padded", 85, 7200),
+    "b2_k16": (2, 16, "token_mean", "padded", 80, 6000),
+    "b4_k8": (4, 8, "token_mean", "bucketed", 75, 6000),
+    "b8_k4": (8, 4, "token_mean", "bucketed", 70, 6000),
 }
 
 
@@ -39,7 +48,7 @@ def render() -> tuple[dict[Path, str], str]:
         for loss in LOSSES:
             for censorship in CENSORSHIPS:
                 stem = f"qwen35_4b_{loss}_{censorship}_{geometry}"
-                run = f"pareto_v2_screen_{stem}"
+                run = f"pareto_v2_micro_{stem}"
                 path = OUT / f"{stem}.yaml"
                 data = {
                     "run_name": run,

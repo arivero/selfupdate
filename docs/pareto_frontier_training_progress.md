@@ -216,6 +216,7 @@ Cache finalization timestamps:
 | 2026-07-14 20:40 CEST | Strict-local Qwen3.5-4B prelaunch gate | pass | 16 sampled v5 items across every block: local gradient L2 1.58, cross-block leakage 0, frozen-vocabulary leakage 0; certifier also requires positive finite signal in every block. First delegated attempt inherited generic Qwen3-0.6B and failed offline before model load; corrected command used `base_qwen35_4b.yaml` and exited 0 with no warnings. |
 | 2026-07-14 20:42:11 CEST | Strict-local 4B screen launched | live | Source commit `6c161b2`; shared lease scheduler PID 1017631 on `agpul02`, physical GPUs 0–3. First cohort: Huber/remove, Huber/pad-random, cosine/remove, cosine/pad-random at `B=8 × K=all`; initial residency 10.3–10.9 GiB/card and measured utilization 47–59%. Launch delegated to Luna; parent supervision retained. |
 | 2026-07-14 20:54–20:56 CEST | First strict-local screen completions | complete | Huber/remove completed six v5 epochs in 11.7 min and cosine/remove in 12.2 min. Both published a 16-item model-resident locality certificate (positive signal in every block; zero cross-block and frozen-vocabulary leakage) and their individual report-v2 manifests. Initial report rendering failed only because the thin L40S environment omits optional `tabulate`; commit `16e4ace` makes report-v2 self-contained, and report-only retries succeeded without rerunning training. |
+| 2026-07-14 21:xx CEST | Finite tile scales promoted | queued | The first broad `B=8 × all` deleted-RAG arms reduced mean recall by 2.95–3.68 percentage points after six epochs. Token-mean averaging avoids a raw gradient-sum increase but still yields only 1,572 optimizer updates. Unstarted successors first use the finite 128-cell diagonal—`1×128`, `2×64`, `4×32`, `8×16`, `16×8`—a controlled fourfold-smaller comparison to 512-cell tiles; then the 16/32-cell small-update diagonal—`1×16`, `1×32`, `2×16`, `4×8`, `8×4`. The in-flight broad delta-cosine and lens-KL controls continue to the required 12,426-item budget; no completed or live run is discarded. |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
 | pending | Qwen3.6 35B student training | pending | — |
@@ -228,21 +229,23 @@ count, and any failure or restart reason.
 
 ### One-day strict-local 4B screen
 
-The committed screen lives in
-`configs/experiments/pareto_v2/screen_4b/` and is generated deterministically
-by `scripts/gen_pareto_v2_screen.py`. Its axes are:
+The original broad-tile controls live in
+`configs/experiments/pareto_v2/screen_4b/`. Their successors live in
+`configs/experiments/pareto_v2/small_tiles_4b/` and are generated
+deterministically by `scripts/gen_pareto_v2_screen.py`. Their axes are:
 
 - local objective: Huber, cosine, delta-cosine, or local teacher lens-KL;
 - censorship: deleted RAG or randomized-token RAG (`remove` / `pad_random`);
-- grid tile: `1×all`, `4×128`, `8×64`, `16×32`, or `8×all`;
-- reduction: valid-token mean except `1×all`, whose one-answer mean is the
-  mathematically identical answerwise scalar.
+- grid tile: first `1×128`, `2×64`, `4×32`, `8×16`, `16×8`; then
+  `1×16`, `1×32`, `2×16`, `4×8`, `8×4`;
+- reduction: valid-token mean for every tile, so differences in update shape
+  are not confounded with a different scalar loss measure.
 
 All configs pin pipeline v2, `conn_window: 1`, `grad_accum: 1`, a nonzero
 learning rate, and the v5 cache. Short answers disappear from later K tiles
 without replacement and contribute neither numerator nor denominator. The
 complete causal prefix is retained for every selected answer; K slices only
-the aligned loss rows.
+the aligned loss rows. No future queue row uses `K=all`.
 
 The queue is `scripts/queue_pareto_v2_4b_screen_20260714.tsv`. A human launch
 uses the shared lease allocator and one worker per physical card:
