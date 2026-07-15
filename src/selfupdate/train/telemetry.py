@@ -209,7 +209,11 @@ def _flush_train_log(log, *, epoch: int, step: int, accum: int,
         _summarize_pending_losses(pending, n_layers, token_counts))
     aggregation = extra.get("update_granularity", "legacy_answer_sum")
     reduction = extra.get("update_reduction", aggregation)
-    use_token = reduction in ("token", "token_mean")
+    # B×K v3.1 updates use an unaveraged gradient sum, while the reported
+    # scalar remains a valid-cell mean so runs with different B/K are
+    # comparable. Reduction names describe writes; loss_measure describes
+    # telemetry and must not conflate the two.
+    use_token = reduction in ("token", "token_mean", "unaveraged_sum_BxK")
     log.log(kind="train", epoch=epoch, step=step, items_seen=accum,
             accum_items=(len(pending) if pending_items is None
                          else pending_items),

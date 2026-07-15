@@ -28,6 +28,24 @@ finished-answer cells from the gradient sum, and measures one B×K tile. Normal
 training rejects the policy until throughput, memory, and update scaling are
 measured and the recipe is promoted.
 
+The promoted production policy is `causal_bk`. It partitions a shuffled
+dataset traversal into length-tight fixed cohorts of at most B users. A cohort
+is never refilled: once an answer finishes, its later cells are masked out of
+loss and gradient while the remaining users continue. Causal state is rebuilt
+for every new cohort and every epoch. Each nonempty tile computes the
+unaveraged sum over its valid B×K cells and performs one immediate state-free
+SGD write per block. Telemetry distinguishes conceptual cell×block writes
+from fused physical block writes.
+
+`student_hidden` is the online-compatible primary trajectory: censored/random
+student tokens and current student block outputs advance through layers.
+`teacher_hidden` is the parallel dreaming option: uncensored adapters-disabled
+teacher h[L-1] seeds each block independently. Random-token censorship is not
+scientifically represented by teacher-hidden seeds because those seeds retain
+the uncensored token identity; random-fill campaign arms therefore use the
+student trajectory. Flow-mask arms may measure both trajectories as an
+explicit axis.
+
 The first Qwen3-0.6B L40S measurements (B=256, median length bucket, LoRA
 r16, Huber, immediate SGD at 1e-5) are:
 

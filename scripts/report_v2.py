@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import statistics
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -627,6 +628,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                     "budget checkpoint inside a dataset traversal; not a "
                     "completed epoch"),
             }
+    online_bk = (
+        train.get("update_granularity") == "online"
+        and train.get("pipeline_revision") == "3.1"
+        and train.get("history_policy") in ("causal_bk", "causal_bk_probe")
+    )
     if train.get("update_granularity") == "online":
         stale_k = train.get("stale_gradient_window", 1)
         stale_label = "all" if stale_k == 0 else stale_k
@@ -634,9 +640,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "no cross-token gradient aggregation"
             if stale_k == 1 else
             "unaveraged gradient sum at one explicitly stale weight snapshot")
+        online_shape = (
+            f"{train.get('micro_batch', 'missing')} fixed user lanes × "
+            if online_bk else "one answer × "
+        )
         update_identity = (
-            "`online`: one answer × "
-            f"{stale_label} known-answer token(s) per weight snapshot; "
+            "`online`: " + online_shape
+            + f"{stale_label} known-answer token(s) per weight snapshot; "
             f"`{train.get('online_optimizer', 'missing')}`; {gradient_law}; history "
             f"`{train.get('history_policy', 'missing')}`; backward dispatch "
             f"`{train.get('backward_dispatch', 'per_block')}`; write dispatch "
@@ -655,7 +665,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"`{train.get('update_granularity', 'missing')}`; logged measure "
             f"`{loss_measure}`"
         )
-    configured_b = (1 if train.get("update_granularity") == "online" else
+    configured_b = ((train.get("micro_batch") if online_bk else 1)
+                    if train.get("update_granularity") == "online" else
                     train.get("answers_per_update", train.get("micro_batch")))
     configured_k_raw = (train.get("stale_gradient_window", 1)
                         if train.get("update_granularity") == "online" else
@@ -677,13 +688,36 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"{token_events:,} aligned-token events; {writes:,} conceptual "
             f"block-local writes; {physical_writes:,} fused physical writes"
         )
+        layer_count = max(
+            (len(row.get("per_layer", [])) for row in rows), default=0)
+        physical_tiles = (
+            physical_writes / layer_count if layer_count else 0)
+        cohort_users = [
+            int(row["users"]) for row in rows
+            if row.get("kind") == "v31_cohort" and row.get("users")
+        ]
         realized_geometry = {
             "updates": writes,
             "physical_updates": physical_writes,
             "token_events": token_events,
-            "lanes_per_update": {"mean": 1, "median": 1, "min": 1, "max": 1},
+            "physical_tiles": physical_tiles,
+            "lanes_per_update": ({
+                "mean": sum(cohort_users) / len(cohort_users),
+                "median": statistics.median(cohort_users),
+                "min": min(cohort_users), "max": max(cohort_users),
+            } if cohort_users else {
+                "mean": configured_b, "median": configured_b,
+                "min": configured_b, "max": configured_b,
+            }),
             "aligned_tokens_per_update": {
-                "mean": 1, "median": 1, "min": 1, "max": 1},
+                "mean": (token_events / physical_tiles
+                         if physical_tiles else 0),
+                "median": configured_b * configured_k
+                    if online_bk and isinstance(configured_k, int) else 1,
+                "min": 1,
+                "max": configured_b * configured_k
+                    if online_bk and isinstance(configured_k, int) else 1,
+            },
         }
     elif (realized_geometry["updates"] and lane_stats.get("mean") is not None
             and token_stats.get("mean") is not None):

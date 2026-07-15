@@ -63,8 +63,12 @@ Certification before the queue opens:
 
 Every scientific arm runs six complete v5 epochs: 12,426 answer visits, thus
 clearing the 12,000-training-item minimum. A short token-count smoke is not a
-promotion run. All arms use B=256, teacher-hidden inputs, LoRA r16/alpha32,
-immediate state-free SGD, and one unaveraged local write per block and tile.
+promotion run. All primary arms use B=256, student-hidden inputs, LoRA
+r16/alpha32, immediate state-free SGD, and one unaveraged local write per
+block and tile. This is the online-compatible trajectory. Teacher-hidden
+flow-mask arms are a separately named dreaming/parallelism axis; random-fill
+cannot use teacher-hidden seeds because that would restore the uncensored
+token identity at every block and erase the intended random-token intervention.
 
 | slots | censorship | K | loss | learning rates | purpose |
 |---:|---|---:|---|---|---|
@@ -113,14 +117,15 @@ slot may pull the corresponding Wave-B K16 objective arm while K1 continues.
 This is adaptive queue refill, not an unreviewed pipeline: a failed control or
 tripwire closes the dependent refill.
 
-The existing 0.8B cache contains 381,532 aligned token events per epoch, or
-2.289 million over six epochs. Using the 0.6B B256 measurements only as a
-planning bound, tile work would take about 2.2 hours at K1 and 9.4 minutes at
-K16; teacher/prefill materialization adds roughly 2.5 minutes across the 54
-six-epoch batches before evaluations. Qwen3.5 recurrent-state performance and
-the fresh cache length distribution can change these numbers, so the adapter
-probe replaces them with measured projections before launch. Evaluation and
-PDF generation are budgeted separately.
+The fixed-ceiling 0.8B cache contains 1,083,913 aligned token events per epoch,
+or 6.503 million over six epochs. The Qwen3.5 hybrid probes replace the old
+0.6B planning bound: flow-mask tile throughput was 113.7 events/s at K1 and
+354.1 at K16, projecting about 2.65 hours and 51 minutes of tile work per
+epoch respectively (15.9 and 5.1 hours over six epochs), before cohort prefill,
+evaluation, and PDF generation. Intact measured 209.1 and 788.8 events/s
+(about 1.44 hours and 23 minutes per epoch). Production student-hidden timing
+is measured independently; these figures are scheduling bounds, not a claim
+that the one-tile teacher-hidden probe and a full epoch have identical costs.
 
 ## Wave B: objective geometry (16 GPUs)
 

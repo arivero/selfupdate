@@ -50,8 +50,8 @@ sum. It also prevents intact probes from accidentally masking privileged RAG.
 | 22:09 | flow B256K16 retry | `agpul05`/GPU2 | invalid empty success | same control-flow defect; no tile and no weight update occurred |
 | 22:14 | flow B256K1 retry 2 | `agpul05`/GPU1 | passed | commit `87729c7`; 256 events; tile 2.251 s / 113.7 events/s; end-to-end 5.40 events/s; 14.86 GiB peak; 24 physical block writes; launcher 58 s |
 | 22:14 | flow B256K16 retry 2 | `agpul05`/GPU2 | passed | commit `87729c7`; 4,096 events; tile 11.569 s / 354.1 events/s; end-to-end 72.4 events/s; 15.68 GiB peak; 24 physical block writes; launcher 67 s |
-| 22:17 | intact B256K1 | `agpul05`/GPU1 | running | numerical-noise and maximum-compute control |
-| 22:17 | intact B256K16 | `agpul05`/GPU2 | running | numerical-noise and maximum-compute control |
+| 22:17 | intact B256K1 | `agpul05`/GPU1 | passed | loss 1.28e-5–1.09e-4; total LoRA delta 4.07e-6; tile 1.224 s / 209.1 events/s; end-to-end 11.9 events/s; launcher 32 s |
+| 22:17 | intact B256K16 | `agpul05`/GPU2 | passed | loss 1.03e-5–1.33e-4; total LoRA delta 1.89e-5; tile 5.193 s / 788.8 events/s; end-to-end 161.1 events/s; launcher 36 s |
 
 The first failures and invalid empty exits are retained because launch/retry
 time is part of the operational result. They did not perform a training tile
@@ -59,6 +59,32 @@ or modify weights. Commit `87729c7` moves the helper out of `main()` and makes
 a missing passed-result payload fail loudly.
 After the flow probes pass, intact B256K1/B256K16 establish the numerical-noise
 and maximum-compute timing controls before the scientific Wave-A queue opens.
+
+The intact/flow total-delta ratios are about 1:534 at K1 and 1:260 at K16.
+Thus the same-runtime uncensored path has a small nonzero bfloat16/batched-kernel
+residual but is cleanly separated from the censorship signal. Qwen3.5 hybrid
+flow masking is materially slower than intact in this probe: 113.7 versus
+209.1 tile events/s at K1 and 354.1 versus 788.8 at K16. Full-epoch estimates
+must use these hybrid measurements, not the earlier full-attention 0.6B bound.
+
+### Production promotion
+
+The promoted `causal_bk` trainer keeps length-bucketed cohorts fixed until all
+users finish, never refills completed lanes, masks finished cells from loss
+and gradient, and rebuilds causal state at every cohort and epoch. Targets are
+transferred as one bounded layer-stacked K-window (12 MiB at B256K1; 192 MiB
+at B256K16), not as the complete 24-layer answer cohort. Padded prefill queries
+receive one harmless key before output zeroing so an all-masked softmax cannot
+create NaN state.
+
+The corrected fixed-ceiling corpus has 1,083,913 aligned training-token events
+per full epoch. Its nine B≤256 length cohorts range from maximum sequence 236
+to 4,954 tokens; the longest full 256-user cohort reaches 4,304 tokens. A
+teacher-hidden B256 implementation that retains every layer's complete
+uncensored sequence would exceed one L40S on that cohort, so the initial
+online-compatible student-hidden campaign streams only the current target
+window. Teacher-hidden dreaming remains an explicit later placement/streaming
+axis rather than silently reducing B.
 
 ## Overnight progression rule
 

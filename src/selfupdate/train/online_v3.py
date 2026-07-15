@@ -22,7 +22,7 @@ import time
 import torch
 from transformers import DynamicCache
 
-from ..data.dataset import DistillDataset
+from ..data.dataset import DistillDataset, collate_padded_items
 from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
 from .telemetry import (
@@ -797,6 +797,348 @@ def _detach_cache_layer(cache: DynamicCache, index: int) -> None:
             setattr(layer, name, detached)
 
 
+def _bk_layer_type(stack, layer: int) -> str:
+    if layer - 1 < len(stack.layer_types):
+        return stack.layer_types[layer - 1]
+    block = stack.blocks[layer - 1]
+    return (getattr(block, "layer_type", None)
+            or getattr(getattr(block, "self_attn", None), "layer_type", None)
+            or "full_attention")
+
+
+def _bk_gather_hidden(value: torch.Tensor, index: torch.Tensor) -> torch.Tensor:
+    return value.gather(
+        1, index[:, :, None].expand(-1, -1, value.shape[-1]))
+
+
+def _bk_prefix_layout(cfg, items, batch, device):
+    """Left-pad one fixed cohort without changing any user's coordinates."""
+    maximum = int(batch.s0.max())
+    lengths = batch.s0.to(device)
+    timeline = torch.arange(maximum, device=device)[None]
+    left = maximum - lengths[:, None]
+    valid = timeline >= left
+    source = (timeline - left).clamp_min(0).long()
+    keep = valid.clone()
+    if cfg.mask.compaction == "flow_mask":
+        for row, it in enumerate(items):
+            shift = maximum - it.s0
+            for start, stop in it.t_priv or []:
+                if start < it.s0:
+                    keep[row, shift + start:shift + min(stop, it.s0)] = False
+    positions = batch.position_ids.to(device).gather(1, source)
+    return maximum, source, positions, valid, keep
+
+
+def _bk_additive_mask(keep: torch.Tensor, query_valid: torch.Tensor,
+                      start: int, stop: int, dtype: torch.dtype) -> torch.Tensor:
+    """Causal full-attention mask for the current K rows and cached prefix."""
+    prefix = keep.shape[1] - stop
+    q_pos = torch.arange(prefix + start, prefix + stop,
+                         device=keep.device)[:, None]
+    k_pos = torch.arange(prefix + stop, device=keep.device)[None]
+    allowed = (k_pos <= q_pos)[None] & keep[:, None, :]
+    # Finished rows must not contribute a loss or state, but an all-masked
+    # softmax query can produce NaN before BlockStack zeroes the row. Give
+    # those dead queries one harmless cached key.
+    allowed[:, :, 0] |= ~query_valid
+    mask = torch.zeros(
+        (keep.shape[0], 1, stop - start, prefix + stop),
+        dtype=dtype, device=keep.device)
+    mask.masked_fill_(~allowed[:, None], torch.finfo(dtype).min)
+    return mask
+
+
+def _bk_bucketed_cohorts(ds, width: int, seed: int):
+    """Length-tight fixed cohorts; shuffle cohort order, never refill lanes."""
+    ordered = sorted(
+        range(len(ds)), key=lambda index: len(ds.pairs[index].student_ids))
+    cohorts = [ordered[start:start + width]
+               for start in range(0, len(ordered), width)]
+    rng = random.Random(seed)
+    for cohort in cohorts:
+        rng.shuffle(cohort)
+    rng.shuffle(cohorts)
+    return cohorts
+
+
+def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
+    """Full dataset-v5 B-user × K-token pipeline-v3.1 training.
+
+    One cohort represents B simultaneous conversations. Its causal state is
+    retained until every answer in that cohort finishes; completed rows stay
+    in place with zero loss/gradient and are never replaced. Each block gets
+    one unaveraged sum over the valid B×K cells and writes immediately.
+    """
+    if cfg.train.max_steps:
+        raise NotImplementedError(
+            "causal_bk production runs currently require full epochs; "
+            "max_steps would split a fixed cohort ambiguously")
+    if stack.block_devices is not None:
+        raise NotImplementedError("causal_bk currently requires one device")
+    layer_types = [_bk_layer_type(stack, layer)
+                   for layer in range(1, stack.n_layers + 1)]
+    unsupported = sorted(set(layer_types) - {
+        "full_attention", "linear_attention",
+    })
+    if unsupported:
+        raise NotImplementedError(
+            f"causal_bk lacks authoritative state semantics for {unsupported}")
+    teacher_hidden = cfg.train.trajectory_source == "teacher_hidden"
+    if teacher_hidden and teacher is None:
+        raise ValueError("causal_bk teacher_hidden requires an online teacher")
+
+    device = torch.device(cfg.model.device)
+    n = stack.n_layers
+    B = cfg.train.micro_batch
+    K = cfg.train.stale_gradient_window
+    loss_fn = HiddenLoss.from_config(cfg.train, stack)
+    ds = DistillDataset(
+        cfg.data.examples_path, cache, tok,
+        need_layers=list(range(1, n + 1)),
+        with_teacher_ids=teacher_hidden,
+        pad_random=(cfg.mask.compaction == "pad_random"),
+        cache_source_compaction=cfg.cache.source_compaction,
+        student_compaction=cfg.mask.compaction,
+    )
+    delta_tracker = ParameterDeltaTracker(stack)
+    started = time.time()
+    token_events = conceptual_writes = physical_writes = answers_seen = 0
+    standard_baseline = _epoch_zero_telemetry(
+        cfg, stack, tok, log, started_at=started)
+    delta_tracker.log(log, epoch=0, phase="epoch0", started_at=started)
+    log.log(
+        kind="pipeline_v31_contract",
+        B_simultaneous_users=B,
+        K_context_tokens=K,
+        lane_refill=False,
+        finished_rows="masked_without_replacement",
+        gradient_aggregation="unaveraged_sum_over_valid_BxK_cells",
+        physical_write="one_per_block_per_nonempty_tile",
+        trajectory_source=cfg.train.trajectory_source,
+        lookahead_contract=(
+            "next_token_online" if K == 1 else
+            "teacher_prefetched_or_speculative_confirmed_tokens"),
+        layer_types=layer_types,
+        cache_hash=cache._index["config_hash"],
+    )
+
+    for epoch in range(cfg.train.epochs):
+        epoch_started = time.time()
+        epoch_events_start = token_events
+        epoch_conceptual_start = conceptual_writes
+        epoch_physical_start = physical_writes
+        epoch_loss_sums = None
+        epoch_grad_sums = None
+        epoch_cells = 0
+        cohorts = _bk_bucketed_cohorts(ds, B, cfg.train.seed + epoch)
+        for cohort_index, indices in enumerate(cohorts):
+            items = [ds[index] for index in indices]
+            batch = collate_padded_items(items)
+            b_now = len(items)
+            student_ids = batch.student_ids.to(device)
+            batch_positions = batch.position_ids.to(device)
+            teacher_inputs = (
+                teacher.full_inputs_resident_batch(batch, device)
+                if teacher_hidden else None)
+            prompt_length, prefix_index, prefix_positions, prefix_valid, prefix_keep = (
+                _bk_prefix_layout(cfg, items, batch, device))
+            history = DynamicCache(config=stack.text_config)
+            if teacher_hidden:
+                first_prefix = _bk_gather_hidden(
+                    teacher_inputs[0], prefix_index)
+                prefix_rope = stack.rope(first_prefix, prefix_positions)
+            else:
+                prefix_ids = student_ids.gather(1, prefix_index)
+                prefix_hidden = stack.embed(prefix_ids)
+                prefix_rope = stack.rope(prefix_hidden, prefix_positions)
+
+            prefill_q = torch.arange(prompt_length, device=device)[:, None]
+            prefill_k = torch.arange(prompt_length, device=device)[None]
+            prefill_allowed = ((prefill_k <= prefill_q)[None]
+                               & prefix_keep[:, None, :])
+            # Left-padded queries are dead rows, but an all-masked softmax can
+            # become NaN before BlockStack zeros them. Permit one harmless
+            # cached key exactly as for finished answer rows.
+            prefill_allowed[:, :, 0] |= ~prefix_valid
+            prefill_mask = torch.zeros(
+                (b_now, 1, prompt_length, prompt_length),
+                dtype=torch.bfloat16, device=device)
+            prefill_mask.masked_fill_(
+                ~prefill_allowed[:, None], torch.finfo(torch.bfloat16).min)
+            with torch.no_grad(), torch.autocast(
+                    device.type, dtype=torch.bfloat16):
+                h = prefix_hidden if not teacher_hidden else None
+                for layer in range(1, n + 1):
+                    h_in = (_bk_gather_hidden(
+                        teacher_inputs[layer - 1], prefix_index)
+                        if teacher_hidden else h)
+                    layer_mask = (prefix_keep
+                                  if layer_types[layer - 1] == "linear_attention"
+                                  else prefill_mask)
+                    h_out = stack.run_block(
+                        layer, h_in, prefix_rope,
+                        position_ids=prefix_positions,
+                        flow_keep=prefix_keep,
+                        past_key_values=history, use_cache=True,
+                        causal_length=prompt_length,
+                        prepared_attention_mask=layer_mask)
+                    _detach_cache_layer(history, layer - 1)
+                    if not teacher_hidden:
+                        h = h_out.detach()
+
+            lengths = batch.A.to(device)
+            max_answer = int(batch.A.max())
+            answer_timeline = torch.arange(max_answer, device=device)[None]
+            answer_keep = answer_timeline < lengths[:, None]
+            student_s0 = batch.s0.to(device)[:, None]
+            for start in range(0, max_answer, K):
+                stop = min(start + K, max_answer)
+                width = stop - start
+                offsets = torch.arange(start, stop, device=device)[None]
+                query_valid = offsets < lengths[:, None]
+                cells = int(
+                    (batch.A - start).clamp(min=0, max=width).sum())
+                if not cells:
+                    continue
+                # One bounded H2D transfer per tile. Staging every layer's
+                # full [B,Amax,H] target cohort can exceed an L40S on a single
+                # long answer even under length bucketing.
+                window_targets = torch.stack([
+                    batch.hidden[layer][:, start:stop]
+                    for layer in range(1, n + 1)
+                ]).to(device)
+                source_index = (student_s0 + offsets).clamp_max(
+                    batch_positions.shape[1] - 1)
+                query_positions = batch_positions.gather(1, source_index)
+                key_keep = torch.cat(
+                    (prefix_keep, answer_keep[:, :stop]), dim=1)
+                full_mask = _bk_additive_mask(
+                    key_keep, query_valid, start, stop, torch.bfloat16)
+                if teacher_hidden:
+                    first_query = _bk_gather_hidden(
+                        teacher_inputs[0], source_index)
+                    query_rope = stack.rope(first_query, query_positions)
+                else:
+                    query_ids = student_ids.gather(1, source_index)
+                    h = stack.embed(query_ids)
+                    query_rope = stack.rope(h, query_positions)
+                tile_losses = []
+                tile_grads = []
+                for layer in range(1, n + 1):
+                    params = _clear_block_grads(stack, layer)
+                    h_in = (_bk_gather_hidden(
+                        teacher_inputs[layer - 1], source_index).detach()
+                        if teacher_hidden else h.detach())
+                    layer_mask = (query_valid
+                                  if layer_types[layer - 1] == "linear_attention"
+                                  else full_mask)
+                    with torch.autocast(device.type, dtype=torch.bfloat16):
+                        h_out = stack.run_block(
+                            layer, h_in, query_rope,
+                            position_ids=query_positions,
+                            flow_keep=key_keep,
+                            past_key_values=history, use_cache=True,
+                            causal_length=prompt_length + stop,
+                            prepared_attention_mask=layer_mask)
+                        view = stack.loss_view(layer, h_out)[query_valid]
+                        target = window_targets[layer - 1][query_valid]
+                        mean_loss = loss_fn(
+                            view, target, normed=(layer == n), layer=layer)
+                        summed_loss = mean_loss * cells
+                    summed_loss.backward()
+                    grad = _immediate_sgd(params, cfg.train.lr)
+                    _detach_cache_layer(history, layer - 1)
+                    tile_losses.append(mean_loss.detach())
+                    tile_grads.append(grad.detach() / cells)
+                    if not teacher_hidden:
+                        h = h_out.detach()
+                weighted_losses = [value * cells for value in tile_losses]
+                weighted_grads = [value * cells for value in tile_grads]
+                if epoch_loss_sums is None:
+                    epoch_loss_sums = weighted_losses
+                    epoch_grad_sums = weighted_grads
+                else:
+                    _foreach_accumulate(epoch_loss_sums, weighted_losses)
+                    _foreach_accumulate(epoch_grad_sums, weighted_grads)
+                epoch_cells += cells
+                token_events += cells
+                conceptual_writes += cells * n
+                physical_writes += n
+                del window_targets
+
+            answers_seen += b_now
+            log.log(
+                kind="v31_cohort",
+                epoch=epoch + 1,
+                cohort=cohort_index,
+                users=b_now,
+                prompt_length_padded=prompt_length,
+                max_answer_tokens=max_answer,
+                token_events_seen=token_events,
+                answers_seen=answers_seen,
+                physical_optimizer_updates_seen=physical_writes,
+            )
+            del teacher_inputs, history, student_ids
+            del batch_positions, batch, items
+
+        pending_losses = (
+            [[value / epoch_cells for value in epoch_loss_sums]]
+            if epoch_cells else [])
+        _flush_train_log(
+            log, epoch=epoch, step=token_events, accum=answers_seen,
+            pending=pending_losses, pending_items=epoch_cells,
+            n_layers=n, partial=False,
+            pipeline_version=3, update_granularity="online",
+            update_reduction="unaveraged_sum_BxK",
+            trajectory_source=cfg.train.trajectory_source,
+            history_policy=cfg.train.history_policy,
+            token_events_seen=token_events,
+            optimizer_updates_seen=conceptual_writes,
+            physical_optimizer_updates_seen=physical_writes,
+            optimizer_updates_per_token=n,
+            stale_gradient_window=K,
+            gradient_aggregation="unaveraged_sum_at_shared_weight_snapshot",
+            completed_epochs=epoch + 1, partial_epoch=False,
+        )
+        if epoch_grad_sums is not None:
+            log.log(
+                kind="v3_gradient_norm",
+                epoch=epoch + 1,
+                per_layer_mean=[float((value / epoch_cells).cpu())
+                                for value in epoch_grad_sums],
+                measure="BxK_window_sum_gradient_norm_normalized_per_cell",
+                token_events_seen=token_events,
+                optimizer_updates_seen=conceptual_writes,
+                physical_optimizer_updates_seen=physical_writes,
+            )
+        seconds = time.time() - epoch_started
+        events = token_events - epoch_events_start
+        log.log(
+            kind="v3_throughput",
+            epoch=epoch + 1,
+            seconds=seconds,
+            token_events=events,
+            local_writes=conceptual_writes - epoch_conceptual_start,
+            physical_local_writes=physical_writes - epoch_physical_start,
+            token_events_per_s=events / seconds,
+            local_writes_per_s=(conceptual_writes - epoch_conceptual_start) / seconds,
+            physical_local_writes_per_s=(physical_writes - epoch_physical_start) / seconds,
+            includes="bucketed_cache_io_plus_prompt_prefill_plus_BxK_writes",
+            history_policy=cfg.train.history_policy,
+            trajectory_source=cfg.train.trajectory_source,
+            stale_gradient_window=K,
+            completed_epochs=epoch + 1,
+            partial_epoch=False,
+        )
+        standard_baseline = _epoch_end_telemetry(
+            cfg, stack, tok, log, epoch=epoch,
+            baseline=standard_baseline, started_at=started)
+        delta_tracker.log(
+            log, epoch=epoch + 1, phase=f"after_epoch_{epoch + 1}",
+            started_at=started)
+
+
 @torch.no_grad()
 def _prefill_student(cfg, stack, it, stop: int, cache: DynamicCache, device,
                      *, student_ids=None, position_ids=None):
@@ -975,6 +1317,9 @@ def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
 
 def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
     """Run the pipeline-v3 online walk; checkpoint publication stays in runtime."""
+    if cfg.train.history_policy == "causal_bk":
+        return train_bk_v31(
+            cfg, stack, tok, log, cache, teacher=teacher)
     if cfg.train.history_policy in (
             "causal_static_eager_probe", "causal_static_graph_probe",
             "causal_bk_probe"):
