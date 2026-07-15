@@ -325,6 +325,7 @@ def main() -> None:
                                     # builder can reuse graph/continuous-batch answers
                                     # without a lossy decode→encode round trip.
                                     "token_ids": token_ids,
+                                    "prompt_tokens": len(item["ids"]),
                                     "generation_budget": item["budget"],
                                     "stop_token_id": item_stop_id,
                                     "finish_reason": result.outputs[0].finish_reason,
@@ -390,6 +391,7 @@ def main() -> None:
                "use_cudagraphs": args.use_cudagraphs,
                "max_num_seqs": args.max_num_seqs,
                "max_num_batched_tokens": args.max_num_batched_tokens,
+               "max_model_len": args.max_model_len,
                "prompt_format": args.prompt_format,
                "limit": args.limit,
                "generation_extra_tokens": extra_tokens,
