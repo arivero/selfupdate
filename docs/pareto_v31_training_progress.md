@@ -86,6 +86,37 @@ online-compatible student-hidden campaign streams only the current target
 window. Teacher-hidden dreaming remains an explicit later placement/streaming
 axis rather than silently reducing B.
 
+## Qwen3.5-0.8B Wave A
+
+The production release gate started at 22:28 CEST on `agpul05`, physical
+GPU3, from commit `5bb63dd`. It is the intact student-hidden B256K16 Huber
+control at learning rate 1e-5. It reused cache `b632054c01558f61`; epoch-zero
+recall and standard-damage evaluation completed before the first update.
+By 22:30 it had completed three real cohorts: 768 answers, 170,173 valid
+token events, and 1,368 physical per-block writes. This is a live progress
+measurement, not a full-epoch throughput estimate. Peak observed allocation
+at this point was about 19.6 GiB and no traceback or locality tripwire had
+fired.
+
+At 22:29, coordinated builds of the same exact 2,071-example epoch-zero cache
+began on `agpul02` GPU0, `agpul04` GPU1, and `agpul06` GPU0. All three
+failed before teacher compute after 117, 124, and 104 seconds respectively:
+their old HF-cache ready markers covered other named snapshots, but not
+Qwen3.5-0.8B. The failed logs are
+`runs/v31_qwen35_0p8b_fixed4096_cache_agpul{02,04,06}.log`. At 22:34 the
+1.7-GiB Qwen3.5-0.8B snapshot began explicit per-node staging, followed by
+retry-1 cache builds. Retry logs have the same stem plus `_retry1.log`.
+The model snapshot, cache hash, and ready manifest are all checked before a
+trainer may consume a node-local copy.
+
+Wave A contains 16 atomic six-epoch runs: flow-mask Huber and random-fill
+Huber at B256K1/B256K16 and learning rates 1e-6, 3e-6, and 1e-5 (12 runs),
+intact Huber controls at both K values (2), and flow-mask cosine controls at
+both K values and 1e-5 (2). The release gate is one of those 16. The remaining
+15 are listed in
+`scripts/queue_pareto_v31_qwen35_0p8b_wave_a_20260715.tsv`; every row ends in
+its own individual Markdown/PDF report and completion-ordered PDF symlink.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer

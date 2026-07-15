@@ -1,0 +1,31 @@
+run_name: pareto_v31_qwen35_0p8b_flow_student_b256k1_huber_lr3e6_s17
+mask:
+  compaction: flow_mask
+train:
+  run_class: method
+  pipeline_version: 3
+  pipeline_revision: "3.1"
+  update_granularity: online
+  online_optimizer: immediate_sgd
+  lr_rule: fixed
+  schedule: summed
+  epochs: 6
+  max_steps: 0
+  micro_batch: 256
+  grad_accum: 1
+  batching: bucketed
+  conn_window: 1
+  conn_stride: 0
+  trajectory_source: student_hidden
+  online_teacher: false
+  history_policy: causal_bk
+  backward_dispatch: per_block
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
+  hidden_loss: huber
+  lr: 3.0e-6
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
