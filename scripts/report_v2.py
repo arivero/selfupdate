@@ -746,7 +746,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          if provenance.get("runtime_dirty") is False else
          "- Runtime tree: cleanliness unavailable (legacy provenance)"),
         f"- Student initialization: `{provenance.get('student_init_identity', train.get('init_from') or model.get('name', 'missing'))}`",
-        f"- Pipeline: v{train.get('pipeline_version', 'missing')}",
+        f"- Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
         f"- Run class: `{reported_run_class}` (source `{run_class_source}`; "
@@ -884,7 +884,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"Status: {'complete' if complete else 'incomplete diagnostic rendering'}",
             f"Model/base: {model.get('name', 'missing')}",
             f"Dataset: {data.get('examples_path', 'missing')}",
-            f"Pipeline: v{train.get('pipeline_version', 'missing')}",
+            f"Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
             f"Censorship: {mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}",
             f"Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
             (f"Run class: {reported_run_class} (source {run_class_source}; "
@@ -935,6 +935,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "model": model.get("name"),
         "dataset": data.get("examples_path"),
         "pipeline_version": train.get("pipeline_version"),
+        "pipeline_revision": train.get("pipeline_revision"),
         "run_class": reported_run_class,
         "configured_run_class": configured_run_class,
         "run_class_source": run_class_source,

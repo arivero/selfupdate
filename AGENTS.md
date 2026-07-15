@@ -265,6 +265,15 @@ interpreted without silently promoting them to frontier evidence.
   74.4%). Keep K named in configs/reports and compare at a matched logical
   token budget. Mask-free cached attention is valid for q=1 only; K>1 must
   carry causal masking inside the chunk (current code uses one K×prefix mask).
+- Pipeline 3.1 names B as simultaneous-user serving parallelism and K as
+  within-answer lookahead. B256K1 is next-token online compatible; B256K16
+  requires prefetched teacher output or confirmed speculative tokens. The
+  `causal_bk_probe` policy is smoke-only and normal training must reject it
+  until the B×K memory/speed/LR-scaling screen is promoted.
+- Fixed-shape static-cache eager is numerically equivalent to dynamic K=1,
+  but the current CUDA-graph replay has a reproducible 1.16% trainable-delta
+  divergence despite fixed in-graph gradient buffers. It is a speed prototype
+  (~52/s at 0.6B), not a certified campaign path; see `issues.md`.
 - Eval on the full corpus. The 8-example training subset can hide severe
   coverage bias.
 - Two concurrent GPU jobs need a VRAM guard with random stagger.

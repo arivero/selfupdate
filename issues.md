@@ -455,6 +455,26 @@ numbers in one table.
   shared K×prefix causal mask, intact loss returned to 2.0e-6--9.2e-6, total
   parameter delta to 7.6e-7, and throughput to 605.09 token-events/s. Keep the
   mask-free path q=1-only.
+- Pipeline-v3 fixed-shape capture probe (2026-07-15, Qwen3-0.6B, 256-token
+  answer): static-cache eager was numerically equivalent to dynamic-cache K=1
+  (relative trainable-delta divergence 1.66e-5, cosine 0.9999999999) and ran at
+  9.96 token-events/s. CUDA-graph replay ran at 51.8--53.2/s with 278--294 MiB
+  incremental peak memory, but reproducibly diverged 0.0116 in relative delta
+  L2 (cosine 0.999939). Repeated graphs matched each other; replacing Python
+  `param.grad=None` with fixed gradient buffers explicitly zeroed inside the
+  capture did not change the divergence. Do not promote capture until that
+  graph-vs-eager residual is explained or accepted by an explicit numerics
+  policy. Fixed cache shape itself is exonerated.
+- Pipeline-v3.1 simultaneous-user probe (2026-07-15, Qwen3-0.6B, one median
+  bucket): B256K1 reached 290.0 tile token-events/s and 69.4/s including the
+  uncensored teacher batch plus prompt prefill, using 10.45 GiB peak. B256K16
+  reached 4,055.5/s tile and 1,083.5/s end-to-end at 11.70 GiB peak. Both made
+  28 physical block writes; gradients were unaveraged sums over 256 and 4,096
+  valid cells respectively. K16 is not ordinary next-token online execution:
+  it requires teacher-prefetched or confirmed speculative tokens. The probe
+  supports full-attention Qwen3-0.6B only; Qwen3.5's alternating
+  linear-attention/full-attention state needs a v3.1 adapter before the 0.8B
+  campaign.
 
 ## Open items (2026-07-11; closed work lives in git history)
 

@@ -188,6 +188,12 @@ def main() -> None:
     teacher_states_s = time.perf_counter() - started
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     history = None
+    static_probe = cfg.train.history_policy in (
+        "causal_static_eager_probe", "causal_static_graph_probe")
+    graph_probe = cfg.train.history_policy == "causal_static_graph_probe"
+    graph_metrics = {}
+    graph_loss_bounds = None
+    graph_grad_bounds = None
     prefill_s = 0.0
     if cfg.train.history_policy == "causal_frozen_history":
         history = DynamicCache(config=stack.text_config)
@@ -213,7 +219,32 @@ def main() -> None:
         teacher_hidden and history is not None
         and cfg.train.backward_dispatch == "per_block"
         and cfg.train.online_write_dispatch == "after_backward")
-    if use_teacher_window_path:
+    if static_probe:
+        from selfupdate.train.graph_v3 import (  # noqa: E402
+            run_teacher_static_graph_probe,
+        )
+        result = run_teacher_static_graph_probe(
+            cfg, stack, loss_fn, it, token_count, teacher_states,
+            position_ids, targets, capture=graph_probe)
+        losses = result.losses
+        grad_norms = result.grad_norms
+        history = result.cache
+        prefill_s = result.prefill_s
+        local_writes = physical_local_writes = token_count * stack.n_layers
+        graph_loss_bounds = (result.loss_min, result.loss_max)
+        graph_grad_bounds = (result.grad_norm_min, result.grad_norm_max)
+        graph_metrics = {
+            "graph_warmup_s": result.warmup_s,
+            "graph_capture_s": result.capture_s,
+            "graph_replay_s": result.replay_s,
+            "graph_replay_token_events": result.replay_token_events,
+            "graph_replay_token_events_per_s": (
+                result.replay_token_events / result.replay_s
+                if result.replay_s else None),
+            "graph_probe_statistics": "exact_global_minmax_plus_per_layer_means",
+            "static_probe_mode": "cuda_graph" if graph_probe else "eager",
+        }
+    elif use_teacher_window_path:
         (losses, grad_norms, local_writes,
          physical_local_writes) = answer_teacher_stale_windows_cached(
             cfg, stack, loss_fn, it, token_count, device, history,
@@ -289,10 +320,14 @@ def main() -> None:
         "parameter_delta_l2_total": sum(
             x * x for x in layer_delta_l2) ** 0.5,
         "delta_out": args.delta_out or None,
-        "loss_min": min(float(x.cpu()) for x in losses),
-        "loss_max": max(float(x.cpu()) for x in losses),
-        "grad_norm_min": min(float(x.cpu()) for x in grad_norms),
-        "grad_norm_max": max(float(x.cpu()) for x in grad_norms),
+        "loss_min": (graph_loss_bounds[0] if graph_loss_bounds else
+                     min(float(x.cpu()) for x in losses)),
+        "loss_max": (graph_loss_bounds[1] if graph_loss_bounds else
+                     max(float(x.cpu()) for x in losses)),
+        "grad_norm_min": (graph_grad_bounds[0] if graph_grad_bounds else
+                          min(float(x.cpu()) for x in grad_norms)),
+        "grad_norm_max": (graph_grad_bounds[1] if graph_grad_bounds else
+                          max(float(x.cpu()) for x in grad_norms)),
         "model_load_s": model_load_s,
         "flow_cert_s": flow_cert_s,
         "teacher_states_s": teacher_states_s,
@@ -309,9 +344,10 @@ def main() -> None:
         "online_physical_local_writes_per_s": (
             physical_local_writes / online_s),
         "with_prefill_token_events_per_s": (
-            token_count / (prefill_s + online_s)),
+            token_count / (online_s if static_probe else prefill_s + online_s)),
         "cache_graph": False,
         "vocab_frozen": True,
+        **graph_metrics,
     }, sort_keys=True))
 
 

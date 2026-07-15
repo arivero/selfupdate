@@ -23,6 +23,7 @@ cache:
   max_sequence_tokens: 8192
 train:
   pipeline_version: 3
+  pipeline_revision: "3.0"
   update_granularity: online
   answers_per_update: 0
   tokens_per_answer_update: 0

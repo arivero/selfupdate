@@ -975,6 +975,12 @@ def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
 
 def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
     """Run the pipeline-v3 online walk; checkpoint publication stays in runtime."""
+    if cfg.train.history_policy in (
+            "causal_static_eager_probe", "causal_static_graph_probe",
+            "causal_bk_probe"):
+        raise NotImplementedError(
+            "v3 probe history policies are certification-only; use the "
+            "matching smoke instrument before adding campaign dispatch")
     device = cfg.model.device
     n = stack.n_layers
     if (not cfg.train.lora.enabled

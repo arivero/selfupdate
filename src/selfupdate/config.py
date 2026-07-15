@@ -165,9 +165,11 @@ class LoraConfig:
 @dataclass
 class TrainConfig:
     # Pipeline 1 is historical. Pipeline 2 requires an explicit gradient
-    # aggregation strategy. Pipeline 3 is online B=1,K=1 learning: one local
-    # state-free update per token and block, with no cross-token averaging.
+    # aggregation strategy. Pipeline 3.0 is single-user online learning;
+    # pipeline 3.1 adds B independent simultaneous-user lanes while K remains
+    # the within-answer lookahead/staleness coordinate.
     pipeline_version: int = 1
+    pipeline_revision: str = ""
     update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid | online
     # Pipeline-v2 grid geometry.  ``grid`` is an optimizer tile in the
     # answer x aligned-token plane followed by the mandatory forward layer

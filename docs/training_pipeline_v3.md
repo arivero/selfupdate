@@ -7,6 +7,40 @@ through a detached input. The minimum-memory dispatch backpropagates and
 writes before the next block; the disconnected-token dispatch enters autograd
 once and writes all disjoint block gradients before the next token.
 
+## Pipeline 3.1: simultaneous-user B×K execution
+
+Pipeline 3.0 fixes B=1. Pipeline 3.1 adds B independent live conversations
+as the hardware-parallel dimension while retaining K as the within-answer
+context/lookahead dimension. The first explicit probes are B256K1 and
+B256K16. They sum all valid cell gradients without averaging, then perform
+one state-free local write per block.
+
+B256K1 is compatible with ordinary online serving: each of 256 users supplies
+one newly known token. B256K16 has a stronger provenance requirement: another
+teacher/card has already produced the 16-token continuation, or speculative
+generation supplies tokens that are updated only after confirmation. Reports
+must label this `teacher_prefetched_or_speculative_confirmed_tokens`; it is not
+silently described as next-token online learning.
+
+The initial `causal_bk_probe` is certification-only. It builds one batched KV
+timeline with left-padded prompt caches, masks privileged/padding rows, drops
+finished-answer cells from the gradient sum, and measures one B×K tile. Normal
+training rejects the policy until throughput, memory, and update scaling are
+measured and the recipe is promoted.
+
+The first Qwen3-0.6B L40S measurements (B=256, median length bucket, LoRA
+r16, Huber, immediate SGD at 1e-5) are:
+
+| geometry | tile events/s | end-to-end events/s | tile time | peak allocation | update provenance |
+|---|---:|---:|---:|---:|---|
+| B256K1 | 290.0 | 69.4 | 0.883 s | 10.45 GiB | ordinary next-token online |
+| B256K16 | 4,055.5 | 1,083.5 | 1.010 s | 11.70 GiB | prefetched teacher or confirmed speculation |
+
+End-to-end includes an uncensored teacher batch and prompt-cache prefill;
+tile throughput isolates the local update. Each geometry performs 28 physical
+block writes: its B×K gradients are an unaveraged sum, so learning-rate scale
+must be screened explicitly rather than inferred from the B=1 recipe.
+
 ## Epoch-zero target materialization
 
 V3 separates the small durable teacher-answer record from the large hidden
@@ -81,10 +115,14 @@ and passed the frozen-vocabulary tripwire. The intact displacement was about
 and 4B event rates diagnose fixed Python/autograd dispatch as the current
 speed limit; they do not establish a model-FLOP scaling law.
 
-The first metaparameter screen uses 12,000 token events per arm (the minimum
-promotion budget): intact Huber at 1e-5; flow Huber at 1e-6, 3e-6, 1e-5, and
-3e-5; flow cosine at 1e-5; random-fill Huber at 1e-5; and a matched
-`per_token_disconnected` dispatch arm. Only promoted arms receive complete
+The first mechanics screen used 12,000 token events per arm: intact Huber at
+1e-5; flow Huber at 1e-6, 3e-6, 1e-5, and 3e-5; flow cosine at 1e-5;
+random-fill Huber at 1e-5; and a matched `per_token_disconnected` dispatch
+arm. The completed K={1,4,8,16} flow subset covered only 85 answers per arm,
+so it is explicitly not the repository's 12,000-training-item promotion
+budget and cannot support a quality verdict. K4/K8/K16 preserved the 0.3958
+standard baseline while K1 fell to 0.375; none improved recall. Promoted arms
+must run at least 12,000 answer/item visits and receive complete
 epoch/campaign interpretation.
 
 This is deliberately not a smaller tile in pipeline v2. It removes the tile:
@@ -220,6 +258,17 @@ only the current window, avoiding an unconditional answer-wide T² tensor.
 Pipeline v3 currently rejects sliding/chunked-attention architectures rather
 than approximating their authoritative mask semantics with a rolling window.
 Gemma4 remains blocked until its chunk-aware adapter is implemented.
+
+## Fixed-shape CUDA-graph probe
+
+`causal_static_eager_probe` and `causal_static_graph_probe` are also
+certification-only. On Qwen3-0.6B, fixed-shape static-cache eager matched the
+ordinary dynamic-cache K=1 delta to 1.66e-5 relative L2, showing that masked
+unwritten KV slots preserve the update. CUDA-graph replay reached about 52--53
+token-events/s versus about 10 for static eager, but retained a reproducible
+1.16% delta divergence (cosine 0.999939) from static eager. Explicit fixed
+gradient buffers zeroed inside the graph did not remove it. The graph path is
+therefore a useful speed prototype, not a certified campaign method.
 
 ## Censorship
 

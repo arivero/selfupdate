@@ -47,14 +47,27 @@ def validate_knob_schedule(cfg) -> None:
         raise ValueError(
             f"unknown train.update_granularity {cfg.train.update_granularity!r}")
     if cfg.train.pipeline_version == 3:
+        if cfg.train.pipeline_revision not in ("", "3.0", "3.1"):
+            bad.append("pipeline-v3 revision must be 3.0 or 3.1")
+        bk_probe = cfg.train.history_policy == "causal_bk_probe"
         if cfg.train.update_granularity != "online":
             bad.append("pipeline_version=3 requires update_granularity=online")
         if sched != "summed":
             bad.append("pipeline-v3 online execution uses the summed forward layer walk")
-        if cfg.train.micro_batch != 1 or cfg.train.grad_accum != 1:
-            bad.append("pipeline-v3 requires micro_batch=1 and grad_accum=1")
-        if cfg.train.batching != "item":
-            bad.append("pipeline-v3 requires batching=item")
+        if cfg.train.grad_accum != 1:
+            bad.append("pipeline-v3 requires grad_accum=1")
+        if bk_probe:
+            if cfg.train.pipeline_revision != "3.1":
+                bad.append("causal_bk_probe requires pipeline_revision=3.1")
+            if cfg.train.micro_batch < 2:
+                bad.append("causal_bk_probe requires micro_batch B >= 2")
+            if cfg.train.batching not in ("padded", "bucketed"):
+                bad.append("causal_bk_probe requires padded or bucketed batching")
+        else:
+            if cfg.train.micro_batch != 1:
+                bad.append("pipeline-v3.0 requires micro_batch=1")
+            if cfg.train.batching != "item":
+                bad.append("pipeline-v3.0 requires batching=item")
         if cfg.train.online_optimizer != "immediate_sgd":
             bad.append("pipeline-v3 requires online_optimizer=immediate_sgd")
         if cfg.train.online_write_dispatch not in (
@@ -69,9 +82,11 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append(
                     "stale_gradient_window != 1 initially requires "
                     "trajectory_source=teacher_hidden")
-            if cfg.train.history_policy != "causal_frozen_history":
+            if cfg.train.history_policy not in (
+                    "causal_frozen_history", "causal_bk_probe"):
                 bad.append(
-                    "stale-gradient windows require causal_frozen_history")
+                    "stale-gradient windows require causal_frozen_history "
+                    "or causal_bk_probe")
             if cfg.train.backward_dispatch != "per_block":
                 bad.append(
                     "stale-gradient windows use backward_dispatch=per_block")
@@ -138,8 +153,36 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("pipeline-v3 currently implements lr_rule=fixed only")
         if cfg.train.history_policy not in (
             "recompute_prefix", "causal_frozen_history",
+            "causal_static_eager_probe", "causal_static_graph_probe",
+            "causal_bk_probe",
         ):
-            bad.append("pipeline-v3 history_policy must be recompute_prefix or causal_frozen_history")
+            bad.append(
+                "pipeline-v3 history_policy must be recompute_prefix, "
+                "causal_frozen_history, causal_static_eager_probe, "
+                "causal_static_graph_probe, or causal_bk_probe")
+        if cfg.train.history_policy in (
+                "causal_static_eager_probe", "causal_static_graph_probe"):
+            if cfg.train.trajectory_source != "teacher_hidden":
+                bad.append("causal_static probes require teacher_hidden")
+            if cfg.train.stale_gradient_window != 1:
+                bad.append("causal_static probes are exact K=1 probes")
+            if cfg.train.backward_dispatch != "per_block":
+                bad.append("causal_static probes require per_block")
+            if cfg.train.online_write_dispatch != "after_backward":
+                bad.append("causal_static probes require after_backward")
+            if not cfg.train.lora.enabled:
+                bad.append("causal_static probes are initially LoRA-only")
+        if cfg.train.history_policy == "causal_bk_probe":
+            if cfg.train.trajectory_source != "teacher_hidden":
+                bad.append("causal_bk_probe requires teacher_hidden")
+            if cfg.train.stale_gradient_window <= 0:
+                bad.append("causal_bk_probe requires finite K > 0")
+            if cfg.train.backward_dispatch != "per_block":
+                bad.append("causal_bk_probe requires per_block")
+            if cfg.train.online_write_dispatch != "after_backward":
+                bad.append("causal_bk_probe requires after_backward")
+            if not cfg.train.lora.enabled:
+                bad.append("causal_bk_probe is initially LoRA-only")
         if cfg.train.conn_window not in (0, 1):
             bad.append("pipeline-v3 is strictly block-local (conn_window 0/1)")
         if cfg.train.conn_stride != 0:
@@ -174,6 +217,8 @@ def validate_knob_schedule(cfg) -> None:
         elif cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
             bad.append("student_hidden consumes the disk cache directly; disable the unused online/frozen teacher")
     elif cfg.train.pipeline_version == 2:
+        if cfg.train.pipeline_revision:
+            bad.append("pipeline_revision is only valid for pipeline-v3")
         if cfg.train.update_granularity == "legacy_answer_sum":
             bad.append("pipeline_version=2 requires update_granularity=answer, token, or grid")
         if sched != "summed":
@@ -306,6 +351,7 @@ def validate_knob_schedule(cfg) -> None:
         if sched != "summed":
             bad.append("batching (currently implemented for summed schedule only)")
         if (cfg.train.update_granularity != "grid"
+                and cfg.train.history_policy != "causal_bk_probe"
                 and cfg.train.grad_accum % cfg.train.micro_batch != 0):
             bad.append("grad_accum must be a multiple of micro_batch for batched training")
     is_method = run_class == "method"
