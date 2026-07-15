@@ -369,6 +369,12 @@ interpreted without silently promoting them to frontier evidence.
   `/tmp/$USER/selfupdate-torchinductor`. A speed probe must cover the real
   sequence-length distribution long enough to expose compilation churn; a
   six-step warm-up is not an epoch-time certificate.
+- Model staging does not warm Python. Before starting many workers on a cold
+  node, delegate one `scripts/warm_python_runtime.sh <python> ...` launch per
+  runtime. It parallel-stats the Lustre venv/base trees and pre-imports the
+  named modules into the node cache without copying the venv. The H100 Slurm
+  launcher has the same pattern inline; skipping it left an L40S GPU empty
+  during minute-scale vLLM imports on 2026-07-15.
 - Scheduler pattern:
 
 ```bash

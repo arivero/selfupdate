@@ -85,6 +85,20 @@ Workers consume one Lustre-shared queue with host-scoped leases and
 `MAX_PER_GPU=1`. Per-node scheduler state/logs and per-host worker-log
 directories follow `AGENTS.md`.
 
+Before opening workers, each node stages model/cache data and runs one
+delegated Python warm-up. The vLLM environment uses:
+
+```bash
+scripts/warm_python_runtime.sh ../venvs/vllm025/bin/python torch transformers vllm
+```
+
+The trainer uses the same command with the Python selected by
+`scripts/l40s_exec.sh` and modules `torch transformers peft`. This parallel-
+stats the Lustre-hosted runtime and pre-imports it into the node's VFS/page
+cache; it does not clone a venv. The 2026-07-15 ad-hoc 0.8B regeneration
+staged model weights but skipped this step, leaving the GPU empty for roughly
+a minute during serial Python metadata reads.
+
 The initial placement balances two K1 and two K16 arms on every node. K16 is
 expected to finish much earlier; after its report is reviewed, that physical
 slot may pull the corresponding Wave-B K16 objective arm while K1 continues.
