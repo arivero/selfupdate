@@ -165,6 +165,15 @@ K16/LR 1e-5 is outside the epoch-one no-censorship stability envelope even
 though standard-damage sampling does not detect damage. Lower learning-rate
 arms must carry the recipe selection.
 
+| intact release epoch | training seconds | aligned events/s | overall recall | standard macro | mean relative LoRA delta | max layer delta |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 426.988 | 2,538.5 | 0.10879 | 0.4375 | 2.24e-4 | 4.84e-4 |
+| 2 | 352.956 | 3,071.0 | 0.11482 | 0.4375 | 3.29e-4 | 7.00e-4 |
+
+Epoch two shows partial recall recovery rather than monotonic destruction,
+but it remains below the 0.12150 epoch-zero value. The intact 1e-5 arm stays
+a runtime/null diagnostic, not a candidate recipe.
+
 ### Wave-A deployment
 
 The first complete release epoch cleared the distributed-launch gate. At
