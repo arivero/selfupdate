@@ -451,6 +451,29 @@ summary, and marks the endpoint missing until the external evaluation exists.
 This repairs the earlier silent preference for the 16-item trajectory when a
 stronger full endpoint file was also present.
 
+### First 4B endpoint and scale correction
+
+At epoch six, intact/1e-6 finishes at recall 0.16542 with only 6.56e-7 mean
+relative movement. Flow/1e-6 finishes at 0.15167 with 1.98e-4 movement, and
+flow/3e-6 at 0.14335 with 5.97e-4; all retain the 0.5833 monitoring macro.
+Thus neither completed flow arm is a correct endpoint despite the positive
+flow/1e-6 epoch-two excursion. The trajectory is consistent with cumulative
+overshoot: six epochs at 3e-7 should produce approximately the movement of
+two epochs at 1e-6, the cleanest observed 4B point. Fixed LR 3e-7 flow and
+random arms are added; the runtime does not yet implement a decay rule, so
+this direct scale measurement precedes any scheduler feature.
+
+The matched 0.8B nulls also completed: intact/1e-6 recall 0.11231 and
+intact/3e-6 recall 0.11265, both below the 0.12150 base and with unchanged
+monitoring macro. The corresponding censored endpoints therefore have real
+matched gains: +0.01720 for flow/1e-6 and +0.04091 for flow/3e-6. Their
+seed-43 replication has started.
+
+One delegated random/3e-6 successor omitted SSH and attempted agpul05 GPU0,
+where it failed during model placement before any training event. Its two-file
+partial directory is preserved under `runs/failed_launches/`; the corrected
+successor executes all checks and launch inside explicit SSH to agpul04.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
