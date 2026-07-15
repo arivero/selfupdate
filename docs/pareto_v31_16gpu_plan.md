@@ -26,7 +26,8 @@ H100 generation but invalidated most targets.
 
 The earlier 4096-ceiling response artifact predates exact generated-token-ID
 preservation, so do not decode/re-encode it into the cache. Regenerate under
-the same 4096 ceiling with the current exact-ID writer, then rerun real-RAG,
+the same `cache.generation_max_tokens: 4096` protocol with the current exact-ID
+writer, then rerun real-RAG,
 no-RAG, and same-length random-RAG epoch-zero controls. Change the prompt only
 if that restored allowance still fails retrieval-use or completion checks.
 Build a fresh cache identity after the gate passes. The existing cache may be

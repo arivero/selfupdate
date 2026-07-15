@@ -119,6 +119,11 @@ class CacheConfig:
     # 96-token margin is certified separately by the RAG gate; it prevents
     # conversational framing from truncating the answer span.
     generation_extra_tokens: int = 96
+    # Optional fixed answer ceiling. Zero keeps the proportional per-record
+    # budget above; a positive value replaces it for every record. This is a
+    # scientific protocol knob, not merely a throughput setting: Qwen3.5-0.8B
+    # needs the historical 4096-token ceiling to terminate naturally.
+    generation_max_tokens: int = 0
     # Open-answer teacher generation.  B=1 preserves the historical cache
     # builder; larger values use left-padded greedy batches with OOM backoff.
     generation_batch: int = 1

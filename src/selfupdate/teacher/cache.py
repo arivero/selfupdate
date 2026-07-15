@@ -99,6 +99,11 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          # Open-answer caches include the teacher's generated answer ids in
          # their index.  The allowance changes those ids, aligned lengths, and
          # every stored h[L] payload, so it must be part of cache identity.
+         # Keep the zero/default payload backward-compatible with schema-9
+         # cache identities; only the explicit fixed-ceiling protocol adds a
+         # field.
+         **({"generation_max_tokens": int(cfg.cache.generation_max_tokens)}
+            if cfg.cache.generation_max_tokens else {}),
          "generation_extra_tokens": int(cfg.cache.generation_extra_tokens),
          # Batched greedy decode can differ from B=1 at exact argmax ties;
          # inference dtype likewise shapes both answers and hidden targets.

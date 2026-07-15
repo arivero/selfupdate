@@ -247,11 +247,14 @@ def main() -> None:
             prompts.append({"example_id": ex.example_id, "record": record,
                             "ids": masker.build(ex).teacher_ids, "budget": budget,
                             "stop_id": stop_id})
-    if args.generation_max_tokens is not None:
-        if args.generation_max_tokens < 1:
+    fixed_generation_max = args.generation_max_tokens
+    if fixed_generation_max is None and cfg.cache.generation_max_tokens:
+        fixed_generation_max = cfg.cache.generation_max_tokens
+    if fixed_generation_max is not None:
+        if fixed_generation_max < 1:
             raise ValueError("--generation-max-tokens must be positive")
         for item in prompts:
-            item["budget"] = args.generation_max_tokens
+            item["budget"] = fixed_generation_max
 
     out_dir = ROOT / (args.out or f"runs/vllm_benchmark/{args.model.split('/')[-1]}_tp{args.tensor_parallel_size}_pp{args.pipeline_parallel_size}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -322,6 +325,10 @@ def main() -> None:
                                     # builder can reuse graph/continuous-batch answers
                                     # without a lossy decode→encode round trip.
                                     "token_ids": token_ids,
+                                    "generation_budget": item["budget"],
+                                    "stop_token_id": item_stop_id,
+                                    "finish_reason": result.outputs[0].finish_reason,
+                                    "stop_reason": result.outputs[0].stop_reason,
                                     # Preserve the exact conditioning protocol too.
                                     # This is essential for Harmony/GPT-OSS, whose
                                     # developer-memory prompt is not reconstructible
@@ -386,7 +393,7 @@ def main() -> None:
                "prompt_format": args.prompt_format,
                "limit": args.limit,
                "generation_extra_tokens": extra_tokens,
-               "generation_max_tokens": args.generation_max_tokens,
+               "generation_max_tokens": fixed_generation_max,
                "reasoning_effort": args.reasoning_effort,
                "results": rows}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

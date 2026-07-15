@@ -32,6 +32,8 @@ def validate_knob_schedule(cfg) -> None:
     if cfg.cache.runtime_policy not in ("durable", "node_epoch0"):
         raise ValueError(
             "cache.runtime_policy must be durable or node_epoch0")
+    if cfg.cache.generation_max_tokens < 0:
+        raise ValueError("cache.generation_max_tokens must be non-negative")
     if (cfg.cache.runtime_policy == "node_epoch0"
             and not cfg.cache.node_root.startswith("/dev/shm/")):
         raise ValueError(

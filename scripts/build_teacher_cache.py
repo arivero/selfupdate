@@ -379,6 +379,8 @@ def main() -> None:
                     help="override cache.hidden_dtype for stored teacher states")
     ap.add_argument("--generation-budget-bucket", type=int, default=None,
                     help="1=exact allowances, N=round up to N, 0=one outer group")
+    ap.add_argument("--generation-max-tokens", type=int, default=None,
+                    help="fixed per-answer ceiling; replaces proportional budgets")
     ap.add_argument("--generation-compile", action="store_true",
                     help="compile decode with PyTorch reduce-overhead/CUDA graphs")
     ap.add_argument("--generation-cache-implementation", default=None,
@@ -429,6 +431,10 @@ def main() -> None:
         cfg.cache.hidden_dtype = args.hidden_dtype
     if args.generation_budget_bucket is not None:
         cfg.cache.generation_budget_bucket = args.generation_budget_bucket
+    if args.generation_max_tokens is not None:
+        if args.generation_max_tokens < 1:
+            raise ValueError("--generation-max-tokens must be positive")
+        cfg.cache.generation_max_tokens = args.generation_max_tokens
     if args.generation_compile:
         cfg.cache.generation_compile = True
     if args.generation_cache_implementation is not None:
@@ -593,6 +599,10 @@ def main() -> None:
                                cfg.cache.generation_extra_tokens)
             for record, ex in zip(records, examples)
         ]
+        if cfg.cache.generation_max_tokens:
+            if cfg.cache.generation_max_tokens < 1:
+                raise ValueError("cache.generation_max_tokens must be non-negative")
+            budgets = [cfg.cache.generation_max_tokens] * len(examples)
         timings["maximum_prompt_tokens"] = max(map(len, prompts), default=0)
         timings["maximum_generation_budget"] = max(budgets, default=0)
         timings["maximum_individual_sequence_tokens"] = max(
@@ -614,6 +624,12 @@ def main() -> None:
                     f"first is {missing[0]}")
             for ex, budget in zip(examples, budgets):
                 row = response_by_id[ex.example_id]
+                recorded_budget = row.get("generation_budget")
+                if (recorded_budget is not None
+                        and int(recorded_budget) != budget):
+                    raise ValueError(
+                        f"generation response {ex.example_id} used budget "
+                        f"{recorded_budget}, expected {budget} from cache config")
                 ids = row.get("token_ids")
                 if not isinstance(ids, list) or not ids:
                     raise ValueError(
@@ -761,6 +777,7 @@ def main() -> None:
         timings["generated_tokens"] / timings["generation_seconds"]
         if timings["generation_seconds"] else 0.0)
     timings["requested_generation_batch"] = cfg.cache.generation_batch
+    timings["generation_max_tokens"] = cfg.cache.generation_max_tokens
     timings["generation_budget_bucket"] = cfg.cache.generation_budget_bucket
     timings["generation_compile"] = cfg.cache.generation_compile
     timings["generation_cache_implementation"] = (
@@ -1055,6 +1072,7 @@ def main() -> None:
         max(effective_teacher_batches) if effective_teacher_batches else 0)
     timings["examples"] = len(examples)
     timings["requested_generation_batch"] = cfg.cache.generation_batch
+    timings["generation_max_tokens"] = cfg.cache.generation_max_tokens
     timings["generation_budget_bucket"] = cfg.cache.generation_budget_bucket
     timings["generation_compile"] = cfg.cache.generation_compile
     timings["generation_cache_implementation"] = (
@@ -1087,6 +1105,7 @@ def main() -> None:
             ],
             "source_commit": source_commit,
             "generation_responses_path": cfg.cache.generation_responses_path,
+            "generation_max_tokens": cfg.cache.generation_max_tokens,
             "teacher_batch": cfg.cache.teacher_batch,
             "total_seconds": timings["total_seconds"],
         })
