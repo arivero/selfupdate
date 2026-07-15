@@ -135,6 +135,11 @@ matrix, then the trainer performs one unaveraged immediate-SGD write. Thus it
 does not lower serving B, refill lanes, average gradients, or increase the
 optimizer-update count. K1 remains an explicit full B256 activation path.
 The repaired gate must finish a full epoch before Wave A is reopened.
+It started at 22:48 CEST on agpul05 physical GPU3 from commit `83782cd`,
+reusing cache `b632054c01558f61`, under run identity
+`pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e5_s17_shard64_r1`.
+Its dedicated worker log is
+`runs/v31_qwen35_0p8b_intact_student_b256k16_shard64_r1_agpul05.log`.
 
 The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
 old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
