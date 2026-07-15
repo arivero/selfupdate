@@ -13,9 +13,10 @@ automatically smaller corrections.
 ## Transfer probe
 
 Before changing the optimizer implementation, run the closest pipeline-v2
-translation of the currently promising but unproven historical Qwen3-8B
-strict `lens_kl` arm.  Its early CER decrease is not success: exact recall has
-remained zero so far.
+translation of the ancient equal-answer optimizer semantics.  The concurrent
+Qwen3-8B strict `lens_kl` arm is not evidence for its `1e-4` rate: CER improved
+to 0.787 at epoch 4 but regressed to 0.831 by epoch 10, while exact recall
+remained zero.
 
 - Qwen3.5-4B, dataset v5, pipeline v2;
 - strict block-local `lens_kl`, `conn_window: 1`, frozen vocabulary head;
@@ -23,8 +24,8 @@ remained zero so far.
 - `answer_mean`, so every answer contributes equally as in the ancient item
   loop (the ancient code summed eight answer means; AdamW is nearly invariant
   to that common factor, while clipping remains a documented difference);
-- learning rate `1e-4`, tested because the historical 8B LoRA arm's early CER
-  trajectory is promising, not because that arm is already successful;
+- learning rate `1e-5`, held equal to the existing broad controls so the
+  experimental change is answer weighting rather than step size;
 - both deleted-RAG and randomized-token-RAG censorship, six complete epochs.
 
 These are explicitly `ablation` arms because unbounded K is a semantics
