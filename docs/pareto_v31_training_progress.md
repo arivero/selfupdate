@@ -191,6 +191,15 @@ recall with demonstrably less movement/damage. The final null checkpoint and
 all six epoch dynamics are complete; its individual report is generated as a
 separate post-training artifact.
 
+The release individual report is complete with no missing artifacts:
+`runs/pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e5_s17_shard64_r1/report.pdf`.
+It contains the loss and parameter-delta heatmaps/temporal plots, recall by
+corpus including epoch zero, standard-damage trajectory, recall-damage
+frontier, signal attribution, and provenance. Its completion-ordered index
+link is under `runs/report_v2_index/`. A concurrent duplicate report command
+was detected and stopped; the original launcher-owned report completed and
+published the verified manifest.
+
 ### Wave-A deployment
 
 The first complete release epoch cleared the distributed-launch gate. At
@@ -300,6 +309,14 @@ memory/speed/locality instrument only: it publishes no checkpoint and does not
 replace the 12,000-item scientific budget. The first K16 probe starts with
 16-user activation shards and LR 1e-6 after the new local teacher cache is
 materialized.
+
+The fixed-response 4B cache is now independently published on agpul05 and
+agpul06 with the same identity `98bb2aff23e25f93`: 2,071 examples, 32
+bfloat16 layers, 36.51 GiB. agpul05 completed teacher forward/cache total in
+146.0/166.0 seconds; agpul06 in 167.7/188.1 seconds. Requested teacher batch
+64 fit throughout except the natural final three-example tail, and neither
+host required an OOM retry. These are node-local copies of the same target
+identity, not separate scientific datasets.
 
 ## Overnight progression rule
 
