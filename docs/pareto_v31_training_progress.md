@@ -154,6 +154,31 @@ mapping, prompt prefill, all B×K local backwards, and no model-load time.
 Epoch-one recall, standard damage, and parameter-delta telemetry also
 completed before epoch two began.
 
+### Wave-A deployment
+
+The first complete release epoch cleared the distributed-launch gate. At
+22:59 CEST four schedulers opened one worker per free physical GPU with the
+shared queue and lease root:
+
+| host | scheduler PID | GPUs admitted | initial Wave-A workers |
+|---|---:|---|---:|
+| agpul02 | 59529 | 0,1,2,3 | 4 |
+| agpul04 | 3095651 | 1 | 1 |
+| agpul05 | 1345628 | 0,1,2 | 3 |
+| agpul06 | 535937 | 0,1,3 | 3 |
+
+This is 11 unique Wave-A arms in parallel, plus the separately launched
+intact B256K16 release control on agpul05 GPU3. Four older v2 workers retain
+the other cards. The global lease audit found one live lease per admitted
+GPU and no duplicated experiment process. An apparent fourth agpul05 claim
+in the delegated summary belonged to the intentionally terminated pre-repair
+scheduler log; the live scheduler has exactly three workers.
+
+The first allocation covers all seven queued K16 censorship/loss/rate arms,
+the K1 intact control, and three K1 censorship/loss arms. The remaining four
+K1 learning-rate arms stay in the shared queue and will backfill cards as
+the first workers publish their individual reports.
+
 The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
 old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
 104–124 seconds. Their corrected snapshot stage and retry-1 epoch-zero
