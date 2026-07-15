@@ -99,6 +99,14 @@ cache; it does not clone a venv. The 2026-07-15 ad-hoc 0.8B regeneration
 staged model weights but skipped this step, leaving the GPU empty for roughly
 a minute during serial Python metadata reads.
 
+Generated compiler state is also node-local. vLLM, TorchInductor, and Triton
+use `/tmp/$USER/selfupdate-vllm-*`; they must not fall back to
+`~/.cache/vllm` on Lustre. This cache is disposable and distinct from staged
+Hugging Face snapshots in `/dev/shm`. The first corrected 0.8B regeneration
+had already reached a healthy compile when the misplaced cache was noticed
+(92.73 seconds total), so it was not restarted; the rule applies to every
+subsequent launch.
+
 The initial placement balances two K1 and two K16 arms on every node. K16 is
 expected to finish much earlier; after its report is reviewed, that physical
 slot may pull the corresponding Wave-B K16 objective arm while K1 continues.

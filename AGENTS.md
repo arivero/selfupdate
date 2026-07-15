@@ -369,6 +369,16 @@ interpreted without silently promoting them to frontier evidence.
   `/tmp/$USER/selfupdate-torchinductor`. A speed probe must cover the real
   sequence-length distribution long enough to expose compilation churn; a
   six-step warm-up is not an epoch-time certificate.
+- vLLM has a separate compiler cache root and otherwise writes under
+  `~/.cache/vllm` on Lustre. The benchmark and L40S vLLM campaign launcher
+  default `VLLM_CACHE_ROOT`, `VLLM_CONFIG_ROOT`,
+  `TORCHINDUCTOR_CACHE_DIR`, and `TRITON_CACHE_DIR` to node-local
+  `/tmp/$USER/selfupdate-vllm-*`. This disposable compiled-code state is
+  separate from model snapshots in `/dev/shm/$USER/selfupdate-hf-cache` and
+  teacher states in `/dev/shm/$USER/selfupdate-teacher-cache`. A cold
+  Qwen3.5-0.8B launch on 2026-07-15 accidentally used Lustre and spent 92.73
+  seconds in `torch.compile`; it was already healthy and was not restarted,
+  while all subsequent launches use the node-local defaults.
 - Model staging does not warm Python. Before starting many workers on a cold
   node, delegate one `scripts/warm_python_runtime.sh <python> ...` launch per
   runtime. It parallel-stats the Lustre venv/base trees and pre-imports the

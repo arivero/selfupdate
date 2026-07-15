@@ -17,6 +17,10 @@ export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1
 export TRANSFORMERS_VERBOSITY=error TOKENIZERS_PARALLELISM=false
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export SSL_CERT_FILE="/fs/agustina/arivero/supercomplex/.local/lib/python3.11/site-packages/certifi/cacert.pem"
+export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-/tmp/$USER/selfupdate-vllm-cache}"
+export VLLM_CONFIG_ROOT="${VLLM_CONFIG_ROOT:-/tmp/$USER/selfupdate-vllm-config}"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/tmp/$USER/selfupdate-vllm-torchinductor}"
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/$USER/selfupdate-vllm-triton}"
 
 run_isolated() {
   setsid "$@" &

@@ -29,6 +29,18 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+# Compiler artifacts are disposable and should not default to ~/.cache on
+# Lustre. Model snapshots are staged independently through HF_HOME in /dev/shm.
+_node_tmp = Path(os.environ.get(
+    "SELFUPDATE_NODE_TMP", f"/tmp/{os.environ.get('USER', 'selfupdate')}"
+))
+os.environ.setdefault("VLLM_CACHE_ROOT", str(_node_tmp / "selfupdate-vllm-cache"))
+os.environ.setdefault("VLLM_CONFIG_ROOT", str(_node_tmp / "selfupdate-vllm-config"))
+os.environ.setdefault(
+    "TORCHINDUCTOR_CACHE_DIR", str(_node_tmp / "selfupdate-vllm-torchinductor")
+)
+os.environ.setdefault("TRITON_CACHE_DIR", str(_node_tmp / "selfupdate-vllm-triton"))
+
 # A completed node-local stage is authoritative. Avoid even Hugging Face's
 # metadata HEAD request: it adds network variability and emits a misleading
 # unauthenticated-Hub warning although every tokenizer/model file is local.
