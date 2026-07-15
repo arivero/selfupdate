@@ -1,4 +1,4 @@
-run_name: pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr3e6_s43
+run_name: pareto_v31_qwen35_4b_flow_student_b256k16_huber_lr1e5_s17
 mask:
   compaction: flow_mask
 train:
@@ -10,7 +10,7 @@ train:
   lr_rule: fixed
   schedule: summed
   epochs: 6
-  seed: 43
+  seed: 17
   max_steps: 0
   micro_batch: 256
   grad_accum: 1
@@ -23,9 +23,9 @@ train:
   backward_dispatch: per_block
   online_write_dispatch: after_backward
   stale_gradient_window: 16
-  activation_shard_users: 64
+  activation_shard_users: 32
   hidden_loss: huber
-  lr: 3.0e-6
+  lr: 1.0e-5
   lora:
     enabled: true
     r: 16
