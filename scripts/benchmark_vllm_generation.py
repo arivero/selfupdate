@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+print("startup stage=repo_imports_begin", flush=True)
 from selfupdate.chatfmt import adapt_records, stop_token_id  # noqa: E402
 from selfupdate.config import load_config  # noqa: E402
 from selfupdate.masking import DEFAULT_SYSTEM, ContextMasker, SegmentedExample  # noqa: E402
@@ -36,6 +37,7 @@ from selfupdate.masking import DEFAULT_SYSTEM, ContextMasker, SegmentedExample  
 # Reuse the source-of-truth budget and corpus scoring logic, while keeping this
 # script's import guard local to this checkout.
 from build_teacher_cache import _corpus_texts, _generation_budget, _recitation_stats  # noqa: E402
+print("startup stage=repo_imports_done", flush=True)
 
 
 class GpuMonitor:
@@ -208,14 +210,18 @@ def main() -> None:
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
 
+    print("startup stage=vllm_imports_begin", flush=True)
     import torch
     from transformers import AutoTokenizer
     from vllm import LLM, SamplingParams
+    print("startup stage=vllm_imports_done", flush=True)
 
     cfg = load_config(args.config, args.experiment)
     examples_path = ROOT / args.examples
     records = [json.loads(x) for x in examples_path.read_text(encoding="utf-8").splitlines()]
+    print("startup stage=tokenizer_load_begin", flush=True)
     tok = AutoTokenizer.from_pretrained(args.model)
+    print("startup stage=tokenizer_load_done", flush=True)
     if args.prompt_format == "native":
         records = adapt_records(records, tok)
     if args.limit and args.limit < len(records):
@@ -276,7 +282,9 @@ def main() -> None:
             llm_kw["max_num_seqs"] = args.max_num_seqs
         if args.max_num_batched_tokens is not None:
             llm_kw["max_num_batched_tokens"] = args.max_num_batched_tokens
+        print("startup stage=engine_init_begin", flush=True)
         llm = LLM(**llm_kw)
+        print("startup stage=engine_init_done", flush=True)
         load_seconds = time.perf_counter() - t_load
 
         rows = []
