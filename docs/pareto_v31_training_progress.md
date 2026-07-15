@@ -146,6 +146,13 @@ boundary had failed in the old implementation; the repaired process held
 18.4 GiB and emitted no error. Training-only time from the v3.1 contract
 record to that cohort was about 102 seconds. This is a partial-epoch
 observation, not the release throughput certificate.
+The first complete epoch then finished cleanly: 2,071 prompts, 1,083,913
+aligned answer-token events, and 17,208 physical block writes in 426.988
+seconds. That is 2,538.5 aligned token events/s, 4.85 completed prompts/s,
+1.68 B256×K16 tiles/s, and 40.30 physical block writes/s; it includes cache
+mapping, prompt prefill, all B×K local backwards, and no model-load time.
+Epoch-one recall, standard damage, and parameter-delta telemetry also
+completed before epoch two began.
 
 The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
 old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
