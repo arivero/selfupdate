@@ -398,9 +398,16 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 - This cluster does not constrain GPU devices by cgroup. Pass physical GPU ids
   verbatim; do not renumber `CUDA_VISIBLE_DEVICES`.
-- One queue file per node/lane.
+- Nodes sharing Lustre may read the SAME queue for dynamic load balancing when
+  they also share `GPU_LEASE_ROOT`.  The allocator mutex and `done_file` lease
+  are global across hosts, while GPU-index capacity is host-scoped (GPU 0 on
+  `agpul04` is independent of GPU 0 on `agpul05`).  This is the preferred
+  homogeneous L40S campaign pattern; use separate queues only when routing
+  different hardware classes or policies.
 - Per-node scheduler state: `SCHED=runs/.sched-$(hostname -s)`.
-- Per-node job log: `JOBLOG=runs/pipeline_sched_<host>.log`.
+- Per-node scheduler log: `runs/pipeline_sched_<host>.log`; use a per-node
+  `JOBLOG_DIR=runs/pareto_v2_4b_worker_logs/<host>` so worker evidence does not
+  interleave.
 - `evaluate.py --base` needs lane-specific `--out` paths during concurrent
   base evals.
 - Results refresher/report shipper should run on only one node.

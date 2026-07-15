@@ -120,9 +120,11 @@ gpu_lease_reap_stale_locked() {
 }
 
 gpu_lease_count_locked() {
-    local gpu="$1" path count=0 dev
+    local gpu="$1" path count=0 dev host
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
+        host="$(gpu_lease_field hostname "$path")"
+        [ "$host" = "$GPU_LEASE_HOST" ] || continue
         dev="$(gpu_lease_field gpu "$path")"
         [ "$dev" = "$gpu" ] && count=$((count + 1))
     done
@@ -130,9 +132,11 @@ gpu_lease_count_locked() {
 }
 
 gpu_lease_reserved_locked() {
-    local gpu="$1" path dev need sum=0
+    local gpu="$1" path dev host need sum=0
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
+        host="$(gpu_lease_field hostname "$path")"
+        [ "$host" = "$GPU_LEASE_HOST" ] || continue
         dev="$(gpu_lease_field gpu "$path")"
         [ "$dev" = "$gpu" ] || continue
         need="$(gpu_lease_field need "$path")"
@@ -143,9 +147,11 @@ gpu_lease_reserved_locked() {
 }
 
 gpu_lease_exclusive_locked() {
-    local gpu="$1" path devset
+    local gpu="$1" path devset host
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
+        host="$(gpu_lease_field hostname "$path")"
+        [ "$host" = "$GPU_LEASE_HOST" ] || continue
         devset="$(gpu_lease_field devset "$path")"
         case ",$devset," in *",$gpu,"*)
             case "$devset" in *,*) printf '1\n'; return 0;; esac
@@ -156,6 +162,8 @@ gpu_lease_exclusive_locked() {
 
 gpu_lease_job_running() {
     local done="$1" path state value
+    # Deliberately global across hosts: every node may read the same Lustre
+    # queue, but a done-file identity may have only one live owner.
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
         value="$(gpu_lease_field done "$path")"
@@ -168,9 +176,11 @@ gpu_lease_job_running() {
 }
 
 gpu_lease_scheduler_busy() {
-    local launcher="$1" path value
+    local launcher="$1" path value host
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
+        host="$(gpu_lease_field hostname "$path")"
+        [ "$host" = "$GPU_LEASE_HOST" ] || continue
         value="$(gpu_lease_field launcher_pid "$path")"
         [ "$value" = "$launcher" ] && return 0
     done
@@ -316,10 +326,12 @@ gpu_lease_release() {
 }
 
 gpu_lease_release_launcher() {
-    local launcher_pid="$1" launcher_start="${2:-}" path value state owner start
+    local launcher_pid="$1" launcher_start="${2:-}" path value state owner start host
     gpu_lease_mutex_acquire
     for path in "$GPU_LEASE_ROOT"/gpu.*.lock; do
         [ -e "$path" ] || continue
+        host="$(gpu_lease_field hostname "$path")"
+        [ "$host" = "$GPU_LEASE_HOST" ] || continue
         state="$(gpu_lease_field state "$path")"
         owner="$(gpu_lease_field launcher_pid "$path")"
         start="$(gpu_lease_field launcher_start "$path")"
