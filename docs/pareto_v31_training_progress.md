@@ -169,8 +169,10 @@ arms must carry the recipe selection.
 |---:|---:|---:|---:|---:|---:|---:|
 | 1 | 426.988 | 2,538.5 | 0.10879 | 0.4375 | 2.24e-4 | 4.84e-4 |
 | 2 | 352.956 | 3,071.0 | 0.11482 | 0.4375 | 3.29e-4 | 7.00e-4 |
-| 3 | 349.639 | 3,100.1 | 0.11755 | 0.4375 | 3.89e-4 | 8.14e-4 |
+| 3 | 349.633 | 3,100.1 | 0.11755 | 0.4375 | 3.89e-4 | 8.14e-4 |
 | 4 | 348.570 | 3,109.6 | 0.12126 | 0.4375 | 4.34e-4 | 9.31e-4 |
+| 5 | 346.293 | 3,130.0 | 0.11603 | 0.4375 | 4.84e-4 | 1.04e-3 |
+| 6 | 350.481 | 3,092.6 | 0.12891 | 0.4375 | 5.27e-4 | 1.14e-3 |
 
 Epoch two shows partial recall recovery rather than monotonic destruction,
 but it remains below the 0.12150 epoch-zero value. The intact 1e-5 arm stays
@@ -181,6 +183,13 @@ Epoch four is nearly back at epoch zero (difference -0.00023) while retaining
 zero sampled macro damage. This makes the null trajectory oscillatory rather
 than monotonically destructive, but the nonzero movement still requires
 lower-rate null normalization.
+The completed epoch-six null ends 0.00742 above epoch zero with unchanged
+sampled macro accuracy, after dipping again at epoch five. Therefore positive
+raw recall change is not sufficient evidence of censorship learning: a
+censored arm must beat the matched intact trajectory or achieve comparable
+recall with demonstrably less movement/damage. The final null checkpoint and
+all six epoch dynamics are complete; its individual report is generated as a
+separate post-training artifact.
 
 ### Wave-A deployment
 
