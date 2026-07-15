@@ -268,17 +268,29 @@ six-epoch trajectories and the full individual reports are required.
 ### Qwen3.5-4B promotion preparation
 
 The old 4B response file named by the pipeline-v3 base has 2,071 examples but
-belongs to the superseded short-answer generation regime: mean answer length
-41.16 tokens, 87,306 generated tokens total, and 2.12% hard cuts. It must not
-seed a v3.1 teacher cache. The current 0.8B fixed-4,096 protocol produced
-947,644 generated tokens and 1,083,913 aligned training events, so reusing the
-old 4B file would silently change the scientific task at promotion.
+belongs to the superseded variable-ceiling generation protocol: mean answer
+length 41.16 tokens, 87,306 generated tokens total, and 2.12% hard cuts. It
+must not seed a v3.1 teacher cache. The 4B base now requires fixed-4,096
+generation and names a new artifact path, so the protocol cannot silently
+regress even though 4B naturally answers much more concisely than 0.8B.
 
 The Qwen3.5-4B snapshot is now present in `/dev/shm` on agpul02/04/05/06.
-Fresh fixed-4,096 vLLM generation is reserved for agpul06 GPU2 after its
-obsolete v2 worker crosses the mandatory 12,000-item floor. No 4B v3.1 cache
-or training may start until that new response artifact has 2,071 exact IDs and
-its hard-cut/quality summary is recorded here.
+The obsolete v2 worker on agpul06 GPU2 was retired only after 12,005 completed
+answers. Fresh fixed-4,096 vLLM generation then completed all 2,071 exact IDs:
+103,017 generated tokens in 239.17 seconds (430.71 token/s, 8.66 prompt/s),
+mean task score 0.92085, mean word accuracy 0.92018, and only 0.145% hard cuts.
+The model used 8.61 GiB for weights and a 783,413-token KV cache; engine cold
+start was dominated by Python imports plus 65.23 seconds of torch compilation
+and 52.61 seconds of profiling. Source artifact:
+`runs/vllm_benchmark_l40s/qwen35_4b_fixed4096_exactids_agpul06/responses_bs64.jsonl`.
+
+Before a six-epoch 4B arm is admitted, `scripts/v31_bk_cohort_probe.py` walks
+the longest existing full B=256 cohort through the exact production
+student-hidden path, including all K tiles and immediate writes. This is a
+memory/speed/locality instrument only: it publishes no checkpoint and does not
+replace the 12,000-item scientific budget. The first K16 probe starts with
+16-user activation shards and LR 1e-6 after the new local teacher cache is
+materialized.
 
 ## Overnight progression rule
 
