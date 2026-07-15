@@ -169,10 +169,13 @@ arms must carry the recipe selection.
 |---:|---:|---:|---:|---:|---:|---:|
 | 1 | 426.988 | 2,538.5 | 0.10879 | 0.4375 | 2.24e-4 | 4.84e-4 |
 | 2 | 352.956 | 3,071.0 | 0.11482 | 0.4375 | 3.29e-4 | 7.00e-4 |
+| 3 | 349.639 | 3,100.1 | 0.11755 | 0.4375 | 3.89e-4 | 8.14e-4 |
 
 Epoch two shows partial recall recovery rather than monotonic destruction,
 but it remains below the 0.12150 epoch-zero value. The intact 1e-5 arm stays
 a runtime/null diagnostic, not a candidate recipe.
+Epoch three recovers further but remains below epoch zero; movement continues
+to grow, so the conclusion is unchanged.
 
 ### Wave-A deployment
 
@@ -215,6 +218,43 @@ builds succeeded: each produced the same hash `b632054c01558f61`, 2,071
 examples and 24 bfloat16 layers. Teacher-forward time was 219.3/219.9/220.2
 seconds; total cache time was 253.7/252.6/252.6 seconds; wrapper wall time
 was 313/300/307 seconds on agpul02/agpul04/agpul06 respectively.
+
+### First Wave-A epoch endpoints
+
+Seven K16 scientific arms completed their first epoch at 2,681--2,728 aligned
+token events/s. The table is an early trajectory screen, not a promotion
+verdict; every arm continues through six epochs and 12,426 answer visits.
+
+| censorship / loss | LR | recall e0 | recall e1 | standard macro e1 | mean/max relative LoRA delta |
+|---|---:|---:|---:|---:|---:|
+| flow / Huber | 1e-5 | 0.12150 | 0.12302 | 0.4167 | 2.08e-3 / 6.64e-3 |
+| flow / Huber | 3e-6 | 0.12150 | 0.10640 | 0.4375 | 7.94e-4 / 3.26e-3 |
+| flow / Huber | 1e-6 | 0.12150 | 0.11360 | 0.4375 | 3.02e-4 / 1.31e-3 |
+| flow / cosine | 1e-5 | 0.12150 | 0.11823 | 0.4375 | 2.20e-3 / 4.62e-3 |
+| random / Huber | 1e-5 | 0.12150 | 0.10961 | 0.3750 | 2.03e-3 / 4.51e-3 |
+| random / Huber | 3e-6 | 0.12150 | 0.10939 | 0.4375 | 7.31e-4 / 2.00e-3 |
+| random / Huber | 1e-6 | 0.12150 | 0.10869 | 0.4375 | 2.73e-4 / 7.36e-4 |
+
+Flow/Huber/1e-5 is the only epoch-one recall improvement, but its 16-item per
+task damage sample falls by 0.0208 macro and its largest layer moves 9.5 times
+farther than the same-rate intact null at epoch one. It is therefore promising
+but not yet safe. Random fill is uniformly weak at this cut. Lower-rate intact
+controls were added specifically to normalize the censored-arm movement.
+
+### Qwen3.5-4B promotion preparation
+
+The old 4B response file named by the pipeline-v3 base has 2,071 examples but
+belongs to the superseded short-answer generation regime: mean answer length
+41.16 tokens, 87,306 generated tokens total, and 2.12% hard cuts. It must not
+seed a v3.1 teacher cache. The current 0.8B fixed-4,096 protocol produced
+947,644 generated tokens and 1,083,913 aligned training events, so reusing the
+old 4B file would silently change the scientific task at promotion.
+
+The Qwen3.5-4B snapshot is now present in `/dev/shm` on agpul02/04/05/06.
+Fresh fixed-4,096 vLLM generation is reserved for agpul06 GPU2 after its
+obsolete v2 worker crosses the mandatory 12,000-item floor. No 4B v3.1 cache
+or training may start until that new response artifact has 2,071 exact IDs and
+its hard-cut/quality summary is recorded here.
 
 ## Overnight progression rule
 
