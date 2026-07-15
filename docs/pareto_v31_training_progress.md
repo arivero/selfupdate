@@ -487,7 +487,16 @@ The paired 4B full-standard gate is now available for the first four endpoints:
 Random/1e-6 finishes at recall 0.15865 versus the 0.16542 intact endpoint,
 so its exact macro retention does not make it a correct recipe. The first flow
 arms likewise fail on matched recall rather than catastrophic standard damage.
-Schema-4 individual report refresh is running for all four endpoints.
+Schema-4 individual report refresh completed successfully for all four
+endpoints between 00:34:55 and 00:41:13 CEST. Each run now has an individual
+PDF plus the explicit 100-item-per-task endpoint table and figure; the
+16-item epoch monitor remains separately labelled.
+
+The scale-corrected flow/3e-7 arm started at 00:40:58 CEST on agpul05 physical
+GPU2, after moving it off an unnecessary successor wait behind the deliberately
+high flow/1e-5 diagnostic. It reused the verified 2,071-example node-local
+cache `98bb2aff23e25f93`. Random/3e-7 remains an atomic remote successor on
+agpul04 GPU0 so it cannot overlap its random/3e-6 predecessor.
 
 ## Overnight progression rule
 
