@@ -251,21 +251,51 @@ def _historical_standard(run_name: str, final_epoch: int) -> pd.DataFrame:
                 for task in common}
 
     base_scores, checkpoint_scores = scores(base), scores(checkpoint)
+    item_counts = [int(checkpoint["tasks"][task].get("n", 0) or 0)
+                   for task in common]
+    items_per_task = min(item_counts) if item_counts else 0
     deltas = {task: checkpoint_scores[task] - base_scores[task] for task in common}
     worst = min(deltas, key=deltas.get)
     base_macro = sum(base_scores.values()) / len(base_scores)
     checkpoint_macro = sum(checkpoint_scores.values()) / len(checkpoint_scores)
     rows = [
-        {"epoch": 0, "macro_accuracy": base_macro, "epoch0_delta": 0.0,
+        {"epoch": 0, "items_per_task": items_per_task,
+         "macro_accuracy": base_macro, "epoch0_delta": 0.0,
          "worst_task": None, "worst_delta": 0.0,
          **{f"accuracy_{task}": value for task, value in base_scores.items()}},
-        {"epoch": final_epoch, "macro_accuracy": checkpoint_macro,
+        {"epoch": final_epoch, "items_per_task": items_per_task,
+         "macro_accuracy": checkpoint_macro,
          "epoch0_delta": checkpoint_macro - base_macro,
          "worst_task": worst, "worst_delta": deltas[worst],
          **{f"accuracy_{task}": value
             for task, value in checkpoint_scores.items()}},
     ]
     return pd.DataFrame(rows)
+
+
+def _full_standard_asset(full_standard: pd.DataFrame,
+                         out_dir: Path) -> Path | None:
+    """Plot the paired full-size base/final endpoint separately from probes."""
+    if full_standard.empty or len(full_standard) < 2:
+        return None
+    frame = full_standard.sort_values("epoch")
+    base, final = frame.iloc[0], frame.iloc[-1]
+    task_columns = sorted(c for c in frame.columns if c.startswith("accuracy_"))
+    labels = [c.removeprefix("accuracy_") for c in task_columns] + ["macro"]
+    base_values = [float(base[c]) for c in task_columns] + [float(base.macro_accuracy)]
+    final_values = [float(final[c]) for c in task_columns] + [float(final.macro_accuracy)]
+    x = list(range(len(labels)))
+    fig, ax = plt.subplots(figsize=(7.5, 4.3))
+    width = .38
+    ax.bar([v - width / 2 for v in x], base_values, width, label="base")
+    ax.bar([v + width / 2 for v in x], final_values, width, label="final")
+    ax.set_xticks(x, labels, rotation=15, ha="right")
+    ax.set(ylabel="accuracy", title="Paired full-standard endpoint")
+    ax.grid(axis="y", alpha=.2); ax.legend(frameon=False)
+    fig.tight_layout()
+    path = out_dir / "full_standard_endpoint.png"
+    fig.savefig(path, dpi=220); plt.close(fig)
+    return path
 
 
 def _layer_assets(df: pd.DataFrame, value: str, ylabel: str, stem: str,
@@ -566,8 +596,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     if delta.empty:
         delta, delta_representation = _final_delta_csv(
             run_dir / "eval" / "weight_deltas.csv", final_epoch)
+    full_standard = _historical_standard(run_dir.name, final_epoch)
     if standard.empty:
-        standard = _historical_standard(run_dir.name, final_epoch)
+        standard, full_standard = full_standard, pd.DataFrame()
     signal_path = run_dir / "eval" / "signal_attribution.json"
     signal = (json.loads(signal_path.read_text(encoding="utf-8"))
               if signal_path.exists() else {})
@@ -578,6 +609,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         gradients.to_csv(out_dir / "gradient_norm_by_epoch.csv", index=False)
     if not recall.empty: recall.to_csv(out_dir / "recall_by_epoch.csv", index=False)
     if not standard.empty: standard.to_csv(out_dir / "standard_by_epoch.csv", index=False)
+    if not full_standard.empty:
+        full_standard.to_csv(out_dir / "full_standard_endpoint.csv", index=False)
     if not signal_frame.empty:
         signal_frame.to_csv(out_dir / "signal_attribution_by_layer.csv", index=False)
     _layer_assets(loss, "loss", "loss", "layer_loss", out_dir, log_scale=True)
@@ -586,6 +619,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     _layer_assets(gradients, "gradient_l2", "local gradient L2 norm",
                   "gradient_norm", out_dir, log_scale=True)
     _eval_assets(recall, standard, out_dir)
+    full_standard_path = _full_standard_asset(full_standard, out_dir)
     phase_path = _historical_phase_asset(
         loss, recall, int(train.get("tail_ce_blocks", 0) or 0), out_dir)
     _signal_asset(signal_frame, out_dir)
@@ -600,6 +634,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("epoch-zero parameter delta", not delta.empty and 0 in set(delta.epoch)),
         ("per-epoch parameter delta", not delta.empty and delta.epoch.nunique() > 1),
         ("signal attribution artifact", bool(signal)),
+        ("paired full-standard endpoint",
+         not full_standard.empty or
+         (standard.get("items_per_task", pd.Series(dtype=int)) >= 100).any()),
     ):
         if not present: missing.append(label)
 
@@ -768,6 +805,21 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                         *sorted(c for c in standard.columns
                                 if c.startswith("accuracy_")),
                         "worst_task", "worst_delta"]
+    full_standard_columns = ["epoch", "items_per_task", "macro_accuracy",
+                             "epoch0_delta",
+                             *sorted(c for c in full_standard.columns
+                                     if c.startswith("accuracy_")),
+                             "worst_task", "worst_delta"]
+    if full_standard.empty:
+        full_standard_summary = "Paired full-standard endpoint: missing."
+    else:
+        endpoint = full_standard.sort_values("epoch").iloc[-1]
+        full_standard_summary = (
+            "Paired full-standard endpoint: "
+            f"n={int(endpoint.get('items_per_task', 0))} per task; "
+            f"macro={float(endpoint.macro_accuracy):.4f}; "
+            f"delta vs base={float(endpoint.epoch0_delta):+.4f}."
+        )
     top_delta = (delta.sort_values("relative_l2", ascending=False)
                  .loc[:, ["layer", "relative_l2"]].head(12)
                  if not delta.empty else pd.DataFrame())
@@ -825,6 +877,14 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "", f"![Standard damage]({rel('standard_damage.png')})" if not standard.empty else "",
         "", f"![Recall–damage trajectory]({rel('recall_damage_frontier.png')})"
         if not recall.empty and not standard.empty else "",
+        "", "## Paired full-standard endpoint", "",
+        ("This table is the separately executed full-size endpoint evaluation; "
+         "it is not the smaller per-epoch monitoring sample." if not full_standard.empty
+         else "_Missing; the full-size endpoint evaluation must be queued._"),
+        "", (_markdown_table(full_standard, full_standard_columns)
+             if not full_standard.empty else ""),
+        "", (f"![Paired full-standard endpoint]({rel('full_standard_endpoint.png')})"
+             if full_standard_path else ""),
         "", "## Per-layer loss by epoch", "",
         ("Historical tail hidden losses are diagnostic: their configured "
          f"training weight is `{train.get('tail_hidden_weight', 'missing')}`. "
@@ -909,6 +969,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("Per-layer training-signal attribution",
          out_dir / "signal_attribution_by_layer.png"),
     ]
+    if full_standard_path:
+        figures.insert(3, ("Paired full-standard endpoint", full_standard_path))
     if not gradients.empty:
         figures.extend([
             ("Per-layer immediate-gradient norm by epoch",
@@ -956,6 +1018,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         coverage=[
             f"Optimizer loss measure: {loss_measure}",
             f"Parameter-change representation: {delta_representation}",
+            full_standard_summary,
             (f"Teacher target source: {signal.get('teacher_target_source', 'missing')}; "
              f"cache hash: {signal.get('teacher_cache_hash', 'missing')}"),
             "Missing evidence:" if missing else "All mandatory epoch telemetry is present.",
@@ -966,7 +1029,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         figures=figures,
     )
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "run": run_dir.name,
         "campaign": (
             "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
@@ -1003,6 +1066,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "trajectory_source": train.get("trajectory_source"),
         "partial_training_boundary": partial_boundary,
         "strict_local": bool(signal.get("passed")) if signal else False,
+        "full_standard_endpoint": {
+            "present": not full_standard.empty,
+            "items_per_task": (int(full_standard.iloc[-1].items_per_task)
+                               if not full_standard.empty else 0),
+            "csv": (str((out_dir / "full_standard_endpoint.csv").relative_to(ROOT))
+                    if not full_standard.empty else None),
+        },
         "source_commit": provenance.get("source_commit"),
         "runtime_dirty": provenance.get("runtime_dirty"),
         "runtime_diff_sha256": provenance.get("runtime_diff_sha256"),

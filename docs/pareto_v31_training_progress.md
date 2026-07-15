@@ -444,6 +444,13 @@ movement; random/1e-6 is effectively neutral at 0.16239 with 5.97e-5
 movement. Warm-epoch throughput is 1,036--1,044 events/s. These reversals are
 recorded as trajectory evidence only; all arms continue to epoch six.
 
+Report-v2 schema 4 now keeps the per-epoch monitoring sample and the paired
+100-item-per-task endpoint as separate evidence. It writes
+`full_standard_endpoint.csv`, a dedicated endpoint figure and exact PDF
+summary, and marks the endpoint missing until the external evaluation exists.
+This repairs the earlier silent preference for the 16-item trajectory when a
+stronger full endpoint file was also present.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
