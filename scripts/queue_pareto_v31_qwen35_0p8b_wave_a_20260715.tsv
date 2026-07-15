@@ -2,7 +2,10 @@
 # Dataset-v5 / pipeline-v3.1 Wave A. The separately running intact B256K16
 # LR1e-5 release gate is intentionally absent. Two lower-rate K16 intact
 # controls extend the original 16-arm design; the seed-43 replication gives
-# 18 queued atomic runs.
+# 18 queued atomic runs. The two 4B higher-rate comparisons reuse this live
+# multi-node allocator so released cards are filled without a second scheduler.
+runs/pareto_v31_qwen35_4b_intact_student_b256k16_huber_lr3e6_s17/report_manifest.json	42000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_4b.yaml --experiment configs/experiments/pareto_v3/qwen35_4b_v31_b256k16_intact_huber_lr3e6.yaml	1	397	21600	qwen35_4b_v31
+runs/pareto_v31_qwen35_4b_random_student_b256k16_huber_lr3e6_s17/report_manifest.json	42000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_4b.yaml --experiment configs/experiments/pareto_v3/qwen35_4b_v31_b256k16_random_huber_lr3e6.yaml	1	396	21600	qwen35_4b_v31
 runs/pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr3e6_s43/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_flow_huber_lr3e6_s43.yaml	1	398	21600	qwen35_0p8b_v31
 runs/pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr3e6_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_intact_huber_lr3e6.yaml	1	400	21600	qwen35_0p8b_v31
 runs/pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e6_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_intact_huber_lr1e6.yaml	1	399	21600	qwen35_0p8b_v31
