@@ -46,11 +46,17 @@ sum. It also prevents intact probes from accidentally masking privileged RAG.
 |---|---|---|---|---|
 | 22:07 | flow B256K1 | `agpul05`/GPU1 | failed before GPU work | 9 s; new base omitted `generation_budget_bucket: 32`, resolving cache `848655…` instead of ready `b63205…` |
 | 22:07 | flow B256K16 | `agpul05`/GPU2 | failed before GPU work | same fail-fast identity defect, 9 s |
-| 22:09 | flow B256K1 retry | `agpul05`/GPU1 | running | commit `d7f7817`; exact ready-cache identity restored |
-| 22:09 | flow B256K16 retry | `agpul05`/GPU2 | running | commit `d7f7817`; exact ready-cache identity restored |
+| 22:09 | flow B256K1 retry | `agpul05`/GPU1 | invalid empty success | cache identity restored, but a misplaced helper made the tile body unreachable; wrapper exited 0 after 10 s without a result |
+| 22:09 | flow B256K16 retry | `agpul05`/GPU2 | invalid empty success | same control-flow defect; no tile and no weight update occurred |
+| 22:14 | flow B256K1 retry 2 | `agpul05`/GPU1 | passed | commit `87729c7`; 256 events; tile 2.251 s / 113.7 events/s; end-to-end 5.40 events/s; 14.86 GiB peak; 24 physical block writes; launcher 58 s |
+| 22:14 | flow B256K16 retry 2 | `agpul05`/GPU2 | passed | commit `87729c7`; 4,096 events; tile 11.569 s / 354.1 events/s; end-to-end 72.4 events/s; 15.68 GiB peak; 24 physical block writes; launcher 67 s |
+| 22:17 | intact B256K1 | `agpul05`/GPU1 | running | numerical-noise and maximum-compute control |
+| 22:17 | intact B256K16 | `agpul05`/GPU2 | running | numerical-noise and maximum-compute control |
 
-The first failures are retained because launch/retry time is part of the
-operational result. They did not allocate training state or modify weights.
+The first failures and invalid empty exits are retained because launch/retry
+time is part of the operational result. They did not perform a training tile
+or modify weights. Commit `87729c7` moves the helper out of `main()` and makes
+a missing passed-result payload fail loudly.
 After the flow probes pass, intact B256K1/B256K16 establish the numerical-noise
 and maximum-compute timing controls before the scientific Wave-A queue opens.
 
