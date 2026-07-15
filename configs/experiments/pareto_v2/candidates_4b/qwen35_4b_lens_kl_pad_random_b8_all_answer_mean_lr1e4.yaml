@@ -1,0 +1,19 @@
+# Censorship-matched companion to the remove arm.  It transfers the same
+# ancient answer-equal reduction and the promising-but-unproven 8B LoRA rate.
+run_name: pareto_v2_candidate_qwen35_4b_lens_kl_pad_random_b8_all_answermean_lr1e4
+mask:
+  compaction: pad_random
+train:
+  run_class: ablation
+  pipeline_version: 2
+  hidden_loss: lens_kl
+  lr: 1.0e-4
+  update_granularity: grid
+  answers_per_update: 8
+  tokens_per_answer_update: 0
+  update_reduction: answer_mean
+  batching: bucketed
+  micro_batch: 8
+  grad_accum: 1
+  conn_window: 1
+  conn_stride: 1
