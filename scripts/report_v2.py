@@ -727,6 +727,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         + (f"; SHA-256 `{_sha(examples_path)}`" if examples_path.is_file() else " (missing)"),
         f"- Frozen run config SHA-256: `{_sha(config_path)}`",
         f"- Training source commit: `{provenance.get('source_commit', 'missing')}`",
+        ("- Runtime tree: DIRTY diagnostic; diff SHA-256 "
+         f"`{provenance.get('runtime_diff_sha256', 'missing')}`"
+         if provenance.get("runtime_dirty") is True else
+         "- Runtime tree: clean at the recorded source commit"
+         if provenance.get("runtime_dirty") is False else
+         "- Runtime tree: cleanliness unavailable (legacy provenance)"),
         f"- Student initialization: `{provenance.get('student_init_identity', train.get('init_from') or model.get('name', 'missing'))}`",
         f"- Pipeline: v{train.get('pipeline_version', 'missing')}",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
@@ -935,6 +941,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "partial_training_boundary": partial_boundary,
         "strict_local": bool(signal.get("passed")) if signal else False,
         "source_commit": provenance.get("source_commit"),
+        "runtime_dirty": provenance.get("runtime_dirty"),
+        "runtime_diff_sha256": provenance.get("runtime_diff_sha256"),
         "missing": missing,
     }
     manifest_path = run_dir / "report_manifest.json"

@@ -1,11 +1,14 @@
 """Pipeline-v3 online block-local learning.
 
-The atomic event is one aligned token.  Within that event blocks are visited
-in forward order and each block receives one local backward followed
-immediately by a state-free SGD write.  No gradient is averaged across
-answers, tokens, or layers.  Earlier causal state is either recomputed from
-the current weights or retained as an immutable per-answer cache; both are
-discarded and rebuilt for the next answer (and therefore the next epoch).
+The atomic event is one aligned token. Within that event blocks are visited
+in forward order and every block receives its own detached local objective.
+The minimum-memory dispatch backpropagates and writes after each block; the
+LoRA dispatch may enter autograd once over all disconnected roots and perform
+the same writes at the token boundary. No gradient is averaged across
+answers, tokens, or layers, and every write lands before the next token.
+Earlier causal state is either recomputed from the current weights or retained
+as an immutable per-answer cache; both are discarded and rebuilt for the next
+answer (and therefore the next epoch).
 """
 
 from __future__ import annotations

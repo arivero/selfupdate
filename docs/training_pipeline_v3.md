@@ -2,9 +2,10 @@
 
 Pipeline v3 is the online-learning limit of the dataset-v5 layerwise
 experiment. Its atomic event is one aligned token from one answer. The model
-walks blocks in forward order; each block computes its own hidden-state loss,
-backpropagates only through that block, writes the gradient immediately, and
-releases it before the next block runs.
+walks blocks in forward order; each block computes its own hidden-state loss
+through a detached input. The minimum-memory dispatch backpropagates and
+writes before the next block; the disconnected-token dispatch enters autograd
+once and writes all disjoint block gradients before the next token.
 
 ## Epoch-zero target materialization
 

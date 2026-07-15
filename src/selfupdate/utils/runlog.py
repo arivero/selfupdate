@@ -47,11 +47,22 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
     defaults = {}
     if cfg.train.pipeline_version in (2, 3):
         examples = Path(cfg.data.examples_path)
+        runtime_diff = subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD", "--",
+             "src/selfupdate", "scripts/train.py"])
+        runtime_untracked = subprocess.check_output(
+            ["git", "ls-files", "--others", "--exclude-standard", "--",
+             "src/selfupdate", "scripts/train.py"], text=True).splitlines()
         defaults = {
             "run_name": cfg.run_name,
             "source_commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], text=True).strip(),
             "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+            "runtime_dirty": bool(runtime_diff or runtime_untracked),
+            "runtime_diff_sha256": (
+                hashlib.sha256(runtime_diff).hexdigest()
+                if runtime_diff else None),
+            "runtime_untracked": runtime_untracked,
             "dataset_path": cfg.data.examples_path,
             "dataset_sha256": (
                 hashlib.sha256(examples.read_bytes()).hexdigest()
