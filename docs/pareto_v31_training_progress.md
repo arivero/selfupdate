@@ -359,6 +359,25 @@ weights remained frozen and no checkpoint was published. The remaining memory
 margin admits a measured shard-24 probe; shard 32 is not assumed safe from
 linear extrapolation.
 
+The shard-24 repetition also passed. Tile time fell to 57.76 seconds and tile
+throughput rose to 1,133.8 events/s (668.6/s including a 40.18-second
+prefill), while peak allocated/reserved memory was 26.36/36.58 GiB. Relative
+to shard 16 this is a 29.7% tile-throughput gain for only 0.79 GiB additional
+allocated memory. A final shard-32 measurement is in progress; production
+will use the fastest measured width with a safe L40S reservation margin.
+
+### Full-corpus K16 damage gate
+
+The first 100-item-per-task evaluations use identical vendored ARC Easy, ARC
+Challenge, and HellaSwag inputs. The native 0.8B base scores
+0.560/0.400/0.430 (macro 0.4633). The matched LR 1e-5 intact endpoint scores
+0.560/0.420/0.450 (macro 0.4767), so its nonzero self-distillation trajectory
+does not damage this standard suite. The provisional flow-mask/Huber/LR 3e-6
+leader scores 0.520/0.400/0.370 (macro 0.4300): damage is 0.0333 versus base
+and 0.0467 versus the matched intact endpoint. Its recall gain is therefore
+not a clean promotion by itself. Full endpoint evaluations of all remaining
+completed K16 arms are in progress to locate a better recall--damage point.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
