@@ -118,9 +118,15 @@ def write_individual_pdf(
         info["Title"] = title
         info["Author"] = "selfupdate layerwise reporting"
         _text_page(pdf, title, identity)
-        _table_pages(pdf, "Recall by corpus (epoch 0 is pre-training)", recall,
-                     ["epoch", "corpus", "next_acc", "prev_acc",
-                      "cloze_acc", "overall_word_acc"])
+        historical = "cer" in recall.columns and recall["cer"].notna().any()
+        recall_columns = (["epoch", "corpus", "cer", "line_exact"]
+                          if historical else
+                          ["epoch", "corpus", "next_acc", "prev_acc",
+                           "cloze_acc", "overall_word_acc"])
+        recall_title = ("Historical inline recall (CER and line exactness)"
+                        if historical else
+                        "Recall by corpus (epoch 0 is pre-training)")
+        _table_pages(pdf, recall_title, recall, recall_columns)
         _table_pages(pdf, "Standard-benchmark damage", standard,
                      ["epoch", "macro_accuracy", "epoch0_delta",
                       "worst_task", "worst_delta"])

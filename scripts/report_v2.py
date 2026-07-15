@@ -260,9 +260,24 @@ def _eval_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
     recall, standard = [], []
     for row in rows:
         if row.get("kind") == "eval":
-            for corpus, scores in (row.get("recall") or {}).items():
+            structured = row.get("recall") or {}
+            for corpus, scores in structured.items():
                 recall.append({"epoch": int(row["epoch"]), "corpus": corpus,
                                **scores})
+            # Campaign-2 metrics predate corpus-typed recall.  Preserve their
+            # actual CER and line-exact measures instead of making a completed
+            # historical run appear to have no recall evidence.  The generic
+            # score column is line exactness, explicitly named by the corpus
+            # label and retained beside CER in historical report tables.
+            if not structured and row.get("cer") is not None:
+                line_exact = row.get("line_exact")
+                recall.append({
+                    "epoch": int(row["epoch"]),
+                    "corpus": "historical_inline_line_exact",
+                    "next_acc": None, "prev_acc": None, "cloze_acc": None,
+                    "overall_word_acc": line_exact,
+                    "cer": row.get("cer"), "line_exact": line_exact,
+                })
         elif row.get("kind") == "standard_eval":
             standard.append({
                 "epoch": int(row["epoch"]),
@@ -283,8 +298,11 @@ def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
         fig, ax = plt.subplots(figsize=(7.5, 4.3))
         for corpus, group in recall.groupby("corpus"):
             ax.plot(group.epoch, group.overall_word_acc, marker="o", label=corpus)
-        ax.set(xlabel="completed epoch", ylabel="overall word accuracy",
-               title="Recall by corpus, including epoch 0")
+        historical = "cer" in recall.columns and recall["cer"].notna().any()
+        ax.set(xlabel="completed epoch",
+               ylabel="line exactness" if historical else "overall word accuracy",
+               title=("Historical inline recall trajectory" if historical
+                      else "Recall by corpus, including epoch 0"))
         ax.grid(alpha=.2); ax.legend(frameon=False)
         fig.tight_layout(); path = out_dir / "recall_by_corpus.png"
         fig.savefig(path, dpi=220); plt.close(fig); paths.append(path)
@@ -474,6 +492,24 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         reported_run_class = "control"
         run_class_source = "2026-07-14_screen_name_fallback"
     rel = lambda name: f"eval/report_v2/{name}"
+    tail_blocks = int(train.get("tail_ce_blocks", 0) or 0)
+    tail_weight = float(train.get("tail_ce_weight", 0) or 0)
+    readout_blocks = int(train.get("readout_window_blocks", 0) or 0)
+    readout_weight = float(train.get("readout_weight", 0) or 0)
+    if tail_blocks and tail_weight:
+        final_logit = (f"ACTIVE historical tail objective: {tail_blocks} blocks, "
+                       f"weight {tail_weight:g}, target "
+                       f"`{train.get('tail_ce_kind', 'legacy/unspecified')}`")
+    elif readout_blocks and readout_weight:
+        final_logit = (f"ACTIVE historical readout: {readout_blocks} blocks, "
+                       f"weight {readout_weight:g}, source "
+                       f"`{train.get('readout_source', 'legacy/unspecified')}`")
+    else:
+        final_logit = "disabled"
+    recall_columns = (["epoch", "corpus", "cer", "line_exact"]
+                      if "cer" in recall.columns and recall["cer"].notna().any()
+                      else ["epoch", "corpus", "next_acc", "prev_acc",
+                            "cloze_acc", "overall_word_acc"])
     md = [
         f"# Individual training report v2 — {run_dir.name}", "",
         "## Identity and provenance", "",
@@ -496,13 +532,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
         f"gradient accumulation {train.get('grad_accum', 'missing')}",
         f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
-        "final-logit training: disabled",
+        f"final-logit training: {final_logit}",
         f"- Seed: {train.get('seed', 'missing')}; items observed: {max_items:,}; elapsed telemetry span: {elapsed_min:.1f} min",
         f"- Parameter-change representation: `{delta_representation}`",
         "", "## Recall by corpus", "",
         "Epoch 0 is the pre-training student; positive epochs are completed training epochs.", "",
-        _markdown_table(recall, ["epoch", "corpus", "next_acc", "prev_acc",
-                                 "cloze_acc", "overall_word_acc"])
+        _markdown_table(recall, recall_columns)
         if not recall.empty else "_Missing._",
         "", f"![Recall by corpus]({rel('recall_by_corpus.png')})" if not recall.empty else "",
         "", "## Standard-benchmark damage", "",
