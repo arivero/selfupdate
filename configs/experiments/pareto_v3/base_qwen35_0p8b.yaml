@@ -18,6 +18,7 @@ cache:
   hidden_dtype: bfloat16
   generation_batch: 256
   teacher_batch: 64
+  generation_budget_bucket: 32
   generation_max_tokens: 4096
   generation_responses_path: runs/vllm_benchmark_l40s/qwen35_0p8b_fixed4096_exactids_agpul05/responses_bs256.jsonl
   generation_shuffle_seed: 17
