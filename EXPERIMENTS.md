@@ -1,6 +1,6 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-10. Working-file convention (as issues.md and
+Updated: 2026-07-15. Working-file convention (as issues.md and
 recommendations.md, 2026-07-10): closed/absorbed content is REMOVED from
 this file — git history keeps it. The full chronological narrative (C1
 waves, findings C2-1..C2-35, wave tables, chimeras, 0.8-band anatomy,
@@ -17,6 +17,21 @@ with slide8kl (0.801) standing as the measured pure-distribution bound
 
 Metrics: `runs/results.md` (auto) | report: `runs/report.pdf` | raw logs:
 `runs/*/metrics.jsonl` and `runs/pipeline_*.log`.
+
+## Current pipeline-v3.1 campaign
+
+Commit `d1aa8d0` establishes B as simultaneous-user parallelism and K as
+within-answer lookahead. Qwen3-0.6B measured B256K1 at 290 tile token-events/s
+(69.4/s including teacher materialization and prefill) and B256K16 at 4,055.5
+tile events/s (1,083.5/s end-to-end). K1 is ordinary online execution; K16
+requires prefetched teacher output or confirmed speculative tokens.
+
+The next campaign screens Qwen3.5-0.8B across sixteen L40S GPUs, then promotes
+stable Pareto recipes to Qwen3.5-4B. The exact gates, 16-slot matrices, report
+requirements, and promotion rule are in `docs/pareto_v31_16gpu_plan.md`.
+Current hard gates: add batched recurrent linear-attention state to the v3.1
+probe, and replace the existing 0.8B cache for scientific use because its
+source generation is 58.52% hard-cut (the RAG gate permits at most 10%).
 
 ## Standing Goal
 
