@@ -56,6 +56,29 @@ class OnlineTeacherSource:
         return states
 
     @torch.no_grad()
+    def full_states_cpu(self, it, device) -> list[torch.Tensor]:
+        """Uncensored ``h0..hn`` staged in host RAM one layer at a time.
+
+        Pipeline-v3 teacher forcing needs full prefixes, whereas the durable
+        v2 cache intentionally stores aligned rows only.  Copying each state
+        before advancing keeps one teacher activation on GPU instead of
+        retaining ``n+1`` complete sequence tensors there.  These states are
+        immutable for the current answer and discarded before the next one.
+        """
+        t_ids = it.teacher_ids.to(device)[None]
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None]
+        states = []
+        with self._ctx(), torch.autocast(
+                torch.device(device).type, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            states.append(h.detach().cpu())
+            for L in range(1, self.stack.n_layers + 1):
+                h = self.stack.run_block(L, h, pos_emb)
+                states.append(h.detach().cpu())
+        return states
+
+    @torch.no_grad()
     def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
         states = self.full_states(it, device)
         return {

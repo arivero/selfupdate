@@ -83,9 +83,9 @@ class AlignedPair:
     t_answer: slice  # answer-only span (eval / CE)
     s_answer: slice
     position_gap: int = 0  # extra positions the teacher's aligned span sits at
-    # teacher-coordinate (start, stop) of each privileged run (interleaved
-    # mode; a single-block example leaves this empty and the block is
-    # implicitly [s_aligned.start, t_aligned.start))
+    # Teacher-coordinate (start, stop) of every privileged run.  Explicit for
+    # both single-block and interleaved examples so a length-preserving
+    # flow-mask does not have to infer a zero-width block from s0 == t0.
     t_privileged: list = field(default_factory=list)
 
     @property
@@ -432,7 +432,8 @@ class ContextMasker:
             student_ids = prefix + stub + mid + answer
             t0 = len(prefix) + len(priv)
             s0 = len(prefix) + len(stub)
-            t_priv = []
+            t_priv = ([(len(prefix), len(prefix) + len(priv))]
+                      if priv else [])
 
         pair = AlignedPair(
             example_id=ex.example_id,

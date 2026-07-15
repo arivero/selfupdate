@@ -323,6 +323,14 @@ interpreted without silently promoting them to frontier evidence.
   ready marker makes `scripts/l40s_exec.sh` export
   `SELFUPDATE_TEACHER_CACHE_ROOT` for subsequent workers. Never copy the whole
   historical root (943 GB measured 2026-07-14); Qwen3.5-4B alone is ~35 GB.
+  That copy-based path is for v1/v2 and historical reproduction. Pipeline v3
+  uses `scripts/l40s_train_v3.sh`: one launcher per host/cache identity wins
+  an atomic lease, regenerates uncensored hidden targets from the fixed answer
+  IDs with the local runtime into
+  `/dev/shm/$USER/selfupdate-teacher-cache-v3`, and atomically publishes a
+  checked ready manifest. Concurrent launchers wait before loading weights;
+  later launchers on the same host skip epoch zero. `/dev/shm` is node-local,
+  so every participating host materializes its own numerically local copy.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the

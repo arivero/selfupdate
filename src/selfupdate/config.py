@@ -88,6 +88,11 @@ class MaskConfig:
     #                Owner 2026-07-12: fixed pad tokens and repeated fillers
     #                are attendable attractors — random non-repeating fill is
     #                the sanctioned length-preserving censor.
+    #   flow_mask  — length- and token-preserving information-flow censor:
+    #                privileged rows stay in the sequence but are zeroed at
+    #                every block boundary and excluded from attention/state
+    #                writes.  This is pipeline-v3's architecture-generic
+    #                censorship control.
     #   intact     — diagnostic control: student sees the original privileged
     #                block, so student_ids == teacher_ids exactly.
     compaction: str = "remove"
@@ -96,6 +101,12 @@ class MaskConfig:
 @dataclass
 class CacheConfig:
     root: str = "caches"
+    # Runtime target placement. ``durable`` uses root (or the historical
+    # SELFUPDATE_TEACHER_CACHE_ROOT staging override). ``node_epoch0`` uses a
+    # numerically local cache generated once per host and atomically published
+    # in node-local shared memory; all later arms on that host memory-map it.
+    runtime_policy: str = "durable"  # durable | node_epoch0
+    node_root: str = "/dev/shm/$USER/selfupdate-teacher-cache-v3"
     # Optional student-view-independent cache selector.  Teacher hidden states
     # and generated answer ids do not depend on how the privileged RAG block
     # is censored for the student.  Setting this to (for example) ``remove``
@@ -154,9 +165,10 @@ class LoraConfig:
 @dataclass
 class TrainConfig:
     # Pipeline 1 is historical. Pipeline 2 requires an explicit gradient
-    # aggregation strategy and records the reserved strategy axes below.
+    # aggregation strategy. Pipeline 3 is online B=1,K=1 learning: one local
+    # state-free update per token and block, with no cross-token averaging.
     pipeline_version: int = 1
-    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid
+    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid | online
     # Pipeline-v2 grid geometry.  ``grid`` is an optimizer tile in the
     # answer x aligned-token plane followed by the mandatory forward layer
     # walk 1..n.  Zero tokens means all remaining aligned tokens in each
@@ -165,7 +177,7 @@ class TrainConfig:
     answers_per_update: int = 0
     tokens_per_answer_update: int = 0
     update_reduction: str = ""  # answer_mean | token_mean (grid only)
-    trajectory_source: str = "student_hidden"      # future: teacher_hidden
+    trajectory_source: str = "student_hidden"      # student_hidden | teacher_hidden (v3)
     attention_source: str = "student_attention"    # future: teacher_attention
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"
@@ -178,6 +190,23 @@ class TrainConfig:
     mix_teacher_start: float = 1.0
     mix_teacher_end: float = 0.0
     lr: float = 1e-5
+    # Pipeline-v3 execution contract. ``immediate_sgd`` has no momentum,
+    # moments, weight decay, clipping, or accumulation state. A fixed LR is
+    # the first certified rule; curvature/NLMS calibration is recorded as a
+    # separate preflight rather than hidden inside the optimizer.
+    online_optimizer: str = "adamw"  # adamw (v1/v2) | immediate_sgd (v3)
+    lr_rule: str = "fixed"            # fixed (v3)
+    # per_block: backward/write immediately after each block (minimum graph
+    # memory). per_token_disconnected: retain the B=1,K=1 block-local graphs
+    # for one token, invoke autograd once over their disconnected loss roots,
+    # then write every block before the next token. No gradients mix because
+    # all inter-block edges remain detached; this is a dispatch optimization,
+    # not accumulation or a wider update tile.
+    backward_dispatch: str = "per_block"  # per_block | per_token_disconnected
+    # recompute_prefix: exact current-weight prefix on every token.
+    # causal_frozen_history: prompt/earlier-token cache is immutable within
+    # the current answer and rebuilt for the next answer/epoch.
+    history_policy: str = "recompute_prefix"
     epochs: int = 10
     micro_batch: int = 1
     grad_accum: int = 8

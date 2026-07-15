@@ -157,7 +157,7 @@ class DistillDataset(Dataset):
         masker = ContextMasker(
             tokenizer,
             pad_random=pad_random,
-            keep_privileged=(student_compaction == "intact"),
+            keep_privileged=(student_compaction in ("intact", "flow_mask")),
         )
         self.pairs = []
         for r in self.records:

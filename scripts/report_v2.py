@@ -1,4 +1,4 @@
-"""Generate the pipeline-v2 report for one completed training.
+"""Generate the atomic v2-format report for one completed training.
 
 The report is deliberately run-local: ``runs/<run>/report.md`` and
 ``runs/<run>/report.pdf`` plus PNG/CSV assets under
@@ -182,6 +182,20 @@ def _delta_frame(rows: list[dict]) -> tuple[pd.DataFrame, str]:
                 "parameter_count": counts[i] if i < len(counts) else None,
             })
     return pd.DataFrame(out), ", ".join(sorted(representations)) or "missing"
+
+
+def _v3_gradient_frame(rows: list[dict]) -> pd.DataFrame:
+    out = []
+    for row in rows:
+        if row.get("kind") != "v3_gradient_norm":
+            continue
+        for i, value in enumerate(row.get("per_layer_mean", [])):
+            out.append({
+                "epoch": int(row.get("epoch", 0)),
+                "layer": i + 1,
+                "gradient_l2": float(value),
+            })
+    return pd.DataFrame(out)
 
 
 def _final_delta_csv(path: Path, epoch: int) -> tuple[pd.DataFrame, str]:
@@ -544,6 +558,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
 
     loss, loss_measure = _layer_loss_frame(rows)
     delta, delta_representation = _delta_frame(rows)
+    gradients = _v3_gradient_frame(rows)
     recall, standard = _eval_frames(rows)
     final_epoch = max((int(row.get("epoch", -1)) + 1 for row in rows
                        if row.get("kind") == "train"), default=0)
@@ -558,6 +573,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     signal_frame = _signal_frame(signal)
     if not loss.empty: loss.to_csv(out_dir / "layer_loss_by_epoch.csv", index=False)
     if not delta.empty: delta.to_csv(out_dir / "parameter_delta_by_epoch.csv", index=False)
+    if not gradients.empty:
+        gradients.to_csv(out_dir / "gradient_norm_by_epoch.csv", index=False)
     if not recall.empty: recall.to_csv(out_dir / "recall_by_epoch.csv", index=False)
     if not standard.empty: standard.to_csv(out_dir / "standard_by_epoch.csv", index=False)
     if not signal_frame.empty:
@@ -565,6 +582,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     _layer_assets(loss, "loss", "loss", "layer_loss", out_dir, log_scale=True)
     _layer_assets(delta, "relative_l2", "relative parameter delta",
                   "parameter_delta", out_dir, log_scale=True)
+    _layer_assets(gradients, "gradient_l2", "local gradient L2 norm",
+                  "gradient_norm", out_dir, log_scale=True)
     _eval_assets(recall, standard, out_dir)
     phase_path = _historical_phase_asset(
         loss, recall, int(train.get("tail_ce_blocks", 0) or 0), out_dir)
@@ -589,7 +608,34 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     times = [float(r["t"]) for r in rows if "t" in r]
     elapsed_min = (max(times) - min(times)) / 60 if len(times) > 1 else float("nan")
     provenance = next((r for r in rows if r.get("source_commit")), {})
-    if train.get("update_granularity") == "grid":
+    partial_boundary = next(
+        (r for r in reversed(rows)
+         if r.get("kind") == "v3_partial_boundary"), None)
+    if partial_boundary is None:
+        partial_train = next(
+            (r for r in reversed(rows)
+             if r.get("kind") == "train" and r.get("partial")), None)
+        if partial_train is not None:
+            partial_boundary = {
+                "token_events_seen": partial_train.get(
+                    "token_events_seen", partial_train.get("step", 0)),
+                "optimizer_updates_seen": partial_train.get(
+                    "optimizer_updates_seen", 0),
+                "completed_epochs": 0,
+                "partial_epoch_index": int(partial_train.get("epoch", 0)) + 1,
+                "meaning": (
+                    "budget checkpoint inside a dataset traversal; not a "
+                    "completed epoch"),
+            }
+    if train.get("update_granularity") == "online":
+        update_identity = (
+            "`online`: one answer token × one block per immediate "
+            f"`{train.get('online_optimizer', 'missing')}` write; no "
+            "cross-token gradient aggregation; history "
+            f"`{train.get('history_policy', 'missing')}`; backward dispatch "
+            f"`{train.get('backward_dispatch', 'per_block')}`"
+        )
+    elif train.get("update_granularity") == "grid":
         token_width = train.get("tokens_per_answer_update", "missing")
         token_width = "all" if token_width == 0 else token_width
         update_identity = (
@@ -602,13 +648,32 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"`{train.get('update_granularity', 'missing')}`; logged measure "
             f"`{loss_measure}`"
         )
-    configured_b = train.get("answers_per_update", train.get("micro_batch"))
-    configured_k_raw = train.get("tokens_per_answer_update", "all")
+    configured_b = (1 if train.get("update_granularity") == "online" else
+                    train.get("answers_per_update", train.get("micro_batch")))
+    configured_k_raw = (1 if train.get("update_granularity") == "online" else
+                        train.get("tokens_per_answer_update", "all"))
     configured_k = "all" if configured_k_raw == 0 else configured_k_raw
     realized_geometry = _realized_geometry(rows, configured_b, configured_k_raw)
     lane_stats = realized_geometry["lanes_per_update"]
     token_stats = realized_geometry["aligned_tokens_per_update"]
-    if (realized_geometry["updates"] and lane_stats.get("mean") is not None
+    if train.get("update_granularity") == "online":
+        token_events = max(
+            (int(row.get("token_events_seen", 0)) for row in rows), default=0)
+        writes = max(
+            (int(row.get("optimizer_updates_seen", 0)) for row in rows),
+            default=0)
+        realized_identity = (
+            f"{token_events:,} aligned-token events; {writes:,} immediate "
+            "block-local writes"
+        )
+        realized_geometry = {
+            "updates": writes,
+            "token_events": token_events,
+            "lanes_per_update": {"mean": 1, "median": 1, "min": 1, "max": 1},
+            "aligned_tokens_per_update": {
+                "mean": 1, "median": 1, "min": 1, "max": 1},
+        }
+    elif (realized_geometry["updates"] and lane_stats.get("mean") is not None
             and token_stats.get("mean") is not None):
         realized_identity = (
             f"{realized_geometry['updates']:,} updates; lanes/update mean "
@@ -670,8 +735,17 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"frozen-config value `{configured_run_class}`)",
         f"- Update geometry/aggregation: {update_identity}",
         f"- Realized update geometry: {realized_identity}",
+        (f"- Training extent: partial budget boundary at "
+         f"{partial_boundary.get('token_events_seen', 0):,} token events; "
+         "zero complete dataset epochs. Numeric boundary plots are probe "
+         "coordinates, not an epoch claim."
+         if partial_boundary else
+         f"- Training extent: {final_epoch} complete dataset epoch(s)."),
         f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
+        f"- Optimizer / LR rule / history: `{train.get('online_optimizer', 'adamw')}` / "
+        f"`{train.get('lr_rule', 'fixed')}` / `{train.get('history_policy', 'not_applicable')}`",
+        f"- Backward dispatch: `{train.get('backward_dispatch', 'per_block')}`",
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
         f"gradient accumulation {train.get('grad_accum', 'missing')}",
         f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
@@ -702,6 +776,14 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"![Temporal layer loss]({rel('layer_loss_temporal.png')})" if not loss.empty else "_Missing._",
         "", f"![Layer-loss heatmap]({rel('layer_loss_heatmap.png')})" if not loss.empty else "",
         "", f"![One-row layer-loss density]({rel('layer_loss_one_row_density.png')})" if not loss.empty else "",
+        "", "## Per-layer immediate-gradient norm", "",
+        ("Pipeline-v3 records the mean norm of each state-free local write "
+         "without synchronizing inside the token/block hot loop."
+         if not gradients.empty else "_Not applicable or missing._"),
+        "", (f"![Temporal local gradient norm]({rel('gradient_norm_temporal.png')})"
+             if not gradients.empty else ""),
+        "", (f"![Local-gradient heatmap]({rel('gradient_norm_heatmap.png')})"
+             if not gradients.empty else ""),
         "", "## Per-layer parameter modification", "",
         f"Representation: `{delta_representation}`.", "",
         "Most-modified layers (final checkpoint):", "",
@@ -765,6 +847,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("Per-layer training-signal attribution",
          out_dir / "signal_attribution_by_layer.png"),
     ]
+    if not gradients.empty:
+        figures.extend([
+            ("Per-layer immediate-gradient norm by epoch",
+             out_dir / "gradient_norm_temporal.png"),
+            ("Per-layer immediate-gradient heatmap",
+             out_dir / "gradient_norm_heatmap.png"),
+        ])
     if phase_path:
         figures.insert(3, ("Local stabilization and behavioral onset",
                            phase_path))
@@ -782,6 +871,10 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              f"frozen-config value {configured_run_class})."),
             f"Update geometry/aggregation: {update_identity}",
             f"Realized update geometry: {realized_identity}",
+            ("Optimizer / LR rule / history: "
+             f"{train.get('online_optimizer', 'adamw')} / "
+             f"{train.get('lr_rule', 'fixed')} / "
+             f"{train.get('history_policy', 'not_applicable')}."),
             ("Batching: "
              f"{train.get('batching', 'missing')}; micro-batch "
              f"{train.get('micro_batch', 'missing')}; gradient accumulation "
@@ -813,7 +906,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     manifest = {
         "schema_version": 3,
         "run": run_dir.name,
-        "campaign": "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None,
+        "campaign": (
+            "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
+            "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None),
         "complete": complete,
         "report": str(report.relative_to(ROOT)),
         "pdf": str(pdf.relative_to(ROOT)),
@@ -832,6 +927,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "reduction": train.get("update_reduction", train.get("update_granularity")),
             "realized": realized_geometry,
         },
+        "optimizer": train.get("online_optimizer", "adamw"),
+        "lr_rule": train.get("lr_rule"),
+        "history_policy": train.get("history_policy"),
+        "backward_dispatch": train.get("backward_dispatch", "per_block"),
+        "trajectory_source": train.get("trajectory_source"),
+        "partial_training_boundary": partial_boundary,
         "strict_local": bool(signal.get("passed")) if signal else False,
         "source_commit": provenance.get("source_commit"),
         "missing": missing,

@@ -147,18 +147,30 @@ class BlockStack:
         with torch.no_grad():
             return self.rotary_emb(hidden, position_ids)
 
-    def run_block(self, L: int, hidden, position_embeddings, position_ids=None):
-        """Forward decoder block L (1-based) on [B, n, H] hidden states."""
+    def run_block(self, L: int, hidden, position_embeddings, position_ids=None,
+                  *, flow_keep=None, past_key_values=None, use_cache=False,
+                  causal_length=None):
+        """Forward decoder block L (1-based) on ``[B,n,H]`` states.
+
+        ``flow_keep`` is the pipeline-v3 information-flow mask over the full
+        key/value history (1 = ordinary token, 0 = censored privileged row).
+        Censored query rows are zeroed before and after every block; attention
+        layers also receive the corresponding key/value mask.  The explicit
+        row zeroing is necessary for recurrent/linear-attention mixers, whose
+        two-dimensional padding helper is ineffective at batch size one in
+        current Transformers.
+        """
         attention_mask = None
         shared_kv_states = None
+        layer_type = (
+            self.layer_types[L - 1] if L - 1 < len(self.layer_types)
+            else getattr(self.blocks[L - 1], "layer_type", None)
+            or getattr(getattr(self.blocks[L - 1], "self_attn", None),
+                       "layer_type", None)
+        )
         if self.rotary_needs_layer_type and isinstance(position_embeddings, dict):
             bundle = position_embeddings
             position_ids = bundle["position_ids"]
-            layer_type = (
-                self.layer_types[L - 1] if L - 1 < len(self.layer_types)
-                else getattr(getattr(self.blocks[L - 1], "self_attn", None),
-                             "layer_type", None)
-            )
             masks = bundle.get("attention_masks")
             if masks is not None:
                 attention_mask = masks[layer_type]
@@ -173,12 +185,68 @@ class BlockStack:
             position_embeddings = self._pos_emb_on(position_embeddings, dev)
             if torch.is_tensor(position_ids) and position_ids.device != dev:
                 position_ids = position_ids.to(dev, non_blocking=True)
+        local_keep = None
+        if flow_keep is not None:
+            flow_keep = flow_keep.to(hidden.device)
+            local_keep = flow_keep[:, -hidden.shape[1]:].to(hidden.dtype)
+            hidden = hidden * local_keep.unsqueeze(-1)
+        if flow_keep is not None or past_key_values is not None:
+            # Linear/recurrent mixers consume the ordinary 2-D keep mask.
+            # Full/sliding attention needs the additive causal form and must
+            # include the already-cached key/value length.
+            if layer_type == "linear_attention":
+                attention_mask = flow_keep
+            else:
+                # A shared DynamicCache is updated layer by layer. Calling
+                # Transformers' top-level mask helper *after* an earlier
+                # layer has appended this same chunk makes that helper count
+                # the chunk as past and doubles K (Q=85 -> K=170). The full
+                # model avoids this by building its mask once before the
+                # layer walk. Build the equivalent additive mask from the
+                # caller-declared causal length, which is stable throughout
+                # this block walk and never inspects another layer's cache.
+                q_len = hidden.shape[1]
+                kv_len = (flow_keep.shape[1] if flow_keep is not None
+                          else causal_length)
+                if kv_len is None:
+                    raise ValueError(
+                        "cached block execution needs causal_length")
+                if kv_len < q_len:
+                    raise ValueError(
+                        f"causal_length {kv_len} shorter than query {q_len}")
+                past_len = kv_len - q_len
+                q_pos = torch.arange(
+                    past_len, kv_len, device=hidden.device)[:, None]
+                k_pos = torch.arange(kv_len, device=hidden.device)[None, :]
+                allowed = k_pos <= q_pos
+                if layer_type in ("sliding_attention", "chunked_attention"):
+                    window = getattr(self.text_config, "sliding_window", None)
+                    if window is None:
+                        window = getattr(
+                            self.text_config, "attention_chunk_size", None)
+                    if window:
+                        allowed &= k_pos > (q_pos - int(window))
+                allowed = allowed[None].expand(hidden.shape[0], -1, -1)
+                if flow_keep is not None:
+                    allowed &= flow_keep[:, None, :].bool()
+                attention_mask = torch.zeros(
+                    allowed.shape, dtype=hidden.dtype, device=hidden.device)
+                attention_mask.masked_fill_(
+                    ~allowed, torch.finfo(hidden.dtype).min)
+                attention_mask = attention_mask[:, None]
         kwargs = {
             "attention_mask": attention_mask,
             "position_ids": position_ids,
             "position_embeddings": position_embeddings,
-            "use_cache": False,
+            "use_cache": use_cache,
         }
+        if past_key_values is not None:
+            params = inspect.signature(self.blocks[L - 1].forward).parameters
+            if "past_key_values" not in params:
+                raise NotImplementedError(
+                    f"{type(self.blocks[L - 1]).__name__} does not expose "
+                    "past_key_values; use history_policy=recompute_prefix")
+            kwargs["past_key_values"] = past_key_values
         if "shared_kv_states" in inspect.signature(self.blocks[L - 1].forward).parameters:
             if shared_kv_states is not None:
                 kwargs["shared_kv_states"] = shared_kv_states
@@ -186,7 +254,10 @@ class BlockStack:
                 if self._shared_kv_states is None:
                     self._shared_kv_states = {}
                 kwargs["shared_kv_states"] = self._shared_kv_states
-        return self._block_calls[L - 1](hidden, **kwargs)
+        out = self._block_calls[L - 1](hidden, **kwargs)
+        if local_keep is not None:
+            out = out * local_keep.unsqueeze(-1)
+        return out
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:
         return list(self.blocks[L - 1].parameters())

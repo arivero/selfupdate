@@ -1,0 +1,64 @@
+# Dataset-v5 pipeline-v3 mechanics/metaparameter base. Candidate overlays
+# must pin censorship, loss, LR, and the promotion budget explicitly.
+run_name: pareto_v3_qwen3_0p6b_base_never_train
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: runs/teacher_cache_h100/artifacts
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v3
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  teacher_batch: 64
+  generation_budget_bucket: 32
+  generation_responses_path: runs/l40s_benchmark/vllm/qwen3_0p6b/responses_bs64.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 3
+  update_granularity: online
+  answers_per_update: 0
+  tokens_per_answer_update: 0
+  update_reduction: ""
+  trajectory_source: student_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: open
+  schedule: summed
+  epochs: 6
+  max_steps: 0
+  lr: 1.0e-5
+  online_optimizer: immediate_sgd
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_frozen_history
+  micro_batch: 1
+  grad_accum: 1
+  batching: item
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  window_dedup: false
+  window_hidden_weight: 1.0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8

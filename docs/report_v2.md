@@ -1,4 +1,4 @@
-# Individual training report v2
+# Individual training report format v2
 
 Report v2 has one atomic subject: one training, identified by the complete
 tuple
@@ -12,6 +12,11 @@ offline-readable rendition of the same individual evidence. Cross-run
 heatmaps and density plots retain their visual encoding but contain one row.
 Final synthesis is a selection and aggregation layer over these atomic
 reports, not a second source of truth.
+
+The format version is independent of the trainer version: pipeline-v2 tiled
+runs and pipeline-v3 immediate-update runs both emit this atomic report. V3
+adds token-event/write throughput, state-free optimizer identity, history
+policy, trajectory source, and sampled per-layer immediate-gradient norms.
 
 For sequential browsing, `runs/report_v2_index/` contains one relative symlink
 per completed PDF, named `YYYYMMDD-HHMMSS__<run_name>.pdf`. The timestamp is
@@ -43,7 +48,12 @@ Required observations are:
 | elapsed time, items seen, and peak memory | baseline/start | required | telemetry rows |
 
 Epoch numbers mean completed training epochs. The pre-training model is epoch
-0; training-loop epoch index 0 is reported as completed epoch 1. Raw rows must
+0; training-loop epoch index 0 is reported as completed epoch 1. A
+`max_steps` metaparameter probe that stops inside its first dataset
+traversal has zero completed epochs: its report labels the endpoint as a
+partial budget boundary and must not promote the plotting coordinate to an
+"epoch 1" scientific claim.
+Raw rows must
 carry the training identity, config hash, dataset identity, pipeline version,
 checkpoint/base identity, seed, batching regime, connected-window width,
 censorship mode, loss kind, and evaluation source.

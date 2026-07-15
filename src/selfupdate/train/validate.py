@@ -26,14 +26,82 @@ def validate_knob_schedule(cfg) -> None:
     sched = cfg.train.schedule
     run_class = cfg.train.run_class
     bad = []
-    if cfg.train.pipeline_version not in (1, 2):
-        raise ValueError("train.pipeline_version must be 1 or 2")
+    if cfg.train.pipeline_version not in (1, 2, 3):
+        raise ValueError("train.pipeline_version must be 1, 2, or 3")
+    if cfg.cache.runtime_policy not in ("durable", "node_epoch0"):
+        raise ValueError(
+            "cache.runtime_policy must be durable or node_epoch0")
+    if (cfg.cache.runtime_policy == "node_epoch0"
+            and not cfg.cache.node_root.startswith("/dev/shm/")):
+        raise ValueError(
+            "cache.runtime_policy=node_epoch0 requires cache.node_root under "
+            "/dev/shm so the cache is host-local shared RAM")
     if cfg.train.update_granularity not in (
-        "legacy_answer_sum", "answer", "token", "grid",
+        "legacy_answer_sum", "answer", "token", "grid", "online",
     ):
         raise ValueError(
             f"unknown train.update_granularity {cfg.train.update_granularity!r}")
-    if cfg.train.pipeline_version == 2:
+    if cfg.train.pipeline_version == 3:
+        if cfg.train.update_granularity != "online":
+            bad.append("pipeline_version=3 requires update_granularity=online")
+        if sched != "summed":
+            bad.append("pipeline-v3 online execution uses the summed forward layer walk")
+        if cfg.train.micro_batch != 1 or cfg.train.grad_accum != 1:
+            bad.append("pipeline-v3 requires micro_batch=1 and grad_accum=1")
+        if cfg.train.batching != "item":
+            bad.append("pipeline-v3 requires batching=item")
+        if cfg.train.online_optimizer != "immediate_sgd":
+            bad.append("pipeline-v3 requires online_optimizer=immediate_sgd")
+        if cfg.train.backward_dispatch not in (
+                "per_block", "per_token_disconnected"):
+            bad.append(
+                "pipeline-v3 backward_dispatch must be per_block or "
+                "per_token_disconnected")
+        if (cfg.train.backward_dispatch == "per_token_disconnected"
+                and not cfg.train.lora.enabled):
+            bad.append(
+                "per_token_disconnected is initially LoRA-only; full-weight "
+                "training uses per_block to avoid retaining every block gradient")
+        if cfg.train.lr_rule != "fixed":
+            bad.append("pipeline-v3 currently implements lr_rule=fixed only")
+        if cfg.train.history_policy not in (
+            "recompute_prefix", "causal_frozen_history",
+        ):
+            bad.append("pipeline-v3 history_policy must be recompute_prefix or causal_frozen_history")
+        if cfg.train.conn_window not in (0, 1):
+            bad.append("pipeline-v3 is strictly block-local (conn_window 0/1)")
+        if cfg.train.conn_stride != 0:
+            bad.append("pipeline-v3 has no connected-window stride")
+        if cfg.train.offload_adam:
+            bad.append("pipeline-v3 has no Adam state to offload")
+        if cfg.train.anchor_hidden_weight:
+            bad.append("pipeline-v3 anchor updates are not implemented")
+        if cfg.train.scramble_targets:
+            bad.append("pipeline-v3 target scrambling is not implemented")
+        if cfg.train.window_dedup:
+            bad.append("pipeline-v3 has no connected windows to deduplicate")
+        if cfg.train.moe_mode != "dense_or_black_box":
+            bad.append("pipeline-v3 MoE routing interventions are not implemented")
+        if cfg.train.hidden_loss.startswith("delta_") or cfg.train.hidden_loss == "multi_delta_nmse":
+            bad.append("pipeline-v3 first pass supports absolute local hidden losses only")
+        if cfg.mask.compaction not in ("flow_mask", "pad_random", "intact"):
+            bad.append("pipeline-v3 censorship is flow_mask, pad_random, or intact; removal modes are retired")
+        if cfg.train.trajectory_source == "teacher_hidden":
+            if not (cfg.train.online_teacher or cfg.train.frozen_teacher_copy):
+                bad.append("teacher_hidden needs online_teacher (LoRA) or frozen_teacher_copy (full weights); aligned disk caches lack h[L-1] prefixes")
+            if cfg.train.online_teacher and not cfg.train.lora.enabled:
+                bad.append("teacher_hidden online_teacher requires LoRA so adapters-off is the frozen teacher")
+            if cfg.train.frozen_teacher_copy and cfg.train.lora.enabled:
+                bad.append("teacher_hidden LoRA must use adapters-off online_teacher, not a redundant frozen copy")
+            if cfg.train.online_teacher and cfg.train.frozen_teacher_copy:
+                bad.append("teacher_hidden must select exactly one full-prefix teacher source")
+            if cfg.mask.compaction == "pad_random":
+                bad.append("teacher_hidden + pad_random would feed uncensored teacher states at random-fill rows; use flow_mask or intact")
+        elif cfg.train.trajectory_source != "student_hidden":
+            bad.append(f"unknown pipeline-v3 trajectory_source={cfg.train.trajectory_source!r}")
+        elif cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
+            bad.append("student_hidden consumes the disk cache directly; disable the unused online/frozen teacher")
+    elif cfg.train.pipeline_version == 2:
         if cfg.train.update_granularity == "legacy_answer_sum":
             bad.append("pipeline_version=2 requires update_granularity=answer, token, or grid")
         if sched != "summed":
@@ -66,7 +134,10 @@ def validate_knob_schedule(cfg) -> None:
             if cfg.train.online_teacher:
                 bad.append("grid aggregation with an online teacher is not implemented")
     elif cfg.train.update_granularity != "legacy_answer_sum":
-        bad.append("answer/token/grid aggregation requires pipeline_version=2")
+        bad.append("non-legacy update granularity requires its matching pipeline version")
+    if (cfg.train.pipeline_version != 3
+            and cfg.train.backward_dispatch != "per_block"):
+        bad.append("backward_dispatch is implemented only by pipeline-v3")
     if cfg.train.update_granularity != "grid":
         if cfg.train.answers_per_update:
             bad.append("answers_per_update is set but update_granularity is not grid")
@@ -75,12 +146,15 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.update_reduction:
             bad.append("update_reduction is set but update_granularity is not grid")
     for knob, value, implemented in (
-        ("trajectory_source", cfg.train.trajectory_source, "student_hidden"),
         ("attention_source", cfg.train.attention_source, "student_attention"),
         ("expert_routing_source", cfg.train.expert_routing_source, "black_box"),
     ):
         if value != implemented:
             bad.append(f"{knob}={value!r} is reserved but not implemented")
+    if (cfg.train.pipeline_version != 3
+            and cfg.train.trajectory_source != "student_hidden"):
+        bad.append(
+            f"trajectory_source={cfg.train.trajectory_source!r} is implemented only by pipeline-v3")
     if run_class not in RUN_CLASSES:
         raise ValueError(f"unknown train.run_class {run_class!r}")
     if run_class == "teacher_reference":
@@ -90,9 +164,11 @@ def validate_knob_schedule(cfg) -> None:
     if cfg.train.batching not in ("item", "padded", "bucketed"):
         raise ValueError(f"unknown train.batching {cfg.train.batching!r}")
     if cfg.mask.compaction not in (
-        "remove", "stub", "stub_gap", "remove_gap", "pad_random", "intact",
+        "remove", "stub", "stub_gap", "remove_gap", "pad_random", "flow_mask", "intact",
     ):
         raise ValueError(f"unknown mask.compaction {cfg.mask.compaction!r}")
+    if cfg.mask.compaction == "flow_mask" and cfg.train.pipeline_version != 3:
+        bad.append("flow_mask is wired only into pipeline-v3 block execution")
     if cfg.cache.source_compaction and cfg.cache.source_compaction not in (
         "remove", "stub", "stub_gap", "remove_gap", "pad_random",
     ):

@@ -18,7 +18,7 @@ def _norm2(params) -> float:
 
 
 def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
-                              items: int = 16) -> dict:
+                              items: int = 16, teacher=None) -> dict:
     """Reproduce sampled layer losses without unloading/reloading the model.
 
     Each backward must touch exactly the current block.  Any foreign-block or
@@ -28,8 +28,11 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
         raise ValueError("strict-local certification requires conn_window <= 1")
     n = stack.n_layers
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
+    teacher_hidden = (cfg.train.pipeline_version == 3
+                      and cfg.train.trajectory_source == "teacher_hidden")
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok, list(range(1, n + 1)),
+        with_teacher_ids=teacher_hidden,
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,
         pad_random=(cfg.mask.compaction == "pad_random"),
@@ -46,12 +49,28 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
     for it in sampled:
         ids = it.student_ids.to(cfg.model.device)[None]
         pos = it.position_ids.to(cfg.model.device)[None]
-        h = stack.embed(ids)
-        pos_emb = stack.rope(h, pos)
+        teacher_states = (
+            teacher.full_states_cpu(it, cfg.model.device)
+            if teacher_hidden else None)
+        h = stack.embed(ids) if not teacher_hidden else None
+        pos_emb = stack.rope(h, pos) if h is not None else None
+        flow_keep = None
+        if cfg.mask.compaction == "flow_mask":
+            flow_keep = torch.ones(
+                (1, len(it.student_ids)), dtype=torch.bool,
+                device=cfg.model.device)
+            for start, stop in it.t_priv or []:
+                flow_keep[:, start:stop] = False
         for L in range(1, n + 1):
-            h_in = h.detach()
+            if teacher_hidden:
+                h_in = teacher_states[L - 1].to(cfg.model.device).detach()
+                pos_emb = stack.rope(h_in, pos)
+            else:
+                h_in = h.detach()
             with torch.autocast(h_in.device.type, dtype=torch.bfloat16):
-                h_out = stack.run_block(L, h_in, pos_emb)
+                h_out = stack.run_block(
+                    L, h_in, pos_emb, position_ids=pos,
+                    flow_keep=flow_keep)
                 if loss_fn.is_delta and 1 < L < n:
                     target = it.hidden[L].to(h_out.device)
                     loss = loss_fn.delta(
@@ -74,7 +93,8 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
                 list(stack.embed_tokens.parameters())
                 + list(stack.final_norm.parameters())
                 + list(stack.lm_head.parameters()))
-            h = h_out.detach()
+            if not teacher_hidden:
+                h = h_out.detach()
 
     stack.model.zero_grad(set_to_none=True)
     stack.model.train(was_training)
@@ -89,10 +109,15 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
         "schema_version": 2,
         "run": cfg.run_name,
         "items": len(sampled),
-        "teacher_target_source": "pipeline_v2_disk_cache",
+        "teacher_target_source": (
+            "pipeline_v3_uncensored_teacher_prefix_plus_disk_target"
+            if teacher_hidden else
+            f"pipeline_v{cfg.train.pipeline_version}_disk_cache"),
         "teacher_cache_hash": cache._index["config_hash"],
         "run_class": cfg.train.run_class,
         "hidden_loss": cfg.train.hidden_loss,
+        "trajectory_source": cfg.train.trajectory_source,
+        "history_policy": cfg.train.history_policy,
         "gradient_contract": "strict_block_local_hidden_state",
         "final_logit_training": False,
         "local_grad_norm": local,

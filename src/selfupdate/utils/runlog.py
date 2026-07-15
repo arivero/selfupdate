@@ -45,7 +45,7 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
         yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
     )
     defaults = {}
-    if cfg.train.pipeline_version == 2:
+    if cfg.train.pipeline_version in (2, 3):
         examples = Path(cfg.data.examples_path)
         defaults = {
             "run_name": cfg.run_name,
@@ -63,21 +63,34 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "answers_per_update": cfg.train.answers_per_update,
             "tokens_per_answer_update": cfg.train.tokens_per_answer_update,
             "update_reduction": cfg.train.update_reduction,
-            "grid_layer_order": "forward",
-            "grid_causal_context": "full_prefix",
-            "grid_student_trajectory_edge": "h[L-1] -> h[L]",
-            "optimizer_updates_per_tile": 1,
+            "grid_layer_order": (
+                "forward" if cfg.train.pipeline_version == 2 else None),
+            "grid_causal_context": (
+                "full_prefix" if cfg.train.pipeline_version == 2 else None),
+            "grid_student_trajectory_edge": (
+                "h[L-1] -> h[L]"
+                if cfg.train.pipeline_version == 2 else None),
+            "optimizer_updates_per_tile": (
+                1 if cfg.train.pipeline_version == 2 else None),
+            "atomic_update_event": (
+                "one_answer_token_x_one_block"
+                if cfg.train.pipeline_version == 3 else None),
             "final_logit_training": False,
             "trajectory_source": cfg.train.trajectory_source,
             "attention_source": cfg.train.attention_source,
             "expert_routing_source": cfg.train.expert_routing_source,
             "mask_mode": cfg.mask.mode,
             "censorship_compaction": cfg.mask.compaction,
+            "cache_runtime_policy": cfg.cache.runtime_policy,
             "loss_kind": cfg.train.hidden_loss,
             "seed": cfg.train.seed,
             "batching": cfg.train.batching,
             "micro_batch": cfg.train.micro_batch,
             "grad_accum": cfg.train.grad_accum,
+            "online_optimizer": cfg.train.online_optimizer,
+            "backward_dispatch": cfg.train.backward_dispatch,
+            "lr_rule": cfg.train.lr_rule,
+            "history_policy": cfg.train.history_policy,
             "conn_window": cfg.train.conn_window,
             "conn_stride": cfg.train.conn_stride,
             "pipeline_split": cfg.model.pipeline_split,

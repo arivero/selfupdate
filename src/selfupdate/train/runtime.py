@@ -332,6 +332,7 @@ class TrainingRuntime:
         self.stack = None
         self.teacher = None
         self.cache = None
+        self.cache_manifest = None
         self._vocab_sig0 = None
 
     # -- construction ------------------------------------------------------
@@ -387,6 +388,17 @@ class TrainingRuntime:
 
     def load_cache(self):
         cache_root, chash = resolve_cache_dir(self.cfg)
+        if self.cfg.cache.runtime_policy == "node_epoch0":
+            from ..teacher.node_epoch0 import ready_manifest, runtime_identity
+
+            ready = ready_manifest(
+                cache_root, chash, compatibility=runtime_identity())
+            if ready is None:
+                raise RuntimeError(
+                    "node-local epoch-zero teacher cache is not ready at "
+                    f"{cache_root}; run scripts/build_teacher_cache.py with "
+                    "--coordinated-node-cache under this node's GPU runtime")
+            self.cache_manifest = ready
         self.cache = TeacherCache(cache_root, expect_hash=chash)
         return self.cache
 

@@ -60,10 +60,18 @@ answer/token aggregation and future state/attention/routing strategy surface
 is specified in [docs/training_pipeline_v2.md](docs/training_pipeline_v2.md).
 Completed pipeline-v2 trainings get their atomic individual report with
 `scripts/report_v2.py`; see [docs/report_v2.md](docs/report_v2.md).
+The online B=1/K=1 successor—with immediate state-free local writes,
+student- versus uncensored-teacher trajectories, information-flow masking,
+and per-answer causal-history lifetime—is specified in
+[docs/training_pipeline_v3.md](docs/training_pipeline_v3.md).
 
-On driver-560 L40S nodes, launch training through `scripts/l40s_exec.sh`; it
-already launches Python, so use `scripts/l40s_exec.sh scripts/train.py ...`
-without an extra `python` argument. The cu128 container is reserved for nodes
+On driver-560 L40S nodes, launch v1/v2 training through
+`scripts/l40s_exec.sh`; it already launches Python, so use
+`scripts/l40s_exec.sh scripts/train.py ...` without an extra `python`
+argument. Launch v3 through `scripts/l40s_train_v3.sh`: it coordinates one
+same-runtime epoch-zero teacher pass into `/dev/shm` per node/cache identity,
+and concurrent or later arms reuse the atomically published cache. The cu128
+container is reserved for nodes
 with a compatible newer driver. The
 thin cu126 dependency layer and its no-second-torch invariant are documented
 in `AGENTS.md`. The wrapper enters the cluster's `glibc/2.35` module through
@@ -76,10 +84,11 @@ one-time online rebuild path rather than a hidden training-time download.
 For a concrete annotated `ps auxww` example of a live L40S scheduler and its
 glibc-loader/Python workers, including the duplicate-worker warning, see the
 L40S Cluster Environment section of `AGENTS.md`.
-Model weights and teacher hidden-state caches are staged independently; use
-`scripts/stage_teacher_cache_shm.sh` for the latter. An idle CPU and idle GPU
-during layerwise training commonly means Lustre-backed teacher shard faults,
-not a slow GPU kernel.
+Model weights and teacher hidden-state caches are staged independently. V1/v2
+can copy a durable cache with `scripts/stage_teacher_cache_shm.sh`; v3 instead
+regenerates it locally through the coordinated epoch-zero launcher above. An
+idle CPU and idle GPU during layerwise training commonly means Lustre-backed
+teacher shard faults, not a slow GPU kernel.
 
 ## Evaluation generation pipeline v2
 
@@ -99,10 +108,12 @@ benefits from kernel-shared resident pages without a custom model object.
 
 ## Current Policy
 
-Pareto v2 is the current campaign: every base uses `conn_window: 1`, frozen
-teacher hidden-state targets, and strict block-local updates. Its atomic report
-is produced immediately after each run; final synthesis selects those reports
-by campaign, model, loss, censorship, or update geometry.
+Pareto v2 is closing. Pipeline v3 is the active implementation target: every
+write is strict block-local and immediate at one answer/token coordinate,
+with no cross-token gradient aggregation or behavioral readout. Dataset v5
+and its uncensored teacher targets remain the scientific source. Atomic reports
+continue to be produced per run; synthesis groups them by pipeline, model,
+loss, censorship, trajectory source, and causal-history policy.
 
 ## Historical readout-era findings
 

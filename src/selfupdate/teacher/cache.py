@@ -102,7 +102,16 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "schema": 9},
     )
     model_short = cfg.model.name.split("/")[-1]
-    cache_root = os.environ.get("SELFUPDATE_TEACHER_CACHE_ROOT", cfg.cache.root)
+    if cfg.cache.runtime_policy == "node_epoch0":
+        cache_root = os.environ.get(
+            "SELFUPDATE_NODE_EPOCH0_CACHE_ROOT", cfg.cache.node_root)
+        cache_root = os.path.expandvars(os.path.expanduser(cache_root))
+    elif cfg.cache.runtime_policy == "durable":
+        cache_root = os.environ.get("SELFUPDATE_TEACHER_CACHE_ROOT", cfg.cache.root)
+    else:
+        raise ValueError(
+            "cache.runtime_policy must be durable or node_epoch0, got "
+            f"{cfg.cache.runtime_policy!r}")
     root = Path(cache_root) / f"{model_short}-{cfg.mask.mode}-{source_compaction}-{chash}"
     return root, chash
 

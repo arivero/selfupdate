@@ -44,6 +44,7 @@ from selfupdate.chatfmt import adapt_records, stop_token_id
 from selfupdate.config import load_config
 from selfupdate.masking import ContextMasker, SegmentedExample
 from selfupdate.teacher.cache import AsyncTeacherCacheWriter, resolve_cache_dir
+from selfupdate.teacher.node_epoch0 import NodeEpoch0Lease, runtime_identity
 from selfupdate.train.runtime import (load_causal_lm, pp_device_map,
                                       uses_pipeline_map)
 
@@ -398,6 +399,13 @@ def main() -> None:
                     help="benchmark/write teacher answers without hidden-state caching")
     ap.add_argument("--generation-responses", default=None,
                     help="reuse exact token_ids from a completed response JSONL")
+    ap.add_argument(
+        "--coordinated-node-cache", action="store_true",
+        help=("materialize epoch-zero targets under cache.node_root with an "
+              "atomic per-host lease; concurrent/repeated builders wait or reuse"))
+    ap.add_argument(
+        "--node-cache-wait-seconds", type=float, default=7200.0,
+        help="maximum wait for another process building the same node cache")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     if args.model is not None:
@@ -434,19 +442,58 @@ def main() -> None:
     if args.generation_shuffle_seed is not None:
         cfg.cache.generation_shuffle_seed = args.generation_shuffle_seed
     if args.cache_root is not None:
-        cfg.cache.root = args.cache_root
+        if cfg.cache.runtime_policy == "node_epoch0":
+            cfg.cache.node_root = args.cache_root
+        else:
+            cfg.cache.root = args.cache_root
     if args.limit is not None:
         cfg.cache.limit = args.limit
     if args.generation_responses is not None:
         cfg.cache.generation_responses_path = args.generation_responses
 
+    if args.coordinated_node_cache and args.generation_only:
+        raise ValueError(
+            "--coordinated-node-cache publishes complete hidden targets; "
+            "it cannot be combined with --generation-only")
+    if (cfg.cache.runtime_policy == "node_epoch0"
+            and not args.coordinated_node_cache):
+        raise ValueError(
+            "cache.runtime_policy=node_epoch0 must use "
+            "--coordinated-node-cache; direct writes could expose partial "
+            "safetensor shards to another training arm")
     if (cfg.cache.source_compaction
             and cfg.cache.source_compaction != cfg.mask.compaction):
-        raise ValueError(
-            "cache.source_compaction is a training-reader selector; cache "
-            "generation must leave it empty or equal mask.compaction")
+        if not args.coordinated_node_cache:
+            raise ValueError(
+                "cache.source_compaction is a training-reader selector; cache "
+                "generation must leave it empty or equal mask.compaction")
+        # V3 node materialization intentionally uses the training arm's view
+        # while targeting the uncensored teacher sequence. The aligned teacher
+        # rows and answer ids are view-independent; readers explicitly ignore
+        # student s0/position-gap metadata on a cross-view cache.
 
     root, chash = resolve_cache_dir(cfg)
+    final_root = root
+    node_lease = None
+    if args.coordinated_node_cache:
+        if cfg.cache.runtime_policy != "node_epoch0":
+            raise ValueError(
+                "--coordinated-node-cache requires "
+                "cache.runtime_policy=node_epoch0")
+        node_lease = NodeEpoch0Lease(
+            final_root, chash, compatibility=runtime_identity(),
+            wait_seconds=args.node_cache_wait_seconds)
+        build_root, ready = node_lease.acquire()
+        if ready is not None:
+            print(
+                f"epoch0 cache reuse: root={final_root} "
+                f"examples={ready['examples']} host={ready['host']} "
+                f"hash={ready['cache_hash']}")
+            return
+        root = build_root
+        print(
+            f"epoch0 cache lease acquired: host={node_lease.host} "
+            f"pid={node_lease.pid} final={final_root}")
     root.mkdir(parents=True, exist_ok=True)
     print(f"cache dir: {root}")
 
@@ -1029,6 +1076,23 @@ def main() -> None:
         print(f"teacher recitation — next/prev word-LCS {gen_summary['mean_word_acc_nextprev']:.3f}, "
               f"hard-cut {gen_summary['hard_cut_fraction']:.1%}, "
               f"mean gen len {gen_summary['mean_gen_tokens']:.0f} tokens")
+    if node_lease is not None:
+        manifest = node_lease.publish(root, {
+            "model": cfg.model.name,
+            "model_dtype": cfg.model.dtype,
+            "hidden_dtype": cfg.cache.hidden_dtype,
+            "gpu_names": [
+                torch.cuda.get_device_name(i)
+                for i in range(torch.cuda.device_count())
+            ],
+            "source_commit": source_commit,
+            "generation_responses_path": cfg.cache.generation_responses_path,
+            "teacher_batch": cfg.cache.teacher_batch,
+            "total_seconds": timings["total_seconds"],
+        })
+        print(
+            f"epoch0 cache ready: root={final_root} "
+            f"examples={manifest['examples']} hash={manifest['cache_hash']}")
 
 
 if __name__ == "__main__":

@@ -69,6 +69,7 @@ from ..utils.seeding import seed_everything
 from .losses import HiddenLoss
 from .locality import certify_locality_resident
 from .moe import MoEController, dequantize_overrides
+from .online_v3 import train_online_v3
 from .anchor import (  # noqa: F401  (AnchorBank re-exported for scripts)
     AnchorBank,
     anchor_trajectory_step,
@@ -131,6 +132,29 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
             raise ValueError(
                 f"train.{knob}={val} exceeds the model's {stack.n_layers} "
                 f"blocks ({cfg.model.name})")
+    if cfg.train.pipeline_version == 3:
+        teacher = rt.load_teacher(moe_load_kw)
+        cache = rt.load_cache()
+        log.log(
+            kind="teacher_cache_source",
+            runtime_policy=cfg.cache.runtime_policy,
+            cache_root=str(cache.root),
+            cache_hash=cache._index["config_hash"],
+            node_epoch0_manifest=rt.cache_manifest,
+        )
+        train_online_v3(cfg, stack, tok, log, cache, teacher=teacher)
+        locality = certify_locality_resident(
+            cfg, stack, tok, cache, run_dir, teacher=teacher)
+        log.log(kind="locality_certification", **{
+            key: locality[key] for key in (
+                "items", "gradient_contract", "final_logit_training",
+                "local_grad_norm", "cross_block_leak_grad_norm",
+                "frozen_vocab_grad_norm",
+                "local_signal_present_in_every_block", "passed")})
+        rt.save_checkpoint(run_dir)
+        log.log(kind="done", **rt.memory_summary())
+        log.close()
+        return run_dir
     teacher = rt.load_teacher(moe_load_kw)
     online = teacher is not None
     # Open-answer (v5) datasets keep their generated answers in the teacher
