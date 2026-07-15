@@ -68,7 +68,7 @@ def _tight_median_bucket(ds, width: int) -> list[int]:
     return ordered[start:start + width]
 
 
-def _prefix_layout(items, device):
+def _prefix_layout(items, device, *, flow_mask: bool):
     lengths = torch.tensor([it.s0 for it in items], device=device)
     maximum = int(lengths.max())
     timeline = torch.arange(maximum, device=device)[None]
@@ -76,10 +76,11 @@ def _prefix_layout(items, device):
     valid = timeline >= left
     source = (timeline - left).clamp_min(0)
     keep = valid.clone()
-    for row, it in enumerate(items):
-        shift = maximum - it.s0
-        for start, stop in it.t_priv or []:
-            keep[row, shift + start:shift + min(stop, it.s0)] = False
+    if flow_mask:
+        for row, it in enumerate(items):
+            shift = maximum - it.s0
+            for start, stop in it.t_priv or []:
+                keep[row, shift + start:shift + min(stop, it.s0)] = False
     return maximum, source.long(), valid, keep
 
 
@@ -104,10 +105,16 @@ def main() -> None:
     load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
     rt = TrainingRuntime(cfg).load(load_kw)
     stack, tok, cache = rt.stack, rt.tokenizer, rt.load_cache()
-    if stack.block_devices is not None or any(
-            kind not in (None, "full_attention") for kind in stack.layer_types):
+    if stack.block_devices is not None:
         raise NotImplementedError(
-            "first v3.1 B×K probe requires one-device full attention")
+            "v3.1 B×K probe requires one-device placement")
+    unsupported = sorted(set(stack.layer_types) - {
+        None, "full_attention", "linear_attention",
+    })
+    if unsupported:
+        raise NotImplementedError(
+            "v3.1 B×K probe lacks authoritative cache semantics for "
+            f"layer types {unsupported}")
     teacher = rt.load_teacher(load_kw)
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
@@ -117,6 +124,15 @@ def main() -> None:
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,
     )
+
+
+def _layer_type(stack, layer: int):
+    if layer - 1 < len(stack.layer_types):
+        return stack.layer_types[layer - 1]
+    block = stack.blocks[layer - 1]
+    return (getattr(block, "layer_type", None)
+            or getattr(getattr(block, "self_attn", None), "layer_type", None)
+            or "full_attention")
     indices = _tight_median_bucket(ds, B)
     items = [ds[index] for index in indices]
     batch = collate_padded_items(items)
@@ -135,7 +151,7 @@ def main() -> None:
     teacher_s = time.perf_counter() - teacher_started
 
     prompt_length, prefix_index, prefix_valid, prefix_keep = _prefix_layout(
-        items, device)
+        items, device, flow_mask=(cfg.mask.compaction == "flow_mask"))
     prefix_positions = prefix_index
     q_offset = torch.arange(K, device=device)[None]
     s0 = torch.tensor([it.s0 for it in items], device=device)[:, None]
@@ -174,11 +190,16 @@ def main() -> None:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         for layer in range(1, stack.n_layers + 1):
             h = _gather_hidden(teacher_inputs[layer - 1], prefix_index)
+            layer_mask = (
+                prefix_keep
+                if _layer_type(stack, layer) == "linear_attention"
+                else prefill_mask
+            )
             stack.run_block(
                 layer, h, prefix_rope, position_ids=prefix_positions,
                 flow_keep=prefix_keep, past_key_values=history,
                 use_cache=True, causal_length=prompt_length,
-                prepared_attention_mask=prefill_mask)
+                prepared_attention_mask=layer_mask)
             _detach_cache_layer(history, layer - 1)
     _sync()
     prefill_s = time.perf_counter() - prefill_started
@@ -196,12 +217,17 @@ def main() -> None:
     for layer in range(1, stack.n_layers + 1):
         params = _clear_block_grads(stack, layer)
         h_in = _gather_hidden(teacher_inputs[layer - 1], query_index).detach()
+        layer_mask = (
+            query_valid
+            if _layer_type(stack, layer) == "linear_attention"
+            else query_mask
+        )
         with torch.autocast("cuda", dtype=torch.bfloat16):
             h_out = stack.run_block(
                 layer, h_in, query_rope, position_ids=query_positions,
                 flow_keep=key_keep, past_key_values=history,
                 use_cache=True, causal_length=prompt_length + K,
-                prepared_attention_mask=query_mask)
+                prepared_attention_mask=layer_mask)
             view = stack.loss_view(layer, h_out)[query_valid]
             target = targets[layer][query_valid]
             mean_loss = loss_fn(
@@ -233,6 +259,8 @@ def main() -> None:
         "token_events": token_events,
         "conceptual_block_local_writes": token_events * stack.n_layers,
         "physical_block_writes": stack.n_layers,
+        "layer_types": [_layer_type(stack, layer)
+                        for layer in range(1, stack.n_layers + 1)],
         "teacher_batch_s": teacher_s,
         "prefill_s": prefill_s,
         "tile_s": tile_s,

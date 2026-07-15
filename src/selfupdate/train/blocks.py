@@ -212,7 +212,12 @@ class BlockStack:
             # Full/sliding attention needs the additive causal form and must
             # include the already-cached key/value length.
             if layer_type == "linear_attention":
-                attention_mask = flow_keep
+                # Transformers applies this mask directly to the current
+                # hidden chunk.  With cached BxK execution ``flow_keep`` also
+                # contains the prefix and therefore cannot broadcast against
+                # [B,K,H]; the prefix has already been committed to recurrent
+                # state.  Mask only the current query rows.
+                attention_mask = local_keep
             else:
                 # A shared DynamicCache is updated layer by layer. Calling
                 # Transformers' top-level mask helper *after* an earlier
