@@ -378,6 +378,35 @@ and 0.0467 versus the matched intact endpoint. Its recall gain is therefore
 not a clean promotion by itself. Full endpoint evaluations of all remaining
 completed K16 arms are in progress to locate a better recall--damage point.
 
+The completed endpoint sweep resolves that point:
+
+| endpoint | full standard macro | damage vs base | final recall |
+|---|---:|---:|---:|
+| flow / cosine / 1e-5 | 0.4400 | 0.0233 | 0.11739 |
+| flow / Huber / 1e-5 | 0.4267 | 0.0367 | 0.12182 |
+| flow / Huber / 3e-6 | 0.4300 | 0.0333 | 0.15356 |
+| flow / Huber / 1e-6 | **0.4600** | **0.0033** | **0.12950** |
+| random / Huber / 1e-5 | 0.4000 | 0.0633 | 0.12626 |
+| random / Huber / 3e-6 | 0.4300 | 0.0333 | 0.13508 |
+| random / Huber / 1e-6 | 0.4567 | 0.0067 | 0.10799 |
+
+Flow-mask/Huber/LR 1e-6 is the clean 0.8B Pareto point: recall is 0.00801
+above epoch zero with only 0.0033 macro damage. Random fill at the same rate
+has similar standard retention but finishes below epoch zero, while both
+3e-6 arms exchange 0.0333 macro accuracy for more recall. The seed-43
+replication of the cleanest high-recall candidate remains queued, and the
+lower-rate intact controls are required to measure its matched null gain.
+
+The final 4B geometry probe passed at 32-user activation shards: 54.80 seconds
+of tile work, 1,194.9 tile events/s, 678.5 events/s including prefill, and
+27.04/38.93 GiB peak allocated/reserved memory. This is 5.4% faster than shard
+24 and leaves 7.1 GiB of the L40S unreserved; larger shards are not pursued for
+the diminishing gain. The audited six-arm 4B screen fixes B=256, K=16, Huber,
+immediate SGD, LoRA r=16/alpha=32, and shard 32, crossing intact/flow-mask/
+random-fill with learning rates 1e-6 and 3e-6. The three LR 1e-6 anchors began
+first on separate GPUs; each must complete six epochs and its individual
+report before selection.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
