@@ -407,6 +407,28 @@ random-fill with learning rates 1e-6 and 3e-6. The three LR 1e-6 anchors began
 first on separate GPUs; each must complete six epochs and its individual
 report before selection.
 
+agpul04 materialized a third numerically local copy of the same 4B cache while
+the first 4B arms loaded: teacher forward 156.3 seconds, cache write 44.1
+seconds, total 175.6 seconds, hash `98bb2aff23e25f93`. The second agpul04 arm
+waited on the atomic lease and reused the published cache. Four 4B arms are
+now active: intact/1e-6, flow/1e-6, random/1e-6, and flow/3e-6. To admit the
+fourth arm, only the obsolete v2 worker that had already reached 12,037 items
+was retired; two v2 workers below 12,000 items remain protected. The queued
+intact/3e-6 and random/3e-6 comparisons will backfill the next eligible cards.
+
+The first 4B epoch establishes both speed and the no-censorship sanity bound.
+Flow/1e-6 trained 239,286 aligned events in 273.37 seconds (875.3 events/s,
+7.58 completed prompts/s); intact/1e-6 took 279.94 seconds (854.8 events/s,
+7.40 prompts/s). Sampled standard macro remained 0.5833 in both. The intact
+mean/max relative LoRA delta was only 1.09e-7/2.73e-7, versus
+3.31e-5/1.25e-4 for flow mask: uncensored teacher targets are therefore
+numerically aligned with this L40S student runtime and do not induce material
+training. Recall moved 0.16209→0.15648 in that effectively stationary intact
+arm and 0.16209→0.16114 in flow, demonstrating generation/evaluation
+oscillation larger than the one-epoch parameter signal. No recipe is selected
+from an epoch-one cut. At this speed, a fresh 12-epoch winner is practical
+after the six-epoch screen and replication gate.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
