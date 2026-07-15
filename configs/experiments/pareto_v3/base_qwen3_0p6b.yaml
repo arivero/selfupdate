@@ -37,6 +37,8 @@ train:
   max_steps: 0
   lr: 1.0e-5
   online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
   lr_rule: fixed
   backward_dispatch: per_block
   history_policy: causal_frozen_history

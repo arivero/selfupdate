@@ -196,13 +196,29 @@ class TrainConfig:
     # separate preflight rather than hidden inside the optimizer.
     online_optimizer: str = "adamw"  # adamw (v1/v2) | immediate_sgd (v3)
     lr_rule: str = "fixed"            # fixed (v3)
+    # after_backward uses a fused multi-tensor block write. grad_ready uses
+    # post-accumulate autograd hooks to write and clear each tensor as soon as
+    # its gradient is materialized; both implement state-free immediate SGD.
+    online_write_dispatch: str = "after_backward"  # after_backward | grad_ready
+    # Known-answer tokens evaluated at one frozen weight snapshot. 1 is exact
+    # online SGD; values >1 are an explicit stale-gradient approximation and
+    # 0 means the whole remaining answer. Gradients are summed, never averaged:
+    # one fused write is exactly sequential replay of gradients precomputed at
+    # the same snapshot under state-free SGD.
+    stale_gradient_window: int = 1
     # per_block: backward/write immediately after each block (minimum graph
     # memory). per_token_disconnected: retain the B=1,K=1 block-local graphs
     # for one token, invoke autograd once over their disconnected loss roots,
     # then write every block before the next token. No gradients mix because
     # all inter-block edges remain detached; this is a dispatch optimization,
     # not accumulation or a wider update tile.
-    backward_dispatch: str = "per_block"  # per_block | per_token_disconnected
+    # answer_wavefront_disconnected exploits a known answer exactly: cells on
+    # the same layer+token anti-diagonal have satisfied both dependencies
+    # (previous layer, same token; same layer, previous token) and may share
+    # one disconnected autograd dispatch. It is not stale/chunked training.
+    # answer_pipeline_lanes executes the same grid with one bounded causal
+    # CUDA lane per block, exposing actual cross-diagonal concurrency.
+    backward_dispatch: str = "per_block"  # see v3 dispatch modes in docs
     # recompute_prefix: exact current-weight prefix on every token.
     # causal_frozen_history: prompt/earlier-token cache is immutable within
     # the current answer and rebuilt for the next answer/epoch.

@@ -348,7 +348,21 @@ def censored_rows(s0: int, t0: int, A: int, t_priv, device) -> torch.Tensor:
     (thinking_selective): kept think runs survive between censored ones.
     The invariant ``len(rows) == s0 + A`` ties teacher-row selection to the
     student sequence length — any drift is an alignment bug, not noise."""
-    if not t_priv:
+    # Length-preserving censorship (intact/pad_random) has the same aligned
+    # boundary in both views. Explicit privileged-span metadata describes
+    # what was replaced, not rows to delete from this identity map.
+    if s0 == t0:
+        keep = [torch.arange(t0, device=device)]
+    elif (len(t_priv or []) == 1
+          and t_priv[0][1] == t0
+          and s0 >= t_priv[0][0]):
+        # Classic one-block views may replace the trailing privileged block
+        # with a non-empty stub. The stub has no teacher counterpart, so this
+        # historical teacher-stream control maps its prefix rows by identity
+        # and begins the aligned teacher target at t0. Interleaved selective
+        # censorship continues through the general kept-run map below.
+        keep = [torch.arange(s0, device=device)]
+    elif not t_priv:
         keep = [torch.arange(s0, device=device)]
     else:
         keep = []

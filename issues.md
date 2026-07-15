@@ -425,6 +425,36 @@ numbers in one table.
   card-packing via offload_adam does not raise throughput while arms are
   compute-saturated (91-98% util at B=1). The B1/B4 grid fork is labeled
   via the layer_loss_manifest `regime` column.
+- Pipeline-v3 B1/K1 dispatch screen (2026-07-15, Qwen3-0.6B, longest
+  answer, 256 aligned tokens, L40S): minimum-memory per-block ran at
+  8.74 token-events/s; one disconnected backward per token reached 9.87.
+  A serial answer anti-diagonal was 9.76, and a bounded threaded/CUDA-stream
+  student pipeline was 9.84 while raising incremental peak allocation from
+  370 to 800 MiB. Post-accumulation optimizer-in-backward hooks were slower
+  on the student path (9.09 token-events/s) than the fused post-backward
+  write. These schedules were parameter-delta equivalent and passed cache/
+  vocabulary tripwires, so the negative is execution speed, not numerics.
+  Teacher-hidden independent layer lanes improved 8.71 -> 10.71; grad-ready
+  writes reached 11.89 with identical layer deltas; partitioning the same 28
+  lanes over three L40S GPUs regressed to 11.12. All remain far below a useful
+  campaign rate. Do not claim that rearranging one-GPU dispatch solves v3:
+  fixed tiny forward/backward launch overhead remains dominant. The next
+  distinct probes are multi-GPU teacher-layer partitioning and fixed-shape
+  capture/fusion, not more one-GPU lane variants.
+- Pipeline-v3 stale-window screen (2026-07-15, Qwen3-0.6B, same 256-token
+  longest answer and seed): K=1 measured 10.87 token-events/s and K=8 measured
+  82.69 (7.61x) with essentially flat incremental memory (82.95 vs 83.32 MiB).
+  The exact trainable-delta comparison gives global relative L2 divergence
+  0.154 and cosine 0.9889. Median per-layer divergence is 0.160; layer 1 is
+  the clear outlier at 0.744/cosine 0.766. This is a one-answer calibration,
+  not a quality verdict; the matched 12k-item K sweep must report recall,
+  damage, and full per-layer dynamics. Longer-window throughput on the same
+  probe reached 165.54 at K=16, 604.78 at K=64, and 1435.17 answer-wide.
+  An intact K=64 control initially exposed future-token leakage when the
+  review's mask-free q=1 optimization was over-generalized to chunks. With a
+  shared K×prefix causal mask, intact loss returned to 2.0e-6--9.2e-6, total
+  parameter delta to 7.6e-7, and throughput to 605.09 token-events/s. Keep the
+  mask-free path q=1-only.
 
 ## Open items (2026-07-11; closed work lives in git history)
 

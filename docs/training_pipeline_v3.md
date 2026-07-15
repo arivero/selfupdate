@@ -96,7 +96,8 @@ This is deliberately not a smaller tile in pipeline v2. It removes the tile:
   object; and
 - embedding, final norm, and vocabulary head remain frozen.
 
-`backward_dispatch` has two numerically equivalent execution choices.
+`backward_dispatch` has five execution choices with the same local objective
+and write law.
 `per_block` invokes backward and writes after every block, minimizing live
 graph memory. `per_token_disconnected` retains only one token's isolated
 block graphs, sums their disconnected scalar roots for one autograd-engine
@@ -106,10 +107,54 @@ gradients, widen K, or create cross-block credit. It trades one token of graph
 memory for lower Python/dispatcher overhead and is particularly relevant when
 small models run no faster than large ones.
 
+`answer_wavefront_disconnected` exploits the fact that the complete answer is
+known during training. In the layer-by-token grid, cell `(L,t)` depends on
+`(L-1,t)` and `(L,t-1)`. The trainer walks anti-diagonals of this grid, so every
+cell on a diagonal is dependency-ready and belongs to a different block. One
+autograd invocation handles those disconnected roots and every block is
+written before its next token cell. Thus each block still observes tokens in
+causal order, downstream blocks still consume the pre-write hidden value, and
+there are no stale weights, averaged gradients, or cross-block paths. Live
+training state is one diagonal/frontier plus the causal caches, rather than a
+graph for the whole answer. The initial implementation is the LoRA,
+`student_hidden`, `causal_frozen_history` path; the sequential `per_block` path
+remains the minimum-memory full-weight implementation.
+
+The serial wavefront proves the dependency transformation but does not itself
+overlap CUDA work. `answer_pipeline_lanes` is its concurrent executor: one
+CUDA stream and host lane owns each block, with a depth-one queue carrying the
+pre-write hidden value to the next layer. This is the same exact grid order,
+but multiple anti-diagonal cells can execute at once. The one-cell frontier
+bounds activation retention independently of answer length.
+
+Teacher-hidden training exposes a still wider schedule. Since every block
+receives uncensored teacher `h[L-1]`, blocks have no same-token dependency at
+all. `teacher_layer_lanes` assigns one causal CUDA lane to each block: tokens
+remain ordered and immediately written within a lane, while all block lanes
+run concurrently. It retains at most one local cell graph per block and does
+not average across either axis. This is the massively parallel dreaming form;
+student wavefront is the stricter deployment-matched form.
+
+Both lane-parallel schedules currently require block-private causal state. Models
+such as Gemma4 expose cross-layer shared KV state, adding edges to the simple
+grid above; runtime rejects wavefront/lanes on those architectures until a
+dependency-aware partition is implemented. Their exact baseline remains the
+token-major dispatch. The lane implementation initially accepts stateless
+geometric losses so lazy shared loss caches cannot race between host threads.
+
 For a model with `N` blocks and an aligned answer span of `A` tokens, one
 answer therefore causes `A*N` immediate writes. Metrics record both token
 events and physical optimizer writes so an epoch always means one complete
 dataset traversal.
+
+The orthogonal `online_write_dispatch` knob controls when state-free SGD is
+applied. `after_backward` uses a fused multi-tensor write after the local
+backward. `grad_ready` installs post-accumulation hooks: each trainable tensor
+is updated and its gradient released as soon as autograd materializes it.
+There is no optimizer lock or block-wide write barrier; an on-device scalar
+still accumulates the exact per-block gradient norm for telemetry. This is a
+measured execution alternative, not a different objective or accumulation
+law.
 
 ## Trajectory source
 
@@ -124,12 +169,57 @@ student block itself executes under the selected censorship. In v2 terms,
 `teacher_hidden` means the uncensored teacher cache. The durable v2 cache only
 stores aligned `h[L]` rows, however, so v3 obtains full `h[L-1]` prefixes from
 an adapters-off resident teacher for LoRA, or from an explicitly requested
-frozen model copy for full-weight training. It stages one answer's states in
-host RAM and discards them after that answer.
+frozen model copy for full-weight training. V3 retains one answer's block
+inputs on the owning GPUs and discards them after that answer. This costs only
+tens to low hundreds of MiB for the tested models and avoids one tiny
+host-to-device transfer in every layer×token cell; the historical
+`full_states_cpu` source remains for schedules that genuinely need host
+residency.
 
 Teacher forcing makes blocks independent except for execution order and is
 the dreaming/parallelizable form. It never changes the teacher input to a
 censored trajectory.
+
+## Stale-gradient token windows: the v2-speed bridge
+
+`train.stale_gradient_window` makes the approximation boundary explicit.
+The default `1` is exact online SGD: token `t+1` evaluates its gradient after
+token `t` has changed the block. Values above one evaluate K known-answer
+tokens at a shared weight snapshot; `0` means the whole remaining answer.
+The first implementation is deliberately restricted to LoRA,
+`teacher_hidden`, `causal_frozen_history`, `per_block`, `after_backward`, and
+stateless geometric hidden losses.
+
+The window loss is multiplied by its number of valid tokens before backward.
+Consequently the optimizer receives `sum_t g_t`, not `mean_t g_t`, and the
+learning rate is unchanged. Under state-free SGD, applying gradients already
+computed at the same snapshot one by one has final value
+`W - lr * sum_t g_t`; one fused physical write is exactly that replay. The
+only approximation is gradient staleness: later tokens are not recomputed
+after earlier logical writes. Metrics therefore report both `K*N` conceptual
+token/block writes and `ceil(K/window)*N` physical writes, and name the
+gradient-norm statistic as a window-sum norm normalized per token.
+
+This is the controlled continuum between deployment-matched online learning
+and pipeline-v2-style dreaming. It is not AdamW accumulation and does not use
+batch averaging as regularization. The throughput oracle is pipeline v2's
+Qwen3.5-4B broad-token regime (roughly 2–3k aligned token events/s versus
+roughly 10/s for the initial exact K=1 v3 executor). Promotion compares K=1,
+4, 8, 16, 64, and all at a matched logical-token budget, reporting speed,
+recall, damage, and parameter deltas separately. The K=8 arm is the first
+calibration point: persist exact parameter deltas for K=1 and K=8 at the same
+seed/item order and report global plus per-layer divergence, not only endpoint
+delta magnitudes.
+
+The mask-free cached-attention optimization is exact only for q=1: the sole
+query cannot see a future key because the dynamic cache contains only its
+prefix. A K>1 stale window must retain a causal mask within its chunk. The
+implementation shares one K×prefix mask across same-device layers and retains
+only the current window, avoiding an unconditional answer-wide T² tensor.
+
+Pipeline v3 currently rejects sliding/chunked-attention architectures rather
+than approximating their authoritative mask semantics with a rolling window.
+Gemma4 remains blocked until its chunk-aware adapter is implemented.
 
 ## Censorship
 
@@ -189,6 +279,7 @@ train:
   pipeline_version: 3
   update_granularity: online
   online_optimizer: immediate_sgd
+  stale_gradient_window: 1
   lr_rule: fixed
   history_policy: causal_frozen_history
   trajectory_source: student_hidden

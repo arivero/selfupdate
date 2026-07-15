@@ -201,7 +201,8 @@ def _summarize_pending_losses(
 
 def _flush_train_log(log, *, epoch: int, step: int, accum: int,
                      pending: list[list[torch.Tensor]], n_layers: int,
-                     token_counts: list[int] | None = None, **extra) -> None:
+                     token_counts: list[int] | None = None,
+                     pending_items: int | None = None, **extra) -> None:
     if not pending:
         return
     answer_loss, per_layer_answer, token_loss, per_layer_token = (
@@ -210,7 +211,8 @@ def _flush_train_log(log, *, epoch: int, step: int, accum: int,
     reduction = extra.get("update_reduction", aggregation)
     use_token = reduction in ("token", "token_mean")
     log.log(kind="train", epoch=epoch, step=step, items_seen=accum,
-            accum_items=len(pending),
+            accum_items=(len(pending) if pending_items is None
+                         else pending_items),
             loss=(token_loss if use_token else answer_loss),
             per_layer=(per_layer_token if use_token else per_layer_answer),
             answer_mean_loss=answer_loss,

@@ -22,6 +22,12 @@ from collections import UserDict
 import torch
 
 
+# ``None`` means "no prepared override" because cached execution may still
+# need to construct a flow/causal mask. This sentinel explicitly requests the
+# model's mask-free causal path for an intact cached-attention cell.
+NO_PREPARED_ATTENTION_MASK = object()
+
+
 class BlockStack:
     def __init__(self, model, hook_free_walk: bool = False):
         self.model = model
@@ -54,6 +60,13 @@ class BlockStack:
             and bool(self.layer_types)
         )
         self.blocks = list(inner.layers)
+        self._block_params = [list(block.parameters()) for block in self.blocks]
+        self._accepts_past_key_values = []
+        self._accepts_shared_kv_states = []
+        for block in self.blocks:
+            params = inspect.signature(block.forward).parameters
+            self._accepts_past_key_values.append("past_key_values" in params)
+            self._accepts_shared_kv_states.append("shared_kv_states" in params)
         self.final_norm = inner.norm
         self.lm_head = model.lm_head
         self.n_layers = len(self.blocks)
@@ -149,7 +162,7 @@ class BlockStack:
 
     def run_block(self, L: int, hidden, position_embeddings, position_ids=None,
                   *, flow_keep=None, past_key_values=None, use_cache=False,
-                  causal_length=None):
+                  causal_length=None, prepared_attention_mask=None):
         """Forward decoder block L (1-based) on ``[B,n,H]`` states.
 
         ``flow_keep`` is the pipeline-v3 information-flow mask over the full
@@ -190,7 +203,11 @@ class BlockStack:
             flow_keep = flow_keep.to(hidden.device)
             local_keep = flow_keep[:, -hidden.shape[1]:].to(hidden.dtype)
             hidden = hidden * local_keep.unsqueeze(-1)
-        if flow_keep is not None or past_key_values is not None:
+        if prepared_attention_mask is NO_PREPARED_ATTENTION_MASK:
+            attention_mask = None
+        elif prepared_attention_mask is not None:
+            attention_mask = prepared_attention_mask.to(hidden.device)
+        elif flow_keep is not None or past_key_values is not None:
             # Linear/recurrent mixers consume the ordinary 2-D keep mask.
             # Full/sliding attention needs the additive causal form and must
             # include the already-cached key/value length.
@@ -241,13 +258,12 @@ class BlockStack:
             "use_cache": use_cache,
         }
         if past_key_values is not None:
-            params = inspect.signature(self.blocks[L - 1].forward).parameters
-            if "past_key_values" not in params:
+            if not self._accepts_past_key_values[L - 1]:
                 raise NotImplementedError(
                     f"{type(self.blocks[L - 1]).__name__} does not expose "
                     "past_key_values; use history_policy=recompute_prefix")
             kwargs["past_key_values"] = past_key_values
-        if "shared_kv_states" in inspect.signature(self.blocks[L - 1].forward).parameters:
+        if self._accepts_shared_kv_states[L - 1]:
             if shared_kv_states is not None:
                 kwargs["shared_kv_states"] = shared_kv_states
             else:
@@ -260,7 +276,7 @@ class BlockStack:
         return out
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:
-        return list(self.blocks[L - 1].parameters())
+        return self._block_params[L - 1]
 
     def loss_view(self, L: int, block_out: torch.Tensor) -> torch.Tensor:
         """What to compare against the cached teacher h{L}: raw block output,

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import torch
+from safetensors.torch import save_file
 from transformers import DynamicCache
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -30,6 +31,11 @@ from selfupdate.train.online_v3 import (  # noqa: E402
     _flow_keep,
     _prefill_student,
     _prefill_teacher,
+    _prepared_cached_masks,
+    answer_teacher_stale_windows_cached,
+    answer_student_pipeline_lanes_cached,
+    answer_teacher_layer_lanes_cached,
+    answer_wavefront_cached,
     stage_answer_tensors,
     _token_cached,
     _token_recompute,
@@ -65,6 +71,19 @@ def _layer_delta_l2(stack, before) -> list[float]:
                  for p, ref in zip(params, refs))
         out.append(sq ** 0.5)
     return out
+
+
+def _write_trainable_deltas(stack, before, path: str) -> None:
+    """Persist exact float32 parameter deltas for cross-geometry comparison."""
+    tensors = {}
+    for layer, refs in before.items():
+        params = [p for p in stack.block_params(layer) if p.requires_grad]
+        for index, (param, ref) in enumerate(zip(params, refs)):
+            tensors[f"layer{layer:03d}.param{index:03d}"] = (
+                param.detach().float().cpu() - ref).contiguous()
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, str(out))
 
 
 def _sync() -> None:
@@ -114,6 +133,9 @@ def main() -> None:
     ap.add_argument("--tokens", type=int, default=1)
     ap.add_argument("--longest", action="store_true",
                     help="select the dataset record with maximum aligned A")
+    ap.add_argument(
+        "--delta-out", default="",
+        help="optional safetensors path for exact trainable-parameter deltas")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
     seed_everything(cfg.train.seed)
@@ -161,7 +183,7 @@ def main() -> None:
     before = _trainable_snapshot(stack)
     started = time.perf_counter()
     teacher_states = (
-        teacher.full_states_cpu(it, device) if teacher_hidden else None)
+        teacher.full_inputs_resident(it, device) if teacher_hidden else None)
     _sync()
     teacher_states_s = time.perf_counter() - started
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
@@ -185,24 +207,61 @@ def main() -> None:
     online_memory_baseline = torch.cuda.memory_allocated()
     torch.cuda.reset_peak_memory_stats()
     started = time.perf_counter()
-    for offset in range(token_count):
-        if history is not None:
-            step_losses, step_grads = _token_cached(
-                cfg, stack, loss_fn, it, offset, device, history,
-                teacher_states=teacher_states, student_ids=student_ids,
-                position_ids=position_ids, targets=targets)
-        else:
-            step_losses, step_grads = _token_recompute(
-                cfg, stack, loss_fn, it, offset, device,
-                teacher_states=teacher_states, student_ids=student_ids,
-                position_ids=position_ids, targets=targets)
-        losses.extend(step_losses)
-        grad_norms.extend(step_grads)
+    local_writes = 0
+    physical_local_writes = 0
+    use_teacher_window_path = (
+        teacher_hidden and history is not None
+        and cfg.train.backward_dispatch == "per_block"
+        and cfg.train.online_write_dispatch == "after_backward")
+    if use_teacher_window_path:
+        (losses, grad_norms, local_writes,
+         physical_local_writes) = answer_teacher_stale_windows_cached(
+            cfg, stack, loss_fn, it, token_count, device, history,
+            teacher_states=teacher_states, position_ids=position_ids,
+            targets=targets)
+    elif cfg.train.backward_dispatch == "teacher_layer_lanes":
+        losses, grad_norms, local_writes = answer_teacher_layer_lanes_cached(
+            cfg, stack, loss_fn, it, token_count, device, history,
+            teacher_states=teacher_states, position_ids=position_ids,
+            targets=targets)
+    elif cfg.train.backward_dispatch == "answer_pipeline_lanes":
+        losses, grad_norms, local_writes = answer_student_pipeline_lanes_cached(
+            cfg, stack, loss_fn, it, token_count, device, history,
+            student_ids=student_ids, position_ids=position_ids,
+            targets=targets)
+    elif cfg.train.backward_dispatch == "answer_wavefront_disconnected":
+        losses, grad_norms, local_writes = answer_wavefront_cached(
+            cfg, stack, loss_fn, it, token_count, device, history,
+            student_ids=student_ids, position_ids=position_ids,
+            targets=targets)
+    else:
+        prepared_masks = (_prepared_cached_masks(
+            cfg, stack, it, position_ids, targets)
+            if history is not None else None)
+        for offset in range(token_count):
+            if history is not None:
+                step_losses, step_grads = _token_cached(
+                    cfg, stack, loss_fn, it, offset, device, history,
+                    teacher_states=teacher_states, student_ids=student_ids,
+                    position_ids=position_ids, targets=targets,
+                    prepared_masks=prepared_masks)
+            else:
+                step_losses, step_grads = _token_recompute(
+                    cfg, stack, loss_fn, it, offset, device,
+                    teacher_states=teacher_states, student_ids=student_ids,
+                    position_ids=position_ids, targets=targets)
+            losses.extend(step_losses)
+            grad_norms.extend(step_grads)
+            local_writes += stack.n_layers
+    if not physical_local_writes:
+        physical_local_writes = local_writes
     _sync()
     online_s = time.perf_counter() - started
     online_peak_memory = torch.cuda.max_memory_allocated()
     changed = _changed_layers(stack, before)
     layer_delta_l2 = _layer_delta_l2(stack, before)
+    if args.delta_out:
+        _write_trainable_deltas(stack, before, args.delta_out)
     expected = list(range(1, stack.n_layers + 1))
     if cfg.mask.compaction != "intact" and changed != expected:
         raise RuntimeError(
@@ -216,6 +275,8 @@ def main() -> None:
         "trajectory_source": cfg.train.trajectory_source,
         "history_policy": cfg.train.history_policy,
         "backward_dispatch": cfg.train.backward_dispatch,
+        "online_write_dispatch": cfg.train.online_write_dispatch,
+        "stale_gradient_window": cfg.train.stale_gradient_window,
         "censorship": cfg.mask.compaction,
         "layers": stack.n_layers,
         "token_events": token_count,
@@ -227,6 +288,7 @@ def main() -> None:
         "parameter_delta_l2_max": max(layer_delta_l2),
         "parameter_delta_l2_total": sum(
             x * x for x in layer_delta_l2) ** 0.5,
+        "delta_out": args.delta_out or None,
         "loss_min": min(float(x.cpu()) for x in losses),
         "loss_max": max(float(x.cpu()) for x in losses),
         "grad_norm_min": min(float(x.cpu()) for x in grad_norms),
@@ -242,7 +304,10 @@ def main() -> None:
         "online_peak_increment_mib": (
             online_peak_memory - online_memory_baseline) / 2**20,
         "online_token_events_per_s": token_count / online_s,
-        "online_local_writes_per_s": token_count * stack.n_layers / online_s,
+        "online_local_writes_per_s": local_writes / online_s,
+        "physical_local_writes": physical_local_writes,
+        "online_physical_local_writes_per_s": (
+            physical_local_writes / online_s),
         "with_prefill_token_events_per_s": (
             token_count / (prefill_s + online_s)),
         "cache_graph": False,

@@ -79,6 +79,34 @@ class OnlineTeacherSource:
         return states
 
     @torch.no_grad()
+    def full_inputs_resident(self, it, device) -> list[torch.Tensor]:
+        """Uncensored ``h0..h[n-1]`` retained on each block's device.
+
+        Pipeline-v3 consumes these rows once per local token update. Keeping
+        them answer-local on their owning GPUs avoids a tiny host-to-device
+        transfer in every layer×token cell. Unlike ``full_states_cpu``, this
+        returns block inputs only; v3 targets still come from the frozen disk
+        cache.
+        """
+        t_ids = it.teacher_ids.to(device)[None]
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None]
+        inputs = []
+        with self._ctx(), torch.autocast(
+                torch.device(device).type, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            for layer in range(1, self.stack.n_layers + 1):
+                block_device = (
+                    self.stack.block_devices[layer - 1]
+                    if self.stack.block_devices is not None else
+                    next(self.stack.blocks[layer - 1].parameters()).device)
+                if h.device != block_device:
+                    h = h.to(block_device, non_blocking=True)
+                inputs.append(h.detach())
+                h = self.stack.run_block(layer, h, pos_emb)
+        return inputs
+
+    @torch.no_grad()
     def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
         states = self.full_states(it, device)
         return {

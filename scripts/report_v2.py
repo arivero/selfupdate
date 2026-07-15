@@ -628,12 +628,19 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                     "completed epoch"),
             }
     if train.get("update_granularity") == "online":
+        stale_k = train.get("stale_gradient_window", 1)
+        stale_label = "all" if stale_k == 0 else stale_k
+        gradient_law = (
+            "no cross-token gradient aggregation"
+            if stale_k == 1 else
+            "unaveraged gradient sum at one explicitly stale weight snapshot")
         update_identity = (
-            "`online`: one answer token × one block per immediate "
-            f"`{train.get('online_optimizer', 'missing')}` write; no "
-            "cross-token gradient aggregation; history "
+            "`online`: one answer × "
+            f"{stale_label} known-answer token(s) per weight snapshot; "
+            f"`{train.get('online_optimizer', 'missing')}`; {gradient_law}; history "
             f"`{train.get('history_policy', 'missing')}`; backward dispatch "
-            f"`{train.get('backward_dispatch', 'per_block')}`"
+            f"`{train.get('backward_dispatch', 'per_block')}`; write dispatch "
+            f"`{train.get('online_write_dispatch', 'after_backward')}`"
         )
     elif train.get("update_granularity") == "grid":
         token_width = train.get("tokens_per_answer_update", "missing")
@@ -650,7 +657,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         )
     configured_b = (1 if train.get("update_granularity") == "online" else
                     train.get("answers_per_update", train.get("micro_batch")))
-    configured_k_raw = (1 if train.get("update_granularity") == "online" else
+    configured_k_raw = (train.get("stale_gradient_window", 1)
+                        if train.get("update_granularity") == "online" else
                         train.get("tokens_per_answer_update", "all"))
     configured_k = "all" if configured_k_raw == 0 else configured_k_raw
     realized_geometry = _realized_geometry(rows, configured_b, configured_k_raw)
@@ -662,12 +670,16 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         writes = max(
             (int(row.get("optimizer_updates_seen", 0)) for row in rows),
             default=0)
+        physical_writes = max(
+            (int(row.get("physical_optimizer_updates_seen", 0))
+             for row in rows), default=writes)
         realized_identity = (
-            f"{token_events:,} aligned-token events; {writes:,} immediate "
-            "block-local writes"
+            f"{token_events:,} aligned-token events; {writes:,} conceptual "
+            f"block-local writes; {physical_writes:,} fused physical writes"
         )
         realized_geometry = {
             "updates": writes,
+            "physical_updates": physical_writes,
             "token_events": token_events,
             "lanes_per_update": {"mean": 1, "median": 1, "min": 1, "max": 1},
             "aligned_tokens_per_update": {
@@ -751,7 +763,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
         f"- Optimizer / LR rule / history: `{train.get('online_optimizer', 'adamw')}` / "
         f"`{train.get('lr_rule', 'fixed')}` / `{train.get('history_policy', 'not_applicable')}`",
-        f"- Backward dispatch: `{train.get('backward_dispatch', 'per_block')}`",
+        f"- Backward / write dispatch: `{train.get('backward_dispatch', 'per_block')}` / "
+        f"`{train.get('online_write_dispatch', 'after_backward')}`; stale-gradient "
+        f"window `{train.get('stale_gradient_window', 1)}`",
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
         f"gradient accumulation {train.get('grad_accum', 'missing')}",
         f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
@@ -937,6 +951,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "lr_rule": train.get("lr_rule"),
         "history_policy": train.get("history_policy"),
         "backward_dispatch": train.get("backward_dispatch", "per_block"),
+        "online_write_dispatch": train.get(
+            "online_write_dispatch", "after_backward"),
+        "stale_gradient_window": train.get("stale_gradient_window", 1),
         "trajectory_source": train.get("trajectory_source"),
         "partial_training_boundary": partial_boundary,
         "strict_local": bool(signal.get("passed")) if signal else False,

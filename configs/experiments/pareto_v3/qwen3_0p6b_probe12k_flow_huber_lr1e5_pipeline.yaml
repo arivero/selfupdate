@@ -1,0 +1,26 @@
+run_name: pareto_v3_qwen3_0p6b_probe12k_flow_huber_lr1e5_pipeline
+mask:
+  compaction: flow_mask
+train:
+  run_class: open
+  pipeline_version: 3
+  update_granularity: online
+  online_optimizer: immediate_sgd
+  lr_rule: fixed
+  backward_dispatch: answer_pipeline_lanes
+  schedule: summed
+  micro_batch: 1
+  grad_accum: 1
+  batching: item
+  conn_window: 1
+  conn_stride: 0
+  max_steps: 12000
+  trajectory_source: student_hidden
+  history_policy: causal_frozen_history
+  hidden_loss: huber
+  lr: 1.0e-5
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0

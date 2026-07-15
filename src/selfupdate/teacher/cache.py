@@ -35,6 +35,22 @@ CACHE_DTYPES = {
 }
 
 
+def resolved_node_epoch0_root(cfg) -> Path:
+    """Resolve and enforce the host-local node-cache root after env overrides."""
+    raw = os.environ.get(
+        "SELFUPDATE_NODE_EPOCH0_CACHE_ROOT", cfg.cache.node_root)
+    expanded = Path(os.path.expandvars(os.path.expanduser(raw))).resolve()
+    shm = Path("/dev/shm").resolve()
+    try:
+        expanded.relative_to(shm)
+    except ValueError as exc:
+        raise ValueError(
+            "resolved node epoch-zero cache root must be under /dev/shm; "
+            f"got {expanded} from SELFUPDATE_NODE_EPOCH0_CACHE_ROOT/"
+            "cache.node_root") from exc
+    return expanded
+
+
 def cache_storage_dtype(name: str) -> torch.dtype:
     """Torch dtype selected by ``cache.hidden_dtype``.
 
@@ -103,9 +119,7 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
     )
     model_short = cfg.model.name.split("/")[-1]
     if cfg.cache.runtime_policy == "node_epoch0":
-        cache_root = os.environ.get(
-            "SELFUPDATE_NODE_EPOCH0_CACHE_ROOT", cfg.cache.node_root)
-        cache_root = os.path.expandvars(os.path.expanduser(cache_root))
+        cache_root = resolved_node_epoch0_root(cfg)
     elif cfg.cache.runtime_policy == "durable":
         cache_root = os.environ.get("SELFUPDATE_TEACHER_CACHE_ROOT", cfg.cache.root)
     else:

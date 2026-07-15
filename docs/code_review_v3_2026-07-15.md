@@ -117,3 +117,37 @@ the repo's recorded measurements. The locality certification laws
 (`_detach_cache_layer`, frozen-vocab guard, disconnected-root backward), not
 re-proven numerically — `scripts/train_certify.py` remains the on-demand
 instrument for that.
+
+## Resolution pass (2026-07-15)
+
+All three surviving findings were addressed in the working tree:
+
+1. `resolved_node_epoch0_root` now applies the environment override and path
+   expansion first, resolves symlinks, and then requires the resulting path
+   to remain beneath `/dev/shm`. Both dispatch validation and cache-directory
+   resolution call this single guard.
+2. `censored_rows` again recognizes the classic one-block/non-empty-stub map;
+   intact and length-preserving random controls retain their identity map,
+   while genuinely interleaved censorship still uses the kept-run map.
+3. Prepared cached masks now carry an explicit mask-free sentinel for intact
+   q=1 full-attention cells. K>1 cached chunks require causality within the
+   chunk, so they lazily share a K×prefix additive mask; omitting it was caught
+   by the intact GPU smoke as future-token leakage. This still avoids the
+   unconditional answer-wide T² allocation and preserves the fair K=1 SDPA
+   baseline. Flow masks are unchanged.
+
+The speed calibration also extended beyond the review snapshot. On an L40S,
+Qwen3-0.6B with a 256-token longest-answer smoke measured 10.69 token-events/s
+at exact K=1, 165.54 at K=16, 604.78 at K=64, and 1435.17 for one answer-wide
+window. All four runs passed the cache-graph and frozen-vocabulary guards;
+incremental peak memory remained 83--95 MiB. K=8 is now a named experiment
+arm so the scientific comparison can report both throughput and per-layer
+weight-delta divergence from K=1 at a shared seed and item budget.
+
+The post-fix intact K=64 smoke measured loss 2.03e-6--9.24e-6 and total
+parameter delta 7.62e-7 at 605.09 token-events/s; cache history remained
+graph-free and the vocabulary stayed frozen. The matched one-answer K=1/K=8
+flow calibration measured 10.87/82.69 token-events/s (7.61x), with exact
+trainable-delta relative L2 divergence 0.154 and cosine 0.9889. Layer 1 is the
+staleness outlier (0.744 relative divergence); this motivates the full matched
+12k-item quality sweep rather than selecting K from throughput alone.

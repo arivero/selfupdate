@@ -13,13 +13,17 @@ answer (and therefore the next epoch).
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, Full, Queue
 import random
+import threading
 import time
 
 import torch
 from transformers import DynamicCache
 
 from ..data.dataset import DistillDataset
+from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
 from .telemetry import (
     ParameterDeltaTracker,
@@ -38,6 +42,107 @@ def _flow_keep(cfg, it, length: int, device) -> torch.Tensor | None:
         if start < length:
             keep[:, start:min(stop, length)] = False
     return keep
+
+
+class _PreparedIntactCausal:
+    """Mask-free q=1 views plus shared explicit masks for K>1 windows."""
+
+    def __init__(self, device, dtype):
+        self.device = device
+        self.dtype = dtype
+        self._window_key = None
+        self._window_mask = None
+
+    def window(self, start: int, stop: int):
+        if stop - start == 1:
+            # A single cached query has no future keys in its prefix, so no
+            # mask is numerically required and SDPA can take its fast path.
+            return NO_PREPARED_ATTENTION_MASK
+        key = (start, stop)
+        mask = self._window_mask if key == self._window_key else None
+        if mask is None:
+            q_pos = torch.arange(start, stop, device=self.device)[:, None]
+            k_pos = torch.arange(stop, device=self.device)[None, :]
+            allowed = k_pos <= q_pos
+            mask = torch.zeros(
+                (1, 1, stop - start, stop), dtype=self.dtype,
+                device=self.device)
+            mask.masked_fill_(~allowed[None, None],
+                              torch.finfo(self.dtype).min)
+            # Layer calls for one window share this tensor. Retain only the
+            # most recent window so a long answer stays O(K*T), not O(T^2).
+            self._window_key = key
+            self._window_mask = mask
+        return mask
+
+
+def _prepared_cached_masks(cfg, stack, it, position_ids, targets):
+    """Build fixed answer-wide causal masks once, then return per-layer views."""
+    length = position_ids.numel()
+    masks = {}
+    cache = {}
+    intact_specs = {}
+    for layer in range(1, stack.n_layers + 1):
+        target = targets[layer]
+        device = target.device
+        dtype = target.dtype
+        layer_type = (
+            stack.layer_types[layer - 1]
+            if layer - 1 < len(stack.layer_types) else None)
+        if layer_type in ("sliding_attention", "chunked_attention"):
+            raise NotImplementedError(
+                f"pipeline-v3 prepared masks do not approximate {layer_type}; "
+                "add the model-authoritative mask adapter first")
+        full_keep = _flow_keep(cfg, it, length, device)
+        if layer_type == "linear_attention":
+            masks[layer] = full_keep
+            continue
+        if full_keep is None:
+            # q=1 intact/pad-random cells need no explicit mask. K>1 stale
+            # windows do: without one, cached chunk attention can see future
+            # tokens within the chunk. The shared spec materializes only the
+            # required K×prefix mask, not an answer-wide T² tensor.
+            key = (device, dtype)
+            if key not in intact_specs:
+                intact_specs[key] = _PreparedIntactCausal(device, dtype)
+            masks[layer] = intact_specs[key]
+            continue
+        key = (device, dtype, layer_type)
+        if key not in cache:
+            q_pos = torch.arange(length, device=device)[:, None]
+            k_pos = torch.arange(length, device=device)[None, :]
+            allowed = k_pos <= q_pos
+            allowed = allowed[None]
+            if full_keep is not None:
+                allowed &= full_keep[:, None, :]
+            additive = torch.zeros(
+                (1, 1, length, length), dtype=dtype, device=device)
+            additive.masked_fill_(
+                ~allowed[:, None], torch.finfo(dtype).min)
+            cache[key] = additive
+        masks[layer] = cache[key]
+    return masks
+
+
+def _prepared_mask_row(mask, pos_index: int):
+    if isinstance(mask, _PreparedIntactCausal):
+        return NO_PREPARED_ATTENTION_MASK
+    if mask is None or mask is NO_PREPARED_ATTENTION_MASK:
+        return mask
+    if mask.ndim == 2:
+        return mask[:, :pos_index + 1]
+    return mask[:, :, pos_index:pos_index + 1, :pos_index + 1]
+
+
+def _prepared_mask_window(mask, start: int, stop: int):
+    """Select query rows ``[start, stop)`` and their causal key prefix."""
+    if isinstance(mask, _PreparedIntactCausal):
+        return mask.window(start, stop)
+    if mask is None or mask is NO_PREPARED_ATTENTION_MASK:
+        return mask
+    if mask.ndim == 2:
+        return mask[:, :stop]
+    return mask[:, :, start:stop, :stop]
 
 
 def stage_answer_tensors(stack, it, device):
@@ -65,7 +170,14 @@ def stage_answer_tensors(stack, it, device):
 
 
 def _clear_block_grads(stack, layer: int) -> list[torch.nn.Parameter]:
-    params = [p for p in stack.block_params(layer) if p.requires_grad]
+    cache = getattr(stack, "_v3_trainable_block_params", None)
+    if cache is None:
+        cache = [
+            [p for p in stack.block_params(index) if p.requires_grad]
+            for index in range(1, stack.n_layers + 1)
+        ]
+        stack._v3_trainable_block_params = cache
+    params = cache[layer - 1]
     for param in params:
         param.grad = None
     return params
@@ -106,6 +218,19 @@ def _immediate_sgd(params: list[torch.nn.Parameter], lr: float) -> torch.Tensor:
     return grad_sq.sqrt()
 
 
+_LAYER_INDEX_TENSOR_CACHE: dict[tuple, torch.Tensor] = {}
+
+
+def _layer_index_tensor(device, indices: list[int], n_layers: int):
+    """Cache immutable telemetry grouping metadata outside the token loop."""
+    key = (str(device), tuple(indices), n_layers)
+    value = _LAYER_INDEX_TENSOR_CACHE.get(key)
+    if value is None:
+        value = torch.tensor(indices, dtype=torch.long, device=device)
+        _LAYER_INDEX_TENSOR_CACHE[key] = value
+    return value
+
+
 @torch.no_grad()
 def _immediate_sgd_token(params_by_layer: list[list[torch.nn.Parameter]],
                          lr: float) -> list[torch.Tensor]:
@@ -126,7 +251,7 @@ def _immediate_sgd_token(params_by_layer: list[list[torch.nn.Parameter]],
     layer_sq: list[torch.Tensor | None] = [None] * len(params_by_layer)
     for (device, _, _), (params, grads, layer_indices) in groups.items():
         norm_vector = torch.stack(torch._foreach_norm(grads, 2)).float()
-        ids = torch.tensor(layer_indices, dtype=torch.long, device=device)
+        ids = _layer_index_tensor(device, layer_indices, len(params_by_layer))
         group_layer_sq = torch.zeros(
             len(params_by_layer), dtype=torch.float32, device=device)
         group_layer_sq.scatter_add_(0, ids, norm_vector.square())
@@ -146,6 +271,56 @@ def _immediate_sgd_token(params_by_layer: list[list[torch.nn.Parameter]],
     return [value.sqrt() for value in layer_sq]
 
 
+_GRAD_READY_STATE = "_selfupdate_v3_grad_ready_state"
+_GRAD_READY_INSTALLED = "_selfupdate_v3_grad_ready_installed"
+
+
+def _grad_ready_hook(param: torch.nn.Parameter) -> None:
+    """Write one parameter and release its gradient at AccumulateGrad."""
+    state = getattr(param, _GRAD_READY_STATE, None)
+    if state is None:
+        return
+    accumulator, lr = state
+    grad = param.grad
+    if grad is None:
+        raise RuntimeError("grad-ready hook fired without an accumulated gradient")
+    with torch.no_grad():
+        accumulator.add_(grad.detach().float().square().sum())
+        param.add_(grad, alpha=-lr)
+        param.grad = None
+    setattr(param, _GRAD_READY_STATE, None)
+
+
+def _arm_grad_ready(params: list[torch.nn.Parameter], lr: float) -> torch.Tensor:
+    """Arm persistent post-accumulation hooks for one local backward."""
+    if not params:
+        raise RuntimeError("pipeline-v3 reached a block with no trainable parameters")
+    accumulator = torch.zeros(
+        (), dtype=torch.float32, device=params[0].device)
+    for param in params:
+        if getattr(param, _GRAD_READY_STATE, None) is not None:
+            raise RuntimeError("grad-ready parameter was armed twice")
+        if not getattr(param, _GRAD_READY_INSTALLED, False):
+            param.register_post_accumulate_grad_hook(_grad_ready_hook)
+            setattr(param, _GRAD_READY_INSTALLED, True)
+        setattr(param, _GRAD_READY_STATE, (accumulator, lr))
+    return accumulator
+
+
+def _finish_grad_ready(params: list[torch.nn.Parameter],
+                       accumulator: torch.Tensor) -> torch.Tensor:
+    missing = [
+        index for index, param in enumerate(params)
+        if getattr(param, _GRAD_READY_STATE, None) is not None
+    ]
+    if missing:
+        for param in params:
+            setattr(param, _GRAD_READY_STATE, None)
+        raise RuntimeError(
+            f"grad-ready backward produced no gradient for parameter slots {missing}")
+    return accumulator.sqrt().detach()
+
+
 @torch.no_grad()
 def _foreach_accumulate(sums: list[torch.Tensor],
                         values: list[torch.Tensor]) -> None:
@@ -163,7 +338,7 @@ def _foreach_accumulate(sums: list[torch.Tensor],
 def _local_forward(cfg, stack, loss_fn, layer: int, h_in: torch.Tensor,
                    pos_emb, position_ids: torch.Tensor, target: torch.Tensor,
                    row: int, *, flow_keep=None, cache=None,
-                   causal_length=None):
+                   causal_length=None, prepared_attention_mask=None):
     """Build one isolated block-local objective and return its parameters."""
     params = _clear_block_grads(stack, layer)
     h_in = h_in.detach()
@@ -173,6 +348,7 @@ def _local_forward(cfg, stack, loss_fn, layer: int, h_in: torch.Tensor,
             layer, h_in, pos_emb, position_ids=position_ids,
             flow_keep=flow_keep, past_key_values=cache,
             use_cache=cache is not None, causal_length=causal_length,
+            prepared_attention_mask=prepared_attention_mask,
         )
         view = stack.loss_view(layer, h_out)[0, row]
         loss = loss_fn(
@@ -185,13 +361,19 @@ def _local_forward(cfg, stack, loss_fn, layer: int, h_in: torch.Tensor,
 def _local_update(cfg, stack, loss_fn, layer: int, h_in: torch.Tensor,
                   pos_emb, position_ids: torch.Tensor, target: torch.Tensor,
                   row: int, *, flow_keep=None, cache=None,
-                  causal_length=None):
+                  causal_length=None, prepared_attention_mask=None):
     """One block forward, one local backward, one immediate parameter write."""
     loss, h_out, params = _local_forward(
         cfg, stack, loss_fn, layer, h_in, pos_emb, position_ids, target, row,
-        flow_keep=flow_keep, cache=cache, causal_length=causal_length)
-    loss.backward()
-    grad_norm = _immediate_sgd(params, cfg.train.lr)
+        flow_keep=flow_keep, cache=cache, causal_length=causal_length,
+        prepared_attention_mask=prepared_attention_mask)
+    if cfg.train.online_write_dispatch == "grad_ready":
+        accumulator = _arm_grad_ready(params, cfg.train.lr)
+        loss.backward()
+        grad_norm = _finish_grad_ready(params, accumulator)
+    else:
+        loss.backward()
+        grad_norm = _immediate_sgd(params, cfg.train.lr)
     if cache is not None:
         _detach_cache_layer(cache, layer - 1)
     # The forward value belongs to the pre-write model and is the causal
@@ -209,10 +391,383 @@ def _finish_disconnected_token(cfg, losses, params_by_layer):
     # A list of scalar roots enters the autograd engine once without even a
     # synthetic sum kernel. Multi-device roots are supported by the engine;
     # their graphs remain disjoint because every block input was detached.
-    torch.autograd.backward(losses)
-    grad_norms = [value.detach() for value in
-                  _immediate_sgd_token(params_by_layer, cfg.train.lr)]
+    if cfg.train.online_write_dispatch == "grad_ready":
+        accumulators = [
+            _arm_grad_ready(params, cfg.train.lr) for params in params_by_layer
+        ]
+        torch.autograd.backward(losses)
+        grad_norms = [
+            _finish_grad_ready(params, accumulator)
+            for params, accumulator in zip(params_by_layer, accumulators)
+        ]
+    else:
+        torch.autograd.backward(losses)
+        grad_norms = [value.detach() for value in
+                      _immediate_sgd_token(params_by_layer, cfg.train.lr)]
     return [loss.detach() for loss in losses], grad_norms
+
+
+def _assert_independent_block_state(stack, dispatch: str) -> None:
+    """Reject schedules whose dependency graph omits cross-block KV edges."""
+    shared = [
+        layer for layer, accepts in enumerate(
+            stack._accepts_shared_kv_states, start=1) if accepts
+    ]
+    if shared:
+        raise NotImplementedError(
+            f"{dispatch} assumes block-private causal state, but blocks "
+            f"{shared} expose shared_kv_states; use per_block/token-major "
+            "until the model's KV-sharing DAG has a dependency-aware schedule")
+
+
+def answer_wavefront_cached(cfg, stack, loss_fn, it, token_count: int, device,
+                            cache: DynamicCache, *, student_ids,
+                            position_ids, targets):
+    """Exact online walk over the layer × known-answer anti-diagonals.
+
+    Cell ``(L,t)`` depends only on ``(L-1,t)`` for its detached student input
+    and ``(L,t-1)`` for that layer's cache/update history. Both live on the
+    preceding anti-diagonal. A diagonal therefore contains at most one cell
+    per block and can enter autograd as disconnected roots without stale
+    weights, gradient averaging, or cross-block credit.
+    """
+    _assert_independent_block_state(stack, "answer_wavefront_disconnected")
+    n = stack.n_layers
+    if token_count <= 0:
+        return [], [], 0
+    frontier = {}
+    full_keep = _flow_keep(cfg, it, position_ids.numel(), position_ids.device)
+    prepared_masks = _prepared_cached_masks(
+        cfg, stack, it, position_ids, targets)
+    losses_by_layer = [[] for _ in range(n)]
+    grads_by_layer = [[] for _ in range(n)]
+    for diagonal in range(token_count + n - 1):
+        diagonal_losses = []
+        diagonal_params = []
+        diagonal_cells = []
+        for layer in range(1, n + 1):
+            offset = diagonal - (layer - 1)
+            if offset < 0 or offset >= token_count:
+                continue
+            pos_index = it.s0 + offset
+            pos = position_ids[pos_index:pos_index + 1][None]
+            if layer == 1:
+                ids = student_ids[pos_index:pos_index + 1][None]
+                h_in = stack.embed(ids).detach()
+            else:
+                h_in = frontier.pop((layer - 1, offset))
+            pos_emb = stack.rope(h_in, pos)
+            keep = (full_keep[:, :pos_index + 1]
+                    if full_keep is not None else None)
+            loss, h_out, params = _local_forward(
+                cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                targets[layer][offset], 0,
+                flow_keep=keep, cache=cache,
+                causal_length=pos_index + 1,
+                prepared_attention_mask=_prepared_mask_row(
+                    prepared_masks[layer], pos_index))
+            if layer < n:
+                frontier[(layer, offset)] = h_out.detach()
+            diagonal_losses.append(loss)
+            diagonal_params.append(params)
+            diagonal_cells.append((layer, offset))
+        detached_losses, diagonal_grads = _finish_disconnected_token(
+            cfg, diagonal_losses, diagonal_params)
+        for layer, _, loss, grad in zip(
+                (cell[0] for cell in diagonal_cells),
+                (cell[1] for cell in diagonal_cells),
+                detached_losses, diagonal_grads):
+            losses_by_layer[layer - 1].append(loss)
+            grads_by_layer[layer - 1].append(grad)
+            _detach_cache_layer(cache, layer - 1)
+    if frontier:
+        raise RuntimeError(
+            f"wavefront ended with {len(frontier)} unconsumed hidden states")
+    mean_losses = [torch.stack(values).mean() for values in losses_by_layer]
+    mean_grads = [torch.stack(values).mean() for values in grads_by_layer]
+    return mean_losses, mean_grads, token_count * n
+
+
+def answer_teacher_stale_windows_cached(
+        cfg, stack, loss_fn, it, token_count: int, device,
+        cache: DynamicCache, *, teacher_states, position_ids, targets):
+    """Vectorize known-answer tokens under explicit stale weight snapshots.
+
+    A window of K token losses is evaluated at one block-weight snapshot.
+    Backward uses their unaveraged sum. Under state-free SGD, one fused
+    ``W -= lr * sum(g_t)`` write is exactly the final value obtained by
+    replaying those already-computed gradients one at a time; the only
+    approximation is that later tokens in the window do not recompute their
+    gradients after earlier writes. K=1 is exact online learning.
+
+    Teacher ``h[L-1]`` inputs remove same-token cross-block dependencies, so
+    each block can process the token window as one ordinary causal forward.
+    Inputs, targets, and block credit remain strictly local and detached.
+    """
+    _assert_independent_block_state(stack, "teacher_stale_gradient_window")
+    if any(kind in ("sliding_attention", "chunked_attention")
+           for kind in stack.layer_types):
+        raise NotImplementedError(
+            "stale-gradient windows require authoritative non-full attention "
+            "mask semantics; use K=1 until the Gemma/chunk adapter lands")
+    if token_count <= 0:
+        return [], [], 0, 0
+    configured = cfg.train.stale_gradient_window
+    width = token_count if configured == 0 else configured
+    prepared_masks = _prepared_cached_masks(
+        cfg, stack, it, position_ids, targets)
+    position_cache = {}
+    keep_cache = {}
+    for layer in range(1, stack.n_layers + 1):
+        h_in = teacher_states[layer - 1]
+        if h_in.device not in position_cache:
+            position_cache[h_in.device] = position_ids.to(h_in.device)
+            keep_cache[h_in.device] = _flow_keep(
+                cfg, it, position_ids.numel(), h_in.device)
+    loss_sums = [None] * stack.n_layers
+    # This is the norm of each window-summed gradient, normalized by its K
+    # before answer averaging. It is deliberately not mislabelled as the
+    # unavailable mean of K individual gradient norms.
+    normalized_grad_sums = [None] * stack.n_layers
+    physical_writes = 0
+
+    for offset_start in range(0, token_count, width):
+        offset_stop = min(offset_start + width, token_count)
+        window_tokens = offset_stop - offset_start
+        pos_start = it.s0 + offset_start
+        pos_stop = it.s0 + offset_stop
+        rope_cache = {}
+        for layer in range(1, stack.n_layers + 1):
+            params = _clear_block_grads(stack, layer)
+            h_in = teacher_states[layer - 1][
+                :, pos_start:pos_stop].detach()
+            pos = position_cache[h_in.device][pos_start:pos_stop][None]
+            rope_key = (h_in.device, h_in.dtype)
+            if stack.rotary_needs_layer_type:
+                pos_emb = stack.rope(h_in, pos)
+            else:
+                pos_emb = rope_cache.get(rope_key)
+                if pos_emb is None:
+                    pos_emb = stack.rope(h_in, pos)
+                    rope_cache[rope_key] = pos_emb
+            full_keep = keep_cache[h_in.device]
+            keep = (full_keep[:, :pos_stop]
+                    if full_keep is not None else None)
+            with torch.autocast(
+                    h_in.device.type, dtype=torch.bfloat16,
+                    enabled=h_in.device.type == "cuda"):
+                h_out = stack.run_block(
+                    layer, h_in, pos_emb, position_ids=pos,
+                    flow_keep=keep, past_key_values=cache, use_cache=True,
+                    causal_length=pos_stop,
+                    prepared_attention_mask=_prepared_mask_window(
+                        prepared_masks[layer], pos_start, pos_stop),
+                )
+                view = stack.loss_view(layer, h_out)[0]
+                mean_loss = loss_fn(
+                    view, targets[layer][offset_start:offset_stop],
+                    normed=(layer == stack.n_layers), layer=layer)
+                summed_loss = mean_loss * window_tokens
+            summed_loss.backward()
+            summed_grad_norm = _immediate_sgd(params, cfg.train.lr)
+            _detach_cache_layer(cache, layer - 1)
+
+            detached_loss_sum = mean_loss.detach() * window_tokens
+            normalized_grad_sum = summed_grad_norm.detach()
+            index = layer - 1
+            if loss_sums[index] is None:
+                loss_sums[index] = detached_loss_sum
+                normalized_grad_sums[index] = normalized_grad_sum
+            else:
+                loss_sums[index].add_(detached_loss_sum)
+                normalized_grad_sums[index].add_(normalized_grad_sum)
+            physical_writes += 1
+
+    mean_losses = [value / token_count for value in loss_sums]
+    normalized_grad_norms = [
+        value / token_count for value in normalized_grad_sums]
+    conceptual_writes = token_count * stack.n_layers
+    return (mean_losses, normalized_grad_norms,
+            conceptual_writes, physical_writes)
+
+
+def answer_teacher_layer_lanes_cached(
+        cfg, stack, loss_fn, it, token_count: int, device,
+        cache: DynamicCache, *, teacher_states, position_ids, targets):
+    """Run independent teacher-forced block lanes concurrently.
+
+    Uncensored teacher ``h[L-1,t]`` removes the same-token dependency between
+    student blocks.  A lane therefore owns one block and advances its answer
+    tokens causally, writing that block after every token.  CUDA stream order
+    preserves each lane's online law while host threads expose all lanes to
+    the device without constructing a whole-answer graph.
+    """
+    _assert_independent_block_state(stack, "teacher_layer_lanes")
+    if token_count <= 0:
+        return [], [], 0
+
+    layer_positions = {}
+    layer_keeps = {}
+    prepared_masks = _prepared_cached_masks(
+        cfg, stack, it, position_ids, targets)
+    for layer in range(1, stack.n_layers + 1):
+        params = [p for p in stack.block_params(layer) if p.requires_grad]
+        if not params:
+            raise RuntimeError(f"teacher lane {layer} has no trainable parameters")
+        layer_positions[layer] = position_ids.to(params[0].device)
+        layer_keeps[layer] = _flow_keep(
+            cfg, it, position_ids.numel(), params[0].device)
+
+    def run_lane(layer: int):
+        params = [p for p in stack.block_params(layer) if p.requires_grad]
+        if not params:
+            raise RuntimeError(f"teacher lane {layer} has no trainable parameters")
+        layer_device = params[0].device
+        stream = (torch.cuda.Stream(device=layer_device)
+                  if layer_device.type == "cuda" else None)
+
+        def walk():
+            losses = []
+            grads = []
+            for offset in range(token_count):
+                pos_index = it.s0 + offset
+                pos = layer_positions[layer][pos_index:pos_index + 1][None]
+                h_in = teacher_states[layer - 1][
+                    :, pos_index:pos_index + 1].detach()
+                pos_emb = stack.rope(h_in, pos)
+                full_keep = layer_keeps[layer]
+                keep = (full_keep[:, :pos_index + 1]
+                        if full_keep is not None else None)
+                loss, grad, _ = _local_update(
+                    cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                    targets[layer][offset], 0, flow_keep=keep, cache=cache,
+                    causal_length=pos_index + 1,
+                    prepared_attention_mask=_prepared_mask_row(
+                        prepared_masks[layer], pos_index))
+                losses.append(loss)
+                grads.append(grad)
+            # Do not launch scalar accumulation kernels inside the hot loop.
+            # These detached scalars are answer-local and released here.
+            return torch.stack(losses).mean(), torch.stack(grads).mean()
+
+        if stream is None:
+            return walk()
+        with torch.cuda.device(layer_device), torch.cuda.stream(stream):
+            stream.wait_stream(torch.cuda.default_stream(layer_device))
+            result = walk()
+        stream.synchronize()
+        return result
+
+    # A CPU fallback remains deterministic and avoids oversubscribing host
+    # kernels; the scientific campaign path is CUDA.
+    if not torch.cuda.is_available():
+        rows = [run_lane(layer) for layer in range(1, stack.n_layers + 1)]
+    else:
+        with ThreadPoolExecutor(max_workers=stack.n_layers) as pool:
+            rows = list(pool.map(run_lane, range(1, stack.n_layers + 1)))
+    return ([row[0] for row in rows], [row[1] for row in rows],
+            token_count * stack.n_layers)
+
+
+def answer_student_pipeline_lanes_cached(
+        cfg, stack, loss_fn, it, token_count: int, device,
+        cache: DynamicCache, *, student_ids, position_ids, targets):
+    """Execute the student layer×token wavefront as bounded CUDA lanes.
+
+    Each lane owns one block and therefore preserves its causal token/update
+    order. A depth-one queue carries the detached pre-write hidden value and
+    a CUDA event to the next block. The queues expose answer-wide pipeline
+    concurrency without retaining answer-wide activations.
+    """
+    _assert_independent_block_state(stack, "answer_pipeline_lanes")
+    if token_count <= 0:
+        return [], [], 0
+    if not torch.cuda.is_available():
+        return answer_wavefront_cached(
+            cfg, stack, loss_fn, it, token_count, device, cache,
+            student_ids=student_ids, position_ids=position_ids,
+            targets=targets)
+
+    frontiers = [Queue(maxsize=1) for _ in range(stack.n_layers - 1)]
+    cancelled = threading.Event()
+    prepared_masks = _prepared_cached_masks(
+        cfg, stack, it, position_ids, targets)
+    layer_keeps = {}
+    for layer in range(1, stack.n_layers + 1):
+        params = [p for p in stack.block_params(layer) if p.requires_grad]
+        if not params:
+            raise RuntimeError(
+                f"student pipeline lane {layer} has no trainable parameters")
+        layer_keeps[layer] = _flow_keep(
+            cfg, it, position_ids.numel(), params[0].device)
+
+    def queue_put(q, value):
+        while not cancelled.is_set():
+            try:
+                q.put(value, timeout=0.1)
+                return
+            except Full:
+                pass
+        raise RuntimeError("student pipeline cancelled while publishing state")
+
+    def queue_get(q):
+        while not cancelled.is_set():
+            try:
+                return q.get(timeout=0.1)
+            except Empty:
+                pass
+        raise RuntimeError("student pipeline cancelled while awaiting state")
+
+    def run_lane(layer: int):
+        try:
+            params = [p for p in stack.block_params(layer) if p.requires_grad]
+            if not params:
+                raise RuntimeError(
+                    f"student pipeline lane {layer} has no trainable parameters")
+            layer_device = params[0].device
+            stream = torch.cuda.Stream(device=layer_device)
+            losses = []
+            grads = []
+            with torch.cuda.device(layer_device), torch.cuda.stream(stream):
+                stream.wait_stream(torch.cuda.default_stream(layer_device))
+                for offset in range(token_count):
+                    pos_index = it.s0 + offset
+                    pos = position_ids[pos_index:pos_index + 1].to(
+                        layer_device)[None]
+                    if layer == 1:
+                        ids = student_ids[pos_index:pos_index + 1].to(
+                            layer_device)[None]
+                        h_in = stack.embed(ids).detach()
+                    else:
+                        h_in, ready = queue_get(frontiers[layer - 2])
+                        stream.wait_event(ready)
+                        h_in.record_stream(stream)
+                    pos_emb = stack.rope(h_in, pos)
+                    full_keep = layer_keeps[layer]
+                    keep = (full_keep[:, :pos_index + 1]
+                            if full_keep is not None else None)
+                    loss, grad, h_out = _local_update(
+                        cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                        targets[layer][offset], 0, flow_keep=keep, cache=cache,
+                        causal_length=pos_index + 1,
+                        prepared_attention_mask=_prepared_mask_row(
+                            prepared_masks[layer], pos_index))
+                    losses.append(loss)
+                    grads.append(grad)
+                    if layer < stack.n_layers:
+                        ready = torch.cuda.Event()
+                        ready.record(stream)
+                        queue_put(frontiers[layer - 1], (h_out, ready))
+            stream.synchronize()
+            return torch.stack(losses).mean(), torch.stack(grads).mean()
+        except BaseException:
+            cancelled.set()
+            raise
+
+    with ThreadPoolExecutor(max_workers=stack.n_layers) as pool:
+        rows = list(pool.map(run_lane, range(1, stack.n_layers + 1)))
+    return ([row[0] for row in rows], [row[1] for row in rows],
+            token_count * stack.n_layers)
 
 
 def _detach_value(value):
@@ -267,10 +822,12 @@ def _prefill_teacher(cfg, stack, it, teacher_states, stop: int,
                      cache: DynamicCache, device):
     if stop <= 0:
         return
-    pos = it.position_ids[:stop].to(device)[None]
+    first = teacher_states[0][:, :stop].detach()
+    first_pos = it.position_ids[:stop].to(first.device)[None]
+    pos_emb = stack.rope(first, first_pos)
     for layer in range(1, stack.n_layers + 1):
-        h_in = teacher_states[layer - 1][:, :stop].to(device).detach()
-        pos_emb = stack.rope(h_in, pos)
+        h_in = teacher_states[layer - 1][:, :stop].detach()
+        pos = it.position_ids[:stop].to(h_in.device)[None]
         keep = _flow_keep(cfg, it, stop, h_in.device)
         stack.run_block(
             layer, h_in, pos_emb, position_ids=pos, flow_keep=keep,
@@ -311,20 +868,22 @@ def _token_recompute(cfg, stack, loss_fn, it, offset: int, device,
                 losses.append(loss)
                 grad_norms.append(grad)
     else:
+        first = teacher_states[0][:, :stop].detach()
+        pos_emb = stack.rope(first, pos.to(first.device))
         for layer in range(1, stack.n_layers + 1):
-            h_in = teacher_states[layer - 1][:, :stop].to(device).detach()
-            pos_emb = stack.rope(h_in, pos)
+            h_in = teacher_states[layer - 1][:, :stop].detach()
+            local_pos = pos.to(h_in.device)
             keep = _flow_keep(cfg, it, stop, h_in.device)
             if deferred:
                 loss, _, params = _local_forward(
-                    cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                    cfg, stack, loss_fn, layer, h_in, pos_emb, local_pos,
                     (targets or it.hidden)[layer][offset], pos_index,
                     flow_keep=keep)
                 losses.append(loss)
                 deferred_params.append(params)
             else:
                 loss, grad, _ = _local_update(
-                    cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                    cfg, stack, loss_fn, layer, h_in, pos_emb, local_pos,
                     (targets or it.hidden)[layer][offset], pos_index,
                     flow_keep=keep)
                 losses.append(loss)
@@ -337,7 +896,8 @@ def _token_recompute(cfg, stack, loss_fn, it, offset: int, device,
 
 def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
                   cache: DynamicCache, teacher_states=None, *,
-                  student_ids=None, position_ids=None, targets=None):
+                  student_ids=None, position_ids=None, targets=None,
+                  prepared_masks=None):
     pos_index = it.s0 + offset
     pos = (position_ids[pos_index:pos_index + 1]
            if position_ids is not None else
@@ -350,14 +910,17 @@ def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
                if student_ids is not None else
                it.student_ids[pos_index:pos_index + 1].to(device))[None]
         h = stack.embed(ids).detach()
+        pos_emb = stack.rope(h, pos)
         for layer in range(1, stack.n_layers + 1):
-            pos_emb = stack.rope(h, pos)
             if deferred:
                 loss, h_out, params = _local_forward(
                     cfg, stack, loss_fn, layer, h, pos_emb, pos,
                     (targets or it.hidden)[layer][offset], 0,
                     flow_keep=full_keep, cache=cache,
-                    causal_length=pos_index + 1)
+                    causal_length=pos_index + 1,
+                    prepared_attention_mask=(
+                        _prepared_mask_row(prepared_masks[layer], pos_index)
+                        if prepared_masks is not None else None))
                 losses.append(loss)
                 deferred_params.append(params)
                 h = h_out.detach()
@@ -366,28 +929,40 @@ def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
                     cfg, stack, loss_fn, layer, h, pos_emb, pos,
                     (targets or it.hidden)[layer][offset], 0,
                     flow_keep=full_keep, cache=cache,
-                    causal_length=pos_index + 1)
+                    causal_length=pos_index + 1,
+                    prepared_attention_mask=(
+                        _prepared_mask_row(prepared_masks[layer], pos_index)
+                        if prepared_masks is not None else None))
                 losses.append(loss)
                 grad_norms.append(grad)
     else:
+        first = teacher_states[0][
+            :, pos_index:pos_index + 1].detach()
+        pos_emb = stack.rope(first, pos.to(first.device))
         for layer in range(1, stack.n_layers + 1):
             h_in = teacher_states[layer - 1][
-                :, pos_index:pos_index + 1].to(device).detach()
-            pos_emb = stack.rope(h_in, pos)
+                :, pos_index:pos_index + 1].detach()
+            local_pos = pos.to(h_in.device)
             if deferred:
                 loss, _, params = _local_forward(
-                    cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                    cfg, stack, loss_fn, layer, h_in, pos_emb, local_pos,
                     (targets or it.hidden)[layer][offset], 0,
                     flow_keep=full_keep, cache=cache,
-                    causal_length=pos_index + 1)
+                    causal_length=pos_index + 1,
+                    prepared_attention_mask=(
+                        _prepared_mask_row(prepared_masks[layer], pos_index)
+                        if prepared_masks is not None else None))
                 losses.append(loss)
                 deferred_params.append(params)
             else:
                 loss, grad, _ = _local_update(
-                    cfg, stack, loss_fn, layer, h_in, pos_emb, pos,
+                    cfg, stack, loss_fn, layer, h_in, pos_emb, local_pos,
                     (targets or it.hidden)[layer][offset], 0,
                     flow_keep=full_keep, cache=cache,
-                    causal_length=pos_index + 1)
+                    causal_length=pos_index + 1,
+                    prepared_attention_mask=(
+                        _prepared_mask_row(prepared_masks[layer], pos_index)
+                        if prepared_masks is not None else None))
                 losses.append(loss)
                 grad_norms.append(grad)
     if deferred:
@@ -402,6 +977,20 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
     """Run the pipeline-v3 online walk; checkpoint publication stays in runtime."""
     device = cfg.model.device
     n = stack.n_layers
+    if (not cfg.train.lora.enabled
+            and cfg.model.dtype in ("bfloat16", "float16")):
+        raise NotImplementedError(
+            "pipeline-v3 full-weight immediate SGD in reduced precision can "
+            "round token writes to zero; use LoRA until an fp32 master or "
+            "stochastic-rounding path is implemented")
+    unsupported_attention = sorted(
+        set(stack.layer_types) & {"sliding_attention", "chunked_attention"})
+    if unsupported_attention:
+        raise NotImplementedError(
+            "pipeline-v3 cached execution does not yet implement the model-"
+            "authoritative semantics for attention types "
+            f"{unsupported_attention}; do not approximate them as rolling "
+            "windows")
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     teacher_hidden = cfg.train.trajectory_source == "teacher_hidden"
     ds = DistillDataset(
@@ -416,7 +1005,8 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
     )
     delta_tracker = ParameterDeltaTracker(stack)
     started = time.time()
-    token_events = optimizer_updates = answers_seen = 0
+    token_events = optimizer_updates = physical_optimizer_updates = 0
+    answers_seen = 0
     max_answer_stage_bytes = 0
     done = False
     standard_baseline = _epoch_zero_telemetry(
@@ -424,12 +1014,32 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
     delta_tracker.log(log, epoch=0, phase="epoch0", started_at=started)
     log.log(
         kind="pipeline_v3_contract",
-        atomic_event="one_aligned_token",
-        block_order="forward",
+        atomic_event=(
+            "one_aligned_token"
+            if cfg.train.stale_gradient_window == 1 else
+            "logical_tokens_grouped_by_stale_weight_snapshot"),
+        block_order=(
+            "teacher_window_major_forward_layers"
+            if cfg.train.stale_gradient_window != 1 else
+            "independent_teacher_layer_lanes"
+            if cfg.train.backward_dispatch == "teacher_layer_lanes" else
+            "student_answer_antidiagonal"
+            if cfg.train.backward_dispatch in (
+                "answer_wavefront_disconnected", "answer_pipeline_lanes") else
+            "forward_within_token"),
         updates_per_token=n,
         optimizer="state_free_immediate_sgd",
         backward_dispatch=cfg.train.backward_dispatch,
-        gradient_aggregation="none",
+        online_write_dispatch=cfg.train.online_write_dispatch,
+        stale_gradient_window=cfg.train.stale_gradient_window,
+        gradient_aggregation=(
+            "none"
+            if cfg.train.stale_gradient_window == 1 else
+            "unaveraged_sum_at_shared_weight_snapshot"),
+        staleness=(
+            "none"
+            if cfg.train.stale_gradient_window == 1 else
+            "later_window_tokens_do_not_recompute_after_earlier_logical_writes"),
         history_policy=cfg.train.history_policy,
         history_lifetime="current_answer_only",
         trajectory_source=cfg.train.trajectory_source,
@@ -440,10 +1050,12 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
         epoch_started = time.time()
         epoch_token_start = token_events
         epoch_write_start = optimizer_updates
+        epoch_physical_write_start = physical_optimizer_updates
         progress_token_start = token_events
         progress_started = epoch_started
-        pending_losses: list[list[torch.Tensor]] = []
-        pending_grad_norms: list[list[torch.Tensor]] = []
+        epoch_loss_sums = None
+        epoch_grad_sums = None
+        epoch_answer_count = 0
         order = list(range(len(ds)))
         random.Random(cfg.train.seed + epoch).shuffle(order)
         for index in order:
@@ -452,7 +1064,8 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
                 stage_answer_tensors(stack, it, device))
             max_answer_stage_bytes = max(max_answer_stage_bytes, staged_bytes)
             teacher_states = (
-                teacher.full_states_cpu(it, device) if teacher_hidden else None)
+                teacher.full_inputs_resident(it, device)
+                if teacher_hidden else None)
             history = None
             if cfg.train.history_policy == "causal_frozen_history":
                 history = DynamicCache(config=stack.text_config)
@@ -466,36 +1079,117 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
             answer_loss_sums = None
             answer_grad_sums = None
             answer_tokens = 0
-            for offset in range(it.A):
-                if history is None:
-                    losses, grads = _token_recompute(
-                        cfg, stack, loss_fn, it, offset, device,
-                        teacher_states=teacher_states,
-                        student_ids=student_ids, position_ids=position_ids,
-                        targets=targets)
-                else:
-                    losses, grads = _token_cached(
-                        cfg, stack, loss_fn, it, offset, device, history,
-                        teacher_states=teacher_states,
-                        student_ids=student_ids, position_ids=position_ids,
-                        targets=targets)
-                if answer_loss_sums is None:
-                    answer_loss_sums = losses
-                    answer_grad_sums = grads
-                else:
-                    _foreach_accumulate(answer_loss_sums, losses)
-                    _foreach_accumulate(answer_grad_sums, grads)
-                answer_tokens += 1
-                token_events += 1
-                optimizer_updates += n
-                if cfg.train.max_steps and token_events >= cfg.train.max_steps:
-                    done = True
-                    break
+            prepared_masks = None
+            if (history is not None
+                    and cfg.train.stale_gradient_window == 1
+                    and cfg.train.backward_dispatch not in (
+                    "teacher_layer_lanes", "answer_pipeline_lanes",
+                    "answer_wavefront_disconnected")):
+                prepared_masks = _prepared_cached_masks(
+                    cfg, stack, it, position_ids, targets)
+            use_teacher_window_path = (
+                teacher_hidden and history is not None
+                and cfg.train.backward_dispatch == "per_block"
+                and cfg.train.online_write_dispatch == "after_backward")
+            if use_teacher_window_path:
+                remaining = (cfg.train.max_steps - token_events
+                             if cfg.train.max_steps else it.A)
+                answer_tokens = min(it.A, remaining)
+                losses, grads, writes, physical_writes = (
+                    answer_teacher_stale_windows_cached(
+                        cfg, stack, loss_fn, it, answer_tokens, device,
+                        history, teacher_states=teacher_states,
+                        position_ids=position_ids, targets=targets))
+                answer_loss_sums = [x * answer_tokens for x in losses]
+                answer_grad_sums = [x * answer_tokens for x in grads]
+                token_events += answer_tokens
+                optimizer_updates += writes
+                physical_optimizer_updates += physical_writes
+                done = bool(cfg.train.max_steps
+                            and token_events >= cfg.train.max_steps)
+            elif cfg.train.backward_dispatch == "teacher_layer_lanes":
+                remaining = (cfg.train.max_steps - token_events
+                             if cfg.train.max_steps else it.A)
+                answer_tokens = min(it.A, remaining)
+                losses, grads, writes = answer_teacher_layer_lanes_cached(
+                    cfg, stack, loss_fn, it, answer_tokens, device, history,
+                    teacher_states=teacher_states, position_ids=position_ids,
+                    targets=targets)
+                answer_loss_sums = [x * answer_tokens for x in losses]
+                answer_grad_sums = [x * answer_tokens for x in grads]
+                token_events += answer_tokens
+                optimizer_updates += writes
+                physical_optimizer_updates += writes
+                done = bool(cfg.train.max_steps
+                            and token_events >= cfg.train.max_steps)
+            elif cfg.train.backward_dispatch == "answer_pipeline_lanes":
+                remaining = (cfg.train.max_steps - token_events
+                             if cfg.train.max_steps else it.A)
+                answer_tokens = min(it.A, remaining)
+                losses, grads, writes = answer_student_pipeline_lanes_cached(
+                    cfg, stack, loss_fn, it, answer_tokens, device, history,
+                    student_ids=student_ids, position_ids=position_ids,
+                    targets=targets)
+                answer_loss_sums = [x * answer_tokens for x in losses]
+                answer_grad_sums = [x * answer_tokens for x in grads]
+                token_events += answer_tokens
+                optimizer_updates += writes
+                physical_optimizer_updates += writes
+                done = bool(cfg.train.max_steps
+                            and token_events >= cfg.train.max_steps)
+            elif cfg.train.backward_dispatch == "answer_wavefront_disconnected":
+                remaining = (cfg.train.max_steps - token_events
+                             if cfg.train.max_steps else it.A)
+                answer_tokens = min(it.A, remaining)
+                losses, grads, writes = answer_wavefront_cached(
+                    cfg, stack, loss_fn, it, answer_tokens, device, history,
+                    student_ids=student_ids, position_ids=position_ids,
+                    targets=targets)
+                answer_loss_sums = [x * answer_tokens for x in losses]
+                answer_grad_sums = [x * answer_tokens for x in grads]
+                token_events += answer_tokens
+                optimizer_updates += writes
+                physical_optimizer_updates += writes
+                done = bool(cfg.train.max_steps
+                            and token_events >= cfg.train.max_steps)
+            else:
+                for offset in range(it.A):
+                    if history is None:
+                        losses, grads = _token_recompute(
+                            cfg, stack, loss_fn, it, offset, device,
+                            teacher_states=teacher_states,
+                            student_ids=student_ids, position_ids=position_ids,
+                            targets=targets)
+                    else:
+                        losses, grads = _token_cached(
+                            cfg, stack, loss_fn, it, offset, device, history,
+                            teacher_states=teacher_states,
+                            student_ids=student_ids, position_ids=position_ids,
+                            targets=targets, prepared_masks=prepared_masks)
+                    if answer_loss_sums is None:
+                        answer_loss_sums = losses
+                        answer_grad_sums = grads
+                    else:
+                        _foreach_accumulate(answer_loss_sums, losses)
+                        _foreach_accumulate(answer_grad_sums, grads)
+                    answer_tokens += 1
+                    token_events += 1
+                    optimizer_updates += n
+                    physical_optimizer_updates += n
+                    if (cfg.train.max_steps
+                            and token_events >= cfg.train.max_steps):
+                        done = True
+                        break
             if answer_tokens:
-                pending_losses.append([x / answer_tokens
-                                       for x in answer_loss_sums])
-                pending_grad_norms.append([x / answer_tokens
-                                           for x in answer_grad_sums])
+                answer_losses = [x / answer_tokens for x in answer_loss_sums]
+                answer_grads = [x / answer_tokens for x in answer_grad_sums]
+                if epoch_loss_sums is None:
+                    epoch_loss_sums = answer_losses
+                    epoch_grad_sums = answer_grads
+                else:
+                    _foreach_accumulate(epoch_loss_sums, answer_losses)
+                    _foreach_accumulate(epoch_grad_sums, answer_grads)
+                epoch_answer_count += 1
             answers_seen += 1
             del teacher_states
             del history
@@ -510,12 +1204,14 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
                     epoch=epoch + 1,
                     token_events_seen=token_events,
                     optimizer_updates_seen=optimizer_updates,
+                    physical_optimizer_updates_seen=physical_optimizer_updates,
                     answers_seen=answers_seen,
                     interval_token_events=progress_tokens,
                     interval_seconds=progress_seconds,
                     interval_token_events_per_s=(
                         progress_tokens / progress_seconds),
                     backward_dispatch=cfg.train.backward_dispatch,
+                    online_write_dispatch=cfg.train.online_write_dispatch,
                 )
                 print(
                     f"v3 epoch {epoch + 1} tokens {token_events} "
@@ -528,16 +1224,24 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
             if done:
                 break
 
+        pending_losses = (
+            [[value / epoch_answer_count for value in epoch_loss_sums]]
+            if epoch_answer_count else [])
         _flush_train_log(
             log, epoch=epoch, step=token_events, accum=answers_seen,
-            pending=pending_losses, n_layers=n, partial=done,
+            pending=pending_losses, pending_items=epoch_answer_count,
+            n_layers=n, partial=done,
             pipeline_version=3, update_granularity="online",
             update_reduction="none", trajectory_source=cfg.train.trajectory_source,
             history_policy=cfg.train.history_policy,
             token_events_seen=token_events,
             optimizer_updates_seen=optimizer_updates,
+            physical_optimizer_updates_seen=physical_optimizer_updates,
             optimizer_updates_per_token=n,
-            gradient_aggregation="none",
+            stale_gradient_window=cfg.train.stale_gradient_window,
+            gradient_aggregation=(
+                "none" if cfg.train.stale_gradient_window == 1 else
+                "unaveraged_sum_at_shared_weight_snapshot"),
             completed_epochs=(epoch if done else epoch + 1),
             partial_epoch=done,
             max_answer_stage_mib=max_answer_stage_bytes / 2**20,
@@ -547,39 +1251,52 @@ def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
                 kind="v3_partial_boundary",
                 token_events_seen=token_events,
                 optimizer_updates_seen=optimizer_updates,
+                physical_optimizer_updates_seen=physical_optimizer_updates,
                 completed_epochs=epoch,
                 partial_epoch_index=epoch + 1,
                 meaning=(
                     "budget checkpoint inside a dataset traversal; not a "
                     "completed epoch"),
             )
-        if pending_grad_norms:
-            by_layer = []
-            for layer in range(n):
-                vals = [row[layer].to(pending_grad_norms[0][layer].device)
-                        for row in pending_grad_norms]
-                by_layer.append(torch.stack(vals).mean().detach().cpu())
+        if epoch_grad_sums is not None:
+            grad_device = epoch_grad_sums[0].device
+            by_layer = torch.stack([
+                (value / epoch_answer_count).to(
+                    grad_device, non_blocking=True)
+                for value in epoch_grad_sums
+            ]).detach().cpu()
             log.log(
                 kind="v3_gradient_norm",
                 epoch=epoch + 1,
                 per_layer_mean=[float(x) for x in by_layer],
+                measure=(
+                    "mean_immediate_gradient_norm"
+                    if cfg.train.stale_gradient_window == 1 else
+                    "window_sum_gradient_norm_normalized_per_token"),
                 token_events_seen=token_events,
                 optimizer_updates_seen=optimizer_updates,
+                physical_optimizer_updates_seen=physical_optimizer_updates,
             )
         epoch_seconds = time.time() - epoch_started
         epoch_tokens = token_events - epoch_token_start
         epoch_writes = optimizer_updates - epoch_write_start
+        epoch_physical_writes = (
+            physical_optimizer_updates - epoch_physical_write_start)
         log.log(
             kind="v3_throughput",
             epoch=epoch + 1,
             seconds=epoch_seconds,
             token_events=epoch_tokens,
             local_writes=epoch_writes,
+            physical_local_writes=epoch_physical_writes,
             token_events_per_s=(epoch_tokens / epoch_seconds),
             local_writes_per_s=(epoch_writes / epoch_seconds),
+            physical_local_writes_per_s=(
+                epoch_physical_writes / epoch_seconds),
             includes="dataset_cache_io_plus_prompt_prefill_plus_online_writes",
             history_policy=cfg.train.history_policy,
             trajectory_source=cfg.train.trajectory_source,
+            stale_gradient_window=cfg.train.stale_gradient_window,
             completed_epochs=(epoch if done else epoch + 1),
             partial_epoch=done,
         )

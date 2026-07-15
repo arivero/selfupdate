@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..eval.tasks import RECALL_CORPUS_PATHS
+from ..teacher.cache import resolved_node_epoch0_root
 from .runtime import uses_pipeline_map
 
 RUN_CLASSES = {
@@ -36,6 +37,10 @@ def validate_knob_schedule(cfg) -> None:
         raise ValueError(
             "cache.runtime_policy=node_epoch0 requires cache.node_root under "
             "/dev/shm so the cache is host-local shared RAM")
+    if cfg.cache.runtime_policy == "node_epoch0":
+        # The environment override wins at runtime, so validate the same
+        # resolved value rather than allowing it to bypass the config guard.
+        resolved_node_epoch0_root(cfg)
     if cfg.train.update_granularity not in (
         "legacy_answer_sum", "answer", "token", "grid", "online",
     ):
@@ -52,16 +57,83 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("pipeline-v3 requires batching=item")
         if cfg.train.online_optimizer != "immediate_sgd":
             bad.append("pipeline-v3 requires online_optimizer=immediate_sgd")
-        if cfg.train.backward_dispatch not in (
-                "per_block", "per_token_disconnected"):
+        if cfg.train.online_write_dispatch not in (
+                "after_backward", "grad_ready"):
             bad.append(
-                "pipeline-v3 backward_dispatch must be per_block or "
-                "per_token_disconnected")
-        if (cfg.train.backward_dispatch == "per_token_disconnected"
+                "pipeline-v3 online_write_dispatch must be after_backward "
+                "or grad_ready")
+        if cfg.train.stale_gradient_window < 0:
+            bad.append("pipeline-v3 stale_gradient_window must be >= 0")
+        if cfg.train.stale_gradient_window != 1:
+            if cfg.train.trajectory_source != "teacher_hidden":
+                bad.append(
+                    "stale_gradient_window != 1 initially requires "
+                    "trajectory_source=teacher_hidden")
+            if cfg.train.history_policy != "causal_frozen_history":
+                bad.append(
+                    "stale-gradient windows require causal_frozen_history")
+            if cfg.train.backward_dispatch != "per_block":
+                bad.append(
+                    "stale-gradient windows use backward_dispatch=per_block")
+            if cfg.train.online_write_dispatch != "after_backward":
+                bad.append(
+                    "stale-gradient windows require after_backward fused writes")
+            if not cfg.train.lora.enabled:
+                bad.append("stale-gradient windows are initially LoRA-only")
+            if cfg.train.hidden_loss not in (
+                    "nmse", "l2mse", "cosine", "huber", "charbonnier",
+                    "clipped_nmse"):
+                bad.append(
+                    "stale-gradient windows initially support stateless "
+                    "geometric hidden losses only")
+        if cfg.train.backward_dispatch not in (
+                "per_block", "per_token_disconnected",
+                "answer_wavefront_disconnected", "answer_pipeline_lanes",
+                "teacher_layer_lanes"):
+            bad.append(
+                "pipeline-v3 backward_dispatch must be per_block, "
+                "per_token_disconnected, answer_wavefront_disconnected, "
+                "answer_pipeline_lanes, or teacher_layer_lanes")
+        if (cfg.train.backward_dispatch in (
+                "per_token_disconnected", "answer_wavefront_disconnected",
+                "answer_pipeline_lanes")
                 and not cfg.train.lora.enabled):
             bad.append(
-                "per_token_disconnected is initially LoRA-only; full-weight "
-                "training uses per_block to avoid retaining every block gradient")
+                "disconnected backward dispatch is initially LoRA-only; "
+                "full-weight training uses per_block to avoid retaining "
+                "every block gradient")
+        if cfg.train.backward_dispatch == "answer_wavefront_disconnected":
+            if cfg.train.history_policy != "causal_frozen_history":
+                bad.append(
+                    "answer_wavefront_disconnected requires "
+                    "causal_frozen_history")
+            if cfg.train.trajectory_source != "student_hidden":
+                bad.append(
+                    "answer_wavefront_disconnected currently implements the "
+                    "student-hidden dependency grid; teacher-hidden already "
+                    "parallelizes by layer")
+        if cfg.train.backward_dispatch == "answer_pipeline_lanes":
+            if cfg.train.history_policy != "causal_frozen_history":
+                bad.append("answer_pipeline_lanes requires causal_frozen_history")
+            if cfg.train.trajectory_source != "student_hidden":
+                bad.append("answer_pipeline_lanes requires student_hidden")
+            if cfg.train.hidden_loss not in (
+                    "nmse", "l2mse", "cosine", "huber", "charbonnier",
+                    "clipped_nmse"):
+                bad.append(
+                    "answer_pipeline_lanes initially supports stateless "
+                    "geometric hidden losses only")
+        if cfg.train.backward_dispatch == "teacher_layer_lanes":
+            if cfg.train.history_policy != "causal_frozen_history":
+                bad.append("teacher_layer_lanes requires causal_frozen_history")
+            if cfg.train.trajectory_source != "teacher_hidden":
+                bad.append("teacher_layer_lanes requires teacher_hidden")
+            if cfg.train.hidden_loss not in (
+                    "nmse", "l2mse", "cosine", "huber", "charbonnier",
+                    "clipped_nmse"):
+                bad.append(
+                    "teacher_layer_lanes initially supports stateless "
+                    "geometric hidden losses only")
         if cfg.train.lr_rule != "fixed":
             bad.append("pipeline-v3 currently implements lr_rule=fixed only")
         if cfg.train.history_policy not in (
@@ -136,8 +208,12 @@ def validate_knob_schedule(cfg) -> None:
     elif cfg.train.update_granularity != "legacy_answer_sum":
         bad.append("non-legacy update granularity requires its matching pipeline version")
     if (cfg.train.pipeline_version != 3
-            and cfg.train.backward_dispatch != "per_block"):
-        bad.append("backward_dispatch is implemented only by pipeline-v3")
+            and (cfg.train.backward_dispatch != "per_block"
+                 or cfg.train.online_write_dispatch != "after_backward"
+                 or cfg.train.stale_gradient_window != 1)):
+        bad.append(
+            "backward/write/window dispatch knobs are implemented only by "
+            "pipeline-v3")
     if cfg.train.update_granularity != "grid":
         if cfg.train.answers_per_update:
             bad.append("answers_per_update is set but update_granularity is not grid")

@@ -253,6 +253,18 @@ interpreted without silently promoting them to frontier evidence.
 - Historical `teacher_censored` result: it was useful as a schedule and as a
   localization readout; context integration peaked near layer 7 in Qwen3-0.6B
   artifacts. The localization observation remains historical evidence.
+- Pipeline-v3 one-GPU lane/wavefront rearrangements remain dispatch-bound at
+  roughly 9-12 token-events/s on Qwen3-0.6B L40S; bounded student lanes added
+  memory without speed, and grad-ready hooks slowed the student path. Exact
+  measurements and the narrower teacher-lane gain are in `issues.md`. Test
+  multi-GPU partitioning or fixed-shape capture/fusion before inventing more
+  one-GPU scheduling variants.
+- Pipeline-v3 teacher-hidden stale windows are the measured speed bridge, not
+  an exact-online synonym. On the 256-token 0.6B probe K=8 was 7.6x faster
+  than K=1 but its exact trainable delta diverged by 15.4% globally (layer 1:
+  74.4%). Keep K named in configs/reports and compare at a matched logical
+  token budget. Mask-free cached attention is valid for q=1 only; K>1 must
+  carry causal masking inside the chunk (current code uses one K×prefix mask).
 - Eval on the full corpus. The 8-example training subset can hide severe
   coverage bias.
 - Two concurrent GPU jobs need a VRAM guard with random stagger.

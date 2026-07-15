@@ -46,17 +46,20 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
     )
     defaults = {}
     if cfg.train.pipeline_version in (2, 3):
+        repo_root = Path(__file__).resolve().parents[3]
         examples = Path(cfg.data.examples_path)
         runtime_diff = subprocess.check_output(
             ["git", "diff", "--binary", "HEAD", "--",
-             "src/selfupdate", "scripts/train.py"])
+             "src/selfupdate", "scripts/train.py"], cwd=repo_root)
         runtime_untracked = subprocess.check_output(
             ["git", "ls-files", "--others", "--exclude-standard", "--",
-             "src/selfupdate", "scripts/train.py"], text=True).splitlines()
+             "src/selfupdate", "scripts/train.py"], cwd=repo_root,
+            text=True).splitlines()
         defaults = {
             "run_name": cfg.run_name,
             "source_commit": subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True).strip(),
+                ["git", "rev-parse", "HEAD"], cwd=repo_root,
+                text=True).strip(),
             "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
             "runtime_dirty": bool(runtime_diff or runtime_untracked),
             "runtime_diff_sha256": (
@@ -100,6 +103,7 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "grad_accum": cfg.train.grad_accum,
             "online_optimizer": cfg.train.online_optimizer,
             "backward_dispatch": cfg.train.backward_dispatch,
+            "online_write_dispatch": cfg.train.online_write_dispatch,
             "lr_rule": cfg.train.lr_rule,
             "history_policy": cfg.train.history_policy,
             "conn_window": cfg.train.conn_window,
