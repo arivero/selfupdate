@@ -176,10 +176,24 @@ on bookkeeping after the round-1 cuDNN fix, so v3's win there is smaller.
 
 This closes the reachable gap: what v3 buys back is the entire
 "unnecessary" bookkeeping tax identified in rounds 1-2. What's left
-(vLLM still ~8.5x on GPU, ~6.3x on CPU) is continuous batching, real
-block-sparse PagedAttention (paging across *different* sequences' KV,
-not just one contiguous region per sequence), and — GPU only — CUDA
-graphs. None of those are expressible without rebuilding the scheduler.
+(vLLM still ~8.5x on GPU, ~6.3x on CPU) splits into two genuinely
+different categories — checked against the installed `vllm025` tree, not
+assumed:
+
+- **Continuous batching / admission / preemption**
+  (`vllm/v1/core/sched/scheduler.py`, 2675 lines) is **plain Python**. No
+  compiled magic — it decides what to admit each step and manages block
+  tables. This part is exactly as reachable as the round-3 cache trick;
+  a v4 could steal the design directly (untested here).
+- **Real block-sparse gather-attention over scattered, per-sequence KV
+  blocks** lives in vLLM's compiled extensions (`_C_stable_libtorch.so`,
+  the paged-attention/flashmla kernels). SDPA has no "attend over
+  non-contiguous KV pages" mode — this needs a custom CUDA/Triton kernel,
+  not Python restructuring. CUDA graphs (GPU only) build on top of it.
+
+So "rebuild the scheduler" was the wrong framing in an earlier draft of
+this note — the scheduler is Python and copyable. The unreachable-without-
+a-kernel piece is specifically the paged attention kernel itself.
 
 ## Verdict
 
