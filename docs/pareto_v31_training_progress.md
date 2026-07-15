@@ -498,6 +498,18 @@ high flow/1e-5 diagnostic. It reused the verified 2,071-example node-local
 cache `98bb2aff23e25f93`. Random/3e-7 remains an atomic remote successor on
 agpul04 GPU0 so it cannot overlap its random/3e-6 predecessor.
 
+The first two scale-corrected flow cuts show that cumulative movement alone
+does not reproduce the earlier useful trajectory. Flow/3e-7 reached recall
+0.15759/0.15654 at epochs one/two with mean relative movement
+9.94e-6/1.99e-5; flow/1e-6 had reached 0.16779 at epoch two with movement
+6.60e-5. Pipeline v3.1 therefore adds a named `epoch_piecewise` immediate-SGD
+rule for BxK training. The first measured taper pins base LR 1e-6 and epoch
+multipliers `[1, 1, 0.1, 0.1, 0.03, 0.03]`: it preserves the two useful
+large-update epochs, then continues the required full-dataset exposure with
+smaller nonzero writes. The exact multiplier vector is part of config identity
+and telemetry; fixed-LR behavior remains unchanged. A matched intact taper is
+included as the null control.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer

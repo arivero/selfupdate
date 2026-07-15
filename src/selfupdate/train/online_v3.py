@@ -1063,6 +1063,9 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
         gradient_aggregation="unaveraged_sum_over_valid_BxK_cells",
         physical_write="one_per_block_per_nonempty_tile",
         trajectory_source=cfg.train.trajectory_source,
+        lr_rule=cfg.train.lr_rule,
+        base_learning_rate=cfg.train.lr,
+        lr_epoch_multipliers=cfg.train.lr_epoch_multipliers,
         lookahead_contract=(
             "next_token_online" if K == 1 else
             "teacher_prefetched_or_speculative_confirmed_tokens"),
@@ -1071,6 +1074,10 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
     )
 
     for epoch in range(cfg.train.epochs):
+        lr_multiplier = (
+            cfg.train.lr_epoch_multipliers[epoch]
+            if cfg.train.lr_rule == "epoch_piecewise" else 1.0)
+        epoch_lr = cfg.train.lr * lr_multiplier
         epoch_started = time.time()
         epoch_events_start = token_events
         epoch_conceptual_start = conceptual_writes
@@ -1136,7 +1143,7 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
                         if not teacher_hidden:
                             state["h"] = h_out.detach()
                         del h_in, h_out, view, target, summed_loss, mean_loss
-                    grad = _immediate_sgd(params, cfg.train.lr)
+                    grad = _immediate_sgd(params, epoch_lr)
                     tile_losses.append(loss_sum / cells)
                     tile_grads.append(grad.detach() / cells)
                 weighted_losses = [value * cells for value in tile_losses]
@@ -1195,6 +1202,9 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
             physical_optimizer_updates_seen=physical_writes,
             optimizer_updates_per_token=n,
             stale_gradient_window=K,
+            lr_rule=cfg.train.lr_rule,
+            learning_rate=epoch_lr,
+            lr_multiplier=lr_multiplier,
             gradient_aggregation="unaveraged_sum_at_shared_weight_snapshot",
             completed_epochs=epoch + 1, partial_epoch=False,
         )
@@ -1225,6 +1235,9 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
             history_policy=cfg.train.history_policy,
             trajectory_source=cfg.train.trajectory_source,
             stale_gradient_window=K,
+            lr_rule=cfg.train.lr_rule,
+            learning_rate=epoch_lr,
+            lr_multiplier=lr_multiplier,
             completed_epochs=epoch + 1,
             partial_epoch=False,
         )

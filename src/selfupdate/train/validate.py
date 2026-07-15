@@ -10,6 +10,7 @@ it offline.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from ..eval.tasks import RECALL_CORPUS_PATHS
@@ -48,6 +49,10 @@ def validate_knob_schedule(cfg) -> None:
     ):
         raise ValueError(
             f"unknown train.update_granularity {cfg.train.update_granularity!r}")
+    if (cfg.train.pipeline_version != 3
+            and cfg.train.lr_epoch_multipliers):
+        bad.append(
+            "lr_epoch_multipliers is implemented only by pipeline-v3.1")
     if cfg.train.pipeline_version == 3:
         if cfg.train.pipeline_revision not in ("", "3.0", "3.1"):
             bad.append("pipeline-v3 revision must be 3.0 or 3.1")
@@ -163,8 +168,27 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append(
                     "teacher_layer_lanes initially supports stateless "
                     "geometric hidden losses only")
-        if cfg.train.lr_rule != "fixed":
-            bad.append("pipeline-v3 currently implements lr_rule=fixed only")
+        if cfg.train.lr_rule == "fixed":
+            if cfg.train.lr_epoch_multipliers:
+                bad.append(
+                    "lr_epoch_multipliers must be empty when lr_rule=fixed")
+        elif cfg.train.lr_rule == "epoch_piecewise":
+            if not bk_training:
+                bad.append(
+                    "lr_rule=epoch_piecewise is implemented only by "
+                    "pipeline-v3.1 causal_bk training")
+            multipliers = cfg.train.lr_epoch_multipliers
+            if len(multipliers) != cfg.train.epochs:
+                bad.append(
+                    "lr_epoch_multipliers must contain exactly one value "
+                    "per training epoch")
+            elif any(not math.isfinite(value) or value < 0
+                     for value in multipliers):
+                bad.append(
+                    "lr_epoch_multipliers must be finite and non-negative")
+        else:
+            bad.append(
+                "pipeline-v3 lr_rule must be fixed or epoch_piecewise")
         if cfg.train.history_policy not in (
             "recompute_prefix", "causal_frozen_history",
             "causal_static_eager_probe", "causal_static_graph_probe",

@@ -198,11 +198,13 @@ class TrainConfig:
     mix_teacher_end: float = 0.0
     lr: float = 1e-5
     # Pipeline-v3 execution contract. ``immediate_sgd`` has no momentum,
-    # moments, weight decay, clipping, or accumulation state. A fixed LR is
-    # the first certified rule; curvature/NLMS calibration is recorded as a
-    # separate preflight rather than hidden inside the optimizer.
+    # moments, weight decay, clipping, or accumulation state. ``fixed`` uses
+    # ``lr`` unchanged. ``epoch_piecewise`` is a v3.1 BxK-only rule and
+    # multiplies ``lr`` by the explicitly pinned value for each epoch; it
+    # changes no within-epoch update/aggregation semantics.
     online_optimizer: str = "adamw"  # adamw (v1/v2) | immediate_sgd (v3)
-    lr_rule: str = "fixed"            # fixed (v3)
+    lr_rule: str = "fixed"            # fixed | epoch_piecewise (v3.1 BxK)
+    lr_epoch_multipliers: list[float] = field(default_factory=list)
     # after_backward uses a fused multi-tensor block write. grad_ready uses
     # post-accumulate autograd hooks to write and clear each tensor as soon as
     # its gradient is materialized; both implement state-free immediate SGD.

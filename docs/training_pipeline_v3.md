@@ -334,11 +334,17 @@ not retroactively rewritten.
 
 ## Learning rate
 
-The first runtime implements `lr_rule: fixed`. This is explicit rather than a
-claim that the pipeline-v2 learning rate transfers unchanged. Calibration
-arms should measure one-token local curvature and gradient norms, then sweep a
-conservative bracket. Candidate future rules include normalized LMS for
-matrix-local updates and a curvature estimate
+`lr_rule: fixed` applies the configured learning rate to every immediate
+write. Pipeline v3.1 BxK training also implements `lr_rule: epoch_piecewise`:
+`lr_epoch_multipliers` must pin exactly one non-negative multiplier per epoch.
+The multiplier changes only the state-free SGD write amplitude; gradients are
+still unaveraged over valid BxK cells and there is no optimizer state. This
+rule exists to preserve a measured useful early trajectory while reducing
+later overshoot, not to claim that a pipeline-v2 learning rate transfers.
+
+Calibration arms should measure local curvature and gradient norms, then
+sweep a conservative bracket. Candidate future rules include normalized LMS
+for matrix-local updates and a curvature estimate
 `||g||^2 / (g^T H g)`. Any adaptive rule must remain state-free across token
 events and become a named, logged experiment variable.
 
