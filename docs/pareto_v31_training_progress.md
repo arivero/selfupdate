@@ -318,6 +318,47 @@ bfloat16 layers, 36.51 GiB. agpul05 completed teacher forward/cache total in
 host required an OOM retry. These are node-local copies of the same target
 identity, not separate scientific datasets.
 
+### Completed K16 screen
+
+All seven censored K16 Wave-A arms completed six dataset-v5 epochs and their
+individual report manifests. The matched LR 1e-5 intact release control is
+included for null normalization. Speeds are final-epoch aligned answer-token
+events/s; the standard score is the in-training 16-item-per-task sample and is
+being replaced by the required full 100-item-per-task evaluation before
+promotion.
+
+| censorship / loss | LR | recall e6 | sampled standard macro | events/s | mean/max relative LoRA delta |
+|---|---:|---:|---:|---:|---:|
+| flow / cosine | 1e-5 | 0.11739 | 0.3750 | 3,034.1 | 5.87e-3 / 1.13e-2 |
+| flow / Huber | 1e-5 | 0.12182 | 0.3958 | 3,011.1 | 5.85e-3 / 1.24e-2 |
+| flow / Huber | 3e-6 | **0.15356** | 0.3958 | 3,078.8 | 3.01e-3 / 7.54e-3 |
+| flow / Huber | 1e-6 | 0.12950 | 0.4167 | 3,041.5 | 1.38e-3 / 4.87e-3 |
+| intact / Huber | 1e-5 | 0.12891 | 0.4375 | 3,092.6 | 5.27e-4 / 1.14e-3 |
+| random / Huber | 1e-5 | 0.12626 | 0.3333 | 3,064.4 | 5.94e-3 / 1.15e-2 |
+| random / Huber | 3e-6 | 0.13508 | 0.3750 | 3,072.0 | 3.08e-3 / 6.47e-3 |
+| random / Huber | 1e-6 | 0.10799 | 0.3958 | 3,058.7 | 1.32e-3 / 3.43e-3 |
+
+Flow-mask/Huber/LR 3e-6 is the provisional leader: it is 0.03206 above epoch
+zero and 0.02465 above the same-geometry intact release endpoint, with about
+half the movement of the aggressive censored arms. Its sampled standard macro
+is 0.04167 below the intact control, however, so it is not yet a validated
+recipe. The full-corpus base/intact/leader comparison and an independent-seed
+replication are promotion gates. The two lower-rate intact K16 controls have
+now backfilled the released GPUs and will quantify how much of the apparent
+benefit is ordinary uncensored self-distillation.
+
+### First exact 4B production-path probe
+
+The worst full B=256 cohort passed the exact student-hidden K16 path with
+16-user activation shards. It contains 65,481 valid answer-token events
+(2,095,392 conceptual block-local writes) across 50 K tiles. Prompt prefill
+took 31.65 seconds and tile training 74.93 seconds: 873.9 tile token-events/s,
+614.4 end-to-end token-events/s, and 106.58 seconds total. Baseline allocation
+was 8.20 GiB; peak allocation/reservation was 25.58/32.82 GiB. All vocabulary
+weights remained frozen and no checkpoint was published. The remaining memory
+margin admits a measured shard-24 probe; shard 32 is not assumed safe from
+linear extrapolation.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
