@@ -170,12 +170,17 @@ arms must carry the recipe selection.
 | 1 | 426.988 | 2,538.5 | 0.10879 | 0.4375 | 2.24e-4 | 4.84e-4 |
 | 2 | 352.956 | 3,071.0 | 0.11482 | 0.4375 | 3.29e-4 | 7.00e-4 |
 | 3 | 349.639 | 3,100.1 | 0.11755 | 0.4375 | 3.89e-4 | 8.14e-4 |
+| 4 | 348.570 | 3,109.6 | 0.12126 | 0.4375 | 4.34e-4 | 9.31e-4 |
 
 Epoch two shows partial recall recovery rather than monotonic destruction,
 but it remains below the 0.12150 epoch-zero value. The intact 1e-5 arm stays
 a runtime/null diagnostic, not a candidate recipe.
 Epoch three recovers further but remains below epoch zero; movement continues
 to grow, so the conclusion is unchanged.
+Epoch four is nearly back at epoch zero (difference -0.00023) while retaining
+zero sampled macro damage. This makes the null trajectory oscillatory rather
+than monotonically destructive, but the nonzero movement still requires
+lower-rate null normalization.
 
 ### Wave-A deployment
 
@@ -240,6 +245,25 @@ task damage sample falls by 0.0208 macro and its largest layer moves 9.5 times
 farther than the same-rate intact null at epoch one. It is therefore promising
 but not yet safe. Random fill is uniformly weak at this cut. Lower-rate intact
 controls were added specifically to normalize the censored-arm movement.
+
+Epoch two reverses several epoch-one rankings:
+
+| censorship / loss | LR | recall e2 | standard macro e2 | aligned events/s | mean/max relative LoRA delta |
+|---|---:|---:|---:|---:|---:|
+| flow / Huber | 1e-5 | 0.13988 | 0.3750 | 3,092 | 3.15e-3 / 7.84e-3 |
+| flow / Huber | 3e-6 | 0.12611 | 0.4167 | 3,099 | 1.37e-3 / 4.83e-3 |
+| flow / Huber | 1e-6 | 0.10938 | 0.4375 | 3,111 | 5.64e-4 / 2.53e-3 |
+| flow / cosine | 1e-5 | 0.12892 | 0.3750 | 3,053 | 3.23e-3 / 6.39e-3 |
+| random / Huber | 1e-5 | 0.14076 | 0.4167 | 3,095 | 3.20e-3 / 6.70e-3 |
+| random / Huber | 3e-6 | 0.10719 | 0.4167 | 3,109 | 1.31e-3 / 3.43e-3 |
+| random / Huber | 1e-6 | 0.11316 | 0.4375 | 3,091 | 5.10e-4 / 1.40e-3 |
+
+The two largest recall values now belong to the aggressive 1e-5 Huber arms,
+but both pay sampled standard damage and have roughly 7--8 times the mean
+relative movement of the epoch-four intact control. Flow/Huber/3e-6 gives a
+smaller positive recall result with smaller movement and smaller sampled
+damage. No arm is promoted from this cut: the reversals demonstrate why the
+six-epoch trajectories and the full individual reports are required.
 
 ### Qwen3.5-4B promotion preparation
 
