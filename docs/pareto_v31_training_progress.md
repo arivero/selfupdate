@@ -199,6 +199,15 @@ the K1 intact control, and three K1 censorship/loss arms. The remaining four
 K1 learning-rate arms stay in the shared queue and will backfill cards as
 the first workers publish their individual reports.
 
+At 23:08 the intact-null evidence extended Wave A by two K16 controls at
+learning rates 3e-6 and 1e-6. They retain B256, K16, activation shards of 64,
+Huber hidden loss, immediate unaveraged SGD, and seed 17; only learning rate
+changes. Their priority is above the remaining K1 backfill. Together with the
+separately running LR1e-5 release arm, this gives a three-point K16 null curve
+against which flow-mask and random-fill movement can be judged. The extension
+raises the design from 16 to 18 atomic runs without changing any in-flight
+configuration.
+
 The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
 old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
 104–124 seconds. Their corrected snapshot stage and retry-1 epoch-zero

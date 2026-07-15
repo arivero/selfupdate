@@ -1,6 +1,9 @@
 # done_file	need_mb	after	command	n_gpus	priority	expected_seconds	cache_group
-# Dataset-v5 / pipeline-v3.1 Wave A. The already-running intact B256K16
-# release gate is intentionally absent; these are the other 15 atomic runs.
+# Dataset-v5 / pipeline-v3.1 Wave A. The separately running intact B256K16
+# LR1e-5 release gate is intentionally absent. Two lower-rate K16 intact
+# controls extend the original 16-arm design, giving 17 queued atomic runs.
+runs/pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr3e6_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_intact_huber_lr3e6.yaml	1	400	21600	qwen35_0p8b_v31
+runs/pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e6_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_intact_huber_lr1e6.yaml	1	399	21600	qwen35_0p8b_v31
 runs/pareto_v31_qwen35_0p8b_intact_student_b256k1_huber_lr1e5_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k1_intact_train.yaml	1	290	64800	qwen35_0p8b_v31
 runs/pareto_v31_qwen35_0p8b_flow_student_b256k16_cosine_lr1e5_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_flow_cosine_lr1e5.yaml	1	257	21600	qwen35_0p8b_v31
 runs/pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr1e5_s17/report_manifest.json	24000	-	scripts/l40s_train_v3.sh --config configs/experiments/pareto_v3/base_qwen35_0p8b.yaml --experiment configs/experiments/pareto_v3/qwen35_0p8b_v31_b256k16_flow_huber_lr1e5.yaml	1	252	21600	qwen35_0p8b_v31
