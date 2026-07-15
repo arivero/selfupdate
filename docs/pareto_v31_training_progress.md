@@ -474,6 +474,21 @@ where it failed during model placement before any training event. Its two-file
 partial directory is preserved under `runs/failed_launches/`; the corrected
 successor executes all checks and launch inside explicit SSH to agpul04.
 
+The paired 4B full-standard gate is now available for the first four endpoints:
+
+| endpoint | ARC Easy | ARC Challenge | HellaSwag | macro | damage vs base |
+|---|---:|---:|---:|---:|---:|
+| base | 0.720 | 0.600 | 0.590 | 0.6367 | 0.0000 |
+| intact / 1e-6 | 0.720 | 0.600 | 0.590 | 0.6367 | 0.0000 |
+| flow / 1e-6 | 0.700 | 0.610 | 0.590 | 0.6333 | 0.0033 |
+| flow / 3e-6 | 0.700 | 0.600 | 0.590 | 0.6300 | 0.0067 |
+| random / 1e-6 | 0.710 | 0.610 | 0.590 | 0.6367 | 0.0000 |
+
+Random/1e-6 finishes at recall 0.15865 versus the 0.16542 intact endpoint,
+so its exact macro retention does not make it a correct recipe. The first flow
+arms likewise fail on matched recall rather than catastrophic standard damage.
+Schema-4 individual report refresh is running for all four endpoints.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
