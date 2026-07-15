@@ -29,6 +29,14 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+# A completed node-local stage is authoritative. Avoid even Hugging Face's
+# metadata HEAD request: it adds network variability and emits a misleading
+# unauthenticated-Hub warning although every tokenizer/model file is local.
+_hf_home = Path(os.environ.get("HF_HOME", "")) if os.environ.get("HF_HOME") else None
+if _hf_home is not None and (_hf_home / ".selfupdate-hf-stage-ready").is_file():
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 print("startup stage=repo_imports_begin", flush=True)
 from selfupdate.chatfmt import adapt_records, stop_token_id  # noqa: E402
 from selfupdate.config import load_config  # noqa: E402
