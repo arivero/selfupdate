@@ -67,7 +67,15 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("causal_bk execution requires micro_batch B >= 2")
             if cfg.train.batching not in ("padded", "bucketed"):
                 bad.append("causal_bk execution requires padded or bucketed batching")
+            shard_users = cfg.train.activation_shard_users
+            if shard_users < 0 or shard_users > cfg.train.micro_batch:
+                bad.append(
+                    "activation_shard_users must be in [0, micro_batch] "
+                    "for causal_bk")
         else:
+            if cfg.train.activation_shard_users:
+                bad.append(
+                    "activation_shard_users is implemented only by causal_bk")
             if cfg.train.micro_batch != 1:
                 bad.append("pipeline-v3.0 requires micro_batch=1")
             if cfg.train.batching != "item":

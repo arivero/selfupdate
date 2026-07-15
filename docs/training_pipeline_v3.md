@@ -267,6 +267,15 @@ calibration point: persist exact parameter deltas for K=1 and K=8 at the same
 seed/item order and report global plus per-layer divergence, not only endpoint
 delta magnitudes.
 
+Pipeline v3.1 additionally distinguishes logical B from the temporary
+activation shard. `activation_shard_users: 64` with `micro_batch: 256`
+prepares four fixed 64-user causal caches and evaluates their block-local
+backwards sequentially. Their gradients are summed at the same pre-write
+matrix and there is exactly one physical write per block/tile, so it is still
+a B256×K update: no user is replaced, averaged, or assigned a separate
+optimizer step. The knob is a memory/dispatch variable and appears in every
+run report and timing record.
+
 The mask-free cached-attention optimization is exact only for q=1: the sole
 query cannot see a future key because the dynamic cache contains only its
 prefix. A K>1 stale window must retain a causal mask within its chunk. The
@@ -347,6 +356,7 @@ train:
   update_granularity: online
   online_optimizer: immediate_sgd
   stale_gradient_window: 1
+  activation_shard_users: 1
   lr_rule: fixed
   history_policy: causal_frozen_history
   trajectory_source: student_hidden

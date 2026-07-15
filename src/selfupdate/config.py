@@ -213,6 +213,13 @@ class TrainConfig:
     # one fused write is exactly sequential replay of gradients precomputed at
     # the same snapshot under state-free SGD.
     stale_gradient_window: int = 1
+    # Pipeline-v3.1 B×K activation-memory shard.  Zero means the complete
+    # logical B-user update is materialized at once.  A positive value splits
+    # transient forwards/backwards into that many fixed user lanes while
+    # accumulating all shard gradients before the one required block write.
+    # It therefore changes memory/dispatch, never the logical B×K geometry,
+    # averaging law, or optimizer-update count.
+    activation_shard_users: int = 0
     # per_block: backward/write immediately after each block (minimum graph
     # memory). per_token_disconnected: retain the B=1,K=1 block-local graphs
     # for one token, invoke autograd once over their disconnected loss roots,

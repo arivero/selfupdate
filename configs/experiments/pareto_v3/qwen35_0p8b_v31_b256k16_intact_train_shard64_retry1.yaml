@@ -1,8 +1,11 @@
-run_name: pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr1e6_s17
+# Full six-epoch release gate after the first B256K16 run exhausted L40S
+# backward activation memory on a long cohort. Logical geometry remains
+# B256×K16; 64 is only the transient backward shard.
+run_name: pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e5_s17_shard64_r1
 mask:
-  compaction: flow_mask
+  compaction: intact
 train:
-  run_class: method
+  run_class: control
   pipeline_version: 3
   pipeline_revision: "3.1"
   update_granularity: online
@@ -25,7 +28,7 @@ train:
   stale_gradient_window: 16
   activation_shard_users: 64
   hidden_loss: huber
-  lr: 1.0e-6
+  lr: 1.0e-5
   lora:
     enabled: true
     r: 16

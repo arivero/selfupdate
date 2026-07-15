@@ -10,6 +10,7 @@ train:
   lr_rule: fixed
   schedule: summed
   epochs: 6
+  seed: 17
   max_steps: 0
   micro_batch: 256
   grad_accum: 1
@@ -22,6 +23,7 @@ train:
   backward_dispatch: per_block
   online_write_dispatch: after_backward
   stale_gradient_window: 1
+  activation_shard_users: 256
   hidden_loss: huber
   lr: 1.0e-5
   lora:

@@ -862,6 +862,151 @@ def _bk_bucketed_cohorts(ds, width: int, seed: int):
     return cohorts
 
 
+def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
+                              teacher_hidden, layer_types, shard_users):
+    """Build fixed B-user causal state in bounded activation shards.
+
+    The shard boundary is purely an execution/memory boundary.  A later tile
+    visits all shards at the same pre-write block weights, accumulates their
+    unaveraged gradients, and writes that block once.  Thus the logical
+    B×K update remains intact even though no backward graph spans all B rows.
+    """
+    n = stack.n_layers
+    shards = []
+    for first in range(0, len(items), shard_users):
+        shard_items = items[first:first + shard_users]
+        batch = collate_padded_items(shard_items)
+        b_now = len(shard_items)
+        student_ids = batch.student_ids.to(device)
+        batch_positions = batch.position_ids.to(device)
+        teacher_inputs = (
+            teacher.full_inputs_resident_batch(batch, device)
+            if teacher_hidden else None)
+        (prompt_length, prefix_index, prefix_positions, prefix_valid,
+         prefix_keep) = _bk_prefix_layout(cfg, shard_items, batch, device)
+        history = DynamicCache(config=stack.text_config)
+        if teacher_hidden:
+            first_prefix = _bk_gather_hidden(
+                teacher_inputs[0], prefix_index)
+            prefix_rope = stack.rope(first_prefix, prefix_positions)
+        else:
+            prefix_ids = student_ids.gather(1, prefix_index)
+            prefix_hidden = stack.embed(prefix_ids)
+            prefix_rope = stack.rope(prefix_hidden, prefix_positions)
+
+        prefill_q = torch.arange(prompt_length, device=device)[:, None]
+        prefill_k = torch.arange(prompt_length, device=device)[None]
+        prefill_allowed = ((prefill_k <= prefill_q)[None]
+                           & prefix_keep[:, None, :])
+        # Left-pad queries are dead rows. Permit one key so a full-attention
+        # softmax never sees an all-masked row before block output zeroing.
+        prefill_allowed[:, :, 0] |= ~prefix_valid
+        prefill_mask = torch.zeros(
+            (b_now, 1, prompt_length, prompt_length),
+            dtype=torch.bfloat16, device=device)
+        prefill_mask.masked_fill_(
+            ~prefill_allowed[:, None], torch.finfo(torch.bfloat16).min)
+        with torch.no_grad(), torch.autocast(
+                device.type, dtype=torch.bfloat16):
+            h = prefix_hidden if not teacher_hidden else None
+            for layer in range(1, n + 1):
+                h_in = (_bk_gather_hidden(
+                    teacher_inputs[layer - 1], prefix_index)
+                    if teacher_hidden else h)
+                layer_mask = (prefix_keep
+                              if layer_types[layer - 1] == "linear_attention"
+                              else prefill_mask)
+                h_out = stack.run_block(
+                    layer, h_in, prefix_rope,
+                    position_ids=prefix_positions,
+                    flow_keep=prefix_keep,
+                    past_key_values=history, use_cache=True,
+                    causal_length=prompt_length,
+                    prepared_attention_mask=layer_mask)
+                _detach_cache_layer(history, layer - 1)
+                if not teacher_hidden:
+                    h = h_out.detach()
+
+        lengths = batch.A.to(device)
+        max_answer = int(batch.A.max())
+        timeline = torch.arange(max_answer, device=device)[None]
+        answer_keep = timeline < lengths[:, None]
+        shards.append({
+            "batch": batch,
+            "b_now": b_now,
+            "student_ids": student_ids,
+            "batch_positions": batch_positions,
+            "teacher_inputs": teacher_inputs,
+            "prompt_length": prompt_length,
+            "prefix_keep": prefix_keep,
+            "history": history,
+            "lengths": lengths,
+            "answer_keep": answer_keep,
+            "student_s0": batch.s0.to(device)[:, None],
+            "max_answer": max_answer,
+        })
+        # These are prefill-only tensors. Persistent causal state is held in
+        # history; retaining the masks would turn the shard mechanism into an
+        # answer-length activation cache.
+        del prefill_allowed, prefill_mask, prefix_index, prefix_positions
+        del prefix_valid, prefix_rope, h_out, h_in
+        if teacher_hidden:
+            del first_prefix
+        else:
+            del prefix_ids, prefix_hidden, h
+    return shards
+
+
+def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
+                           teacher_hidden):
+    """Materialize one shard's current K-window state, or return None."""
+    if start >= shard["max_answer"]:
+        return None
+    stop = min(start + width, shard["max_answer"])
+    tile_width = stop - start
+    batch = shard["batch"]
+    offsets = torch.arange(start, stop, device=device)[None]
+    query_valid = offsets < shard["lengths"][:, None]
+    cells = int((batch.A - start).clamp(min=0, max=tile_width).sum())
+    if not cells:
+        return None
+    # Target staging remains bounded by the current K window. The shard
+    # boundary exists for backward activations, not for target averaging.
+    window_targets = torch.stack([
+        batch.hidden[layer][:, start:stop]
+        for layer in range(1, n + 1)
+    ]).to(device)
+    source_index = (shard["student_s0"] + offsets).clamp_max(
+        shard["batch_positions"].shape[1] - 1)
+    query_positions = shard["batch_positions"].gather(1, source_index)
+    key_keep = torch.cat(
+        (shard["prefix_keep"], shard["answer_keep"][:, :stop]), dim=1)
+    full_mask = _bk_additive_mask(
+        key_keep, query_valid, start, stop, torch.bfloat16)
+    if teacher_hidden:
+        first_query = _bk_gather_hidden(
+            shard["teacher_inputs"][0], source_index)
+        query_rope = stack.rope(first_query, query_positions)
+        h = None
+    else:
+        query_ids = shard["student_ids"].gather(1, source_index)
+        h = stack.embed(query_ids)
+        query_rope = stack.rope(h, query_positions)
+    return {
+        "shard": shard,
+        "stop": stop,
+        "cells": cells,
+        "window_targets": window_targets,
+        "source_index": source_index,
+        "query_positions": query_positions,
+        "query_valid": query_valid,
+        "key_keep": key_keep,
+        "full_mask": full_mask,
+        "query_rope": query_rope,
+        "h": h,
+    }
+
+
 def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
     """Full dataset-v5 B-user × K-token pipeline-v3.1 training.
 
@@ -892,6 +1037,7 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
     n = stack.n_layers
     B = cfg.train.micro_batch
     K = cfg.train.stale_gradient_window
+    activation_shard_users = cfg.train.activation_shard_users or B
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
@@ -910,6 +1056,7 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
     log.log(
         kind="pipeline_v31_contract",
         B_simultaneous_users=B,
+        activation_shard_users=activation_shard_users,
         K_context_tokens=K,
         lane_refill=False,
         finished_rows="masked_without_replacement",
@@ -934,125 +1081,64 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
         cohorts = _bk_bucketed_cohorts(ds, B, cfg.train.seed + epoch)
         for cohort_index, indices in enumerate(cohorts):
             items = [ds[index] for index in indices]
-            batch = collate_padded_items(items)
+            shards = _bk_prepare_cohort_shards(
+                cfg, stack, items, device, teacher, teacher_hidden,
+                layer_types, activation_shard_users)
             b_now = len(items)
-            student_ids = batch.student_ids.to(device)
-            batch_positions = batch.position_ids.to(device)
-            teacher_inputs = (
-                teacher.full_inputs_resident_batch(batch, device)
-                if teacher_hidden else None)
-            prompt_length, prefix_index, prefix_positions, prefix_valid, prefix_keep = (
-                _bk_prefix_layout(cfg, items, batch, device))
-            history = DynamicCache(config=stack.text_config)
-            if teacher_hidden:
-                first_prefix = _bk_gather_hidden(
-                    teacher_inputs[0], prefix_index)
-                prefix_rope = stack.rope(first_prefix, prefix_positions)
-            else:
-                prefix_ids = student_ids.gather(1, prefix_index)
-                prefix_hidden = stack.embed(prefix_ids)
-                prefix_rope = stack.rope(prefix_hidden, prefix_positions)
-
-            prefill_q = torch.arange(prompt_length, device=device)[:, None]
-            prefill_k = torch.arange(prompt_length, device=device)[None]
-            prefill_allowed = ((prefill_k <= prefill_q)[None]
-                               & prefix_keep[:, None, :])
-            # Left-padded queries are dead rows, but an all-masked softmax can
-            # become NaN before BlockStack zeros them. Permit one harmless
-            # cached key exactly as for finished answer rows.
-            prefill_allowed[:, :, 0] |= ~prefix_valid
-            prefill_mask = torch.zeros(
-                (b_now, 1, prompt_length, prompt_length),
-                dtype=torch.bfloat16, device=device)
-            prefill_mask.masked_fill_(
-                ~prefill_allowed[:, None], torch.finfo(torch.bfloat16).min)
-            with torch.no_grad(), torch.autocast(
-                    device.type, dtype=torch.bfloat16):
-                h = prefix_hidden if not teacher_hidden else None
-                for layer in range(1, n + 1):
-                    h_in = (_bk_gather_hidden(
-                        teacher_inputs[layer - 1], prefix_index)
-                        if teacher_hidden else h)
-                    layer_mask = (prefix_keep
-                                  if layer_types[layer - 1] == "linear_attention"
-                                  else prefill_mask)
-                    h_out = stack.run_block(
-                        layer, h_in, prefix_rope,
-                        position_ids=prefix_positions,
-                        flow_keep=prefix_keep,
-                        past_key_values=history, use_cache=True,
-                        causal_length=prompt_length,
-                        prepared_attention_mask=layer_mask)
-                    _detach_cache_layer(history, layer - 1)
-                    if not teacher_hidden:
-                        h = h_out.detach()
-
-            lengths = batch.A.to(device)
-            max_answer = int(batch.A.max())
-            answer_timeline = torch.arange(max_answer, device=device)[None]
-            answer_keep = answer_timeline < lengths[:, None]
-            student_s0 = batch.s0.to(device)[:, None]
+            max_answer = max(shard["max_answer"] for shard in shards)
             for start in range(0, max_answer, K):
-                stop = min(start + K, max_answer)
-                width = stop - start
-                offsets = torch.arange(start, stop, device=device)[None]
-                query_valid = offsets < lengths[:, None]
-                cells = int(
-                    (batch.A - start).clamp(min=0, max=width).sum())
+                tile_states = [
+                    state for shard in shards
+                    if (state := _bk_prepare_shard_tile(
+                        shard, start, K, n, device, stack, teacher_hidden))
+                ]
+                cells = sum(state["cells"] for state in tile_states)
                 if not cells:
                     continue
-                # One bounded H2D transfer per tile. Staging every layer's
-                # full [B,Amax,H] target cohort can exceed an L40S on a single
-                # long answer even under length bucketing.
-                window_targets = torch.stack([
-                    batch.hidden[layer][:, start:stop]
-                    for layer in range(1, n + 1)
-                ]).to(device)
-                source_index = (student_s0 + offsets).clamp_max(
-                    batch_positions.shape[1] - 1)
-                query_positions = batch_positions.gather(1, source_index)
-                key_keep = torch.cat(
-                    (prefix_keep, answer_keep[:, :stop]), dim=1)
-                full_mask = _bk_additive_mask(
-                    key_keep, query_valid, start, stop, torch.bfloat16)
-                if teacher_hidden:
-                    first_query = _bk_gather_hidden(
-                        teacher_inputs[0], source_index)
-                    query_rope = stack.rope(first_query, query_positions)
-                else:
-                    query_ids = student_ids.gather(1, source_index)
-                    h = stack.embed(query_ids)
-                    query_rope = stack.rope(h, query_positions)
                 tile_losses = []
                 tile_grads = []
                 for layer in range(1, n + 1):
                     params = _clear_block_grads(stack, layer)
-                    h_in = (_bk_gather_hidden(
-                        teacher_inputs[layer - 1], source_index).detach()
-                        if teacher_hidden else h.detach())
-                    layer_mask = (query_valid
-                                  if layer_types[layer - 1] == "linear_attention"
-                                  else full_mask)
-                    with torch.autocast(device.type, dtype=torch.bfloat16):
-                        h_out = stack.run_block(
-                            layer, h_in, query_rope,
-                            position_ids=query_positions,
-                            flow_keep=key_keep,
-                            past_key_values=history, use_cache=True,
-                            causal_length=prompt_length + stop,
-                            prepared_attention_mask=layer_mask)
-                        view = stack.loss_view(layer, h_out)[query_valid]
-                        target = window_targets[layer - 1][query_valid]
-                        mean_loss = loss_fn(
-                            view, target, normed=(layer == n), layer=layer)
-                        summed_loss = mean_loss * cells
-                    summed_loss.backward()
+                    loss_sum = torch.zeros(
+                        (), dtype=torch.float32, device=device)
+                    # Each shard sees the same pre-write parameters. Backward
+                    # releases its local graph before the next shard, then
+                    # the accumulated B×K gradient writes once below.
+                    for state in tile_states:
+                        shard = state["shard"]
+                        h_in = (_bk_gather_hidden(
+                            shard["teacher_inputs"][layer - 1],
+                            state["source_index"]).detach()
+                            if teacher_hidden else state["h"].detach())
+                        layer_mask = (
+                            state["query_valid"]
+                            if layer_types[layer - 1] == "linear_attention"
+                            else state["full_mask"])
+                        with torch.autocast(device.type, dtype=torch.bfloat16):
+                            h_out = stack.run_block(
+                                layer, h_in, state["query_rope"],
+                                position_ids=state["query_positions"],
+                                flow_keep=state["key_keep"],
+                                past_key_values=shard["history"], use_cache=True,
+                                causal_length=shard["prompt_length"] + state["stop"],
+                                prepared_attention_mask=layer_mask)
+                            view = stack.loss_view(layer, h_out)[
+                                state["query_valid"]]
+                            target = state["window_targets"][layer - 1][
+                                state["query_valid"]]
+                            mean_loss = loss_fn(
+                                view, target, normed=(layer == n), layer=layer)
+                            summed_loss = mean_loss * state["cells"]
+                        summed_loss.backward()
+                        loss_sum.add_(mean_loss.detach().float()
+                                      * state["cells"])
+                        _detach_cache_layer(shard["history"], layer - 1)
+                        if not teacher_hidden:
+                            state["h"] = h_out.detach()
+                        del h_in, h_out, view, target, summed_loss, mean_loss
                     grad = _immediate_sgd(params, cfg.train.lr)
-                    _detach_cache_layer(history, layer - 1)
-                    tile_losses.append(mean_loss.detach())
+                    tile_losses.append(loss_sum / cells)
                     tile_grads.append(grad.detach() / cells)
-                    if not teacher_hidden:
-                        h = h_out.detach()
                 weighted_losses = [value * cells for value in tile_losses]
                 weighted_grads = [value * cells for value in tile_grads]
                 if epoch_loss_sums is None:
@@ -1065,7 +1151,11 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
                 token_events += cells
                 conceptual_writes += cells * n
                 physical_writes += n
-                del window_targets
+                for state in tile_states:
+                    del state["window_targets"], state["query_rope"]
+                    del state["key_keep"], state["full_mask"], state["h"]
+                    del state["source_index"], state["query_positions"]
+                    del state["query_valid"]
 
             answers_seen += b_now
             log.log(
@@ -1073,14 +1163,21 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
                 epoch=epoch + 1,
                 cohort=cohort_index,
                 users=b_now,
-                prompt_length_padded=prompt_length,
+                activation_shard_users=activation_shard_users,
+                activation_shards=len(shards),
+                prompt_length_padded=max(
+                    shard["prompt_length"] for shard in shards),
                 max_answer_tokens=max_answer,
                 token_events_seen=token_events,
                 answers_seen=answers_seen,
                 physical_optimizer_updates_seen=physical_writes,
             )
-            del teacher_inputs, history, student_ids
-            del batch_positions, batch, items
+            for shard in shards:
+                del shard["teacher_inputs"], shard["history"]
+                del shard["student_ids"], shard["batch_positions"]
+                del shard["batch"], shard["lengths"], shard["answer_keep"]
+                del shard["prefix_keep"], shard["student_s0"]
+            del shards, items
 
         pending_losses = (
             [[value / epoch_cells for value in epoch_loss_sums]]

@@ -117,6 +117,33 @@ both K values and 1e-5 (2). The release gate is one of those 16. The remaining
 `scripts/queue_pareto_v31_qwen35_0p8b_wave_a_20260715.tsv`; every row ends in
 its own individual Markdown/PDF report and completion-ordered PDF symlink.
 
+### Release-gate memory finding and repair
+
+The first intact B256K16 production gate (commit `5bb63dd`) completed
+epoch-zero evaluation and four real cohorts—1,024 answers, 267,380 aligned
+token events, and 2,640 physical block writes—then failed at the next,
+longer cohort. At 392 seconds wall time, one block-local backward requested
+4.57 GiB while the L40S process already held 39.90 GiB (32.78 GiB allocated,
+6.62 GiB reserved). This was a real activation-memory OOM, not a cache,
+padding, or loss/locality failure. The result is recorded as an incomplete
+release gate and does not count as a scientific arm.
+
+The release repair keeps the logical update exactly B256×K: K16 uses four
+fixed 64-user activation shards. Each shard retains its own causal history;
+at a given layer/tile all four gradients accumulate at the same pre-write
+matrix, then the trainer performs one unaveraged immediate-SGD write. Thus it
+does not lower serving B, refill lanes, average gradients, or increase the
+optimizer-update count. K1 remains an explicit full B256 activation path.
+The repaired gate must finish a full epoch before Wave A is reopened.
+
+The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
+old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
+104–124 seconds. Their corrected snapshot stage and retry-1 epoch-zero
+builds succeeded: each produced the same hash `b632054c01558f61`, 2,071
+examples and 24 bfloat16 layers. Teacher-forward time was 219.3/219.9/220.2
+seconds; total cache time was 253.7/252.6/252.6 seconds; wrapper wall time
+was 313/300/307 seconds on agpul02/agpul04/agpul06 respectively.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer

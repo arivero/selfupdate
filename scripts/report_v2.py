@@ -644,6 +644,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"{train.get('micro_batch', 'missing')} fixed user lanes × "
             if online_bk else "one answer × "
         )
+        activation_shard = (
+            train.get("activation_shard_users", 0)
+            or train.get("micro_batch", "missing"))
+        activation_clause = (
+            f"; transient activation shard {activation_shard} users"
+            if online_bk else "")
         update_identity = (
             "`online`: " + online_shape
             + f"{stale_label} known-answer token(s) per weight snapshot; "
@@ -651,6 +657,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"`{train.get('history_policy', 'missing')}`; backward dispatch "
             f"`{train.get('backward_dispatch', 'per_block')}`; write dispatch "
             f"`{train.get('online_write_dispatch', 'after_backward')}`"
+            + activation_clause
         )
     elif train.get("update_granularity") == "grid":
         token_width = train.get("tokens_per_answer_update", "missing")
@@ -801,7 +808,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"`{train.get('online_write_dispatch', 'after_backward')}`; stale-gradient "
         f"window `{train.get('stale_gradient_window', 1)}`",
         f"- Batching: `{train.get('batching', 'missing')}`, micro-batch {train.get('micro_batch', 'missing')}, "
-        f"gradient accumulation {train.get('grad_accum', 'missing')}",
+        f"gradient accumulation {train.get('grad_accum', 'missing')}; transient "
+        f"activation shard {train.get('activation_shard_users', 0) or train.get('micro_batch', 'missing')} users",
         f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
         f"final-logit training: {final_logit}",
         f"- Seed: {train.get('seed', 'missing')}; items observed: {max_items:,}; elapsed telemetry span: {elapsed_min:.1f} min",
@@ -989,6 +997,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "online_write_dispatch": train.get(
             "online_write_dispatch", "after_backward"),
         "stale_gradient_window": train.get("stale_gradient_window", 1),
+        "activation_shard_users": (
+            train.get("activation_shard_users", 0)
+            or train.get("micro_batch")),
         "trajectory_source": train.get("trajectory_source"),
         "partial_training_boundary": partial_boundary,
         "strict_local": bool(signal.get("passed")) if signal else False,
