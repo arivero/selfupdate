@@ -89,7 +89,16 @@ def _gather_hidden(value, index):
         1, index[:, :, None].expand(-1, -1, value.shape[-1]))
 
 
-def main() -> None:
+def _layer_type(stack, layer: int):
+    if layer - 1 < len(stack.layer_types):
+        return stack.layer_types[layer - 1]
+    block = stack.blocks[layer - 1]
+    return (getattr(block, "layer_type", None)
+            or getattr(getattr(block, "self_attn", None), "layer_type", None)
+            or "full_attention")
+
+
+def main() -> dict:
     cap_cpu_threads()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -124,15 +133,6 @@ def main() -> None:
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,
     )
-
-
-def _layer_type(stack, layer: int):
-    if layer - 1 < len(stack.layer_types):
-        return stack.layer_types[layer - 1]
-    block = stack.blocks[layer - 1]
-    return (getattr(block, "layer_type", None)
-            or getattr(getattr(block, "self_attn", None), "layer_type", None)
-            or "full_attention")
     indices = _tight_median_bucket(ds, B)
     items = [ds[index] for index in indices]
     batch = collate_padded_items(items)
@@ -243,7 +243,7 @@ def _layer_type(stack, layer: int):
     peak = torch.cuda.max_memory_allocated(device)
     deltas = _delta_l2(stack, before)
     rt.check_vocab_frozen()
-    print(json.dumps({
+    return {
         "status": "passed",
         "pipeline_revision": "3.1",
         "B_simultaneous_users": B,
@@ -277,8 +277,11 @@ def _layer_type(stack, layer: int):
         "parameter_delta_l2_by_layer": deltas,
         "cache_graph": False,
         "vocab_frozen": True,
-    }, sort_keys=True))
+    }
 
 
 if __name__ == "__main__":
-    main()
+    result = main()
+    if not isinstance(result, dict) or result.get("status") != "passed":
+        raise RuntimeError("v3.1 B×K smoke exited without a passed result")
+    print(json.dumps(result, sort_keys=True), flush=True)
