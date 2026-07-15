@@ -347,7 +347,9 @@ def _eval_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
             if not structured and row.get("cer") is not None:
                 line_exact = row.get("line_exact")
                 recall.append({
-                    "epoch": int(row["epoch"]),
+                    # Historical trainers logged a zero-based epoch index.
+                    # Reports use completed-epoch counts throughout.
+                    "epoch": int(row["epoch"]) + 1,
                     "corpus": "historical_inline_line_exact",
                     "next_acc": None, "prev_acc": None, "cloze_acc": None,
                     "overall_word_acc": line_exact,
@@ -413,6 +415,52 @@ def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
             path = out_dir / "recall_damage_frontier.png"
             fig.savefig(path, dpi=220); plt.close(fig); paths.append(path)
     return paths
+
+
+def _historical_phase_asset(loss: pd.DataFrame, recall: pd.DataFrame,
+                            tail_blocks: int, out_dir: Path) -> Path | None:
+    """Plot local stabilization, tail divergence, and behavioral onset."""
+    if (loss.empty or recall.empty or tail_blocks <= 0
+            or "cer" not in recall.columns or not recall["cer"].notna().any()):
+        return None
+    n_layers = int(loss.layer.max())
+    tail_start = max(1, n_layers - tail_blocks + 1)
+    last4_start = max(1, n_layers - 3)
+
+    def grouped(label: str, selected: pd.Series) -> pd.DataFrame:
+        frame = loss.loc[selected].groupby("epoch", as_index=False).loss.mean()
+        frame["group"] = label
+        return frame
+
+    groups = pd.concat([
+        grouped(f"body L1–L{tail_start - 1}", loss.layer < tail_start),
+        grouped(f"tail L{tail_start}–L{n_layers}", loss.layer >= tail_start),
+        grouped(f"last four L{last4_start}–L{n_layers}",
+                loss.layer >= last4_start),
+    ], ignore_index=True)
+    fig, ax = plt.subplots(figsize=(8.2, 4.8))
+    for label, frame in groups.groupby("group"):
+        ax.plot(frame.epoch, frame.loss, lw=2, label=label)
+    ax.set(xlabel="completed epoch", ylabel="mean logged hidden loss",
+           title="Local stabilization precedes tail-window behavioral learning")
+    ax.set_yscale("log")
+    ax.grid(alpha=.2)
+    right = ax.twinx()
+    hist = recall.sort_values("epoch")
+    right.plot(hist.epoch, hist.line_exact, color="black", marker="o",
+               label="line exactness")
+    right.plot(hist.epoch, hist.cer, color="tab:red", marker=".", ls="--",
+               alpha=.75, label="CER")
+    right.set_ylabel("behavioral score")
+    handles, labels = ax.get_legend_handles_labels()
+    handles2, labels2 = right.get_legend_handles_labels()
+    ax.legend(handles + handles2, labels + labels2, frameon=False,
+              fontsize=8, ncol=2)
+    fig.tight_layout()
+    path = out_dir / "historical_loss_recall_phases.png"
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
 
 
 def _markdown_table(df: pd.DataFrame, columns: list[str]) -> str:
@@ -499,14 +547,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     recall, standard = _eval_frames(rows)
     final_epoch = max((int(row.get("epoch", -1)) + 1 for row in rows
                        if row.get("kind") == "train"), default=0)
-    final_eval_epoch = max((int(row["epoch"]) for row in rows
-                            if row.get("kind") == "eval"),
-                           default=final_epoch)
     if delta.empty:
         delta, delta_representation = _final_delta_csv(
             run_dir / "eval" / "weight_deltas.csv", final_epoch)
     if standard.empty:
-        standard = _historical_standard(run_dir.name, final_eval_epoch)
+        standard = _historical_standard(run_dir.name, final_epoch)
     signal_path = run_dir / "eval" / "signal_attribution.json"
     signal = (json.loads(signal_path.read_text(encoding="utf-8"))
               if signal_path.exists() else {})
@@ -521,6 +566,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     _layer_assets(delta, "relative_l2", "relative parameter delta",
                   "parameter_delta", out_dir, log_scale=True)
     _eval_assets(recall, standard, out_dir)
+    phase_path = _historical_phase_asset(
+        loss, recall, int(train.get("tail_ce_blocks", 0) or 0), out_dir)
     _signal_asset(signal_frame, out_dir)
 
     examples_path = ROOT / str(data.get("examples_path", ""))
@@ -643,6 +690,14 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "", f"![Recall–damage trajectory]({rel('recall_damage_frontier.png')})"
         if not recall.empty and not standard.empty else "",
         "", "## Per-layer loss by epoch", "",
+        ("Historical tail hidden losses are diagnostic: their configured "
+         f"training weight is `{train.get('tail_hidden_weight', 'missing')}`. "
+         "Their divergence can therefore measure task-window specialization, "
+         "not failure to minimize an active hidden objective."
+         if phase_path else ""),
+        "", (f"![Loss/recall phases]({rel('historical_loss_recall_phases.png')})"
+             if phase_path else ""),
+        "",
         f"Loss measure selected by the optimizer regime: `{loss_measure}`.", "",
         f"![Temporal layer loss]({rel('layer_loss_temporal.png')})" if not loss.empty else "_Missing._",
         "", f"![Layer-loss heatmap]({rel('layer_loss_heatmap.png')})" if not loss.empty else "",
@@ -710,6 +765,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("Per-layer training-signal attribution",
          out_dir / "signal_attribution_by_layer.png"),
     ]
+    if phase_path:
+        figures.insert(3, ("Local stabilization and behavioral onset",
+                           phase_path))
     pdf = write_individual_pdf(
         run_dir / "report.pdf",
         title=f"Individual training report v2 — {run_dir.name}",
