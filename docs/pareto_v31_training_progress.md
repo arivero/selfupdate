@@ -140,6 +140,12 @@ reusing cache `b632054c01558f61`, under run identity
 `pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e5_s17_shard64_r1`.
 Its dedicated worker log is
 `runs/v31_qwen35_0p8b_intact_student_b256k16_shard64_r1_agpul05.log`.
+At 22:51 it crossed the original OOM boundary: cohort four completed with
+1,024 answers, 267,380 token events and 2,640 physical writes. The same
+boundary had failed in the old implementation; the repaired process held
+18.4 GiB and emitted no error. Training-only time from the v3.1 contract
+record to that cohort was about 102 seconds. This is a partial-epoch
+observation, not the release throughput certificate.
 
 The initial non-agpul05 cache attempts were also retained: agpul02/04/06 had
 old HF ready markers that omitted Qwen3.5-0.8B and failed offline after
