@@ -72,11 +72,12 @@ def _worst_full_cohort(ds, width: int, seed: int):
     def score(cohort):
         sequence_lengths = [len(ds.pairs[index].student_ids)
                             for index in cohort]
-        answer_lengths = [int(ds.pairs[index].A) for index in cohort]
+        answer_lengths = [ds.pairs[index].aligned_len for index in cohort]
         return (max(sequence_lengths), max(answer_lengths),
                 sum(sequence_lengths), sum(answer_lengths))
 
-    return max(full, key=score), score(max(full, key=score))
+    selected = max(full, key=score)
+    return selected, score(selected)
 
 
 def main():
