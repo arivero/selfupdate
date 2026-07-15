@@ -429,6 +429,21 @@ oscillation larger than the one-epoch parameter signal. No recipe is selected
 from an epoch-one cut. At this speed, a fresh 12-epoch winner is practical
 after the six-epoch screen and replication gate.
 
+The full production epoch reports 43.86 GiB reserved, higher than the
+single-cohort probe's 38.93 GiB because allocator history spans all bucket
+shapes. Shard 32 is still running without OOM, but its actual steady margin is
+about 2.2 GiB, not the probe-only 7.1 GiB. Production shard-32 arms therefore
+require an exclusive physical GPU; shard 24 remains the conservative fallback
+if another runtime introduces additional allocations.
+
+At epoch two the conservative flow arm becomes the first positive 4B signal:
+recall 0.16779 versus 0.16209 at epoch zero and 0.16267 in the matched intact
+arm, with sampled standard macro still 0.5833. Mean relative movement is
+6.60e-5. Flow/3e-6 is still below baseline at 0.15711 despite 1.98e-4 mean
+movement; random/1e-6 is effectively neutral at 0.16239 with 5.97e-5
+movement. Warm-epoch throughput is 1,036--1,044 events/s. These reversals are
+recorded as trajectory evidence only; all arms continue to epoch six.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
