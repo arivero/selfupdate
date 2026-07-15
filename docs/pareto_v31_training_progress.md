@@ -154,6 +154,17 @@ mapping, prompt prefill, all B×K local backwards, and no model-load time.
 Epoch-one recall, standard damage, and parameter-delta telemetry also
 completed before epoch two began.
 
+The intact null is not behaviorally stationary at K16/LR 1e-5. Overall
+recall changed from 0.12150 at epoch zero to 0.10879 after epoch one;
+Machado moved 0.09018→0.06240, Quijote chapter 1 moved
+0.13345→0.12306, and Quijote chapter 4 remained 0.14086. The vendored
+16-item-per-task standard macro stayed 0.4375 with no task-score change.
+Mean relative LoRA movement was 2.24e-4 (layer range 5.58e-5–4.84e-4);
+mean normalized per-cell gradient norm was 1.04e-3. Therefore
+K16/LR 1e-5 is outside the epoch-one no-censorship stability envelope even
+though standard-damage sampling does not detect damage. Lower learning-rate
+arms must carry the recipe selection.
+
 ### Wave-A deployment
 
 The first complete release epoch cleared the distributed-launch gate. At
