@@ -475,6 +475,18 @@ numbers in one table.
   supports full-attention Qwen3-0.6B only; Qwen3.5's alternating
   linear-attention/full-attention state needs a v3.1 adapter before the 0.8B
   campaign.
+- Qwen3.5-0.8B mixed-budget target regression (2026-07-15): the fixed
+  `--generation-max-tokens 4096` H100 run produced 975,919 tokens in 47.23 s,
+  stopped naturally on 93.19% of examples, and scored 0.6087. Replacing that
+  ceiling with the exact per-record formula (often 104--116 tokens for short
+  Machado answers) reduced generation to 245,263 tokens/19.93 s but raised
+  hard cuts to 58.52% and lowered score to 0.5260. Preserved cut samples end
+  mid-sentence/mid-word after verbose hallucinated framing, so this is not a
+  stop-sentinel or cache-reader bug. Do not use the resulting 2,071-example
+  hidden cache for scientific claims. The older good response JSON lacks
+  exact token IDs; regenerate at 4096 with the current writer, rerun the RAG
+  gate, and mint a fresh cache identity. A 27-second generation saving is not
+  a valid trade for changed teacher behavior.
 
 ## Open items (2026-07-11; closed work lives in git history)
 

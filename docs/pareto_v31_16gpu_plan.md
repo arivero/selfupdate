@@ -17,10 +17,20 @@ A durable Qwen3.5-0.8B cache exists at
 `runs/teacher_cache_h100/artifacts/selfupdate-cache-full-qwen35-08/` with
 2,071 examples and 18.75 GB of hidden states. It is not campaign-eligible:
 58.52% of its source answers are hard cuts, versus the RAG gate's maximum of
-10%. It may be used only for explicitly labelled architecture/timing probes.
-Before quality training, rerun real-RAG, no-RAG, and same-length random-RAG
-epoch-zero generation; repair the allowance or prompt protocol; require the
-documented recall lifts; and build a fresh cache identity.
+10%. This is a measured allowance regression, not evidence that the model
+cannot finish: the earlier fixed `--generation-max-tokens 4096` run stopped
+naturally on 93.19% of examples (6.81% hard cuts) and scored 0.6087, whereas
+the later per-record ceilings are commonly only 104--116 tokens on short
+Machado targets and score 0.5260. The optimization saved about 27 seconds of
+H100 generation but invalidated most targets.
+
+The earlier 4096-ceiling response artifact predates exact generated-token-ID
+preservation, so do not decode/re-encode it into the cache. Regenerate under
+the same 4096 ceiling with the current exact-ID writer, then rerun real-RAG,
+no-RAG, and same-length random-RAG epoch-zero controls. Change the prompt only
+if that restored allowance still fails retrieval-use or completion checks.
+Build a fresh cache identity after the gate passes. The existing cache may be
+used only for explicitly labelled architecture/timing probes.
 
 Qwen3.5 alternates three recurrent `linear_attention` blocks with one
 `full_attention` block. Pipeline v3.0 supports this at B=1. The initial v3.1
