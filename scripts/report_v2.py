@@ -184,6 +184,75 @@ def _delta_frame(rows: list[dict]) -> tuple[pd.DataFrame, str]:
     return pd.DataFrame(out), ", ".join(sorted(representations)) or "missing"
 
 
+def _final_delta_csv(path: Path, epoch: int) -> tuple[pd.DataFrame, str]:
+    """Adapt the historical final-only weight-delta CSV to report-v2.
+
+    Campaign-2 retained only its final checkpoint, so this is a final profile,
+    not an invented epoch timeline.  Module-relative deltas are aggregated as
+    RMS per layer, matching ``per_layer_profile``.
+    """
+    if not path.is_file():
+        return pd.DataFrame(), "missing"
+    modules = pd.read_csv(path)
+    required = {"layer", "rel_delta"}
+    if modules.empty or not required.issubset(modules.columns):
+        return pd.DataFrame(), "missing"
+    profile = (modules.groupby("layer")["rel_delta"]
+               .apply(lambda values: float((values.astype(float) ** 2).mean() ** .5)))
+    frame = pd.DataFrame({
+        "epoch": epoch,
+        "layer": profile.index.astype(int),
+        "relative_l2": profile.values,
+        "absolute_l2": None,
+        "parameter_count": None,
+    })
+    return (frame,
+            "final checkpoint LoRA effective delta / base Frobenius; "
+            "per-layer RMS over modules")
+
+
+def _historical_standard(run_name: str, final_epoch: int) -> pd.DataFrame:
+    """Load paired 100-item historical standard evaluations when present."""
+    damage_root = RUNS / "standard_damage"
+    checkpoint_path = damage_root / f"{run_name}.json"
+    if not checkpoint_path.is_file():
+        return pd.DataFrame()
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    model = str(checkpoint.get("model", ""))
+    base_name = "teacher_" + model.replace("/", "_") + ".json"
+    base_path = damage_root / base_name
+    if not base_path.is_file():
+        return pd.DataFrame()
+    base = json.loads(base_path.read_text(encoding="utf-8"))
+    common = sorted(set(base.get("tasks", {})) & set(checkpoint.get("tasks", {})))
+    common = [task for task in common
+              if base["tasks"][task].get("accuracy") is not None
+              and checkpoint["tasks"][task].get("accuracy") is not None]
+    if not common:
+        return pd.DataFrame()
+
+    def scores(payload: dict) -> dict[str, float]:
+        return {task: float(payload["tasks"][task]["accuracy"])
+                for task in common}
+
+    base_scores, checkpoint_scores = scores(base), scores(checkpoint)
+    deltas = {task: checkpoint_scores[task] - base_scores[task] for task in common}
+    worst = min(deltas, key=deltas.get)
+    base_macro = sum(base_scores.values()) / len(base_scores)
+    checkpoint_macro = sum(checkpoint_scores.values()) / len(checkpoint_scores)
+    rows = [
+        {"epoch": 0, "macro_accuracy": base_macro, "epoch0_delta": 0.0,
+         "worst_task": None, "worst_delta": 0.0,
+         **{f"accuracy_{task}": value for task, value in base_scores.items()}},
+        {"epoch": final_epoch, "macro_accuracy": checkpoint_macro,
+         "epoch0_delta": checkpoint_macro - base_macro,
+         "worst_task": worst, "worst_delta": deltas[worst],
+         **{f"accuracy_{task}": value
+            for task, value in checkpoint_scores.items()}},
+    ]
+    return pd.DataFrame(rows)
+
+
 def _layer_assets(df: pd.DataFrame, value: str, ylabel: str, stem: str,
                   out_dir: Path, log_scale: bool) -> list[Path]:
     if df.empty:
@@ -192,14 +261,20 @@ def _layer_assets(df: pd.DataFrame, value: str, ylabel: str, stem: str,
     paths = []
     norm = colors.Normalize(vmin=1, vmax=max(pivot.index))
     fig, ax = plt.subplots(figsize=(8.0, 4.5))
-    for layer, series in pivot.iterrows():
-        ax.plot(pivot.columns, series, color=cm.viridis(norm(layer)),
-                lw=1.0, alpha=0.82)
+    if len(pivot.columns) == 1:
+        ax.bar(pivot.index, pivot.iloc[:, 0],
+               color=cm.viridis(norm(pivot.index.to_numpy())))
+        ax.set_xlabel("layer")
+        ax.set_title(f"Final per-layer {ylabel}")
+    else:
+        for layer, series in pivot.iterrows():
+            ax.plot(pivot.columns, series, color=cm.viridis(norm(layer)),
+                    lw=1.0, alpha=0.82)
+        ax.set_xlabel("completed epoch")
+        ax.set_title(f"Per-layer {ylabel} by epoch")
     if log_scale and (df[value] > 0).any():
         ax.set_yscale("log")
-    ax.set_xlabel("completed epoch")
     ax.set_ylabel(ylabel)
-    ax.set_title(f"Per-layer {ylabel} by epoch")
     ax.grid(alpha=.2, lw=.5)
     fig.colorbar(cm.ScalarMappable(norm=norm, cmap="viridis"), ax=ax,
                  label="layer", pad=.01)
@@ -308,8 +383,12 @@ def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
         fig.savefig(path, dpi=220); plt.close(fig); paths.append(path)
     if not standard.empty:
         fig, ax = plt.subplots(figsize=(7.5, 4.3))
-        ax.plot(standard.epoch, standard.macro_accuracy, marker="o",
-                label="standard macro accuracy")
+        ax.plot(standard.epoch, standard.macro_accuracy, marker="o", lw=2,
+                label="macro accuracy")
+        for column in sorted(c for c in standard.columns
+                             if c.startswith("accuracy_")):
+            ax.plot(standard.epoch, standard[column], marker="o", ls="--",
+                    label=column.removeprefix("accuracy_"))
         ax.axhline(float(standard.iloc[0].macro_accuracy), color="grey",
                    ls="--", lw=.8, label="epoch 0")
         ax.set(xlabel="completed epoch", ylabel="accuracy",
@@ -418,6 +497,16 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     loss, loss_measure = _layer_loss_frame(rows)
     delta, delta_representation = _delta_frame(rows)
     recall, standard = _eval_frames(rows)
+    final_epoch = max((int(row.get("epoch", -1)) + 1 for row in rows
+                       if row.get("kind") == "train"), default=0)
+    final_eval_epoch = max((int(row["epoch"]) for row in rows
+                            if row.get("kind") == "eval"),
+                           default=final_epoch)
+    if delta.empty:
+        delta, delta_representation = _final_delta_csv(
+            run_dir / "eval" / "weight_deltas.csv", final_epoch)
+    if standard.empty:
+        standard = _historical_standard(run_dir.name, final_eval_epoch)
     signal_path = run_dir / "eval" / "signal_attribution.json"
     signal = (json.loads(signal_path.read_text(encoding="utf-8"))
               if signal_path.exists() else {})
@@ -442,7 +531,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("epoch-zero standard benchmark", not standard.empty and 0 in set(standard.epoch)),
         ("per-layer loss", not loss.empty),
         ("epoch-zero parameter delta", not delta.empty and 0 in set(delta.epoch)),
-        ("per-epoch parameter delta", not delta.empty and delta.epoch.max() > 0),
+        ("per-epoch parameter delta", not delta.empty and delta.epoch.nunique() > 1),
         ("signal attribution artifact", bool(signal)),
     ):
         if not present: missing.append(label)
@@ -510,6 +599,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                       if "cer" in recall.columns and recall["cer"].notna().any()
                       else ["epoch", "corpus", "next_acc", "prev_acc",
                             "cloze_acc", "overall_word_acc"])
+    standard_columns = ["epoch", "macro_accuracy", "epoch0_delta",
+                        *sorted(c for c in standard.columns
+                                if c.startswith("accuracy_")),
+                        "worst_task", "worst_delta"]
+    top_delta = (delta.sort_values("relative_l2", ascending=False)
+                 .loc[:, ["layer", "relative_l2"]].head(12)
+                 if not delta.empty else pd.DataFrame())
     md = [
         f"# Individual training report v2 — {run_dir.name}", "",
         "## Identity and provenance", "",
@@ -541,8 +637,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         if not recall.empty else "_Missing._",
         "", f"![Recall by corpus]({rel('recall_by_corpus.png')})" if not recall.empty else "",
         "", "## Standard-benchmark damage", "",
-        _markdown_table(standard, ["epoch", "macro_accuracy", "epoch0_delta",
-                                   "worst_task", "worst_delta"])
+        _markdown_table(standard, standard_columns)
         if not standard.empty else "_Missing._",
         "", f"![Standard damage]({rel('standard_damage.png')})" if not standard.empty else "",
         "", f"![Recall–damage trajectory]({rel('recall_damage_frontier.png')})"
@@ -554,6 +649,10 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "", f"![One-row layer-loss density]({rel('layer_loss_one_row_density.png')})" if not loss.empty else "",
         "", "## Per-layer parameter modification", "",
         f"Representation: `{delta_representation}`.", "",
+        "Most-modified layers (final checkpoint):", "",
+        _markdown_table(top_delta, ["layer", "relative_l2"])
+        if not top_delta.empty else "_Missing._",
+        "",
         f"![Temporal parameter delta]({rel('parameter_delta_temporal.png')})" if not delta.empty else "_Missing._",
         "", f"![Parameter-delta heatmap]({rel('parameter_delta_heatmap.png')})" if not delta.empty else "",
         "", f"![One-row parameter density]({rel('parameter_delta_one_row_density.png')})" if not delta.empty else "",
@@ -631,7 +730,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              f"{train.get('grad_accum', 'missing')}."),
             ("Connected hidden window: width "
              f"{train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
-             "final-logit training disabled."),
+             f"final-logit training {final_logit}."),
             (f"Items observed: {max_items:,}; elapsed telemetry span: "
              f"{elapsed_min:.1f} min."),
             ("Strict-local certification: "
@@ -640,6 +739,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ],
         recall=recall,
         standard=standard,
+        delta=top_delta,
         coverage=[
             f"Optimizer loss measure: {loss_measure}",
             f"Parameter-change representation: {delta_representation}",

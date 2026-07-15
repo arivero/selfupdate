@@ -22,6 +22,32 @@ def _layer_module(name: str) -> tuple[int, str] | None:
     return int(m.group(1)), m.group(2)
 
 
+def _frobenius_norm_fp32(tensor: torch.Tensor,
+                         chunk_elements: int = 4 * 1024 * 1024) -> float:
+    """Stable CPU norm without materializing a full fp32 model matrix."""
+    flat = tensor.reshape(-1)
+    total = 0.0
+    for start in range(0, flat.numel(), chunk_elements):
+        chunk = flat[start:start + chunk_elements].float()
+        total += float(chunk.square().sum(dtype=torch.float64).item())
+    return total ** 0.5
+
+
+def _lora_product_norm(a: torch.Tensor, b: torch.Tensor,
+                       scaling: float) -> float:
+    """Exact Frobenius norm of ``scaling * B @ A`` in LoRA rank space.
+
+    ``||BA||_F^2 = tr((AA^T)(B^TB))`` avoids constructing the often
+    hundreds-of-megabytes dense update merely to reduce it to one scalar.
+    """
+    a = a.float()
+    b = b.float()
+    gram_a = a @ a.T
+    gram_b = b.T @ b
+    squared = (gram_a * gram_b).sum(dtype=torch.float64).clamp_min(0)
+    return abs(float(scaling)) * float(squared.sqrt().item())
+
+
 def full_ft_deltas(base_state: dict, trained_state: dict) -> pd.DataFrame:
     rows = []
     for name, w0 in base_state.items():
@@ -50,15 +76,16 @@ def lora_deltas(base_state: dict, adapter_state: dict, scaling: float) -> pd.Dat
         if m is None or kb not in adapter_state:
             continue
         layer, module = int(m.group(1)), m.group(2)
-        ba = (adapter_state[kb].float() @ adapter_state[ka].float()) * scaling
         base_key = next(
             (k for k in base_state if k.endswith(f"layers.{layer}.{module}.weight")), None
         )
-        w0n = base_state[base_key].float().norm().item() if base_key else float("nan")
+        w0n = (_frobenius_norm_fp32(base_state[base_key])
+               if base_key else float("nan"))
+        delta_norm = _lora_product_norm(adapter_state[ka], adapter_state[kb], scaling)
         rows.append({
             "layer": layer + 1,
             "module": module,
-            "rel_delta": ba.norm().item() / max(w0n, 1e-12),
+            "rel_delta": delta_norm / max(w0n, 1e-12),
         })
     return pd.DataFrame(rows)
 

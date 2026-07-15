@@ -100,6 +100,7 @@ def write_individual_pdf(
     identity: list[str],
     recall: pd.DataFrame,
     standard: pd.DataFrame,
+    delta: pd.DataFrame,
     coverage: list[str],
     figures: list[tuple[str, Path]],
 ) -> Path:
@@ -127,9 +128,14 @@ def write_individual_pdf(
                         if historical else
                         "Recall by corpus (epoch 0 is pre-training)")
         _table_pages(pdf, recall_title, recall, recall_columns)
+        standard_columns = ["epoch", "macro_accuracy", "epoch0_delta",
+                            *sorted(c for c in standard.columns
+                                    if c.startswith("accuracy_")),
+                            "worst_task", "worst_delta"]
         _table_pages(pdf, "Standard-benchmark damage", standard,
-                     ["epoch", "macro_accuracy", "epoch0_delta",
-                      "worst_task", "worst_delta"])
+                     standard_columns)
+        _table_pages(pdf, "Most-modified layers (final checkpoint)", delta,
+                     ["layer", "relative_l2"])
         _text_page(pdf, "Coverage and provenance", coverage)
         for figure_title, image in figures:
             _image_page(pdf, figure_title, image)
