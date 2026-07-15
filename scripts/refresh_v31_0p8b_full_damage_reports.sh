@@ -13,6 +13,7 @@ fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 runs=(
+    pareto_v31_qwen35_0p8b_intact_student_b256k16_huber_lr1e5_s17_shard64_r1
     pareto_v31_qwen35_0p8b_flow_student_b256k16_cosine_lr1e5_s17
     pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr1e5_s17
     pareto_v31_qwen35_0p8b_flow_student_b256k16_huber_lr3e6_s17
