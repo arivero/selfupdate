@@ -1833,8 +1833,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
                     cohort=cohort_index,
                     pp_execution=cfg.train.pp_execution,
                     stage_telemetry=pp_result["executor"].telemetry(),
-                    tile_count=(pp_result["physical_writes"]
-                                // max(partition.stages, 1)),
+                    tile_count=(pp_result["physical_writes"] // n),
                     boundary_bytes_per_tile=pp_result["boundary_bytes"],
                 )
             # The reference path is deliberately left byte-for-byte in its

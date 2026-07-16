@@ -30,9 +30,12 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     teacher_hidden = (cfg.train.pipeline_version == 3
                       and cfg.train.trajectory_source == "teacher_hidden")
+    cached_teacher_hidden = (
+        teacher_hidden and cfg.train.teacher_hidden_source == "cpu_cache")
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok, list(range(1, n + 1)),
-        with_teacher_ids=teacher_hidden,
+        with_teacher_ids=teacher_hidden and not cached_teacher_hidden,
+        with_teacher_inputs=cached_teacher_hidden,
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,
         pad_random=(cfg.mask.compaction == "pad_random"),
@@ -50,6 +53,7 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
         ids = it.student_ids.to(cfg.model.device)[None]
         pos = it.position_ids.to(cfg.model.device)[None]
         teacher_states = (
+            it.teacher_inputs if cached_teacher_hidden else
             teacher.full_states_cpu(it, cfg.model.device)
             if teacher_hidden else None)
         h = stack.embed(ids) if not teacher_hidden else None
@@ -63,14 +67,20 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
                 flow_keep[:, start:stop] = False
         for L in range(1, n + 1):
             if teacher_hidden:
-                h_in = teacher_states[L - 1].to(cfg.model.device).detach()
-                pos_emb = stack.rope(h_in, pos)
+                block_device = next(stack.blocks[L - 1].parameters()).device
+                source = (teacher_states[L] if cached_teacher_hidden
+                          else teacher_states[L - 1])
+                h_in = source.to(block_device).detach()
+                layer_pos = pos.to(block_device)
+                pos_emb = stack.rope(h_in, layer_pos)
             else:
                 h_in = h.detach()
+                layer_pos = pos.to(h_in.device)
             with torch.autocast(h_in.device.type, dtype=torch.bfloat16):
                 h_out = stack.run_block(
-                    L, h_in, pos_emb, position_ids=pos,
-                    flow_keep=flow_keep)
+                    L, h_in, pos_emb, position_ids=layer_pos,
+                    flow_keep=(flow_keep.to(h_in.device)
+                               if flow_keep is not None else None))
                 if loss_fn.is_delta and 1 < L < n:
                     target = it.hidden[L].to(h_out.device)
                     loss = loss_fn.delta(
@@ -110,7 +120,9 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
         "run": cfg.run_name,
         "items": len(sampled),
         "teacher_target_source": (
-            "pipeline_v3_uncensored_teacher_prefix_plus_disk_target"
+            ("pipeline_v3_full_prefix_teacher_input_cache_plus_disk_target"
+             if cached_teacher_hidden else
+             "pipeline_v3_uncensored_teacher_prefix_plus_disk_target")
             if teacher_hidden else
             f"pipeline_v{cfg.train.pipeline_version}_disk_cache"),
         "teacher_cache_hash": cache._index["config_hash"],
