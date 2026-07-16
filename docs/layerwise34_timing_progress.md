@@ -89,6 +89,7 @@ Lustre during the measured traversal.
 | 00:37 | First PP4 partition fed all cards but underloaded the final stage | `[7,14,21]` completed five cohorts at 5,475.7 token-events/s (2.017x PP1; 50.4% four-card efficiency) with only 10.50/11.99/11.93/21.42 GiB peak allocated. Its long-cohort sample was 83/94/85/64% on GPU0--3. The common host starvation seen in PP3 is no longer the immediate limiter, but the 3-block final range over-budgeted vocabulary evaluation. One linear block moves back to the final card: measured profile v2 is `[7,14,20]` (7/7/6/4). The InfiniBand ladder remains locked until the retry sustains the all-card gate. |
 | 00:41 | 0.8B tuning closed; moved to 4B | At owner direction, the just-started PP4 v2 repartition was cancelled before measured training. Recorded 0.8B speeds are PP1 2,714.7/s, PP2 3,689.1/s, PP3 best 4,749.2/s, and PP4 5,475.7/s; occupancy caveats remain explicit. The 4B PP1 reference is promoted from exact-100 to the full-v5 traversal with LoRA and B256/K16. |
 | 00:42 | 4B PP1 full-v5 reference launched | `agpul06` GPU0, Python PID `3776076`, sampler PID `3775989`; full cache `98bb2aff23e25f93` reused for 2,071 questions. No immediate error; epoch-zero evaluation/load sample was 69% / 167 W / 41 C / 9.1 GiB and is not yet a training-rate measurement. |
+| 06:xx | 4B PP1 full-v5 reference completed cleanly | One full traversal: 239,286 valid token-events in 231.196 s, **1,035.0 valid token-events/s** and 53.84 physical local writes/s. Locality certification passed; report and checkpoint were published. Whole-training-set output evaluation: CE-eval-loss 2.59303 and KL-eval-loss 2.52684. Peak allocated/reserved VRAM was 32.91/35.51 GiB on GPU0. This was a completion, not an OOM. |
 | 06:xx | 4B parallel PP launch prepared | PP3 is pinned to agpul06 physical GPUs 1/2/3 while PP1 stays on GPU0. PP2 is pinned to agpul05 physical GPUs 1/3, preserving its existing GPU0/2 jobs. Both hosts have the full cache `98bb2aff23e25f93`; host-specific run names prevent shared-Lustre output collisions. |
 
 ## Matrix
@@ -99,7 +100,7 @@ Lustre during the measured traversal.
 | Qwen3.5-0.8B | 2 | wavefront | cut after block 12, preflight profile v1 | full-v5 cache `b632054c01558f61` | passed/stopped; locality passed | 3,689.1 (1.359x PP1) | 16.24 / 28.48 GiB allocated on GPU0/GPU1 |
 | Qwen3.5-0.8B | 3 | wavefront | preflight `[8,16]`; v1 `[9,17]`; v2 `[10,19]` | full-v5 cache `b632054c01558f61` | throughput measured; occupancy rejected | 4,749.2 best (1.750x PP1) | best-run v1: 13.33 / 12.29 / 24.77 GiB |
 | Qwen3.5-0.8B | 4 | wavefront | v1 `[7,14,21]`; v2 `[7,14,20]` | full-v5 cache `b632054c01558f61` | v1 throughput passed but GPU3 occupancy rejected; v2 pending | 5,475.7 v1 (2.017x PP1) | v1: 10.50 / 11.99 / 11.93 / 21.42 GiB |
-| Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | pending exact-100 | pending |  |  |
+| Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,035.0 | 32.91 / 35.51 GiB allocated/reserved on GPU0 |
 | Qwen3.5-4B | 2 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 | Qwen3.5-4B | 3 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 | Qwen3.5-4B | 4 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
