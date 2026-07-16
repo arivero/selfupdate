@@ -41,6 +41,10 @@ exact next-token online learning.
 - 13:30: first implementation pass completed; Python compilation and the
   full config audit passed. GPU A/B certification and measured smoke remain
   gates before campaign launch.
+- 13:31: the first delegated 0.6B gate on agpul06 GPU2 exited before model
+  load because the offline node-local Hugging Face cache did not contain
+  Qwen3-0.6B. This is staging evidence, not a trainer result. The gate moved
+  to cached Qwen3.5-0.8B on the same node.
 
 ## Launch/results ledger
 
