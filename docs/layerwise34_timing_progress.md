@@ -154,6 +154,9 @@ from the dependency proof or from a partial run.
    run the first feasible PPn, and permit exactly one measured optimization
    retry. Then freeze the achieved speed and stop the model ladder. The
    Qwen3.6-35B-A3B black-box MoE arm is deferred beyond this version.
+   After teacher-hidden measurements for 0.8B, 4B, and 27B are saved,
+   terminate every campaign launcher, sampler, cache helper, and watcher and
+   launch no further process. That is the terminal condition for the night.
    Qwen3.6-27B admission starts at PP2 on agpul04 physical GPUs 1/3; PP1 is
    not attempted. Its model snapshot is staged to node-local shared memory.
    The historical H100 hidden cache is provenance, not a pipeline-v3 runtime
