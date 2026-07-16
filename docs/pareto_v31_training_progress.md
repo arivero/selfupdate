@@ -510,6 +510,72 @@ smaller nonzero writes. The exact multiplier vector is part of config identity
 and telemetry; fixed-LR behavior remains unchanged. A matched intact taper is
 included as the null control.
 
+### Overnight closure and 40-epoch extension
+
+The remaining completed 4B endpoints reinforce the absence of a correct
+fixed-rate censored recipe. Flow/1e-5 ended at recall 0.15117 with mean
+relative movement 2.02e-3; flow/3e-7 ended at 0.15616. The intact controls
+ended at 0.15985 (1e-5) and 0.15989 (3e-6), while the earlier intact/1e-6
+control remains the strongest stationary endpoint at 0.16542. Epoch zero is
+0.16209. Thus no completed censored 4B arm beats both epoch zero and its
+matched intact trajectory.
+
+The random/3e-6 and random/3e-7 4B attempts are not endpoints. A defective
+successor gate admitted both to agpul04 physical GPU0 concurrently. Each
+completed only three epoch-one cohorts (768 answers, 50,741 aligned events),
+then the two roughly 21--23 GiB processes contended for hours and both failed
+with CUDA OOM at 04:43 CEST. Neither reached the mandatory 12,000-item floor,
+published a checkpoint, or supports a scientific claim. Their logs and
+partial telemetry remain as orchestration-failure evidence.
+
+The 0.8B flow/Huber/3e-6 seed-43 replication completed six full dataset-v5
+epochs. Recall followed 0.12150, 0.10802, 0.12727, 0.14188, 0.12377,
+0.13697, 0.13532 from epoch zero through six. Its final gain over epoch zero
+is +0.01383, smaller than seed 17's +0.03206 but directionally positive.
+Final throughput was 3,081.9 aligned events/s and mean relative movement was
+3.01e-3. Its individual report is complete; the paired 100-item standard
+endpoint is still missing, so replication is provisional on damage.
+
+The audited epoch-piecewise 4B taper did not launch overnight because all
+three delegated launch agents hit their model-usage limit before executing.
+It subsequently started at 12:00:49 CEST on two exclusive cards: flow taper
+on agpul04 GPU0 (launcher PID 1468608) and matched intact taper on agpul06
+GPU2 (PID 2818706). Both reuse cache `98bb2aff23e25f93`; the pinned epoch
+multipliers remain `[1, 1, 0.1, 0.1, 0.03, 0.03]`.
+
+At the owner's request, six additional stopped GPUs received one 0.8B model
+each for 40 complete K16 epochs (82,840 dataset-v5 answer visits per arm):
+
+| host/GPU | start | censorship / loss | LR | purpose |
+|---|---|---|---:|---|
+| agpul02/3 | 12:05 | flow / Huber | 1e-6 | extend the clean six-epoch Pareto point |
+| agpul04/2 | 12:05 | flow / Huber | 3e-6 | high-recall trajectory and late stability |
+| agpul04/3 | 12:05 | random / Huber | 3e-6 | censorship-mode comparison |
+| agpul05/2 | 12:06 | intact / Huber | 1e-6 | matched 40-epoch null |
+| agpul05/3 | 12:06 | flow / hidden cosine | 1e-6 | cheap directional control |
+| agpul06/3 | 12:06 | flow / sampled vocabulary cosine | 1e-6 | semantic directional metric |
+
+The vocabulary arm uses 256 deterministic centred rows of the frozen
+unembedding (seed 17). It computes cosine in sampled vocabulary-score space,
+costing O(N H 256) rather than materializing O(N V) logits or applying an
+H-by-H Gram matrix per position. Identical hidden states give zero loss up to
+floating-point noise; the sampled head, embedding, and full vocabulary remain
+frozen. Commit `4c91b78` contains the implementation and all six configs;
+config audit, syntax checks, finite-gradient smoke, and an identical-input
+zero-loss objective smoke passed before launch. A full intact training control
+remains a separate empirical requirement rather than being implied by that
+unit-level check.
+
+All eight cards that were stopped at allocation time now host exactly one new
+model: the two 4B tapers plus these six 0.8B epoch-40 arms. UUID-specific
+placement checks were required because the first delegated retry incorrectly
+treated a process on any GPU of a host as occupancy of every GPU. That retry
+performed no training; corrected `_retry1` logs identify the three affected
+launches. The first three epoch-40 logs contain malformed compact start-marker
+formatting from their detached wrapper, but their exact commands, cache reuse,
+PIDs, UUID placement, metrics, and ongoing GPU work independently establish
+the launches.
+
 ## Overnight progression rule
 
 Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
