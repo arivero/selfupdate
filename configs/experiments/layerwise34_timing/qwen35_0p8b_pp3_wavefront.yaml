@@ -5,7 +5,7 @@ mask:
   compaction: flow_mask
 model:
   pipeline_split: 0
-  pipeline_splits: [9, 17]
+  pipeline_splits: [10, 19]
   pipeline_devices: [0, 1, 2]
   pipeline_world_size: 3
 train:
@@ -22,5 +22,5 @@ train:
   prefill_query_chunk: 64
   online_optimizer: immediate_sgd
   pp_execution: wavefront
-  partition_profile_id: qwen35-0p8b-pp3-measured-v1
+  partition_profile_id: qwen35-0p8b-pp3-measured-v2
   partition_profile_path: ""
