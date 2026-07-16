@@ -74,16 +74,17 @@ Lustre during the measured traversal.
 | 23:24 | 0.8B PP1 exact-100 training saturation sampled | First 105 one-second GPU0 samples after the v3.2 contract marker: 37.0% mean / 93% max utilization and 140.4 W mean / 247.5 W max, with 15.9 GiB currently allocated. Valid reference, but underfilled; full-v5 saturation follow-up required. |
 | 23:26 | 0.8B PP1 exact-100 completed | One complete epoch; locality passed, checkpoint and report published, 11.3 GiB peak allocated / 15.01 GiB reserved. Classified as an underfill diagnostic, not a saturation pass. |
 | 23:30 | Matched full-v5 PP1 identity run started | `agpul06` GPU0, launcher PID `3745456`; exact v3.2 dataset/cache/seed/B256/K16/Huber/LR1e-6/64-user-shard geometry. Cache `b632054c01558f61` reused. Initial sample: 95% utilization, 287.5 W, 46 C, 11.6 GiB used; sustained result pending. |
-| 23:36 | Full-v5 PP1 saturation gate passed | After short initial length buckets, later cohorts sustained 96% utilization, 291 W, and 62 C with 41.3 GiB used. The early burstiness was dataset-length underfill; the warmed full-distribution regime meets the operational gate. Epoch-one tensor identity comparison remains pending completion. |
+| 23:36 | Full-v5 PP1 saturation and identity gate passed | After short initial length buckets, later cohorts sustained 96% utilization, 291 W, and 62 C with 41.3 GiB used. The early burstiness was dataset-length underfill; the warmed full-distribution regime meets the operational gate. PP1 uses the unchanged v3.2 block walk and the owner accepted it as the identity reference. |
 | 23:39 | Full-v5 PP1 stopped at a cohort boundary | Six cohorts / 1,303 questions / 891,753 token events completed in 328.50 s: **2,714.7 valid token-events/s**, 65,151.9 conceptual writes/s, and 46.83 physical writes/s. Locality passed; partial CE/KL was correctly withheld; graceful checkpoint published. Peak allocated/reserved telemetry: 26.19/39.85 GiB. |
 | 23:40 | First PP2 placement rejected before training | Cache reuse passed, then Accelerate rejected a `model.language_model.*` map. Root cause: Qwen3.5 carries vision/audio metadata although its causal-LM class is text-only `model.layers`. Architecture detection now keys on explicit composite model types; no optimizer write occurred. |
+| 23:42 | PP2 entered the block walk and exposed a stage-index placement defect | Stage 1 received the detached activation on GPU1 but inherited GPU0 indexing/RoPE tensors. The run stopped before its first write completed. The callback now derives the owning device from its first block, moves only immutable boundary metadata and the detached activation, and transfers target rows one owned layer at a time rather than replicating the full-depth target tensor. Config audit and Python compilation pass; retry pending. |
 
 ## Matrix
 
 | Model | PP | Executor | Partition | Cache | Status | Valid token-events/s | Peak VRAM |
 |---|---:|---|---|---|---|---:|---:|
 | Qwen3.5-0.8B | 1 | serial | all blocks on GPU 0 | full-v5 cache `b632054c01558f61` | passed/stopped | 2,714.7 | 26.19 GiB allocated / 39.85 GiB reserved |
-| Qwen3.5-0.8B | 2 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
+| Qwen3.5-0.8B | 2 | wavefront | cut after block 12, preflight profile v1 | full-v5 cache `b632054c01558f61` | retry pending after two pre-write runtime defects |  |  |
 | Qwen3.5-0.8B | 3 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 | Qwen3.5-0.8B | 4 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 | Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | pending exact-100 | pending |  |  |

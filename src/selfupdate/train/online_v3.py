@@ -787,6 +787,19 @@ def _detach_value(value):
     return value
 
 
+def _to_device_value(value, device):
+    """Move an immutable PP boundary value to its owning stage device."""
+    if torch.is_tensor(value):
+        return value.to(device, non_blocking=True)
+    if isinstance(value, list):
+        return [_to_device_value(v, device) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_to_device_value(v, device) for v in value)
+    if isinstance(value, dict):
+        return {k: _to_device_value(v, device) for k, v in value.items()}
+    return value
+
+
 def _detach_cache_layer(cache, index: int) -> None:
     """Make history a constant after the current token's backward.
 
@@ -1350,6 +1363,19 @@ def _bk_process_ppn_stage(cfg, stack, loss_fn, tile: Tile, states,
     """
     cells = int(tile.users)
     n = stack.n_layers
+    first_params = stack.block_params(first_layer)
+    if not first_params:
+        raise RuntimeError(f"PPn block {first_layer} has no parameters")
+    device = first_params[0].device
+    # Tile construction happens on stage 0.  Only the detached activation and
+    # small immutable indexing/RoPE inputs cross a boundary; layer targets are
+    # copied one owned layer at a time below instead of replicating the full
+    # depth target tensor on every stage.
+    for state in states:
+        for key in ("source_index", "query_positions", "query_valid",
+                    "valid_index", "eval_index", "eval_target_ids",
+                    "full_mask", "query_rope", "h"):
+            state[key] = _to_device_value(state[key], device)
     loss_sums = []
     grad_sums = []
     ce_sum = None
@@ -1384,7 +1410,8 @@ def _bk_process_ppn_stage(cfg, stack, loss_fn, tile: Tile, states,
                 flat_view = stack.loss_view(layer, h_out).reshape(
                     -1, h_out.shape[-1])
                 valid_view = flat_view.index_select(0, state["valid_index"])
-                target_all = state["window_targets"][layer - 1]
+                target_all = state["window_targets"][layer - 1].to(
+                    device, non_blocking=True)
                 flat_target = target_all.reshape(-1, target_all.shape[-1])
                 target = flat_target.index_select(0, state["valid_index"])
                 mean_loss = loss_fn(
