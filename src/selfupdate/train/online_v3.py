@@ -1094,9 +1094,26 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
         b_now = len(shard_items)
         student_ids = batch.student_ids.to(device)
         batch_positions = batch.position_ids.to(device)
-        teacher_inputs = (
-            teacher.full_inputs_pinned_batch(batch, device)
-            if teacher_hidden else None)
+        teacher_inputs = None
+        if teacher_hidden:
+            if teacher is not None:
+                teacher_inputs = teacher.full_inputs_pinned_batch(batch, device)
+            else:
+                # Explicit full-prefix cache: assemble one immutable padded
+                # host tensor per layer.  Padding is after every real teacher
+                # row and is never indexed by the causal prefix/tile maps.
+                teacher_width = max(
+                    next(iter(it.teacher_inputs.values())).shape[0]
+                    for it in shard_items)
+                teacher_inputs = []
+                for layer in range(1, n + 1):
+                    values = [it.teacher_inputs[layer] for it in shard_items]
+                    staged = torch.zeros(
+                        (b_now, teacher_width, values[0].shape[-1]),
+                        dtype=values[0].dtype, device="cpu", pin_memory=True)
+                    for row, value in enumerate(values):
+                        staged[row, :value.shape[0]].copy_(value)
+                    teacher_inputs.append(staged)
         (prompt_length, prefix_index, prefix_positions, prefix_valid,
          prefix_keep) = _bk_prefix_layout(cfg, shard_items, batch, device)
         lengths_cpu = batch.A.clone()
@@ -1131,11 +1148,7 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                     (b_now, kv_heads, 0, head_dim), dtype=execution_dtype,
                     device=block_device)
                 cache_layer.lazy_initialization(empty_kv, empty_kv)
-        if teacher_hidden:
-            first_prefix = _bk_pinned_gather_hidden(
-                teacher_inputs[0], prefix_index).to(device, non_blocking=True)
-            prefix_rope = stack.rope(first_prefix, prefix_positions)
-        else:
+        if not teacher_hidden:
             prefix_ids = student_ids.gather(1, prefix_index)
             prefix_hidden = stack.embed(prefix_ids)
             prefix_rope = stack.rope(prefix_hidden, prefix_positions)
@@ -1144,26 +1157,38 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                 enabled=cfg.train.lora.enabled):
             h = prefix_hidden if not teacher_hidden else None
             for layer in range(1, n + 1):
-                h_in = (
-                    _bk_pinned_gather_hidden(
+                if teacher_hidden:
+                    block_device = next(
+                        stack.blocks[layer - 1].parameters()).device
+                    layer_positions = prefix_positions.to(
+                        block_device, non_blocking=True)
+                    h_in = _bk_pinned_gather_hidden(
                         teacher_inputs[layer - 1], prefix_index
-                    ).to(device, non_blocking=True)
-                    if teacher_hidden else h)
+                    ).to(block_device, non_blocking=True)
+                    layer_rope = stack.rope(h_in, layer_positions)
+                    layer_valid = prefix_valid.to(block_device)
+                    layer_keep_full = full_keep.to(block_device)
+                else:
+                    h_in = h
+                    layer_positions = prefix_positions
+                    layer_rope = prefix_rope
+                    layer_valid = prefix_valid
+                    layer_keep_full = full_keep
                 pieces = []
                 for q0 in range(0, prompt_length, cfg.train.prefill_query_chunk):
                     q1 = min(q0 + cfg.train.prefill_query_chunk, prompt_length)
-                    query_valid = prefix_valid[:, q0:q1]
-                    query_keep = prefix_keep[:, q0:q1]
+                    query_valid = layer_valid[:, q0:q1]
+                    query_keep = layer_keep_full[:, q0:q1]
                     layer_mask = (
                         query_keep
                         if layer_types[layer - 1] == "linear_attention" else
                         _bk_static_additive_mask(
-                            full_keep, query_valid, q0, q1,
+                            layer_keep_full, query_valid, q0, q1,
                             execution_dtype))
                     pieces.append(stack.run_block(
                         layer, h_in[:, q0:q1],
-                        _bk_slice_sequence(prefix_rope, q0, q1),
-                        position_ids=prefix_positions[:, q0:q1],
+                        _bk_slice_sequence(layer_rope, q0, q1),
+                        position_ids=layer_positions[:, q0:q1],
                         flow_keep=query_keep,
                         past_key_values=history, use_cache=True,
                         causal_length=max_cache_len,
@@ -1202,11 +1227,11 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
         # These are prefill-only tensors. Persistent causal state is held in
         # history; retaining the masks would turn the shard mechanism into an
         # answer-length activation cache.
-        del prefix_index, prefix_positions, prefix_valid, prefix_rope
+        del prefix_index, prefix_positions, prefix_valid
+        if not teacher_hidden:
+            del prefix_rope
         del h_out, h_in, pieces
-        if teacher_hidden:
-            del first_prefix
-        else:
+        if not teacher_hidden:
             del prefix_ids, prefix_hidden, h
     return shards
 
@@ -1327,6 +1352,13 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         "full_mask": full_mask,
         "query_rope": query_rope,
         "h": h,
+        "teacher_staging": (
+            torch.empty(
+                (shard["b_now"], tile_width,
+                 shard["teacher_staging"].shape[-1]),
+                dtype=shard["teacher_staging"].dtype,
+                device="cpu", pin_memory=True)
+            if teacher_hidden else None),
     }
 
 
@@ -1363,12 +1395,14 @@ def _bk_answer_eval_coordinates(shard, start: int, stop: int):
 
 def _bk_stage_teacher_tile(shard, layer_index: int,
                            source_index: torch.Tensor,
-                           device: torch.device) -> torch.Tensor:
+                           device: torch.device,
+                           staging: torch.Tensor | None = None) -> torch.Tensor:
     """Gather one teacher layer into the shard's pinned BxK buffer."""
     source_cpu = source_index.to("cpu")
     source = shard["teacher_inputs"][layer_index].index_select(
         0, shard["active_rows_cpu"])
-    out = shard["teacher_staging"][
+    buffer = staging if staging is not None else shard["teacher_staging"]
+    out = buffer[
         :shard["b_now"], :source_cpu.shape[1]]
     torch.gather(
         source, 1,
@@ -1417,7 +1451,8 @@ def _bk_process_ppn_stage(cfg, stack, loss_fn, tile: Tile, states,
         for state in states:
             shard = state["shard"]
             h_in = (_bk_stage_teacher_tile(
-                shard, layer - 1, state["source_index"], device).detach()
+                shard, layer - 1, state["source_index"], device,
+                state.get("teacher_staging")).detach()
                 if teacher_hidden else state["h"].detach())
             layer_mask = (
                 state["query_valid"]
@@ -1489,6 +1524,14 @@ def _bk_run_ppn_cohort(cfg, stack, loss_fn, shards, max_answer, n, device,
     metrics_lock = threading.Lock()
 
     def callback(context, tile, states):
+        if execution == "independent":
+            # Each stage mutates only its shallow packet (device placement and
+            # teacher gather buffer).  The immutable host targets/inputs and
+            # the causal-history object are shared; cache layers inside that
+            # object remain disjoint by the unchanged partition ownership.
+            states = [{**state, "teacher_staging": torch.empty_like(
+                state["teacher_staging"], pin_memory=True)}
+                for state in states]
         return _bk_process_ppn_stage(
             cfg, stack, loss_fn, tile, states, context.first_block,
             context.last_block, device, teacher_hidden, layer_types, epoch_lr)
@@ -1519,14 +1562,16 @@ def _bk_run_ppn_cohort(cfg, stack, loss_fn, shards, max_answer, n, device,
                 metadata={
                     "start": start,
                     "live_users": live_users,
-                    "boundary_bytes": boundary_volume_bytes(
-                        live_users=live_users,
-                        tile_width=min(
-                            cfg.train.stale_gradient_window,
-                            max(0, max_answer - start)),
-                        hidden_size=int(getattr(
-                            stack.text_config, "hidden_size", 0)),
-                        element_size=2 if cfg.train.lora.enabled else 4),
+                    "boundary_bytes": (
+                        0 if execution == "independent" else
+                        boundary_volume_bytes(
+                            live_users=live_users,
+                            tile_width=min(
+                                cfg.train.stale_gradient_window,
+                                max(0, max_answer - start)),
+                            hidden_size=int(getattr(
+                                stack.text_config, "hidden_size", 0)),
+                            element_size=2 if cfg.train.lora.enabled else 4)),
                 },
             )
             tile_index += 1
@@ -1576,15 +1621,15 @@ def _bk_run_ppn_cohort(cfg, stack, loss_fn, shards, max_answer, n, device,
                     total_kl = (metrics["kl_sum"].detach() if total_kl is None
                                 else total_kl + metrics["kl_sum"].to(total_kl.device))
                     total_eval_tokens += int(metrics["eval_tokens"])
+            total_physical_writes += int(metrics["physical_writes"])
         final_states = result.payload
         for state in final_states:
             del state["window_targets"], state["query_rope"]
             del state["valid_index"], state["full_mask"], state["h"]
             del state["eval_index"], state["eval_target_ids"]
             del state["source_index"], state["query_positions"]
-            del state["query_valid"]
+            del state["query_valid"], state["teacher_staging"]
         total_cells += int(result.metrics["cells"])
-        total_physical_writes += int(result.metrics["physical_writes"])
         total_boundary_bytes += int(result.metrics.get("boundary_bytes", 0))
     if any(value is None for value in aggregate_loss):
         raise RuntimeError("PPn did not produce a loss for every owned block")
@@ -1627,8 +1672,13 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
         raise NotImplementedError(
             f"causal_bk lacks authoritative state semantics for {unsupported}")
     teacher_hidden = cfg.train.trajectory_source == "teacher_hidden"
-    if teacher_hidden and teacher is None:
-        raise ValueError("causal_bk teacher_hidden requires an online teacher")
+    cached_teacher_hidden = (
+        teacher_hidden and cfg.train.teacher_hidden_source == "cpu_cache")
+    if teacher_hidden and not cached_teacher_hidden and teacher is None:
+        raise ValueError("online causal_bk teacher_hidden requires a teacher")
+    if cached_teacher_hidden and not cache.has_full_teacher_inputs:
+        raise ValueError(
+            "cached causal_bk teacher_hidden requires full teacher inputs")
 
     n = stack.n_layers
     partition = partition_from_config(cfg, num_blocks=n)
@@ -1663,7 +1713,8 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
         need_layers=list(range(1, n + 1)),
-        with_teacher_ids=teacher_hidden,
+        with_teacher_ids=teacher_hidden and not cached_teacher_hidden,
+        with_teacher_inputs=cached_teacher_hidden,
         pad_random=(cfg.mask.compaction == "pad_random"),
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,

@@ -123,6 +123,12 @@ class CacheConfig:
     source_compaction: str = ""
     shard_size: int = 128
     hidden_dtype: str = "float16"
+    # Pipeline-v3 teacher-seeded execution can consume each block's complete
+    # frozen-teacher input directly.  This is a distinct, larger cache
+    # identity: i{L}=h[L-1] over the full teacher sequence.  Ordinary caches
+    # remain aligned-target-only.
+    store_full_teacher_inputs: bool = False
+    full_input_shard_size: int = 1
     # Bound Python-owned teacher tensors. Safetensors already mmap the durable
     # cache, so evicted rows remain available through the kernel page cache
     # without pinning the complete multi-GB corpus in every trainer process.
@@ -190,7 +196,7 @@ class TrainConfig:
     # Project identity is deliberately separate from the preserved pipeline
     # protocol.  3.4 is the arbitrary-stage executor; the BxK contract stays
     # pipeline-v3.2.
-    pp_execution: str = "serial"  # serial | wavefront
+    pp_execution: str = "serial"  # serial | wavefront | independent
     partition_profile_id: str = ""
     partition_profile_path: str = ""
     partition_safety_margin: float = 0.80
@@ -205,6 +211,10 @@ class TrainConfig:
     tokens_per_answer_update: int = 0
     update_reduction: str = ""  # answer_mean | token_mean (grid only)
     trajectory_source: str = "student_hidden"      # student_hidden | teacher_hidden (v3)
+    # teacher_hidden only: online recomputes full inputs with the frozen
+    # teacher; cpu_cache reads the explicit full-prefix cache and permits
+    # stages to execute without activation boundaries.
+    teacher_hidden_source: str = "online"  # online | cpu_cache
     attention_source: str = "student_attention"    # future: teacher_attention
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"

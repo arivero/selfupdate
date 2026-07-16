@@ -99,6 +99,7 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
                 if cfg.train.pipeline_version == 3 else None),
             "final_logit_training": False,
             "trajectory_source": cfg.train.trajectory_source,
+            "teacher_hidden_source": cfg.train.teacher_hidden_source,
             "attention_source": cfg.train.attention_source,
             "expert_routing_source": cfg.train.expert_routing_source,
             "mask_mode": cfg.mask.mode,

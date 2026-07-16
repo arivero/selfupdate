@@ -814,8 +814,12 @@ def main() -> None:
         return
 
     writer = AsyncTeacherCacheWriter(
-        root, chash, shard_size=cfg.cache.shard_size,
+        root, chash, shard_size=(
+            cfg.cache.full_input_shard_size
+            if cfg.cache.store_full_teacher_inputs else cfg.cache.shard_size),
         hidden_dtype=cfg.cache.hidden_dtype)
+    if cfg.cache.store_full_teacher_inputs and cfg.cache.full_input_shard_size < 1:
+        raise ValueError("cache.full_input_shard_size must be positive")
     copy_streams = ({device: torch.cuda.Stream(device=device)
                      for device in cuda_devices}
                     if torch.cuda.is_available() else {})
@@ -950,6 +954,20 @@ def main() -> None:
             t_phase = time.perf_counter()
             layer_states = [out.hidden_states[L][row, span.start:span.stop]
                             for L in range(1, n_layers + 1)]
+            # The optional independent-stage cache stores the complete input
+            # to every block, not merely aligned targets.  Keep it under an
+            # explicit cache identity because its storage contract is much
+            # larger.  These copies occur during cache construction, outside
+            # the measured training traversal.
+            teacher_inputs = None
+            if cfg.cache.store_full_teacher_inputs:
+                teacher_length = len(pair.teacher_ids)
+                teacher_inputs = {
+                    L: out.hidden_states[L - 1][
+                        row, :teacher_length].detach().to(
+                            writer.hidden_dtype).cpu()
+                    for L in range(1, n_layers + 1)
+                }
             if "hidden_state_devices" not in timings:
                 device_counts = {}
                 for state in layer_states:
@@ -1021,6 +1039,10 @@ def main() -> None:
                 copy_start_event = None
                 ready_event = None
             hidden_bytes += packed_hidden.numel() * packed_hidden.element_size()
+            if teacher_inputs:
+                hidden_bytes += sum(
+                    value.numel() * value.element_size()
+                    for value in teacher_inputs.values())
             hidden = {L: packed_hidden[L - 1] for L in range(1, n_layers + 1)}
             writer.add(
                 ex.example_id, hidden,
@@ -1033,6 +1055,7 @@ def main() -> None:
                     "n_student": len(pair.student_ids),
                 },
                 extra=extra,
+                teacher_inputs=teacher_inputs,
                 copy_start_event=copy_start_event,
                 ready_event=ready_event,
                 finite_flag=finite_flag,

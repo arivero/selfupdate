@@ -674,7 +674,7 @@ BoundaryTransfer = Callable[[Any, int], Any]
 
 
 class PPnExecutor:
-    """Run stage callbacks in serial or wavefront topological order."""
+    """Run stage callbacks in serial, wavefront, or independent order."""
 
     def __init__(self, partition: PPnPartition,
                  callbacks: Sequence[StageCallback], *,
@@ -707,7 +707,8 @@ class PPnExecutor:
             return result
         return StageResult(result)
 
-    def _call(self, stage: int, tile: Tile, payload: Any) -> StageResult:
+    def _call(self, stage: int, tile: Tile, payload: Any, *,
+              count_boundary: bool = True) -> StageResult:
         context = self.contexts[stage]
         context.admit(tile.index)
         started = time.perf_counter()
@@ -719,7 +720,7 @@ class PPnExecutor:
             if isinstance(value, (int, float)):
                 context.metric_sums[key] = (
                     context.metric_sums.get(key, 0.0) + float(value))
-        if stage + 1 < self.partition.stages:
+        if count_boundary and stage + 1 < self.partition.stages:
             boundary_bytes = tile.metadata.get("boundary_bytes", 0)
             if isinstance(boundary_bytes, (int, float)):
                 context.metric_sums["boundary_bytes"] = (
@@ -826,13 +827,108 @@ class PPnExecutor:
         results.sort(key=lambda pair: pair[0])
         return [result for _, result in results]
 
+    def run_independent(self, tiles: Iterable[Tile], *,
+                        stop_admission: threading.Event | None = None
+                        ) -> list[StageResult]:
+        """Execute stage-local tile chains without cross-stage edges.
+
+        This order is legal only when every block obtains its input from an
+        immutable teacher cache.  The caller enforces that scientific knob;
+        the executor enforces ordered tiles and bounded admission separately
+        for every unchanged stage in the pinned partition.
+        """
+        stages = self.partition.stages
+        queues = [Queue(maxsize=self.queue_depth) for _ in range(stages)]
+        sentinel = object()
+        failure: list[BaseException] = []
+        failure_lock = threading.Lock()
+        final_results: list[tuple[int, StageResult]] = []
+        result_lock = threading.Lock()
+        cancelled = threading.Event()
+
+        def fail(exc: BaseException) -> None:
+            with failure_lock:
+                if not failure:
+                    failure.append(exc)
+            cancelled.set()
+
+        def put(queue: Queue, item: Any, context: StageContext | None = None):
+            started = time.perf_counter()
+            while not cancelled.is_set():
+                try:
+                    queue.put(item, timeout=0.05)
+                    if context is not None:
+                        context.send_wait_seconds += time.perf_counter() - started
+                    return True
+                except Full:
+                    continue
+            return False
+
+        def worker(stage: int) -> None:
+            context = self.contexts[stage]
+            while not cancelled.is_set():
+                started = time.perf_counter()
+                try:
+                    item = queues[stage].get(timeout=0.05)
+                except Empty:
+                    context.receive_wait_seconds += time.perf_counter() - started
+                    continue
+                context.receive_wait_seconds += time.perf_counter() - started
+                if item is sentinel:
+                    return
+                tile, payload = item
+                try:
+                    result = self._call(
+                        stage, tile, payload, count_boundary=False)
+                    if stage == stages - 1:
+                        with result_lock:
+                            final_results.append((tile.index, result))
+                except BaseException as exc:
+                    fail(exc)
+                    return
+
+        threads = [threading.Thread(
+            target=worker, args=(stage,),
+            name=f"selfupdate-ppn-independent-stage-{stage}")
+            for stage in range(stages)]
+        for thread in threads:
+            thread.start()
+        try:
+            for tile in tiles:
+                if cancelled.is_set() or (stop_admission is not None
+                                          and stop_admission.is_set()):
+                    break
+                for stage in range(stages):
+                    if not put(queues[stage], (tile, tile.payload),
+                               self.contexts[stage]):
+                        break
+                if cancelled.is_set():
+                    break
+            for stage in range(stages):
+                put(queues[stage], sentinel, self.contexts[stage])
+        except BaseException as exc:
+            fail(exc)
+        for thread in threads:
+            thread.join()
+        if failure:
+            raise PPnError("independent PPn stage failed") from failure[0]
+        completed = {context.completed_tiles for context in self.contexts}
+        if len(completed) != 1:
+            raise PPnError(
+                f"independent stages drained unequal tile counts: {completed}")
+        final_results.sort(key=lambda pair: pair[0])
+        return [result for _, result in final_results]
+
     def run(self, tiles: Iterable[Tile], *, execution: str = "wavefront",
             stop_admission: threading.Event | None = None) -> list[StageResult]:
         if execution == "serial":
             return self.run_serial(tiles)
         if execution == "wavefront":
             return self.run_wavefront(tiles, stop_admission=stop_admission)
-        raise ValueError("PPn execution must be 'serial' or 'wavefront'")
+        if execution == "independent":
+            return self.run_independent(tiles, stop_admission=stop_admission)
+        raise ValueError(
+            "PPn execution must be 'serial', 'wavefront', or 'independent'")
 
     def telemetry(self) -> dict[str, Any]:
         return {

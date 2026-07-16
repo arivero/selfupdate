@@ -120,7 +120,9 @@ def resolve_cache_dir(cfg) -> tuple[Path, str]:
          "max_sequence_tokens": int(cfg.cache.max_sequence_tokens),
          "limit": int(cfg.cache.limit),
          "model_dtype": cfg.model.dtype,
-         "schema": 9},
+         **({"full_teacher_inputs": "h[L-1]-full/v1"}
+            if cfg.cache.store_full_teacher_inputs else {}),
+         "schema": 10 if cfg.cache.store_full_teacher_inputs else 9},
     )
     model_short = cfg.model.name.split("/")[-1]
     if cfg.cache.runtime_policy == "node_epoch0":
@@ -150,6 +152,7 @@ class TeacherCacheWriter:
         self._index: dict = {
             "config_hash": config_hash,
             "hidden_dtype": hidden_dtype,
+            "full_teacher_inputs": False,
             "examples": {},
         }
 
@@ -159,6 +162,7 @@ class TeacherCacheWriter:
         hidden: dict[int, torch.Tensor],  # L -> [A, H]
         span: dict,
         extra: dict | None = None,
+        teacher_inputs: dict[int, torch.Tensor] | None = None,
         finite_checked: bool = False,
     ) -> None:
         """``extra`` (v5 open-answer records): generation artifacts merged
@@ -174,6 +178,15 @@ class TeacherCacheWriter:
                     f"{example_id}/h{L:02d} as {self.hidden_dtype_name}; "
                     "use bfloat16 for outlier channels or inspect the teacher forward")
             self._buffer[f"{example_id}/h{L:02d}"] = stored
+        if teacher_inputs:
+            self._index["full_teacher_inputs"] = True
+            for L, value in teacher_inputs.items():
+                stored = value.detach().to(self.hidden_dtype).contiguous().cpu()
+                if not torch.isfinite(stored).all():
+                    raise FloatingPointError(
+                        f"teacher input cache would store non-finite values "
+                        f"for {example_id}/i{L:02d}")
+                self._buffer[f"{example_id}/i{L:02d}"] = stored
         self._index["examples"][example_id] = {"shard": self._shard_no, **span}
         self._buffered_examples += 1
         if self._buffered_examples >= self.shard_size:
@@ -305,6 +318,18 @@ class TeacherCache:
 
     def hidden(self, example_id: str, layer: int) -> torch.Tensor:
         return self._handle(example_id).get_tensor(f"{example_id}/h{layer:02d}")
+
+    @property
+    def has_full_teacher_inputs(self) -> bool:
+        return bool(self._index.get("full_teacher_inputs", False))
+
+    def teacher_input(self, example_id: str, layer: int) -> torch.Tensor:
+        if not self.has_full_teacher_inputs:
+            raise ValueError(
+                "teacher cache has aligned targets only; rebuild with "
+                "cache.store_full_teacher_inputs=true")
+        return self._handle(example_id).get_tensor(
+            f"{example_id}/i{layer:02d}")
 
     def answer_ids(self, example_id: str) -> list[int] | None:
         """Generated answer ids for open-answer (v5) examples; None for

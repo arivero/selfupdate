@@ -33,8 +33,9 @@ def validate_knob_schedule(cfg) -> None:
     if getattr(cfg, "layerwise_project_version", "3.4") != "3.4":
         bad.append(
             "layerwise_project_version must be the separate project identity '3.4'")
-    if cfg.train.pp_execution not in ("serial", "wavefront"):
-        bad.append("train.pp_execution must be serial or wavefront")
+    if cfg.train.pp_execution not in ("serial", "wavefront", "independent"):
+        bad.append(
+            "train.pp_execution must be serial, wavefront, or independent")
     if not 0 < cfg.train.partition_safety_margin <= 1:
         bad.append("train.partition_safety_margin must be in (0, 1]")
     pipeline_splits = list(getattr(cfg.model, "pipeline_splits", []) or [])
@@ -313,20 +314,34 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.mask.compaction not in ("flow_mask", "pad_random", "intact"):
             bad.append("pipeline-v3 censorship is flow_mask, pad_random, or intact; removal modes are retired")
         if cfg.train.trajectory_source == "teacher_hidden":
-            if not (cfg.train.online_teacher or cfg.train.frozen_teacher_copy):
-                bad.append("teacher_hidden needs online_teacher (LoRA) or frozen_teacher_copy (full weights); aligned disk caches lack h[L-1] prefixes")
-            if cfg.train.online_teacher and not cfg.train.lora.enabled:
-                bad.append("teacher_hidden online_teacher requires LoRA so adapters-off is the frozen teacher")
-            if cfg.train.frozen_teacher_copy and cfg.train.lora.enabled:
-                bad.append("teacher_hidden LoRA must use adapters-off online_teacher, not a redundant frozen copy")
-            if cfg.train.online_teacher and cfg.train.frozen_teacher_copy:
-                bad.append("teacher_hidden must select exactly one full-prefix teacher source")
+            if cfg.train.teacher_hidden_source == "cpu_cache":
+                if not cfg.cache.store_full_teacher_inputs:
+                    bad.append("teacher_hidden cpu_cache requires cache.store_full_teacher_inputs=true")
+                if cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
+                    bad.append("teacher_hidden cpu_cache must not load an online/frozen teacher")
+                if cfg.train.pp_execution != "independent":
+                    bad.append("teacher_hidden cpu_cache requires pp_execution=independent")
+            elif cfg.train.teacher_hidden_source == "online":
+                if not (cfg.train.online_teacher or cfg.train.frozen_teacher_copy):
+                    bad.append("teacher_hidden online needs online_teacher (LoRA) or frozen_teacher_copy (full weights)")
+                if cfg.train.online_teacher and not cfg.train.lora.enabled:
+                    bad.append("teacher_hidden online_teacher requires LoRA so adapters-off is the frozen teacher")
+                if cfg.train.frozen_teacher_copy and cfg.train.lora.enabled:
+                    bad.append("teacher_hidden LoRA must use adapters-off online_teacher, not a redundant frozen copy")
+                if cfg.train.online_teacher and cfg.train.frozen_teacher_copy:
+                    bad.append("teacher_hidden must select exactly one full-prefix teacher source")
+                if cfg.train.pp_execution == "independent":
+                    bad.append("independent execution requires the cached source; online teacher still has stage dependencies")
+            else:
+                bad.append("teacher_hidden_source must be online or cpu_cache")
             if cfg.mask.compaction == "pad_random":
                 bad.append("teacher_hidden + pad_random would feed uncensored teacher states at random-fill rows; use flow_mask or intact")
         elif cfg.train.trajectory_source != "student_hidden":
             bad.append(f"unknown pipeline-v3 trajectory_source={cfg.train.trajectory_source!r}")
         elif cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
             bad.append("student_hidden consumes the disk cache directly; disable the unused online/frozen teacher")
+        elif cfg.train.pp_execution == "independent":
+            bad.append("independent execution is only valid for cached teacher_hidden")
     elif cfg.train.pipeline_version == 2:
         if cfg.train.pipeline_revision:
             bad.append("pipeline_revision is only valid for pipeline-v3")

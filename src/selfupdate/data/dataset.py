@@ -30,6 +30,9 @@ class Item:
     # interleaved (thinking_selective) records: teacher-coordinate ranges of
     # each privileged run; empty list = single implicit block [s0, t0)
     t_priv: list | None = None
+    # Optional iL=h[L-1] full teacher sequences. Kept separate from aligned
+    # hL targets so the source and objective cannot be confused.
+    teacher_inputs: dict[int, torch.Tensor] | None = None
 
 
 @dataclass
@@ -138,6 +141,7 @@ class DistillDataset(Dataset):
         need_layers: list[int] | None = None,
         rebase_gap: bool = False,
         with_teacher_ids: bool = False,
+        with_teacher_inputs: bool = False,
         pad_random: bool = False,
         cache_source_compaction: str = "",
         student_compaction: str = "remove",
@@ -157,6 +161,11 @@ class DistillDataset(Dataset):
         self.need_layers = need_layers  # via setter: validates cache presence
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
+        self.with_teacher_inputs = with_teacher_inputs
+        if with_teacher_inputs and (
+                cache is None or not cache.has_full_teacher_inputs):
+            raise ValueError(
+                "with_teacher_inputs requires a full-prefix teacher cache")
         masker = ContextMasker(
             tokenizer,
             pad_random=pad_random,
@@ -249,6 +258,10 @@ class DistillDataset(Dataset):
             teacher_ids=torch.tensor(pair.teacher_ids) if self.with_teacher_ids else None,
             t0=pair.t_aligned.start,
             t_priv=pair.t_privileged or None,
+            teacher_inputs=(
+                {L: self.cache.teacher_input(ex_id, L)
+                 for L in self.need_layers}
+                if self.with_teacher_inputs else None),
         )
         if self.item_cache_items:
             self._item_cache[idx] = item
