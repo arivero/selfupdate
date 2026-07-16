@@ -116,8 +116,8 @@ raises at dispatch, the frozen-vocab fingerprint tripwire at save, the
 graph-leak/MoE tripwires in the walk, `scripts/audit_configs.py`.
 
 For a trainer change that is INTENDED to be numerics-preserving, use
-`scripts/train_certify.py` as an on-demand A/B instrument — record fresh
-fingerprints on current HEAD, apply the change, compare, discard:
+`scripts/train_certify.py` as an on-demand numerical-regression instrument —
+record fresh fingerprints on current HEAD, apply the change, compare, discard:
 
 ```bash
 python scripts/train_certify.py --all --out-dir /tmp/$USER/certify_head
@@ -516,7 +516,8 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - Long work runs detached via `nohup setsid ... >> runs/pipeline*.log 2>&1 &`.
 - After changes touching masking, aligned spans, cache layer-index conventions,
   or detach discipline in `train/layerwise.py`, run `scripts/audit_configs.py`
-  and use `scripts/train_certify.py` as an on-demand A/B instrument; stored
+  and use `scripts/train_certify.py` as an on-demand numerical-regression
+  instrument; stored
   tests and certification fingerprints were intentionally deleted.
 
 ## Hardware Ladder

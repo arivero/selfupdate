@@ -20,12 +20,12 @@ exact next-token online learning.
 | 1 | Sharding silently disabled | `causal_bk` rejects zero; all old unpinned YAMLs pinned; deterministic pre-load shape/post-load VRAM guard | config audit + launch guard |
 | 2 | Teacher-hidden GPU residency unbounded | full teacher inputs are stored in host-pinned memory and only one B-shard x K x H layer window returns to GPU | smoke + memory telemetry pending |
 | 3 | Whole teacher cache retained by Python | bounded LRU (`cache.item_cache_items`, default 64); safetensors mmap/page cache remains the backing cache | host RSS measurement pending |
-| 4 | Finished-row KV retained | rows are compacted, never replaced, at K-tile boundaries across cache and shard state | A/B certification pending |
-| 5 | DynamicCache quadratic append/copy | hybrid-aware Transformers `StaticCache`, preallocated to prompt + maximum answer | A/B certification pending |
-| 6 | GPU boolean-index synchronization | CPU-derived valid flat indices and device `index_select`; no GPU `nonzero` | A/B certification pending |
+| 4 | Finished-row KV retained | rows are compacted, never replaced, at K-tile boundaries across cache and shard state | numerical regression pending |
+| 5 | DynamicCache quadratic append/copy | hybrid-aware Transformers `StaticCache`, preallocated to prompt + maximum answer | numerical regression pending |
+| 6 | GPU boolean-index synchronization | CPU-derived valid flat indices and device `index_select`; no GPU `nonzero` | numerical regression pending |
 | 7 | Pageable blocking target restaging | one reusable pinned n x B-shard x K x H staging buffer with nonblocking H2D | throughput measurement pending |
 | 8 | Full target re-padding per cohort | B/K path collates metadata only and lazily fills the current K window from mmap-backed Items | host RSS/epoch timing pending |
-| 9 | Divide/remultiply kernel churn | tile loss and gradient sums accumulate directly; division occurs once at epoch telemetry | A/B certification pending |
+| 9 | Divide/remultiply kernel churn | tile loss and gradient sums accumulate directly; division occurs once at epoch telemetry | numerical regression pending |
 | 10 | O(B S^2) prefill-mask transient | static-cache prefill runs in configurable query chunks (default 64) | peak-memory measurement pending |
 
 ## Allocation state at start
@@ -39,7 +39,7 @@ exact next-token online learning.
 
 - 13:22: session-cancellation audit found no partial v3.2 edits.
 - 13:30: first implementation pass completed; Python compilation and the
-  full config audit passed. GPU A/B certification and measured smoke remain
+  full config audit passed. GPU numerical regression and measured smoke remain
   gates before campaign launch.
 - 13:31: the first delegated 0.6B gate on agpul06 GPU2 exited before model
   load because the offline node-local Hugging Face cache did not contain
@@ -132,5 +132,5 @@ monitoring delta, not the still-missing paired full-standard endpoint.
   epochs in this table are measurements, not recoverable promoted artifacts.
 - Production stability is established, but the numerics-adjacent static-cache,
   compaction, and reduction changes still require the review-requested exact
-  A/B certificate. No scientific comparison to v3.1 should be claimed before
+  old-versus-new numerical regression. No scientific comparison to v3.1 should be claimed before
   that gate.

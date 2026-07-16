@@ -1,4 +1,4 @@
-# Trainer A/B fingerprint instrument (no stored references)
+# Trainer numerical fingerprint regression instrument (no stored references)
 
 `scripts/train_certify.py` runs the real `train_layerwise` on a matrix of
 tiny variants (every schedule / batching / window / optimizer path) and
@@ -8,7 +8,7 @@ fingerprints each run: per-step losses, a per-tensor checkpoint signature
 **No references are stored in this repo** (owner decision 2026-07-11:
 stored fingerprints — like stored tests — act as a frozen specification
 that agents ossify around; the historical `pre/` and `pp2/` reference sets
-live in git history). The tool is an on-demand A/B instrument for changes
+live in git history). The tool is an on-demand numerical-regression instrument for changes
 INTENDED to be numerics-preserving:
 
 ```bash

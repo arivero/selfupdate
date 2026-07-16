@@ -20,7 +20,7 @@ one-write-per-block-per-tile are load-bearing semantics, not speed targets;
 issues.md negative results (async target prefetch, threaded student lanes,
 grad-ready hooks, multi-GPU lanes) were checked before proposing anything
 similarly shaped; numerics-adjacent proposals are marked as requiring a
-`scripts/train_certify.py` A/B from HEAD.
+`scripts/train_certify.py` numerical regression against HEAD.
 
 Measured grounding (see `docs/pareto_v31_training_progress.md`, "Measured
 throughput per arm"): 0.8B K=16 ~2,700 tok/s; 0.8B K=1 ~565 tok/s; 4B K=16
@@ -110,7 +110,7 @@ OOM traces showing 4-11 GB "reserved but unallocated". A cohort-preallocated
 fixed-shape KV buffer (static-cache style: allocate prefix+max_answer once,
 write in place) removes both the copy traffic and the transient. This is the
 same direction as the existing fixed-shape/CUDA-graph prototype and is
-numerics-adjacent: requires `scripts/train_certify.py` A/B.
+numerics-adjacent: requires a `scripts/train_certify.py` numerical regression.
 
 ### 6. CONFIRMED — hot-loop boolean-mask indexing syncs the GPU per layer per shard per tile
 `src/selfupdate/train/online_v3.py:1132-1133`

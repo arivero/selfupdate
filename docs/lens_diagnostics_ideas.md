@@ -125,7 +125,7 @@ below preserve scientific reasoning; they are not priority lists.
   `delta_vocab_mse`. This is the most promising importable idea.
 - **`cumulative_hidden_delta` variant (`h_i − h_0`)** — same treatment on the
   running residual sum instead of the per-step write. Cheaper credit assignment,
-  same legality. Worth an A/B against the successive form.
+  same legality. Worth a direct comparison against the successive form.
 - **Tuned-lens-translated per-layer KL — IMPLEMENTED.** The file is the
   reference scaffold for
   the `tuned_lens_kl` / `tuned_lens_path` knobs already added to `config.py` this

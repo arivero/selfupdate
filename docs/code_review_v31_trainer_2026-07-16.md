@@ -17,7 +17,7 @@ OOM modes were observed on 2026-07-15/16: a content-driven tile-size failure
 (4B arms on agpul04 GPU0).
 
 Review discipline: none of the speed changes below may be applied without a
-`scripts/train_certify.py` A/B against HEAD (fresh fingerprints, compare,
+`scripts/train_certify.py` numerical regression against HEAD (fresh fingerprints, compare,
 discard), and the measured NEGATIVE results in `issues.md` (async target
 prefetch; threaded/CUDA-stream student lanes; grad-ready hooks on the student
 path; multi-GPU lane partitioning) rule out several superficially attractive
@@ -235,10 +235,10 @@ suggests, and fixing the export is free margin.
 1. **M1.2 dispatch guard + pin `activation_shard_users` in K=1 YAMLs** —
    unblocks the wedged arms and stops retry-loop burn; no numerics risk.
 2. **S1 masked-mean loss (kill the bool-index syncs)** — certify with
-   `train_certify.py --all`, then A/B throughput at K=1 and 4B-K=16 where
+   `train_certify.py --all`, then compare throughput at K=1 and 4B-K=16 where
    dispatch dominates.
 3. **S2 pinned staging buffer for window targets** — certify + throughput
-   A/B; do NOT extend to side-stream prefetch without confronting the
+   old-versus-new comparison; do NOT extend to side-stream prefetch without confronting the
    existing negative result.
 4. **M4 allocator verification** — 2 minutes, possibly free margin.
 5. **S3/M2/M3** — only with a profile in hand after (2)-(3), on the tail

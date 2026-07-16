@@ -50,7 +50,7 @@ the arbitrary-mask attention kernel instead of the mask-free causal fast
 path in every (layer × token) cell. For q_len=1 decode rows the mask is
 all-zero. Returning `None` for full-attention layers when `full_keep` is
 None keeps flow arms unchanged and makes the intact control both faster and
-a fairer throughput baseline. Unmeasured; worth a one-epoch A/B before the
+a fairer throughput baseline. Unmeasured; worth a one-epoch direct comparison before the
 0.6B probes are compared on token-events-per-second.
 
 ## Candidates already fixed in the current tree (verified)

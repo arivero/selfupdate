@@ -136,8 +136,8 @@ loading a directory while it is still being populated on Lustre.
   per-tensor checkpoint signatures, VRAM peaks. NO references are stored
   in the repo (owner decision 2026-07-11: stored fingerprints act as a
   frozen-numerics specification; the pre-refactor `certs/pre` and PP2
-  `certs/pp2` sets are in git history). Use it as an on-demand A/B
-  instrument: record on HEAD (`--all --out-dir /tmp/$USER/certify_head`),
+  `certs/pp2` sets are in git history). Use it as an on-demand numerical-
+  regression instrument: record on HEAD (`--all --out-dir /tmp/$USER/certify_head`),
   apply the change, compare (`--all --reference-dir ...`), discard. The
   comparison keys on a semantic config hash that EXCLUDES placement knobs,
   so one single-device recording certifies PP runs;
