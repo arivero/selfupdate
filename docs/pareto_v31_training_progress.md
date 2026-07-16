@@ -578,13 +578,14 @@ the launches.
 
 ## Overnight progression rule
 
-Each scientific 0.8B arm runs six complete dataset-v5 epochs (12,426 answer
-visits), publishes its checkpoint, locality certificate, individual Markdown
-report, PDF, and completion-ordered report symlink, then becomes eligible for
-Pareto selection. Promoted Qwen3.5-4B arms run six epochs and extend to 12 when
-measured throughput makes that practical. Selection uses recall, standard
-damage, intrusion, layerwise loss/delta dynamics, locality, and elapsed time;
-loss alone does not promote a run.
+The original 0.8B screen runs six complete dataset-v5 epochs (12,426 answer
+visits); the explicitly named epoch-40 extension runs 82,840 visits. Each
+publishes its checkpoint, locality certificate, individual Markdown report,
+PDF, and completion-ordered report symlink before Pareto selection. Promoted
+Qwen3.5-4B arms run six epochs and extend to 12 when measured throughput makes
+that practical. Selection uses recall, standard damage, intrusion, layerwise
+loss/delta dynamics, locality, and elapsed time; loss alone does not promote a
+run.
 
 ## Measured throughput per arm (2026-07-16 audit)
 
