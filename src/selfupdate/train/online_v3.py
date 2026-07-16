@@ -1630,13 +1630,21 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
     if teacher_hidden and teacher is None:
         raise ValueError("causal_bk teacher_hidden requires an online teacher")
 
-    device = torch.device(cfg.model.device)
     n = stack.n_layers
     partition = partition_from_config(cfg, num_blocks=n)
     if partition.stages > 1 and stack.block_devices is None:
         raise ValueError(
             "a multi-stage PPn execution needs explicit model.pipeline_splits "
             "so block ownership is unambiguous")
+    # The v3.2 reference names a single model device.  PPn's input staging,
+    # epoch accumulators, and footprint guard instead belong to the first
+    # owning stage.  This matters for sparse physical placement (for example
+    # stages [1, 3]): checking cuda:0 can reject a healthy PPn run merely
+    # because an unrelated job occupies that card.
+    device = torch.device(
+        "cuda", partition.physical_devices[0]) if (
+            partition.stages > 1 and partition.physical_devices
+        ) else torch.device(cfg.model.device)
     B = cfg.train.micro_batch
     K = cfg.train.stale_gradient_window
     activation_shard_users = cfg.train.activation_shard_users

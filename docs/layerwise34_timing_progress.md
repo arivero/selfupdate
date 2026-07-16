@@ -91,6 +91,7 @@ Lustre during the measured traversal.
 | 00:42 | 4B PP1 full-v5 reference launched | `agpul06` GPU0, Python PID `3776076`, sampler PID `3775989`; full cache `98bb2aff23e25f93` reused for 2,071 questions. No immediate error; epoch-zero evaluation/load sample was 69% / 167 W / 41 C / 9.1 GiB and is not yet a training-rate measurement. |
 | 06:xx | 4B PP1 full-v5 reference completed cleanly | One full traversal: 239,286 valid token-events in 231.196 s, **1,035.0 valid token-events/s** and 53.84 physical local writes/s. Locality certification passed; report and checkpoint were published. Whole-training-set output evaluation: CE-eval-loss 2.59303 and KL-eval-loss 2.52684. Peak allocated/reserved VRAM was 32.91/35.51 GiB on GPU0. This was a completion, not an OOM. |
 | 06:xx | 4B parallel PP launch prepared | PP3 is pinned to agpul06 physical GPUs 1/2/3 while PP1 stays on GPU0. PP2 is pinned to agpul05 physical GPUs 1/3, preserving its existing GPU0/2 jobs. Both hosts have the full cache `98bb2aff23e25f93`; host-specific run names prevent shared-Lustre output collisions. |
+| 06:xx | Sparse PP2 launch preflight found and corrected | The first agpul05 PP2 attempt did not train or OOM: `CUDA_VISIBLE_DEVICES=1,3` renumbered the physical manifest to 0/1, then the footprint guard incorrectly inspected occupied GPU0 rather than the first PP stage. PPn now stages and guards on its first owning physical device. The corrected launch retains all physical devices visible and assigns work only to configured stages 1 and 3. |
 
 ## Matrix
 
