@@ -115,8 +115,8 @@ def validate_knob_schedule(cfg) -> None:
             if not cfg.train.lora.enabled:
                 bad.append("stale-gradient windows are initially LoRA-only")
             if cfg.train.hidden_loss not in (
-                    "nmse", "l2mse", "cosine", "huber", "charbonnier",
-                    "clipped_nmse"):
+                "nmse", "l2mse", "cosine", "huber", "charbonnier",
+                    "clipped_nmse", "vocab_cosine_sampled"):
                 bad.append(
                     "stale-gradient windows initially support stateless "
                     "geometric hidden losses only")
@@ -153,7 +153,7 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("answer_pipeline_lanes requires student_hidden")
             if cfg.train.hidden_loss not in (
                     "nmse", "l2mse", "cosine", "huber", "charbonnier",
-                    "clipped_nmse"):
+                    "clipped_nmse", "vocab_cosine_sampled"):
                 bad.append(
                     "answer_pipeline_lanes initially supports stateless "
                     "geometric hidden losses only")
@@ -164,7 +164,7 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("teacher_layer_lanes requires teacher_hidden")
             if cfg.train.hidden_loss not in (
                     "nmse", "l2mse", "cosine", "huber", "charbonnier",
-                    "clipped_nmse"):
+                    "clipped_nmse", "vocab_cosine_sampled"):
                 bad.append(
                     "teacher_layer_lanes initially supports stateless "
                     "geometric hidden losses only")
@@ -348,6 +348,14 @@ def validate_knob_schedule(cfg) -> None:
         raise ValueError("eval.every_epochs must be positive")
     if cfg.eval.standard_damage_every_epochs < 0:
         raise ValueError("eval.standard_damage_every_epochs must be >= 0")
+    if cfg.train.hidden_loss == "vocab_cosine_sampled":
+        if cfg.train.vocab_cosine_samples <= 1:
+            bad.append(
+                "vocab_cosine_sampled requires vocab_cosine_samples > 1")
+    elif cfg.train.vocab_cosine_samples:
+        bad.append(
+            "vocab_cosine_samples is set but hidden_loss is not "
+            "vocab_cosine_sampled")
     jacobian_kind = cfg.train.hidden_loss in (
         "jacobian_nmse", "jacobian_vocab_mse", "jacobian_cosine", "jacobian_lens_kl",
     )

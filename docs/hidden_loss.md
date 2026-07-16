@@ -42,6 +42,14 @@ already post-norm):
 MSE in logit space, computed through the precomputed Gram matrix
 `M = WᵀW` ([H,H], one 4 MB buffer). Equivalently: `Δhᵀ M Δh`.
 
+`vocab_cosine_sampled`: cosine distance between teacher and student scores on
+a deterministic sample of centred rows from the frozen unembedding. With
+sample matrix `W_S - mean_vocab(W)`, the loss is
+`1 - cos((W_S-mean(W))h_s, (W_S-mean(W))h_t)`. It approximates centred
+full-vocabulary score cosine without a vocabulary-wide logits tensor or an
+`H×H` multiply per position. Sample count and seed are mandatory config and
+telemetry fields; the sampled vocabulary matrix is frozen.
+
 `lens_kl`: `KL(lens(h_t) ‖ lens(h_s))` through the frozen norm + head. It is a
 local metric for the current block, not a behavioral readout: the head is
 frozen, no logits are trained, and the graph is detached at both block

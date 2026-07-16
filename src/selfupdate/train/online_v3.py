@@ -1066,6 +1066,8 @@ def train_bk_v31(cfg, stack, tok, log, cache, teacher=None) -> None:
         lr_rule=cfg.train.lr_rule,
         base_learning_rate=cfg.train.lr,
         lr_epoch_multipliers=cfg.train.lr_epoch_multipliers,
+        vocab_cosine_samples=cfg.train.vocab_cosine_samples,
+        vocab_cosine_seed=cfg.train.vocab_cosine_seed,
         lookahead_contract=(
             "next_token_online" if K == 1 else
             "teacher_prefetched_or_speculative_confirmed_tokens"),

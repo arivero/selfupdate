@@ -275,6 +275,11 @@ class TrainConfig:
     # increments; L=1/h_n use the paired state fallback because the cache has
     # no h0 and h_n is post-final-norm).  See losses.py / docs/hidden_loss.md.
     hidden_loss: str = "nmse"
+    # Deterministic frozen-vocabulary score sketch used only by
+    # vocab_cosine_sampled. Rows are sampled from the frozen unembedding and
+    # centred by its vocabulary-wide mean; no vocabulary parameter is trained.
+    vocab_cosine_samples: int = 0
+    vocab_cosine_seed: int = 17
     tuned_lens_path: str = ""
     jacobian_lens_path: str = ""
     # Frozen offline per-layer precision matrices for mahalanobis hidden loss.

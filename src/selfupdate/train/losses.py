@@ -10,7 +10,7 @@ Three families of hidden-match kinds:
 
 - geometric (``nmse``, ``l2mse``, ``cosine``, ``huber``): compare hidden
   vectors directly, in the residual-stream metric.
-- vocabulary-metric (``vocab_mse``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
+- vocabulary-metric (``vocab_mse``, ``vocab_cosine_sampled``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
   the FROZEN vocabulary sees them (docs/hidden_loss.md, Frozen-Vocabulary
   Principle). ``vocab_mse`` is MSE in logit space, computed cheaply through
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
@@ -39,7 +39,8 @@ import torch.nn.functional as F
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
                    "clipped_nmse", "contrastive", "relational_state", "zero")
-VOCAB_KINDS = ("vocab_mse", "lens_kl", "lens_js", "tuned_lens_kl", "vocab_fisher")
+VOCAB_KINDS = ("vocab_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
+               "tuned_lens_kl", "vocab_fisher")
 # Match what a block *adds* rather than repeatedly charging it for inherited
 # state error.  The trainer applies these only to interior raw block outputs
 # (2 <= L < n); L=1 and h_n use the paired state fallback below because the
@@ -152,12 +153,16 @@ class HiddenLoss:
                    jacobian_lens_path=train_cfg.jacobian_lens_path,
                    input_embedding=stack.embed_tokens,
                    mahalanobis_path=train_cfg.mahalanobis_path,
-                   multi_delta_scales=tuple(train_cfg.multi_delta_scales))
+                   multi_delta_scales=tuple(train_cfg.multi_delta_scales),
+                   vocab_cosine_samples=train_cfg.vocab_cosine_samples,
+                   vocab_cosine_seed=train_cfg.vocab_cosine_seed)
 
     def __init__(self, kind: str, final_norm=None, lm_head=None,
                  tuned_lens_path: str = "", jacobian_lens_path: str = "",
                  input_embedding=None, mahalanobis_path: str = "",
-                 multi_delta_scales: tuple[int, ...] = (1,)):
+                 multi_delta_scales: tuple[int, ...] = (1,),
+                 vocab_cosine_samples: int = 0,
+                 vocab_cosine_seed: int = 17):
         if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
@@ -185,6 +190,12 @@ class HiddenLoss:
         self._precision_cache: dict[tuple[int, torch.device], torch.Tensor] = {}
         self._gram: torch.Tensor | None = None
         self._centered_gram: torch.Tensor | None = None
+        self.vocab_cosine_samples = int(vocab_cosine_samples)
+        self.vocab_cosine_seed = int(vocab_cosine_seed)
+        self._sampled_vocab: torch.Tensor | None = None
+        if kind == "vocab_cosine_sampled" and self.vocab_cosine_samples <= 1:
+            raise ValueError(
+                "vocab_cosine_sampled needs train.vocab_cosine_samples > 1")
         self.translators = None
         self._jacobians_cpu: dict[int, torch.Tensor] = {}
         self._jacobian_cache: dict[tuple[int, torch.device, torch.dtype], torch.Tensor] = {}
@@ -280,6 +291,28 @@ class HiddenLoss:
                 )
         return self._centered_gram
 
+    def _sampled_vocab_matrix(self) -> torch.Tensor:
+        """Deterministic centred rows of the frozen unembedding.
+
+        Cosine over these sampled score coordinates is a Johnson-Lindenstrauss-
+        style coordinate sketch of centred full-vocabulary score cosine. It
+        costs O(N H S), not O(N H V), and the frozen sampled matrix remains a
+        measurement device rather than a trainable readout.
+        """
+        if self._sampled_vocab is None:
+            W = self.lm_head.weight.detach()
+            count = min(self.vocab_cosine_samples, W.shape[0])
+            generator = torch.Generator(device="cpu")
+            generator.manual_seed(self.vocab_cosine_seed)
+            indices = torch.randperm(
+                W.shape[0], generator=generator, device="cpu")[:count]
+            with torch.autocast(W.device.type, enabled=False):
+                mean = W.float().mean(dim=0, keepdim=True)
+                self._sampled_vocab = (
+                    W.index_select(0, indices.to(W.device)).float() - mean
+                ).contiguous()
+        return self._sampled_vocab
+
     @property
     def is_delta(self) -> bool:
         return self.kind in DELTA_KINDS
@@ -355,6 +388,15 @@ class HiddenLoss:
                 t = teacher_h.float()
                 denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
+        if kind == "vocab_cosine_sampled":
+            with torch.autocast(student_h.device.type, enabled=False):
+                sampled = self._sampled_vocab_matrix()
+                student_scores = student_h.float() @ sampled.T
+                with torch.no_grad():
+                    teacher_scores = teacher_h.float() @ sampled.T
+                return 1.0 - F.cosine_similarity(
+                    student_scores, teacher_scores, dim=-1,
+                    eps=1e-8).mean()
         if kind == "vocab_fisher":
             # Position-dependent Fisher metric: weight the logit-space error
             # by the TEACHER's layer-L lens distribution, restricted to its
