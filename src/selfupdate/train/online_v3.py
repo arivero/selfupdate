@@ -1657,6 +1657,8 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
         pp_dependency_graph=(
             "O[s,t]->O[s,t+1] and O[s,t]->O[s+1,t]"),
         pp_boundary_activation="detached_exact_copy",
+        frozen_output_head_replica=bool(getattr(
+            stack, "pp_frozen_output_head_replica", False)),
         pp_queue_depth=2,
         pp_write_semantics="immediate_state_free_sgd_before_next_tile",
         B_simultaneous_users=B,

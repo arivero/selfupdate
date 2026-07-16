@@ -113,7 +113,9 @@ def pp_device_map(cfg) -> dict:
     prefix = "model.language_model" if composite else "model"
     dm = {f"{prefix}.embed_tokens": first_dev,
           f"{prefix}.rotary_emb": first_dev,
-          f"{prefix}.norm": vocab_dev, "lm_head": vocab_dev}
+          # Final hidden loss belongs to the final stage even when the
+          # checkpoint ties the vocabulary head to the stage-0 embedding.
+          f"{prefix}.norm": last_dev, "lm_head": vocab_dev}
     if prefix != "model":
         dm["model.vision_tower"] = first_dev
         dm["model.embed_vision"] = first_dev
@@ -123,6 +125,33 @@ def pp_device_map(cfg) -> dict:
             dev += 1
         dm[f"{prefix}.layers.{i}"] = devices[dev]
     return dm
+
+
+def _replicate_frozen_output_head_for_pp(stack: BlockStack) -> None:
+    """Keep tied-checkpoint output evaluation local to the final PP stage.
+
+    A tied embedding/head parameter cannot be placed on two devices by
+    Accelerate.  The checkpoint alias remains untouched on stage 0, while the
+    training stack receives an exact frozen replica beside the final norm.
+    The replica is evaluation-only and is never serialized as an independent
+    trainable tensor; checkpoint metadata continues to record the real alias.
+    """
+    norm_parameter = next(stack.final_norm.parameters(), None)
+    head_weight = getattr(stack.lm_head, "weight", None)
+    if (norm_parameter is None or head_weight is None
+            or head_weight.device == norm_parameter.device):
+        return
+    bias = getattr(stack.lm_head, "bias", None)
+    replica = torch.nn.Linear(
+        head_weight.shape[1], head_weight.shape[0], bias=bias is not None,
+        device=norm_parameter.device, dtype=head_weight.dtype)
+    with torch.no_grad():
+        replica.weight.copy_(head_weight.detach().to(norm_parameter.device))
+        if bias is not None:
+            replica.bias.copy_(bias.detach().to(norm_parameter.device))
+    replica.requires_grad_(False)
+    stack.lm_head = replica
+    stack.pp_frozen_output_head_replica = True
 
 
 def uses_pipeline_map(cfg) -> bool:
@@ -390,6 +419,8 @@ class TrainingRuntime:
         # 2026-07-10 PP2 hook measurement); evals keep the model's hooks
         self.stack = BlockStack(self.model,
                                 hook_free_walk=self.pp_map is not None)
+        if self.pp_map is not None:
+            _replicate_frozen_output_head_for_pp(self.stack)
         self.stack.freeze_non_blocks()
         self._vocab_sig0 = vocab_signature(self.stack)
         return self
