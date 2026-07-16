@@ -88,3 +88,49 @@ nonzero exit. The six 4B processes used approximately 27-32 GiB at this point,
 the ordinary 0.8B processes approximately 38.6 GiB, and the 8-user KL process
 approximately 9.4 GiB. Slurm allocation 418791 had about 25 hours remaining,
 well beyond this screen's planned horizon.
+
+## Five-hour screen status (17:54 CEST)
+
+Eleven arms completed cleanly and generated run-local Markdown/PDF reports;
+the full KL-lens arm remained live at epoch 7. Mean recall is the report's
+three-corpus `overall_word_acc`. Damage below is the contemporaneous 16-item
+monitoring delta, not the still-missing paired full-standard endpoint.
+
+| Model / arm | Extent | Mean tok-events/s | Best recall (epoch) | Gain from epoch 0 | Monitor damage at best | Final recall |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.8B flow Huber 1e-6 | 40, done | 3,911 | 0.15622 (18) | +0.03472 | -0.0625 | 0.12437 |
+| 0.8B flow Huber 3e-6 | 40, done | 3,887 | 0.15821 (6) | +0.03672 | -0.0417 | 0.10117 |
+| 0.8B flow cosine 1e-6 | 40, done | 3,836 | 0.14599 (17) | +0.02449 | -0.0417 | 0.11834 |
+| 0.8B random Huber 3e-6 | 40, done | 3,911 | 0.14008 (7) | +0.01858 | -0.0417 | 0.11137 |
+| 0.8B intact Huber 1e-6 | 40, done | 3,891 | 0.13528 (24) | +0.01378 | 0.0000 | 0.13056 |
+| 0.8B flow full KL 1e-6 | 6 complete, epoch 7 live | 478 | 0.15461 (4) | +0.03311 | -0.0833 | 0.14458 at epoch 6 |
+| 4B flow sampled-vocab cosine 1e-6 | 24, done | 1,240 | 0.16763 (2) | +0.00554 | 0.0000 | 0.13824 |
+| 4B flow hidden cosine 1e-6 | 24, done | 1,307 | 0.16418 (4) | +0.00210 | 0.0000 | 0.15565 |
+| 4B flow Huber 1e-6 | 24, done | 1,311 | 0.16166 (4) | -0.00043 | 0.0000 | 0.14375 |
+| 4B flow Huber 3e-6 | 24, done | 1,312 | 0.15781 (10) | -0.00427 | 0.0000 | 0.13642 |
+| 4B random Huber 1e-6 | 24, done | 1,304 | 0.15877 (6) | -0.00332 | 0.0000 | 0.15046 |
+| 4B intact Huber 1e-6 | 24, done | 1,328 | 0.16464 (16) | +0.00256 | 0.0000 | 0.15909 |
+
+### Interpretation boundary
+
+- Systems result: v3.2 sustained about 3.9k token-events/s at 0.8B and
+  1.31k/s at 4B, roughly 27% above the corresponding v3.1 campaign rates,
+  while completing the formerly fatal long cohort. The 4B runs used roughly
+  27-32 GiB instead of the v3.1 high-40-GiB regime.
+- Optimization result: fixed-rate arms generally peaked early and then
+  degraded. Forty versus twenty-four epochs did not rescue them; the next
+  screen should taper around the measured peak rather than continue fixed
+  writes.
+- 0.8B shows a censorship-conditioned signal: flow Huber's best gain exceeds
+  the intact control by about 0.021-0.023. It is not yet a clean frontier
+  result because the 16-item damage monitor is negative and full-standard
+  endpoints are missing.
+- 4B has no robust winner yet. Sampled-vocabulary cosine is the only flow arm
+  above the intact-control gain, and only by about 0.003 at epoch 2; this
+  requires seed replication and a matched intact sampled-vocabulary control.
+- The reports currently save only the final checkpoint, so the early best
+  epochs in this table are measurements, not recoverable promoted artifacts.
+- Production stability is established, but the numerics-adjacent static-cache,
+  compaction, and reduction changes still require the review-requested exact
+  A/B certificate. No scientific comparison to v3.1 should be claimed before
+  that gate.
