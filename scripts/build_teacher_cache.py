@@ -534,7 +534,17 @@ def main() -> None:
         load_kwargs = {"dtype": model_dtype, "low_cpu_mem_usage": True}
         load_kwargs.update(_native_mxfp4_load_overrides(cfg.model.name))
         if uses_pipeline_map(cfg):
-            load_kwargs["device_map"] = pp_device_map(cfg)
+            placement = pp_device_map(cfg)
+            stage_devices = list(cfg.model.pipeline_devices or [])
+            if not stage_devices:
+                stage_devices = list(range(
+                    len(cfg.model.pipeline_splits or []) + 1))
+            # Preserve physical sparse placement during cache materialization.
+            # Transformers' allocator warmup otherwise uses the process-wide
+            # cuda:0 default even when every declared model tensor belongs to
+            # stages such as [1, 3].
+            torch.cuda.set_device(stage_devices[0])
+            load_kwargs["device_map"] = placement
         elif cfg.model.device_map:
             if cfg.model.device_map != "auto":
                 raise ValueError("model.device_map must be empty or 'auto'")
