@@ -62,3 +62,29 @@ hidden cosine, random-context, intact control, and full KL-lens speed arm) and
 six 4B arms (Huber learning-rate pair, hidden cosine, random-context, intact
 control, and sampled-vocabulary cosine). All use B256/K16 and immediate SGD;
 the KL arm uses an 8-user execution shard solely to bound vocabulary logits.
+
+### Five-hour screen placement (13:47 CEST)
+
+| Host/GPU | Model | Arm |
+|---|---|---|
+| agpul04/0 | 4B | flow Huber, LR 1e-6, 24 epochs |
+| agpul04/1 | 4B | flow Huber, LR 3e-6, 24 epochs |
+| agpul04/2 | 4B | flow hidden cosine, LR 1e-6, 24 epochs |
+| agpul04/3 | 4B | random-context Huber, LR 1e-6, 24 epochs |
+| agpul05/0 | 4B | intact Huber control, LR 1e-6, 24 epochs |
+| agpul05/1 | 4B | flow sampled-vocabulary cosine-256, LR 1e-6, 24 epochs |
+| agpul05/2 | 0.8B | flow hidden cosine, LR 1e-6, 40 epochs |
+| agpul05/3 | 0.8B | random-context Huber, LR 3e-6, 40 epochs |
+| agpul06/0 | 0.8B | flow Huber, LR 3e-6, 40 epochs |
+| agpul06/1 | 0.8B | intact Huber control, LR 1e-6, 40 epochs |
+| agpul06/2 | 0.8B | flow Huber, LR 1e-6, 40 epochs |
+| agpul06/3 | 0.8B | flow full KL lens, LR 1e-6, 12 epochs |
+
+All twelve emitted `pipeline_v32_contract` and completed at least one real
+cohort before agent detachment. Eleven had completed 3-4 cohorts; the slower
+full-vocabulary KL arm had completed one. Every physical L40S showed an active
+trainer and nonzero utilization; no launch log contained a traceback, OOM, or
+nonzero exit. The six 4B processes used approximately 27-32 GiB at this point,
+the ordinary 0.8B processes approximately 38.6 GiB, and the 8-user KL process
+approximately 9.4 GiB. Slurm allocation 418791 had about 25 hours remaining,
+well beyond this screen's planned horizon.
