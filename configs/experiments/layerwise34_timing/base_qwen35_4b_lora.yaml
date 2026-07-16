@@ -1,0 +1,78 @@
+run_name: layerwise34_timing_qwen35_4b_base_never_train
+layerwise_project_version: "3.4"
+model:
+  name: Qwen/Qwen3.5-4B
+  dtype: bfloat16
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [0]
+  pipeline_world_size: 1
+data:
+  examples_path: data/combined/examples_v5rs_window_deciepoch100.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: runs/teacher_cache_h100/artifacts_exact_full
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v3
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  item_cache_items: 16
+  generation_batch: 64
+  teacher_batch: 64
+  generation_budget_bucket: 32
+  generation_max_tokens: 4096
+  generation_responses_path: runs/vllm_benchmark_l40s/qwen35_4b_fixed4096_exactids_agpul06/responses_bs64.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 3
+  pipeline_revision: "3.2"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  answers_per_update: 0
+  tokens_per_answer_update: 0
+  update_reduction: ""
+  trajectory_source: student_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: method
+  schedule: summed
+  epochs: 1
+  max_steps: 0
+  seed: 17
+  lr: 1.0e-6
+  online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 16
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_bk
+  micro_batch: 256
+  grad_accum: 1
+  batching: bucketed
+  activation_shard_users: 32
+  prefill_query_chunk: 32
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  window_dedup: false
+  window_hidden_weight: 1.0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8

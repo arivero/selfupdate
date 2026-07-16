@@ -1,0 +1,35 @@
+run_name: layerwise34_identity_qwen35_0p8b_lora_pp1_fullv5
+mask:
+  compaction: flow_mask
+cache:
+  item_cache_items: 32
+train:
+  run_class: method
+  pipeline_version: 3
+  pipeline_revision: "3.2"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  online_optimizer: immediate_sgd
+  lr_rule: fixed
+  schedule: summed
+  epochs: 1
+  seed: 17
+  max_steps: 0
+  micro_batch: 256
+  grad_accum: 1
+  batching: bucketed
+  conn_window: 1
+  conn_stride: 0
+  trajectory_source: student_hidden
+  online_teacher: false
+  history_policy: causal_bk
+  backward_dispatch: per_block
+  online_write_dispatch: after_backward
+  stale_gradient_window: 16
+  activation_shard_users: 64
+  prefill_query_chunk: 64
+  hidden_loss: huber
+  lr: 1.0e-6
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
