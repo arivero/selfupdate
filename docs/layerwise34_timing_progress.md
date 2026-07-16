@@ -85,6 +85,7 @@ Lustre during the measured traversal.
 | 00:15 | First measured PP3 repin improved speed but still failed occupancy balance | `[9,17]` completed five cohorts / 795,510 events in 167.50 s: 4,749.2 token-events/s (1.750x PP1). Full training-trace means were only 69.2/61.9/74.4% across GPU0--2, with long-cohort snapshots around 57/57/99%; peak VRAM was 13.33/12.29/24.77 GiB. The final-stage whole-training-set vocabulary metric is materially more expensive than callback dispatch timing indicates. The next pinned profile is `[10,19]` (10/9/5 blocks), moving one block to each upstream stage and two off the final stage. |
 | 00:22 | PP3 `[10,19]` isolated a shared host-production bubble | Five cohorts completed at 4,458.9 token-events/s with 13.55/12.62/24.26 GiB peak allocated. Initial long-cohort balance improved to about 77/96/100%, then all three cards collapsed together near 49--58%. Target construction was issuing up to B×n = 6,144 Python `copy_` calls for every rectangular K tile. The exact same pinned target bytes are now assembled with one `torch.stack(..., out=...)` per layer (24 C++ calls); only ragged tail tiles retain row-wise copies. This is a transfer/dispatch optimization, not a change to B, K, target values, loss, or writes. |
 | 00:27 | Rectangular-only vector staging was insufficient; ragged staging grouped | Rectangular vectorization measured 4,493.0 token-events/s, only 0.8% above the preceding `[10,19]` run, and later utilization still collapsed. Once any user finishes, the un-compacted PPn cohort takes the ragged path for every later tile. Rows are now grouped by their valid width (at most K=16 groups), reducing ragged target assembly from B×n to at most K×n C++ copies while preserving the identical zero padding and row order. |
+| 00:33 | Ragged-group PP3 measured; PP4 profile pinned from physical evidence | `[10,19]` with grouped ragged staging measured 4,615.7 token-events/s. Full-trace utilization still averaged 66.5/65.7/71.7%, so PP3 does not receive the hardware-occupancy pass; the best measured PP3 throughput remains 4,749.2/s at `[9,17]`. PP4 is pinned to `[7,14,21]` (7/7/7/3 blocks): the short final range explicitly budgets the frozen output-distribution evaluation cost observed on PP3. |
 
 ## Matrix
 
@@ -92,7 +93,7 @@ Lustre during the measured traversal.
 |---|---:|---|---|---|---|---:|---:|
 | Qwen3.5-0.8B | 1 | serial | all blocks on GPU 0 | full-v5 cache `b632054c01558f61` | passed/stopped | 2,714.7 | 26.19 GiB allocated / 39.85 GiB reserved |
 | Qwen3.5-0.8B | 2 | wavefront | cut after block 12, preflight profile v1 | full-v5 cache `b632054c01558f61` | passed/stopped; locality passed | 3,689.1 (1.359x PP1) | 16.24 / 28.48 GiB allocated on GPU0/GPU1 |
-| Qwen3.5-0.8B | 3 | wavefront | preflight `[8,16]`; v1 `[9,17]`; v2 `[10,19]` | full-v5 cache `b632054c01558f61` | v1 4,749.2/s but occupancy rejected; v2 pending |  | v1: 13.33 / 12.29 / 24.77 GiB |
+| Qwen3.5-0.8B | 3 | wavefront | preflight `[8,16]`; v1 `[9,17]`; v2 `[10,19]` | full-v5 cache `b632054c01558f61` | throughput measured; occupancy rejected | 4,749.2 best (1.750x PP1) | best-run v1: 13.33 / 12.29 / 24.77 GiB |
 | Qwen3.5-0.8B | 4 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 | Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | pending exact-100 | pending |  |  |
 | Qwen3.5-4B | 2 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
@@ -101,3 +102,51 @@ Lustre during the measured traversal.
 
 Blank result cells are intentionally unmeasured; no throughput is inferred
 from the dependency proof or from a partial run.
+
+## Pending work, in order
+
+1. Run Qwen3.5-0.8B PP4 with pinned measured profile `[7,14,21]`. The gate is
+   sustained 80--90%+ utilization on all four cards in the long cohorts,
+   approximately 300 W/card, and the recorded temperature/power/VRAM trace.
+   If it fails, diagnose the common host bubble or repartition; do not call
+   spikes a pass. Only a passing PP4 unlocks multi-node work.
+2. Complete the Qwen3.5-4B PP1/PP2/PP3/PP4 matrix on `agpul06`, starting from
+   the existing full-v5 cache `98bb2aff23e25f93`. Use LoRA, B256/K16, the
+   same logical token budget, physical telemetry, locality certification,
+   graceful cohort-boundary stops, and measured (not layer-count) cuts.
+3. Run fresh fixed-cohort serial-versus-wavefront equivalence for each chosen
+   placement, including per-layer parameter-delta relative L2/cosine and
+   fresh numerical fingerprints. Existing speed runs do not substitute for
+   this gate. Preserve failed/preflight run directories under explicit names.
+4. Late cache-residency crossover (never silently mixed into the primary
+   matrix): add explicit flags and compare (a) online teacher-state
+   recomputation / no cache, (b) mmap or CPU-RAM cache with pinned tile
+   staging (current baseline), and (c) each stage's owned teacher layers
+   resident in GPU VRAM. Match B, K, questions, answers, and token budget;
+   report host RAM, H2D bytes/wait, VRAM, power, and token-events/s. Label
+   no-cache as teacher recomputation -- it cannot prove cached-hidden
+   throughput even if it wins. This is the expected PPn-dependent crossover
+   as model/KV residency per card falls. (The unpleasant third regime: 😭.)
+5. After the Pareto matrix, test fully independent teacher-seeded block
+   trajectories (`trajectory_source: teacher_hidden`). The current code uses
+   online adapters-off teacher prefixes because aligned disk caches lack
+   h[L-1] prefix rows. Re-check host-pinned residency and locality before 4B;
+   do not revive connected credit or final-logit training.
+6. Prepare Qwen3.6-27B and Qwen3.6-35B-A3B black-box MoE: stage snapshots,
+   create fixed teacher answers and complete teacher caches on every
+   participating node, profile legal text-tower cuts, and run every
+   memory-feasible PPn through PP4. Keep complete MoE router+experts on one
+   stage and introduce no routing objective or expert parallelism.
+7. Conditional InfiniBand bonus, only after the PP4 all-card gate: implement
+   real rank-owned detached activation transport and cursor/checkpoint
+   coordination, benchmark NCCL point-to-point versus host staging, then test
+   homogeneous L40S PP6, PP8, and PP12. Do not describe the current
+   single-process peer executor as multi-node PP. Separately measure the
+   available 12×H100 pool through the cu128 container; never mix H100 and
+   L40S stages in one scaling line.
+8. Refresh this ledger and each atomic run report after every accepted result.
+   At campaign close regenerate layer-loss heatmaps and temporal traces,
+   parameter-delta profiles, recall/damage frontier, coverage/provenance,
+   `runs/results.md`, and the visibly checked report PDF. Whole-training-set
+   CE/KL is published only for complete epochs with exact item/token counts;
+   partial timing stops must continue withholding it.
