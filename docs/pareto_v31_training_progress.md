@@ -519,3 +519,91 @@ Pareto selection. Promoted Qwen3.5-4B arms run six epochs and extend to 12 when
 measured throughput makes that practical. Selection uses recall, standard
 damage, intrusion, layerwise loss/delta dynamics, locality, and elapsed time;
 loss alone does not promote a run.
+
+## Measured throughput per arm (2026-07-16 audit)
+
+Real throughput, not the configured rate: `token_events_seen` at the last
+logged cohort divided by wall-clock seconds from that run's first to last
+`metrics.jsonl` line (both L40S, node-local teacher cache). Computed for every
+arm regardless of whether it finished six epochs or died mid-run, so crashed
+arms contribute a genuine measured rate up to the point of failure. Tile shape
+is `<B users>u/<activation_shard_users>shu x<activation_shards>sh,
+<prompt_length_padded>p x<max_answer_tokens>a` from that same last cohort
+line — K alone (the lookahead depth) does not fix the per-step memory/compute
+footprint; B, the activation-sharding split, and the realized padded
+prompt/answer lengths (which vary per cohort with the data, not the config)
+all move it independently.
+
+| model | K | censorship | lr | status | duration | tok events | last-cohort tile shape | measured tok/s |
+|---|---:|---|---|---|---:|---:|---|---:|
+| 0.8B | 16 | flow | 1e-5 | DONE (6 ep) | 39.5 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,745.4 |
+| 0.8B | 16 | random | 1e-5 | DONE | 39.7 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,733.5 |
+| 0.8B | 16 | intact | 3e-6 | DONE | 39.7 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,729.9 |
+| 0.8B | 16 | flow | 3e-6 (s43) | DONE | 39.7 min | 6,503,478 | 256u/64shu x4sh, 780p x844a | 2,729.3 |
+| 0.8B | 16 | flow | 3e-6 (s17) | DONE | 39.8 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,725.9 |
+| 0.8B | 16 | random | 1e-6 | DONE | 39.8 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,721.1 |
+| 0.8B | 16 | random | 3e-6 | DONE | 39.9 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,717.9 |
+| 0.8B | 16 | flow | 1e-6 | DONE | 39.8 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,724.3 |
+| 0.8B | 16 | intact | 1e-5 (shard64 retry) | DONE | 40.0 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,708.3 |
+| 0.8B | 16 | intact | 1e-6 | DONE | 40.2 min | 6,503,478 | 256u/64shu x4sh, 502p x507a | 2,697.5 |
+| 0.8B | 16 | intact | 1e-5 (unsharded) | **OOM e1c3** | 2.5 min | 267,380 | 256u/**None**shu x**None**sh, 780p x844a | 1,795.5 |
+| 4B | 16 | intact | 1e-5 | DONE | 28.9 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 826.5 |
+| 4B | 16 | flow | 3e-6 | DONE | 28.9 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 826.7 |
+| 4B | 16 | flow | 1e-5 | DONE | 29.0 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 825.1 |
+| 4B | 16 | flow | 3e-7 | DONE | 29.1 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 822.2 |
+| 4B | 16 | intact | 3e-6 | DONE | 29.2 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 820.4 |
+| 4B | 16 | intact | 1e-6 | DONE | 29.2 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 818.9 |
+| 4B | 16 | random | 1e-6 | DONE | 29.3 min | 1,435,716 | 256u/32shu x8sh, 162p x122a | 817.8 |
+| 0.8B | 1 | intact | 1e-5 | **OOM e1c3** | 7.8 min | 267,380 | 256u/256shu x1sh, 780p x844a | 569.6 |
+| 0.8B | 1 | flow | 1e-6 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 566.2 |
+| 0.8B | 1 | random | 1e-6 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 566.2 |
+| 0.8B | 1 | random | 1e-5 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 565.9 |
+| 0.8B | 1 | flow | 1e-5 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 564.8 |
+| 0.8B | 1 | flow | 3e-6 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 563.2 |
+| 0.8B | 1 | random | 3e-6 | **OOM e1c3** | 7.9 min | 267,380 | 256u/256shu x1sh, 780p x844a | 563.5 |
+| 4B | 16 | random | 3e-7 | **OOM e1c2** (GPU collision) | 2.3 min | 50,741 | 256u/32shu x8sh, 123p x72a | 373.7 |
+| 4B | 16 | random | 3e-6 | **OOM e1c2** (GPU collision) | 2.6 min | 50,741 | 256u/32shu x8sh, 123p x72a | 323.0 |
+
+Two independent OOM mechanisms are visible in this data, not one: every
+`K=1` arm and the one unsharded `K=16` arm die at the same tile
+(780 padded prompt x 844 padded answer tokens, cohort 3) whenever
+`activation_shard_users` equals the full 256-user batch (no sharding) —
+a content-driven tile-size failure, reproducible independent of what else is
+on the GPU. The two 4B `K=16` OOMs instead die on a much smaller tile
+(123p x72a, cohort 2) and only when a second process is confirmed sharing
+the same physical GPU 0 on `agpul04` — a scheduler-collision failure, not a
+tile-size one. `activation_shard_users`/`activation_shards` (32shu x8sh for
+4B, 64shu x4sh for the surviving 0.8B `K=16` arms) is the knob that already
+fixes the tile-size failure mode; it does not touch the collision one.
+
+Reading the surviving rows: 0.8B `K=16` sustains roughly **2,700-2,745
+tok/s**, its `K=1` counterpart only **560-570 tok/s** (~4.8x), and 4B `K=16`
+sustains **818-828 tok/s** (~3.3x slower than 0.8B `K=16`, a smaller gap than
+the ~5x parameter-count ratio would suggest — the per-block backward
+dispatch and activation traffic are a larger share of the wall clock at this
+tile size than raw FLOPs).
+
+### Reference: vLLM raw-generation throughput (H100, not L40S)
+
+For context only — these are pure-generation numbers (autoregressive decode,
+no backward pass, no optimizer step) from the H100 Qwen3.5 self-update ladder
+in `docs/vllm_generation_benchmark.md` ("H100 Qwen3.5 self-update ladder"
+section, batch 64, full 2,071-example corpus). They are **not** measured on
+the L40S nodes the training arms above ran on, so treat the ratio as
+order-of-magnitude, not a precise multiplier:
+
+| model | mode | tok/s |
+|---|---|---:|
+| Qwen3.5-0.8B | graphs | 1,370.06 |
+| Qwen3.5-0.8B | eager | 148.89 |
+| Qwen3.5-0.8B | mixed-budget batch-64 (`docs/vllm_generation_benchmark.md:236`) | 12,304.16 |
+| Qwen3.5-4B | graphs | 341.00 |
+| Qwen3.5-4B | eager | 69.90 |
+
+At matched model, the trained `K=16` arms above (2,700-2,745 tok/s for 0.8B,
+818-828 tok/s for 4B) sit **below** H100 graph-mode generation for 0.8B but
+**above** it for 4B — consistent with training's backward/optimizer cost
+scaling differently with model size than pure decode does, not with training
+having somehow gotten cheaper than generation. No L40S vLLM number exists yet
+for Qwen3.5-0.8B/4B specifically; `docs/vllm_generation_benchmark.md`'s L40S
+rows only cover the Qwen3 (non-.5) family at present.
