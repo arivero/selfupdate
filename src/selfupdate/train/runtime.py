@@ -52,7 +52,7 @@ def load_causal_lm(src, **kw):
 
 
 def pp_device_map(cfg) -> dict:
-    """Pipeline map: embedding on cuda:0; decoder blocks partitioned by
+    """Pipeline map: embedding on the first configured stage; decoder blocks partitioned by
     ``pipeline_split`` (2 GPUs) or ``pipeline_splits`` (N GPUs). The final
     norm/head live on the last card for untied models, so the top readout
     window stays colocated with logits."""
@@ -364,13 +364,26 @@ class TrainingRuntime:
 
     def __init__(self, cfg):
         self.cfg = cfg
-        self.device = cfg.model.device
         if uses_pipeline_map(cfg) and cfg.model.device_map:
             raise ValueError(
                 "model.pipeline_split(s) and model.device_map are mutually exclusive")
         if cfg.model.device_map not in ("", "auto"):
             raise ValueError("model.device_map must be empty or 'auto'")
         self.pp_map = pp_device_map(cfg) if uses_pipeline_map(cfg) else None
+        if self.pp_map is not None:
+            # Sparse PP placement is physical, not CUDA_VISIBLE_DEVICES
+            # relative: a [1, 3] run must not create its default allocator,
+            # streams, or transient model-load tensors on a busy cuda:0.
+            splits = list(cfg.model.pipeline_splits or [])
+            stage_devices = list(cfg.model.pipeline_devices or [])
+            if not stage_devices:
+                stage_devices = list(range(len(splits) + 1))
+            self.owned_devices = tuple(stage_devices)
+            self.device = torch.device("cuda", self.owned_devices[0])
+            torch.cuda.set_device(self.device)
+        else:
+            self.owned_devices = tuple(range(torch.cuda.device_count()))
+            self.device = torch.device(cfg.model.device)
         self.auto_map = cfg.model.device_map == "auto"
         # bf16 base for LoRA (frozen weights) AND for the sequential
         # schedules: only actively-training blocks need fp32 master weights
@@ -496,19 +509,20 @@ class TrainingRuntime:
                 "during training — refusing to save (docs/hidden_loss.md)"
             )
 
-    @staticmethod
-    def memory_summary() -> dict:
-        n_dev = torch.cuda.device_count()
+    def memory_summary(self) -> dict:
+        devices = self.owned_devices
         return {
-            # summed across visible cards (pipeline-parallel jobs use several)
+            # Include only this run's declared PP stages. Sparse placement
+            # deliberately leaves other visible physical GPUs to other jobs.
             "vram_gb": round(sum(torch.cuda.max_memory_allocated(d)
-                                 for d in range(n_dev)) / 2**30, 2),
+                                 for d in devices) / 2**30, 2),
             # reserved = what the allocator actually holds from the device —
             # the honest footprint for "does it fit on this card" claims
             "vram_reserved_gb": round(sum(torch.cuda.max_memory_reserved(d)
-                                          for d in range(n_dev)) / 2**30, 2),
+                                          for d in devices) / 2**30, 2),
             "vram_per_device_gb": [round(torch.cuda.max_memory_reserved(d) / 2**30, 2)
-                                   for d in range(n_dev)],
+                                   for d in devices],
+            "vram_physical_devices": list(devices),
         }
 
     def save_checkpoint(self, run_dir: Path) -> None:

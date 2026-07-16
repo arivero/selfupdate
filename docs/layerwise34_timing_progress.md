@@ -92,6 +92,8 @@ Lustre during the measured traversal.
 | 06:xx | 4B PP1 full-v5 reference completed cleanly | One full traversal: 239,286 valid token-events in 231.196 s, **1,035.0 valid token-events/s** and 53.84 physical local writes/s. Locality certification passed; report and checkpoint were published. Whole-training-set output evaluation: CE-eval-loss 2.59303 and KL-eval-loss 2.52684. Peak allocated/reserved VRAM was 32.91/35.51 GiB on GPU0. This was a completion, not an OOM. |
 | 06:xx | 4B parallel PP launch prepared | PP3 is pinned to agpul06 physical GPUs 1/2/3 while PP1 stays on GPU0. PP2 is pinned to agpul05 physical GPUs 1/3, preserving its existing GPU0/2 jobs. Both hosts have the full cache `98bb2aff23e25f93`; host-specific run names prevent shared-Lustre output collisions. |
 | 06:xx | Sparse PP2 launch preflight found and corrected | The first agpul05 PP2 attempt did not train or OOM: `CUDA_VISIBLE_DEVICES=1,3` renumbered the physical manifest to 0/1, then the footprint guard incorrectly inspected occupied GPU0 rather than the first PP stage. PPn now stages and guards on its first owning physical device. The corrected launch retains all physical devices visible and assigns work only to configured stages 1 and 3. |
+| 06:xx | PP2 sparse-placement isolation strengthened before measurement | The corrected process did allocate its model stages on GPUs 1/3 but also left a 1.0 GiB default-CUDA allocation on busy GPU0. It was stopped before its traversal. Runtime initialization now sets the first owning PP stage as CUDA's default before model load and reports VRAM only for declared physical stages; PP2 will be relaunched only after this isolation fix is committed. The teacher cache is confirmed local shared memory (37 GiB), not Lustre. |
+| 06:xx | 4B PP3 full-v5 completed cleanly | Pinned `[11,23]` stages on agpul06 GPUs 1/2/3 completed 239,286 valid token-events in 158.947 s: **1,505.4 token-events/s**, 1.454x PP1 (48.5% three-card efficiency), and 22.03 global physical block writes/s. Locality passed with zero cross-block and frozen-vocabulary leakage; report/checkpoint published. CE-eval-loss 2.59292, KL-eval-loss 2.52675, and final allocated/reserved VRAM 38.54/40.95 GiB (13.88/13.52/13.01 GiB on the three owning cards). |
 
 ## Matrix
 
@@ -103,7 +105,7 @@ Lustre during the measured traversal.
 | Qwen3.5-0.8B | 4 | wavefront | v1 `[7,14,21]`; v2 `[7,14,20]` | full-v5 cache `b632054c01558f61` | v1 throughput passed but GPU3 occupancy rejected; v2 pending | 5,475.7 v1 (2.017x PP1) | v1: 10.50 / 11.99 / 11.93 / 21.42 GiB |
 | Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,035.0 | 32.91 / 35.51 GiB allocated/reserved on GPU0 |
 | Qwen3.5-4B | 2 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
-| Qwen3.5-4B | 3 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
+| Qwen3.5-4B | 3 | wavefront | `[11,23]`, ranges 11/12/9, GPUs 1/2/3 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,505.4 (1.454x PP1) | 13.88 / 13.52 / 13.01 GiB allocated; 40.95 GiB aggregate reserved |
 | Qwen3.5-4B | 4 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
 
 Blank result cells are intentionally unmeasured; no throughput is inferred
