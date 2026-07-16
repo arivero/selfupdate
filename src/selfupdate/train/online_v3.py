@@ -1260,13 +1260,23 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
                 for it in shard["target_items"]
             ], dim=0, out=staging[layer - 1])
     else:
-        for row, (it, count) in enumerate(zip(
-                shard["target_items"], counts)):
-            if not count:
-                continue
+        # Finished and final-tile rows have at most K distinct valid widths.
+        # Group them so the ragged path is bounded by K*n C++ copies rather
+        # than falling back to B*n Python dispatches as users complete.
+        rows_by_width = {}
+        for row, count in enumerate(counts):
+            if count:
+                rows_by_width.setdefault(count, []).append(row)
+        for count, rows in rows_by_width.items():
+            row_index = torch.tensor(rows, dtype=torch.long)
             for layer in range(1, n + 1):
-                staging[layer - 1, row, :count].copy_(
-                    it.hidden[layer][start:start + count])
+                packed = torch.stack([
+                    shard["target_items"][row].hidden[layer][
+                        start:start + count]
+                    for row in rows
+                ])
+                staging[layer - 1, :, :count].index_copy_(
+                    0, row_index, packed)
     # Wavefront tiles may remain live until the final stage drains them. Keep
     # their full-depth targets in pinned host storage and transfer only the
     # current owned layer in the stage callback; otherwise every in-flight
