@@ -1310,9 +1310,12 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                             h_out = stack.run_block(
                                 layer, h_in, state["query_rope"],
                                 position_ids=state["query_positions"],
-                                flow_keep=state["key_keep"],
+                                # The additive mask addresses the full static
+                                # cache; flow_keep here is only the current
+                                # query-row zeroing mask.
+                                flow_keep=state["query_valid"],
                                 past_key_values=shard["history"], use_cache=True,
-                                causal_length=shard["prompt_length"] + state["stop"],
+                                causal_length=shard["full_keep"].shape[1],
                                 prepared_attention_mask=layer_mask)
                             view = stack.loss_view(layer, h_out).reshape(
                                 -1, h_out.shape[-1]).index_select(
