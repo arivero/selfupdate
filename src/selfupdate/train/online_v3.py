@@ -1249,13 +1249,24 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         staging = shard["target_staging"][
             :, :shard["b_now"], :tile_width]
     staging.zero_()
-    for row, (it, count) in enumerate(zip(
-            shard["target_items"], valid_widths.tolist())):
-        if not count:
-            continue
+    counts = valid_widths.tolist()
+    if all(count == tile_width for count in counts):
+        # Almost every bucket tile is rectangular. A layer-wise stack writes
+        # the same bytes with n C++ calls instead of B*n tiny Python copy_
+        # dispatches, so the single tile producer can keep PP3+ fed.
         for layer in range(1, n + 1):
-            staging[layer - 1, row, :count].copy_(
-                it.hidden[layer][start:start + count])
+            torch.stack([
+                it.hidden[layer][start:start + tile_width]
+                for it in shard["target_items"]
+            ], dim=0, out=staging[layer - 1])
+    else:
+        for row, (it, count) in enumerate(zip(
+                shard["target_items"], counts)):
+            if not count:
+                continue
+            for layer in range(1, n + 1):
+                staging[layer - 1, row, :count].copy_(
+                    it.hidden[layer][start:start + count])
     # Wavefront tiles may remain live until the final stage drains them. Keep
     # their full-depth targets in pinned host storage and transfer only the
     # current owned layer in the stage callback; otherwise every in-flight
