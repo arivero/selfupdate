@@ -18,7 +18,8 @@ train:
   stale_gradient_window: 16
   micro_batch: 256
   batching: bucketed
-  activation_shard_users: 32
+  activation_shard_users: 64
+  prefill_query_chunk: 64
   online_optimizer: immediate_sgd
   pp_execution: wavefront
   partition_profile_id: qwen35-0p8b-hybrid-cycle-preflight-v1

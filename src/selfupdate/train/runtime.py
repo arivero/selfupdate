@@ -101,10 +101,15 @@ def pp_device_map(cfg) -> dict:
     first_dev = devices[0]
     vocab_dev = first_dev if tied else last_dev
     model_type = getattr(mc, "model_type", "")
-    composite = bool(
-        getattr(mc, "vision_config", None) is not None
-        or getattr(mc, "audio_config", None) is not None
-        or model_type in ("qwen3_6", "qwen3_6_vl", "gemma4"))
+    # Select the topology of the class registered under AutoModelForCausalLM,
+    # not merely the metadata carried by the repository config. Qwen3.5
+    # advertises vision/audio sub-configs, but its causal-LM registration is
+    # the text-only model with ``model.layers``. Treating metadata presence as
+    # proof of a composite produced a completely invalid
+    # ``model.language_model.*`` device map. Qwen3.6 multimodal releases are
+    # explicit composites and retain the language-tower prefix.
+    composite = model_type in (
+        "qwen3_6", "qwen3_6_vl", "gemma4", "mistral3")
     prefix = "model.language_model" if composite else "model"
     dm = {f"{prefix}.embed_tokens": first_dev,
           f"{prefix}.rotary_emb": first_dev,
