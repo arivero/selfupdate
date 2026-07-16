@@ -87,6 +87,10 @@ path. Merely running `module load glibc/2.35` keeps the old loader, mixes
 incompatible libc internals (`GLIBC_PRIVATE` failures), and is not a valid
 substitute. The wrapper restores the host library path before child compilers
 run so Triton's host `gcc` does not inherit that mixed userspace.
+It also exports both allocator-variable spellings: this cluster's Torch 2.7
+runtime still reads `PYTORCH_CUDA_ALLOC_CONF`, while newer Torch uses
+`PYTORCH_ALLOC_CONF`. Both select expandable segments for the shape-varying
+causal walk.
 The same wrapper resolves model weights from the RAM-backed offline HF cache.
 The standard-damage subsets are consequently vendored under `data/eval/` at
 their pinned revisions; `scripts/vendor_standard_eval.py` is the explicit,

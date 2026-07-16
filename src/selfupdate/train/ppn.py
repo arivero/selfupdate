@@ -680,7 +680,7 @@ class PPnExecutor:
                  callbacks: Sequence[StageCallback], *,
                  detach_boundary: BoundaryDetach | None = None,
                  transfer_boundary: BoundaryTransfer | None = None,
-                 queue_depth: int = 2,
+                 queue_depth: int = 1,
                  telemetry_callback: Callable[[int, Tile, StageResult], None]
                  | None = None):
         if len(callbacks) != partition.stages:

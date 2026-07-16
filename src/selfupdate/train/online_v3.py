@@ -1256,7 +1256,12 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         for layer in range(1, n + 1):
             staging[layer - 1, row, :count].copy_(
                 it.hidden[layer][start:start + count])
-    window_targets = staging.to(device, non_blocking=True)
+    # Wavefront tiles may remain live until the final stage drains them. Keep
+    # their full-depth targets in pinned host storage and transfer only the
+    # current owned layer in the stage callback; otherwise every in-flight
+    # tile replicates n layers of targets on stage 0 and fragments its VRAM.
+    window_targets = (
+        staging if isolated_target else staging.to(device, non_blocking=True))
     source_index = (shard["student_s0"] + offsets).clamp_max(
         shard["batch_positions"].shape[1] - 1)
     query_positions = shard["batch_positions"].gather(1, source_index)
@@ -1509,7 +1514,7 @@ def _bk_run_ppn_cohort(cfg, stack, loss_fn, shards, max_answer, n, device,
         partition,
         [callback] * partition.stages,
         detach_boundary=_detach_value,
-        queue_depth=2,
+        queue_depth=1,
         telemetry_callback=observe,
     )
     results = executor.run(tile_source(), execution=execution)
@@ -1659,7 +1664,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
         pp_boundary_activation="detached_exact_copy",
         frozen_output_head_replica=bool(getattr(
             stack, "pp_frozen_output_head_replica", False)),
-        pp_queue_depth=2,
+        pp_queue_depth=1,
         pp_write_semantics="immediate_state_free_sgd_before_next_tile",
         B_simultaneous_users=B,
         activation_shard_users=activation_shard_users,

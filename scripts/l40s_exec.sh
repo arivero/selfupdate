@@ -40,6 +40,10 @@ export TQDM_DISABLE="${TQDM_DISABLE:-1}"
 export HF_HUB_DISABLE_PROGRESS_BARS="${HF_HUB_DISABLE_PROGRESS_BARS:-1}"
 export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-expandable_segments:True}"
+# Torch 2.7 uses the historical CUDA-prefixed name; newer Torch accepts the
+# shorter alias above. Export both so this wrapper's cu126 runtime actually
+# enables expandable segments instead of merely documenting the intention.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-$PYTORCH_ALLOC_CONF}"
 # TorchInductor otherwise creates min(32, CPU count) compiler workers per
 # trainer. Four concurrent L40S arms produced ~128 workers and starved the
 # shape-varying Qwen3.5 training walk while GPUs waited for compilation.
