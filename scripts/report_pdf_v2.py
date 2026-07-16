@@ -98,6 +98,8 @@ def write_individual_pdf(
     *,
     title: str,
     identity: list[str],
+    learning: pd.DataFrame,
+    output_eval: pd.DataFrame,
     recall: pd.DataFrame,
     standard: pd.DataFrame,
     delta: pd.DataFrame,
@@ -119,6 +121,38 @@ def write_individual_pdf(
         info["Title"] = title
         info["Author"] = "selfupdate layerwise reporting"
         _text_page(pdf, title, identity)
+        _table_pages(
+            pdf,
+            "Learning outcome: next phrase, previous phrase, and cloze",
+            learning,
+            ["measure", "epoch_zero", "maximum", "max_epoch", "max_delta",
+             "at_best_overall", "delta_at_best_overall", "final", "final_delta"],
+            rows_per_page=8,
+        )
+        _text_page(
+            pdf,
+            "Teacher-output evaluation contract",
+            [
+                "CE-eval-loss and KL-eval-loss are evaluation-only metrics.",
+                "They are NEVER training losses, are NEVER passed to backward, "
+                "and have optimizer weight zero.",
+                "They cover every teacher-realized answer token in the whole "
+                "training-set traversal once per completed epoch; this is not "
+                "a validation subset.",
+                "Values are streaming pre-write measurements at each sample "
+                "visit, not a separate frozen-checkpoint pass.",
+            ],
+        )
+        _table_pages(
+            pdf,
+            "Whole-training-set CE-eval-loss and KL-eval-loss",
+            output_eval,
+            ["epoch", "CE-eval-loss", "KL-eval-loss",
+             "answer_token_count", "dataset_item_count",
+             "validation_subset", "evaluation_only", "used_for_backward",
+             "optimizer_weight"],
+            rows_per_page=12,
+        )
         historical = "cer" in recall.columns and recall["cer"].notna().any()
         recall_columns = (["epoch", "corpus", "cer", "line_exact"]
                           if historical else
@@ -128,7 +162,8 @@ def write_individual_pdf(
                         if historical else
                         "Recall by corpus (epoch 0 is pre-training)")
         _table_pages(pdf, recall_title, recall, recall_columns)
-        standard_columns = ["epoch", "macro_accuracy", "epoch0_delta",
+        standard_columns = ["epoch", "items_per_task", "macro_accuracy",
+                            "epoch0_delta",
                             *sorted(c for c in standard.columns
                                     if c.startswith("accuracy_")),
                             "worst_task", "worst_delta"]

@@ -215,7 +215,8 @@ def main() -> None:
     out = ["# Checkpoint re-evaluation: recall and model damage", "",
            f"Recall artifacts exist for {len(rows)}/{checkpoint_total} checkpoints; "
            f"{scope_complete}/{checkpoint_total} cover every corpus in the declared "
-           f"training scope. Paired standard-capability results exist for "
+           f"training scope. Checkpoint-versus-epoch-zero standard-capability "
+           f"results exist for "
            f"{damage_complete}/{checkpoint_total} checkpoints. There are {len(bases)} "
            "corpus-specific recall base references.", "",
            "Recall word accuracy is the fraction of reference words recovered "
@@ -254,15 +255,15 @@ def main() -> None:
         out.append("")
 
     out += ["## Model damage: fixed standard benchmark subsets", "",
-            "This is the capability check. Accuracy and Δ are paired means over "
-            "the standard tasks available in both checkpoint and epoch-zero "
+            "This is the capability check. Accuracy and Δ use the same standard "
+            "tasks in both checkpoint and epoch-zero "
             "artifacts — the primary suite is ARC-Easy, ARC-Challenge, and "
             "HellaSwag (n=100 fixed subsets); legacy destruction.json "
             "fallbacks may add HellaSwag/MMLU/ARC-Challenge/WinoGrande/"
             "MMLU-Pro at n=200. Negative Δ means lost general "
             "knowledge/skill. The old custom prose-loss task is no longer "
             "part of checkpoint re-evaluation.", "",
-            "| run | model | paired/base tasks | accuracy | epoch 0 | Δ | worst loss |",
+            "| run | model | common/epoch-zero tasks | accuracy | epoch 0 | Δ | worst loss |",
             "|---|---|---:|---:|---:|---:|---|"]
     for r in rows:
         d = r["damage"]

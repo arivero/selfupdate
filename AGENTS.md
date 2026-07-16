@@ -167,6 +167,15 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
   reference-text log loss is a training target. Original text is evaluation
   reference only; teacher states are the training source. The readout runtime
   deletion is intentional and recoverable from Git, not a missing experiment.
+- `CE-eval-loss` and `KL-eval-loss` are output-distance EVALUATION ONLY. They
+  are measured over every teacher-realized answer token in the WHOLE training
+  set once per completed epoch during its ordinary traversal; they are not a
+  validation subset. They NEVER enter `HiddenLoss`, backward, gradient
+  accumulation, parameter writes, learning-rate selection, or any optimizer;
+  their optimizer weight is structurally zero. Reports must show both values,
+  evaluated token/item counts, whole-training-set coverage, and these flags.
+  Do not confuse `KL-eval-loss` with the separately named, permitted
+  block-local training metric `lens_kl`.
 - Lens/objective treatment is depth-uniform. Do not use depth-increasing
   weights, deep-only lens losses, or a readout-shaped auxiliary under another
   name. Report gradient-share attribution with every scientific claim.
@@ -476,6 +485,15 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
   `scripts/layer_loss_plots.py`, `scripts/delta_profiles.py`, the campaign
   report builder, and the report PDF builder in that order. The agent owns
   verifying that the resulting PDF visibly contains these pages.
+
+- **Evaluation terminology (owner, 2026-07-16):** `epoch zero` is the
+  untrained network evaluated under the same prompts, inputs, decoding,
+  subsets, and scoring conditions as the student checkpoints. The base
+  network evaluated with the original uncensored RAG is a separate teacher
+  reference/control; historical records variously call it the teacher
+  ceiling, teacher reference, or intact-RAG control. Do not conflate it with
+  epoch zero, and do not invent a compound name for the epoch-zero/checkpoint
+  standard-benchmark comparison. State the two evaluated conditions directly.
 
 - **Agent-owned supervision (owner, 2026-07-11):** the agent—not a watcher,
   scheduler, or status script—owns a live campaign. While campaign work is

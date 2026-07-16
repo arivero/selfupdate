@@ -207,6 +207,50 @@ def _v3_gradient_frame(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(out)
 
 
+def _teacher_output_eval_frame(rows: list[dict]) -> pd.DataFrame:
+    """Whole-training-set output distances that are never optimizer losses."""
+    out = []
+    for row in rows:
+        if row.get("kind") != "teacher_output_eval":
+            continue
+        out.append({
+            "epoch": int(row["epoch"]),
+            "CE-eval-loss": float(row["CE_eval_loss"]),
+            "KL-eval-loss": float(row["KL_eval_loss"]),
+            "answer_token_count": int(row["answer_token_count"]),
+            "dataset_item_count": int(row["dataset_item_count"]),
+            "dataset_coverage": row.get("dataset_coverage", "missing"),
+            "validation_subset": bool(row.get("validation_subset", True)),
+            "evaluation_only": bool(row.get("evaluation_only", False)),
+            "used_for_backward": bool(row.get("used_for_backward", True)),
+            "optimizer_weight": float(row.get("optimizer_weight", float("nan"))),
+            "temporal_semantics": row.get("temporal_semantics", "missing"),
+        })
+    return pd.DataFrame(out).sort_values("epoch") if out else pd.DataFrame()
+
+
+def _teacher_output_eval_asset(frame: pd.DataFrame,
+                               out_dir: Path) -> Path | None:
+    if frame.empty:
+        return None
+    fig, axes = plt.subplots(2, 1, figsize=(8.6, 6.5), sharex=True,
+                             constrained_layout=True)
+    for ax, column, color in zip(
+            axes, ("CE-eval-loss", "KL-eval-loss"),
+            ("tab:blue", "tab:orange")):
+        ax.plot(frame.epoch, frame[column], marker="o", color=color)
+        ax.set_ylabel(column)
+        ax.grid(alpha=.2)
+    axes[-1].set_xlabel("completed epoch")
+    fig.suptitle(
+        "Evaluation-only output distance over the whole training set\n"
+        "Never used for backward or optimizer updates")
+    path = out_dir / "teacher_output_eval_by_epoch.png"
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+    return path
+
+
 def _final_delta_csv(path: Path, epoch: int) -> tuple[pd.DataFrame, str]:
     """Adapt the historical final-only weight-delta CSV to report-v2.
 
@@ -235,7 +279,7 @@ def _final_delta_csv(path: Path, epoch: int) -> tuple[pd.DataFrame, str]:
 
 
 def _historical_standard(run_name: str, final_epoch: int) -> pd.DataFrame:
-    """Load paired 100-item historical standard evaluations when present."""
+    """Load same-task epoch-zero/checkpoint standard evaluations when present."""
     damage_root = RUNS / "standard_damage"
     checkpoint_path = damage_root / f"{run_name}.json"
     if not checkpoint_path.is_file():
@@ -283,7 +327,7 @@ def _historical_standard(run_name: str, final_epoch: int) -> pd.DataFrame:
 
 def _full_standard_asset(full_standard: pd.DataFrame,
                          out_dir: Path) -> Path | None:
-    """Plot the paired full-size base/final endpoint separately from probes."""
+    """Plot the full-size epoch-zero/checkpoint evaluation separately from probes."""
     if full_standard.empty or len(full_standard) < 2:
         return None
     frame = full_standard.sort_values("epoch")
@@ -295,10 +339,10 @@ def _full_standard_asset(full_standard: pd.DataFrame,
     x = list(range(len(labels)))
     fig, ax = plt.subplots(figsize=(7.5, 4.3))
     width = .38
-    ax.bar([v - width / 2 for v in x], base_values, width, label="base")
-    ax.bar([v + width / 2 for v in x], final_values, width, label="final")
+    ax.bar([v - width / 2 for v in x], base_values, width, label="epoch zero")
+    ax.bar([v + width / 2 for v in x], final_values, width, label="checkpoint")
     ax.set_xticks(x, labels, rotation=15, ha="right")
-    ax.set(ylabel="accuracy", title="Paired full-standard endpoint")
+    ax.set(ylabel="accuracy", title="Standard benchmark: epoch zero vs checkpoint")
     ax.grid(axis="y", alpha=.2); ax.legend(frameon=False)
     fig.tight_layout()
     path = out_dir / "full_standard_endpoint.png"
@@ -411,6 +455,7 @@ def _eval_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
         elif row.get("kind") == "standard_eval":
             standard.append({
                 "epoch": int(row["epoch"]),
+                "items_per_task": row.get("standard_limit"),
                 "macro_accuracy": row.get("standard_macro_accuracy"),
                 "epoch0_delta": row.get("standard_epoch0_delta"),
                 "worst_delta": row.get("standard_worst_delta"),
@@ -419,6 +464,65 @@ def _eval_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
                    for k, v in (row.get("standard_tasks") or {}).items()},
             })
     return pd.DataFrame(recall), pd.DataFrame(standard)
+
+
+def _learning_summary(recall: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:
+    """Make the three recall tasks visible instead of hiding them in a mean."""
+    required = {"epoch", "next_acc", "prev_acc", "cloze_acc",
+                "overall_word_acc"}
+    if recall.empty or not required.issubset(recall.columns):
+        return pd.DataFrame(), None
+    frame = recall.loc[:, sorted(required)].copy()
+    for column in required - {"epoch"}:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    grouped = frame.groupby("epoch", as_index=True).mean(numeric_only=True)
+    if grouped.empty or 0 not in grouped.index:
+        return pd.DataFrame(), None
+    trained = grouped[grouped.index > 0]
+    overall = trained["overall_word_acc"].dropna()
+    if overall.empty:
+        return pd.DataFrame(), None
+    best_overall_epoch = int(overall.idxmax())
+    final_epoch = int(grouped.index.max())
+    labels = {
+        "overall_word_acc": "equal mean of next / previous / cloze",
+        "next_acc": "next phrase",
+        "prev_acc": "previous phrase",
+        "cloze_acc": "cloze",
+    }
+    out = []
+    for column, label in labels.items():
+        series = grouped[column].dropna()
+        trained_series = series[series.index > 0]
+        if series.empty or trained_series.empty or 0 not in series.index:
+            continue
+        best_epoch = int(trained_series.idxmax())
+        epoch_zero = float(series.loc[0])
+        at_overall = float(series.loc[best_overall_epoch])
+        final = float(series.loc[final_epoch])
+        out.append({
+            "measure": label,
+            "epoch_zero": epoch_zero,
+            "maximum": float(series.loc[best_epoch]),
+            "max_epoch": best_epoch,
+            "max_delta": float(series.loc[best_epoch]) - epoch_zero,
+            "at_best_overall": at_overall,
+            "delta_at_best_overall": at_overall - epoch_zero,
+            "final": final,
+            "final_delta": final - epoch_zero,
+        })
+    return pd.DataFrame(out), best_overall_epoch
+
+
+def _v3_throughput(rows: list[dict]) -> float | None:
+    samples = [row for row in rows if row.get("kind") == "v3_throughput"
+               and row.get("token_events") is not None
+               and row.get("seconds") is not None
+               and float(row["seconds"]) > 0]
+    if not samples:
+        return None
+    return (sum(float(row["token_events"]) for row in samples)
+            / sum(float(row["seconds"]) for row in samples))
 
 
 def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
@@ -436,6 +540,24 @@ def _eval_assets(recall: pd.DataFrame, standard: pd.DataFrame,
         ax.grid(alpha=.2); ax.legend(frameon=False)
         fig.tight_layout(); path = out_dir / "recall_by_corpus.png"
         fig.savefig(path, dpi=220); plt.close(fig); paths.append(path)
+        component_columns = ["next_acc", "prev_acc", "cloze_acc"]
+        if all(column in recall.columns for column in component_columns):
+            components = (recall.groupby("epoch")[component_columns]
+                          .mean(numeric_only=True))
+            fig, ax = plt.subplots(figsize=(7.5, 4.3))
+            labels = {
+                "next_acc": "next phrase",
+                "prev_acc": "previous phrase",
+                "cloze_acc": "cloze",
+            }
+            for column in component_columns:
+                ax.plot(components.index, components[column], marker="o",
+                        label=labels[column])
+            ax.set(xlabel="completed epoch", ylabel="mean word accuracy",
+                   title="Recall components across corpora, including epoch 0")
+            ax.grid(alpha=.2); ax.legend(frameon=False)
+            fig.tight_layout(); path = out_dir / "recall_components.png"
+            fig.savefig(path, dpi=220); plt.close(fig); paths.append(path)
     if not standard.empty:
         fig, ax = plt.subplots(figsize=(7.5, 4.3))
         ax.plot(standard.epoch, standard.macro_accuracy, marker="o", lw=2,
@@ -598,7 +720,20 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     loss, loss_measure = _layer_loss_frame(rows)
     delta, delta_representation = _delta_frame(rows)
     gradients = _v3_gradient_frame(rows)
+    output_eval = _teacher_output_eval_frame(rows)
     recall, standard = _eval_frames(rows)
+    learning, best_overall_epoch = _learning_summary(recall)
+    token_events_per_s = _v3_throughput(rows)
+    recall_items_per_task = next(
+        (int(row["recall_items_per_task"]) for row in rows
+         if row.get("kind") == "eval"
+         and row.get("recall_items_per_task") is not None),
+        # Structured corpus recall was hard-coded to eight before the sample
+        # size became an explicit telemetry field. Preserve that known
+        # provenance for existing v2/v3 reports rather than showing unknown.
+        8 if any(row.get("kind") == "eval" and row.get("recall")
+                 for row in rows) else None,
+    )
     final_epoch = max((int(row.get("epoch", -1)) + 1 for row in rows
                        if row.get("kind") == "train"), default=0)
     if delta.empty:
@@ -615,7 +750,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     if not delta.empty: delta.to_csv(out_dir / "parameter_delta_by_epoch.csv", index=False)
     if not gradients.empty:
         gradients.to_csv(out_dir / "gradient_norm_by_epoch.csv", index=False)
+    if not output_eval.empty:
+        output_eval.to_csv(
+            out_dir / "teacher_output_eval_by_epoch.csv", index=False)
     if not recall.empty: recall.to_csv(out_dir / "recall_by_epoch.csv", index=False)
+    if not learning.empty:
+        learning.to_csv(out_dir / "learning_summary.csv", index=False)
     if not standard.empty: standard.to_csv(out_dir / "standard_by_epoch.csv", index=False)
     if not full_standard.empty:
         full_standard.to_csv(out_dir / "full_standard_endpoint.csv", index=False)
@@ -627,6 +767,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     _layer_assets(gradients, "gradient_l2", "local gradient L2 norm",
                   "gradient_norm", out_dir, log_scale=True)
     _eval_assets(recall, standard, out_dir)
+    output_eval_path = _teacher_output_eval_asset(output_eval, out_dir)
     full_standard_path = _full_standard_asset(full_standard, out_dir)
     phase_path = _historical_phase_asset(
         loss, recall, int(train.get("tail_ce_blocks", 0) or 0), out_dir)
@@ -642,7 +783,15 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         ("epoch-zero parameter delta", not delta.empty and 0 in set(delta.epoch)),
         ("per-epoch parameter delta", not delta.empty and delta.epoch.nunique() > 1),
         ("signal attribution artifact", bool(signal)),
-        ("paired full-standard endpoint",
+        ("whole-training-set CE-eval-loss and KL-eval-loss telemetry",
+         not output_eval.empty
+         and output_eval["dataset_coverage"].eq(
+             "whole_training_set_once_per_completed_epoch").all()
+         and not output_eval["validation_subset"].any()
+         and output_eval["evaluation_only"].all()
+         and not output_eval["used_for_backward"].any()
+         and output_eval["optimizer_weight"].eq(0.0).all()),
+        ("100-item-per-task standard benchmark at epoch zero and checkpoint",
          not full_standard.empty or
          (standard.get("items_per_task", pd.Series(dtype=int)) >= 100).any()),
     ):
@@ -809,7 +958,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                       if "cer" in recall.columns and recall["cer"].notna().any()
                       else ["epoch", "corpus", "next_acc", "prev_acc",
                             "cloze_acc", "overall_word_acc"])
-    standard_columns = ["epoch", "macro_accuracy", "epoch0_delta",
+    standard_columns = ["epoch", "items_per_task", "macro_accuracy", "epoch0_delta",
                         *sorted(c for c in standard.columns
                                 if c.startswith("accuracy_")),
                         "worst_task", "worst_delta"]
@@ -819,11 +968,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                                      if c.startswith("accuracy_")),
                              "worst_task", "worst_delta"]
     if full_standard.empty:
-        full_standard_summary = "Paired full-standard endpoint: missing."
+        full_standard_summary = (
+            "Standard-benchmark evaluation at epoch zero and checkpoint: missing.")
     else:
         endpoint = full_standard.sort_values("epoch").iloc[-1]
         full_standard_summary = (
-            "Paired full-standard endpoint: "
+            "Standard-benchmark evaluation at epoch zero and checkpoint: "
             f"n={int(endpoint.get('items_per_task', 0))} per task; "
             f"macro={float(endpoint.macro_accuracy):.4f}; "
             f"delta vs base={float(endpoint.epoch0_delta):+.4f}."
@@ -873,25 +1023,63 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Connected hidden window: width {train.get('conn_window', 0)}, stride {train.get('conn_stride', 0)}; "
         f"final-logit training: {final_logit}",
         f"- Seed: {train.get('seed', 'missing')}; items observed: {max_items:,}; elapsed telemetry span: {elapsed_min:.1f} min",
+        (f"- Measured training throughput: {token_events_per_s:,.1f} aligned "
+         "token-events/s" if token_events_per_s is not None else
+         "- Measured training throughput: unavailable"),
         f"- Parameter-change representation: `{delta_representation}`",
+        "", "## Learning outcome summary", "",
+        ("The overall score is the equal mean of next-phrase, previous-phrase, "
+         + "and cloze recall across the declared corpora. Component deltas below "
+         + (f"come from the fast {recall_items_per_task}-item-per-task, "
+            + "per-corpus monitor. " if recall_items_per_task is not None else "")
+         + f"are shown both at the best post-training evaluation (epoch {best_overall_epoch}) "
+         + "and at each component's own maximum; a gain in one component cannot "
+         + "hide regression in another." if not learning.empty else
+         "_Missing recall decomposition._"),
+        "", (_markdown_table(
+            learning,
+            ["measure", "epoch_zero", "maximum", "max_epoch", "max_delta",
+             "at_best_overall", "delta_at_best_overall", "final", "final_delta"])
+             if not learning.empty else ""),
+        "", "## Whole-training-set teacher-output evaluation", "",
+        ("**CE-eval-loss and KL-eval-loss are evaluation-only metrics. They "
+         "are NEVER training losses, NEVER passed to backward, and always "
+         "have optimizer weight zero.** They cover every teacher-realized "
+         "answer token in the whole training-set traversal once per completed "
+         "epoch; this is not a validation subset. Values are streaming "
+         "pre-write measurements at each sample visit, not a separate frozen "
+         "checkpoint pass."), "",
+        (_markdown_table(
+            output_eval,
+            ["epoch", "CE-eval-loss", "KL-eval-loss",
+             "answer_token_count", "dataset_item_count",
+             "dataset_coverage", "validation_subset", "evaluation_only",
+             "used_for_backward", "optimizer_weight"])
+         if not output_eval.empty else
+         "_Missing from this run; no value is inferred or substituted._"),
+        "", (f"![Whole-training-set CE/KL evaluation]({rel('teacher_output_eval_by_epoch.png')})"
+             if output_eval_path else ""),
         "", "## Recall by corpus", "",
         "Epoch 0 is the pre-training student; positive epochs are completed training epochs.", "",
         _markdown_table(recall, recall_columns)
         if not recall.empty else "_Missing._",
         "", f"![Recall by corpus]({rel('recall_by_corpus.png')})" if not recall.empty else "",
+        "", (f"![Recall components]({rel('recall_components.png')})"
+             if (out_dir / "recall_components.png").is_file() else ""),
         "", "## Standard-benchmark damage", "",
         _markdown_table(standard, standard_columns)
         if not standard.empty else "_Missing._",
         "", f"![Standard damage]({rel('standard_damage.png')})" if not standard.empty else "",
         "", f"![Recall–damage trajectory]({rel('recall_damage_frontier.png')})"
         if not recall.empty and not standard.empty else "",
-        "", "## Paired full-standard endpoint", "",
-        ("This table is the separately executed full-size endpoint evaluation; "
+        "", "## Standard benchmark at epoch zero and checkpoint", "",
+        ("This table is the separately executed 100-item-per-task evaluation "
+         "of the untrained epoch-zero network and the trained checkpoint; "
          "it is not the smaller per-epoch monitoring sample." if not full_standard.empty
          else "_Missing; the full-size endpoint evaluation must be queued._"),
         "", (_markdown_table(full_standard, full_standard_columns)
              if not full_standard.empty else ""),
-        "", (f"![Paired full-standard endpoint]({rel('full_standard_endpoint.png')})"
+        "", (f"![Standard benchmark at epoch zero and checkpoint]({rel('full_standard_endpoint.png')})"
              if full_standard_path else ""),
         "", "## Per-layer loss by epoch", "",
         ("Historical tail hidden losses are diagnostic: their configured "
@@ -962,7 +1150,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     report_tmp.write_text("\n".join(x for x in md if x is not None), encoding="utf-8")
     report_tmp.replace(report)
     figures = [
+        ("Whole-training-set CE/KL output evaluation (never trained)",
+         out_dir / "teacher_output_eval_by_epoch.png"),
         ("Recall by corpus", out_dir / "recall_by_corpus.png"),
+        ("Recall components: next phrase, previous phrase, and cloze",
+         out_dir / "recall_components.png"),
         ("Standard-benchmark retention", out_dir / "standard_damage.png"),
         ("Recall–damage trajectory", out_dir / "recall_damage_frontier.png"),
         ("Per-layer loss by epoch", out_dir / "layer_loss_temporal.png"),
@@ -978,7 +1170,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          out_dir / "signal_attribution_by_layer.png"),
     ]
     if full_standard_path:
-        figures.insert(3, ("Paired full-standard endpoint", full_standard_path))
+        figures.insert(3, ("Standard benchmark: epoch zero vs checkpoint",
+                           full_standard_path))
     if not gradients.empty:
         figures.extend([
             ("Per-layer immediate-gradient norm by epoch",
@@ -1016,10 +1209,21 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              f"final-logit training {final_logit}."),
             (f"Items observed: {max_items:,}; elapsed telemetry span: "
              f"{elapsed_min:.1f} min."),
+            (f"Measured training throughput: {token_events_per_s:,.1f} aligned "
+             "token-events/s." if token_events_per_s is not None else
+             "Measured training throughput: unavailable."),
+            (f"Epoch recall monitor: {recall_items_per_task} items per task "
+             "and corpus." if recall_items_per_task is not None else
+             "Epoch recall monitor sample size: unavailable."),
+            ("CE-eval-loss / KL-eval-loss: whole training set once per epoch; "
+             "evaluation only; never backward; optimizer weight zero; not a "
+             "validation subset."),
             ("Strict-local certification: "
              f"{'PASS' if signal.get('passed') else 'MISSING OR FAIL'}; "
              "the frozen vocabulary and cross-block gradients are audited."),
         ],
+        learning=learning,
+        output_eval=output_eval,
         recall=recall,
         standard=standard,
         delta=top_delta,
@@ -1037,7 +1241,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         figures=figures,
     )
     manifest = {
-        "schema_version": 4,
+        "schema_version": 5,
         "run": run_dir.name,
         "campaign": (
             "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
@@ -1073,6 +1277,21 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             or train.get("micro_batch")),
         "trajectory_source": train.get("trajectory_source"),
         "partial_training_boundary": partial_boundary,
+        "training_token_events_per_s": token_events_per_s,
+        "best_overall_recall_epoch": best_overall_epoch,
+        "learning_summary_csv": (
+            str((out_dir / "learning_summary.csv").relative_to(ROOT))
+            if not learning.empty else None),
+        "teacher_output_eval": {
+            "present": not output_eval.empty,
+            "scope": "whole_training_set_once_per_completed_epoch",
+            "validation_subset": False,
+            "evaluation_only": True,
+            "used_for_backward": False,
+            "optimizer_weight": 0.0,
+            "csv": (str((out_dir / "teacher_output_eval_by_epoch.csv")
+                        .relative_to(ROOT)) if not output_eval.empty else None),
+        },
         "strict_local": bool(signal.get("passed")) if signal else False,
         "full_standard_endpoint": {
             "present": not full_standard.empty,

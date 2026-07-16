@@ -54,6 +54,12 @@ tests/              removed 2026-07-11; historical tests remain in Git
   (eval against the reference text is correct and required); the embedding
   and logits matrix are never trained (Frozen-Vocabulary Principle).
 
+`CE-eval-loss` and `KL-eval-loss` are evaluation-only output distances
+collected over every answer token in the whole training-set traversal once
+per epoch. They are not validation-subset losses and are NEVER used for
+backward or optimization; reports show their coverage and zero optimizer
+weight explicitly.
+
 See [docs/hidden_loss.md](docs/hidden_loss.md) for locality proofs and
 [docs/scaling.md](docs/scaling.md) for the large-model plan. The typed
 answer/token aggregation and future state/attention/routing strategy surface
@@ -99,6 +105,13 @@ prompts and their individual token budgets directly to vLLM. Pass
 same prompt construction and scoring path used for its base reference. The
 retired Transformers `model.generate` implementation is intentionally not
 kept in-tree; it remains recoverable from Git history.
+
+Here, **epoch zero** means the untrained network evaluated in exactly the same
+conditions as the later student checkpoints. The separate evaluation in which
+the base network receives the original uncensored RAG is recorded historically
+as a teacher ceiling, teacher reference, or intact-RAG control. It is not the
+epoch-zero checkpoint baseline unless that same uncensored input is also the
+declared checkpoint-evaluation condition.
 
 For repeated base-model or checkpoint loads, stage snapshots into Unix tmpfs
 with `scripts/stage_hf_cache.sh --shm <org/model>`. Container launches prefer

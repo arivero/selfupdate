@@ -474,7 +474,8 @@ where it failed during model placement before any training event. Its two-file
 partial directory is preserved under `runs/failed_launches/`; the corrected
 successor executes all checks and launch inside explicit SSH to agpul04.
 
-The paired 4B full-standard gate is now available for the first four endpoints:
+The 4B standard-benchmark evaluation at epoch zero and at the first four
+checkpoints is now available:
 
 | endpoint | ARC Easy | ARC Challenge | HellaSwag | macro | damage vs base |
 |---|---:|---:|---:|---:|---:|
@@ -533,8 +534,9 @@ epochs. Recall followed 0.12150, 0.10802, 0.12727, 0.14188, 0.12377,
 0.13697, 0.13532 from epoch zero through six. Its final gain over epoch zero
 is +0.01383, smaller than seed 17's +0.03206 but directionally positive.
 Final throughput was 3,081.9 aligned events/s and mean relative movement was
-3.01e-3. Its individual report is complete; the paired 100-item standard
-endpoint is still missing, so replication is provisional on damage.
+3.01e-3. Its individual report is complete; the 100-item-per-task standard
+evaluation at epoch zero and at this checkpoint is still missing, so
+replication is provisional on damage.
 
 The audited epoch-piecewise 4B taper did not launch overnight because all
 three delegated launch agents hit their model-usage limit before executing.

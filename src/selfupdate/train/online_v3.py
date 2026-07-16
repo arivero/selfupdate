@@ -23,6 +23,7 @@ import torch
 from transformers import DynamicCache, StaticCache
 
 from ..data.dataset import DistillDataset, collate_padded_items
+from ..eval.teacher_output import teacher_output_eval_sums
 from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
 from .telemetry import (
@@ -962,7 +963,14 @@ def _bk_footprint_guard(cfg, stack, ds, device, layer_types, shard_users,
     # Conservative current-block backward workspace. Only one local block's
     # graph is alive, so this does not scale with depth.
     activation_bytes = shard_users * window_width * hidden * bf16 * 20
-    required = kv_bytes + target_bytes + mask_bytes + activation_bytes
+    # Evaluation-only CE/KL decodes student and teacher final states in
+    # bounded 256-row chunks. Conservatively account for logits plus fp32
+    # log-probabilities for both sides.
+    vocab = int(stack.lm_head.weight.shape[0])
+    output_eval_rows = min(256, cfg.train.micro_batch * window_width)
+    output_eval_bytes = output_eval_rows * vocab * 4 * 4
+    required = (kv_bytes + target_bytes + mask_bytes + activation_bytes
+                + output_eval_bytes)
     free, total = torch.cuda.mem_get_info(device)
     allowed = int(free * 0.80)
     evidence = {
@@ -974,6 +982,7 @@ def _bk_footprint_guard(cfg, stack, ds, device, layer_types, shard_users,
         "estimated_target_bytes": target_bytes,
         "estimated_mask_bytes": mask_bytes,
         "estimated_activation_bytes": activation_bytes,
+        "estimated_output_eval_bytes": output_eval_bytes,
         "estimated_peak_increment_bytes": required,
         "cuda_free_bytes_after_model_load": free,
         "cuda_total_bytes": total,
@@ -1142,6 +1151,10 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         if int(count)
     ])
     valid_index = valid_index_cpu.to(device, non_blocking=True)
+    eval_index_cpu, eval_target_ids_cpu = _bk_answer_eval_coordinates(
+        shard, start, stop)
+    eval_index = eval_index_cpu.to(device, non_blocking=True)
+    eval_target_ids = eval_target_ids_cpu.to(device, non_blocking=True)
     if teacher_hidden:
         first_query = _bk_stage_teacher_tile(
             shard, 0, source_index, device)
@@ -1160,10 +1173,43 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         "query_positions": query_positions,
         "query_valid": query_valid,
         "valid_index": valid_index,
+        "eval_index": eval_index,
+        "eval_target_ids": eval_target_ids,
         "full_mask": full_mask,
         "query_rope": query_rope,
         "h": h,
     }
+
+
+def _bk_answer_eval_coordinates(shard, start: int, stop: int):
+    """Return flattened tile rows and next-token ids for the whole answer.
+
+    The aligned cache span is ``shared_mid + answer``.  Therefore aligned
+    offset ``answer_offset - 1`` predicts the first answer token, while the
+    last aligned row has no next token and is excluded.  Prompt/shared-mid
+    targets, finished-row padding, and final padding never enter the metric.
+    """
+    tile_width = stop - start
+    flat_rows = []
+    target_ids = []
+    for row, item in enumerate(shard["target_items"]):
+        answer_offset = item.ans0 - item.s0
+        if not 1 <= answer_offset <= item.A:
+            raise RuntimeError(
+                f"{item.example_id}: full-answer output evaluation requires "
+                "a non-empty shared_mid predictor before the answer")
+        first_q = max(start, answer_offset - 1)
+        last_q_exclusive = min(stop, item.A - 1)
+        if first_q >= last_q_exclusive:
+            continue
+        q = torch.arange(first_q, last_q_exclusive, dtype=torch.long)
+        flat_rows.append(row * tile_width + (q - start))
+        target_positions = item.s0 + q + 1
+        target_ids.append(item.student_ids.index_select(0, target_positions))
+    if not flat_rows:
+        empty = torch.empty(0, dtype=torch.long)
+        return empty, empty.clone()
+    return torch.cat(flat_rows), torch.cat(target_ids)
 
 
 def _bk_stage_teacher_tile(shard, layer_index: int,
@@ -1227,6 +1273,8 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
         student_compaction=cfg.mask.compaction,
         item_cache_items=cfg.cache.item_cache_items,
     )
+    full_training_answer_tokens = sum(
+        pair.s_answer.stop - pair.s_answer.start for pair in ds.pairs)
     footprint = _bk_footprint_guard(
         cfg, stack, ds, device, layer_types, activation_shard_users, K)
     delta_tracker = ParameterDeltaTracker(stack)
@@ -1250,6 +1298,11 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
         lr_epoch_multipliers=cfg.train.lr_epoch_multipliers,
         vocab_cosine_samples=cfg.train.vocab_cosine_samples,
         vocab_cosine_seed=cfg.train.vocab_cosine_seed,
+        output_evaluation=(
+            "CE-eval-loss and KL-eval-loss over every answer token in the "
+            "whole training-set traversal; evaluation_only=true; "
+            "used_for_backward=false; optimizer_weight=0"),
+        output_evaluation_answer_tokens_per_epoch=full_training_answer_tokens,
         lookahead_contract=(
             "next_token_online" if K == 1 else
             "teacher_prefetched_or_speculative_confirmed_tokens"),
@@ -1270,6 +1323,11 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
         epoch_loss_sums = None
         epoch_grad_sums = None
         epoch_cells = 0
+        epoch_ce_eval_sum = torch.zeros(
+            (), dtype=torch.float32, device=device)
+        epoch_kl_eval_sum = torch.zeros(
+            (), dtype=torch.float32, device=device)
+        epoch_output_eval_tokens = 0
         cohorts = _bk_bucketed_cohorts(ds, B, cfg.train.seed + epoch)
         for cohort_index, indices in enumerate(cohorts):
             items = [ds[index] for index in indices]
@@ -1293,6 +1351,9 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                     params = _clear_block_grads(stack, layer)
                     loss_sum = torch.zeros(
                         (), dtype=torch.float32, device=device)
+                    eval_student_parts = []
+                    eval_teacher_parts = []
+                    eval_id_parts = []
                     # Each shard sees the same pre-write parameters. Backward
                     # releases its local graph before the next shard, then
                     # the accumulated B×K gradient writes once below.
@@ -1317,24 +1378,46 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                                 past_key_values=shard["history"], use_cache=True,
                                 causal_length=shard["full_keep"].shape[1],
                                 prepared_attention_mask=layer_mask)
-                            view = stack.loss_view(layer, h_out).reshape(
-                                -1, h_out.shape[-1]).index_select(
-                                    0, state["valid_index"])
+                            flat_view = stack.loss_view(layer, h_out).reshape(
+                                -1, h_out.shape[-1])
+                            view = flat_view.index_select(
+                                0, state["valid_index"])
                             target_all = state["window_targets"][
                                 layer - 1]
-                            target = target_all.reshape(
-                                -1, target_all.shape[-1]).index_select(
-                                    0, state["valid_index"])
+                            flat_target = target_all.reshape(
+                                -1, target_all.shape[-1])
+                            target = flat_target.index_select(
+                                0, state["valid_index"])
                             mean_loss = loss_fn(
                                 view, target, normed=(layer == n), layer=layer)
                             summed_loss = mean_loss * state["cells"]
                         summed_loss.backward()
+                        if layer == n and state["eval_index"].numel():
+                            eval_student_parts.append(
+                                flat_view.detach().index_select(
+                                    0, state["eval_index"]))
+                            eval_teacher_parts.append(
+                                flat_target.detach().index_select(
+                                    0, state["eval_index"]))
+                            eval_id_parts.append(state["eval_target_ids"])
                         loss_sum.add_(mean_loss.detach().float()
                                       * state["cells"])
                         _detach_cache_layer(shard["history"], layer - 1)
                         if not teacher_hidden:
                             state["h"] = h_out.detach()
-                        del h_in, h_out, view, target, summed_loss, mean_loss
+                        del h_in, h_out, flat_view, view, target_all
+                        del flat_target, target, summed_loss, mean_loss
+                    if eval_id_parts:
+                        ce_sum, kl_sum, eval_tokens = teacher_output_eval_sums(
+                            torch.cat(eval_student_parts),
+                            torch.cat(eval_teacher_parts),
+                            torch.cat(eval_id_parts),
+                            stack.lm_head,
+                            chunk_rows=256,
+                        )
+                        epoch_ce_eval_sum.add_(ce_sum)
+                        epoch_kl_eval_sum.add_(kl_sum)
+                        epoch_output_eval_tokens += eval_tokens
                     grad = _immediate_sgd(params, epoch_lr)
                     tile_loss_sums.append(loss_sum)
                     tile_grad_sums.append(grad.detach())
@@ -1351,6 +1434,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                 for state in tile_states:
                     del state["window_targets"], state["query_rope"]
                     del state["valid_index"], state["full_mask"], state["h"]
+                    del state["eval_index"], state["eval_target_ids"]
                     del state["source_index"], state["query_positions"]
                     del state["query_valid"]
 
@@ -1399,6 +1483,35 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
             lr_multiplier=lr_multiplier,
             gradient_aggregation="unaveraged_sum_at_shared_weight_snapshot",
             completed_epochs=epoch + 1, partial_epoch=False,
+        )
+        if epoch_output_eval_tokens != full_training_answer_tokens:
+            raise RuntimeError(
+                "output evaluation did not cover the whole training set: "
+                f"measured {epoch_output_eval_tokens:,} answer tokens, "
+                f"expected {full_training_answer_tokens:,}")
+        log.log(
+            kind="teacher_output_eval",
+            epoch=epoch + 1,
+            CE_eval_loss=float(
+                (epoch_ce_eval_sum / epoch_output_eval_tokens).cpu()),
+            KL_eval_loss=float(
+                (epoch_kl_eval_sum / epoch_output_eval_tokens).cpu()),
+            answer_token_count=epoch_output_eval_tokens,
+            expected_answer_token_count=full_training_answer_tokens,
+            dataset_item_count=len(ds),
+            dataset_coverage="whole_training_set_once_per_completed_epoch",
+            token_coverage="every_teacher_realized_answer_token",
+            answer_only=True,
+            evaluation_only=True,
+            validation_subset=False,
+            used_for_backward=False,
+            optimizer_weight=0.0,
+            aggregation="token_weighted_mean",
+            temporal_semantics=(
+                "streaming_pre_final_block_write_at_each_sample_visit"),
+            CE_target="teacher_realized_answer_token_ids",
+            KL_direction="teacher_to_student",
+            vocabulary_head="frozen",
         )
         if epoch_grad_sums is not None:
             log.log(

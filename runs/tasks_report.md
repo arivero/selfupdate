@@ -1,6 +1,6 @@
 # Checkpoint re-evaluation: recall and model damage
 
-Recall artifacts exist for 62/62 checkpoints; 62/62 cover every corpus in the declared training scope. Paired standard-capability results exist for 62/62 checkpoints. There are 19 corpus-specific recall base references.
+Recall artifacts exist for 62/62 checkpoints; 62/62 cover every corpus in the declared training scope. Checkpoint-versus-epoch-zero standard-capability results exist for 62/62 checkpoints. There are 19 corpus-specific recall base references.
 
 Recall word accuracy is the fraction of reference words recovered in order, averaged over next, previous, and cloze prompts. Each Δ uses the epoch-zero model on the same corpus. A dash means that corpus/reference has not been evaluated; it is never imputed from the other author.
 
@@ -78,9 +78,9 @@ Recall word accuracy is the fraction of reference words recovered in order, aver
 
 ## Model damage: fixed standard benchmark subsets
 
-This is the capability check. Accuracy and Δ are paired means over the standard tasks available in both checkpoint and epoch-zero artifacts — the primary suite is ARC-Easy, ARC-Challenge, and HellaSwag (n=100 fixed subsets); legacy destruction.json fallbacks may add HellaSwag/MMLU/ARC-Challenge/WinoGrande/MMLU-Pro at n=200. Negative Δ means lost general knowledge/skill. The old custom prose-loss task is no longer part of checkpoint re-evaluation.
+This is the capability check. Accuracy and Δ use the same standard tasks in both checkpoint and epoch-zero artifacts — the primary suite is ARC-Easy, ARC-Challenge, and HellaSwag (n=100 fixed subsets); legacy destruction.json fallbacks may add HellaSwag/MMLU/ARC-Challenge/WinoGrande/MMLU-Pro at n=200. Negative Δ means lost general knowledge/skill. The old custom prose-loss task is no longer part of checkpoint re-evaluation.
 
-| run | model | paired/base tasks | accuracy | epoch 0 | Δ | worst loss |
+| run | model | common/epoch-zero tasks | accuracy | epoch 0 | Δ | worst loss |
 |---|---|---:|---:|---:|---:|---|
 | lw_b_mixed_strict_0p6b_rag | Qwen3-0.6B | 3/3 | 0.39 | 0.46 | -0.06 | arc_easy -0.09 |
 | lw_b_tc_frozen_0p6b_rag | Qwen3-0.6B | 3/3 | 0.40 | 0.46 | -0.06 | arc_easy -0.12 |

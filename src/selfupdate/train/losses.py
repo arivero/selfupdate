@@ -37,6 +37,8 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
+from ..eval.teacher_output import EVALUATION_ONLY_OUTPUT_NAMES
+
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
                    "clipped_nmse", "contrastive", "relational_state", "zero")
 VOCAB_KINDS = ("vocab_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
@@ -163,6 +165,10 @@ class HiddenLoss:
                  multi_delta_scales: tuple[int, ...] = (1,),
                  vocab_cosine_samples: int = 0,
                  vocab_cosine_seed: int = 17):
+        if kind in EVALUATION_ONLY_OUTPUT_NAMES:
+            raise ValueError(
+                f"{kind} is an evaluation-only full-training-set metric and "
+                "is NEVER a training objective")
         if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):

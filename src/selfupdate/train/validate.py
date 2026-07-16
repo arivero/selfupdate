@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 
 from ..eval.tasks import RECALL_CORPUS_PATHS
+from ..eval.teacher_output import EVALUATION_ONLY_OUTPUT_NAMES
 from ..teacher.cache import resolved_node_epoch0_root
 from .runtime import uses_pipeline_map
 
@@ -28,6 +29,12 @@ def validate_knob_schedule(cfg) -> None:
     sched = cfg.train.schedule
     run_class = cfg.train.run_class
     bad = []
+    if cfg.train.hidden_loss in EVALUATION_ONLY_OUTPUT_NAMES:
+        raise ValueError(
+            f"train.hidden_loss={cfg.train.hidden_loss!r} is forbidden: "
+            "CE-eval-loss and KL-eval-loss are evaluation-only measurements "
+            "over the whole training-set traversal and are NEVER used for "
+            "backward or optimizer updates")
     if cfg.train.pipeline_version not in (1, 2, 3):
         raise ValueError("train.pipeline_version must be 1, 2, or 3")
     if cfg.cache.runtime_policy not in ("durable", "node_epoch0"):

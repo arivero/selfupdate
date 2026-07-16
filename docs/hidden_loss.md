@@ -101,6 +101,20 @@ frozen-head `lens_kl` measurement is allowed only as the local loss for the
 intended block; it does not update the head or cross blocks. Reference-text
 cross-entropy is not a training objective on this branch.
 
+### Output evaluation is not a hidden loss
+
+`CE-eval-loss` (student final-output cross-entropy against the teacher's
+realized answer token) and `KL-eval-loss` (`KL(teacher || student)` at the
+final output) are deliberately absent from `HiddenLoss`. They are computed
+under `torch.no_grad` from detached final states through the frozen vocabulary
+head. The trainer measures every teacher-realized answer token in the whole
+training-set traversal once per completed epoch—not a validation subset—and
+reports token-weighted means. They NEVER contribute to backward, gradient
+accumulation, parameter writes, learning-rate selection, or an optimizer;
+their optimizer weight is always zero. `KL-eval-loss` is not `lens_kl`: the
+latter is a permitted depth-uniform block-local training metric, whereas the
+former measures the final output and is evaluation only.
+
 ## The Frozen-Vocabulary Principle
 
 The embedding and LM head are the system's vocabulary, not part of the

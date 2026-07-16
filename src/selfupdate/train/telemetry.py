@@ -1,7 +1,7 @@
 """Training telemetry: loss aggregation and epoch-boundary probes.
 
 Everything corpus-specific lives here — which recall corpora a run reports,
-the paired standard-benchmark damage probe, the epoch-0 reference — so the
+the same-subset standard-benchmark damage probe, the epoch-0 reference — so the
 schedule loops in ``layerwise.py`` stay generic: they accumulate per-layer
 losses and call the epoch hooks, nothing else. Probes never change training
 mode and never contribute a gradient (EVALUATION_ONLY by contract; see
@@ -16,6 +16,9 @@ from pathlib import Path
 import torch
 
 from ..eval.tasks import RECALL_CORPUS_PATHS, tasks_eval
+
+
+EPOCH_RECALL_ITEMS_PER_TASK = 8
 
 
 class ParameterDeltaTracker:
@@ -246,7 +249,8 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
                       started_at: float) -> None:
     """Log corpus-separated fast recall without changing training mode."""
     results = {
-        name: tasks_eval(stack.model, tok, path, n_per_task=8,
+        name: tasks_eval(stack.model, tok, path,
+                         n_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
                          generation_batch=cfg.eval.generation_batch)
         for name, path in _epoch_recall_corpora(cfg)
     }
@@ -264,6 +268,7 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
     primary = next(iter(summary.values()))
     overall = sum(v["overall_word_acc"] for v in summary.values()) / len(summary)
     log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
+            recall_items_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
             next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
             cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
             vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
@@ -275,7 +280,7 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
 
 def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
                          baseline: dict | None, started_at: float) -> dict:
-    """Paired fast standard-benchmark probe for epoch-gating a campaign."""
+    """Same-subset fast standard-benchmark probe for epoch-gating a campaign."""
     from ..eval.standard import STANDARD_TASKS, evaluate_standard
 
     probe = evaluate_standard(
@@ -321,7 +326,7 @@ def _epoch_zero_telemetry(cfg, stack, tok, log, started_at: float) -> dict | Non
 def _epoch_end_telemetry(cfg, stack, tok, log, *, epoch: int,
                          baseline: dict | None, started_at: float) -> dict | None:
     """Epoch-boundary probes shared by every epoch-driven schedule: fast
-    recall on the configured cadence, plus the paired standard-damage probe
+    recall on the configured cadence, plus the same-subset standard-damage probe
     when gating is enabled. Returns the (unchanged) standard baseline."""
     completed = epoch + 1
     last = epoch == cfg.train.epochs - 1

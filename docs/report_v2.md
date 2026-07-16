@@ -18,6 +18,18 @@ runs and pipeline-v3 immediate-update runs both emit this atomic report. V3
 adds token-event/write throughput, state-free optimizer identity, history
 policy, trajectory source, and sampled per-layer immediate-gradient norms.
 
+## Evaluation terminology
+
+`Epoch zero` is the untrained network evaluated with the same prompts, inputs,
+decoding, subsets, and scoring procedure used for the student checkpoints.
+Checkpoint deltas are always relative to that like-for-like measurement.
+
+The base network evaluated with the original uncensored RAG is a different
+measurement. Historical artifacts call it the `teacher ceiling`,
+`teacher_reference`, or `intact-RAG control`. Reports retain the artifact's
+historical label and state the input condition explicitly; they do not treat
+that measurement as a synonym for epoch zero.
+
 For sequential browsing, `runs/report_v2_index/` contains one relative symlink
 per completed PDF, named `YYYYMMDD-HHMMSS__<run_name>.pdf`. The timestamp is
 the stable training-completion time from the `kind=done` telemetry row, so
@@ -26,9 +38,9 @@ does not reorder history. Every individual report generation refreshes this
 index; it can also be rebuilt with `scripts/refresh_report_v2_index.py`.
 
 The campaign-wide live ledger is
-`docs/pareto_frontier_training_progress.md`. Epoch-zero teacher controls are written
-there as soon as they complete; they do not wait for a training or its local
-report.
+`docs/pareto_frontier_training_progress.md`. Epoch-zero evaluations and the
+separate teacher controls are written there as soon as they complete; they do
+not wait for a training or its local report.
 
 ## Collection contract
 
@@ -41,10 +53,11 @@ Required observations are:
 | series | epoch 0 | every completed epoch | source |
 |---|---|---|---|
 | recall, separated by corpus | required | required | `metrics.jsonl`, `kind=eval` |
-| standard benchmark accuracy and paired damage | required | required | `metrics.jsonl`, `kind=standard_eval` |
+| standard benchmark accuracy and damage relative to epoch zero on the same items | required | required | `metrics.jsonl`, `kind=standard_eval` |
 | per-layer training loss | not applicable | required | `metrics.jsonl`, `kind=train` |
 | per-layer parameter modification from base/epoch 0 | explicit zero row | required | epoch-boundary delta telemetry |
 | signal/gradient attribution | reference metadata | required where the loss supplies it | epoch-boundary attribution telemetry |
+| `CE-eval-loss` and `KL-eval-loss` | not collected before training traversal | required over every answer token in the whole training set | `metrics.jsonl`, `kind=teacher_output_eval` |
 | elapsed time, items seen, and peak memory | baseline/start | required | telemetry rows |
 
 Epoch numbers mean completed training epochs. The pre-training model is epoch
@@ -57,6 +70,19 @@ Raw rows must
 carry the training identity, config hash, dataset identity, pipeline version,
 checkpoint/base identity, seed, batching regime, connected-window width,
 censorship mode, loss kind, and evaluation source.
+Recall and standard-benchmark rows also carry their items-per-task sample
+size. Older structured-recall rows inherit the historical hard-coded
+eight-items-per-task value explicitly in the report adapter.
+
+`CE-eval-loss` and `KL-eval-loss` are not validation-subset measurements and
+are NEVER training objectives. During each complete training-set traversal,
+the active v3.2 trainer evaluates every teacher-realized answer token once,
+using detached final states and the frozen vocabulary head. The row records
+whole-training-set item/token coverage, `validation_subset=false`,
+`evaluation_only=true`, `used_for_backward=false`, and `optimizer_weight=0`.
+The aggregation is a token-weighted mean. Because weights evolve during the
+traversal, the report calls this a streaming pre-write measurement at each
+sample visit rather than a frozen endpoint pass.
 
 Reports distinguish nominal geometry from realized geometry. Nominal `B` and
 `K` come from the frozen config (`K=all`, not `K=0`); realized telemetry gives
@@ -116,7 +142,15 @@ Each completed training report includes, in both its Markdown source and
 required PDF rendition:
 
 - identity, provenance, configuration, timing, placement, and coverage;
-- recall by corpus from epoch 0 through the final epoch;
+- a first-page learning summary that keeps next-phrase, previous-phrase, and
+  cloze recall separate at epoch zero, their individual maxima, the
+  best-overall post-training evaluation, and the final checkpoint;
+- a per-epoch table and plot of whole-training-set `CE-eval-loss` and
+  `KL-eval-loss`, with answer-token/item counts and an explicit statement that
+  neither metric is ever trained;
+- recall by corpus from epoch 0 through the final epoch, plus a separate
+  temporal plot of next-phrase, previous-phrase, and cloze recall averaged
+  across the declared corpora;
 - standard-benchmark damage by epoch and the recall-versus-damage trajectory;
 - per-layer loss as a one-row density/heatmap and as temporal layer traces;
 - per-layer parameter modification by epoch and its one-row density/heatmap;
