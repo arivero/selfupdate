@@ -78,15 +78,23 @@ def refresh_report_index() -> int:
 
     for old in REPORT_INDEX.glob("*.pdf"):
         if old.name not in wanted and old.is_symlink():
-            old.unlink()
+            # Concurrent per-run report builders may both observe the same
+            # stale link. The index is derived state, so losing this unlink
+            # race is harmless.
+            old.unlink(missing_ok=True)
     for name, target in wanted.items():
         link = REPORT_INDEX / name
         relative = os.path.relpath(target, start=REPORT_INDEX)
-        if link.is_symlink() and os.readlink(link) == relative:
-            continue
-        tmp = REPORT_INDEX / f".{name}.tmp"
+        try:
+            if link.is_symlink() and os.readlink(link) == relative:
+                continue
+        except FileNotFoundError:
+            pass
+        # A PID-qualified temporary prevents two concurrent report builders
+        # from unlinking or replacing each other's publication candidate.
+        tmp = REPORT_INDEX / f".{name}.{os.getpid()}.tmp"
         if os.path.lexists(tmp):
-            tmp.unlink()
+            tmp.unlink(missing_ok=True)
         tmp.symlink_to(relative)
         tmp.replace(link)
     return len(wanted)
