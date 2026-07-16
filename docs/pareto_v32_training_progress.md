@@ -160,6 +160,26 @@ run, against the same model's epoch-zero evaluation. These are fast monitors
 with 8 prompts per task per corpus (72 prompt evaluations per epoch), not the
 full-corpus checkpoint evaluation.
 
+Absolute overall recall from that monitor is:
+
+| Model / arm | Epoch-zero recall | Best recall | Best epoch | Final/current recall | Best Δ | Final/current Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.8B flow Huber 3e-6 | 0.12150 | 0.15821 | 6 | 0.10117 | +0.03672 | -0.02033 |
+| 0.8B flow Huber 1e-6 | 0.12150 | 0.15622 | 18 | 0.12437 | +0.03472 | +0.00287 |
+| 0.8B flow full KL 1e-6 (epoch 8 cut; live) | 0.12150 | 0.15461 | 4 | 0.11847 | +0.03311 | -0.00303 |
+| 0.8B flow cosine 1e-6 | 0.12150 | 0.14599 | 17 | 0.11834 | +0.02449 | -0.00316 |
+| 0.8B random Huber 3e-6 | 0.12150 | 0.14008 | 7 | 0.11137 | +0.01858 | -0.01013 |
+| 0.8B intact Huber 1e-6 | 0.12150 | 0.13528 | 24 | 0.13056 | +0.01378 | +0.00906 |
+| 4B flow sampled-vocabulary cosine 1e-6 | 0.16209 | 0.16763 | 2 | 0.13824 | +0.00554 | -0.02385 |
+| 4B intact Huber 1e-6 | 0.16209 | 0.16464 | 16 | 0.15909 | +0.00256 | -0.00299 |
+| 4B flow cosine 1e-6 | 0.16209 | 0.16418 | 4 | 0.15565 | +0.00210 | -0.00643 |
+| 4B flow Huber 1e-6 | 0.16209 | 0.16166 | 4 | 0.14375 | -0.00043 | -0.01834 |
+| 4B random Huber 1e-6 | 0.16209 | 0.15877 | 6 | 0.15046 | -0.00332 | -0.01163 |
+| 4B flow Huber 3e-6 | 0.16209 | 0.15781 | 10 | 0.13642 | -0.00427 | -0.02567 |
+
+The corresponding next-phrase, previous-phrase, and cloze changes at each
+run's best-overall epoch are:
+
 | Model / arm | Best epoch | Δ overall | Δ next phrase | Δ previous phrase | Δ cloze | Final Δ overall |
 |---|---:|---:|---:|---:|---:|---:|
 | 0.8B flow Huber 3e-6 | 6 | +0.03672 | -0.00460 | -0.00505 | +0.11979 | -0.02033 |

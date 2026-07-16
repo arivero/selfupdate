@@ -16,6 +16,58 @@ All pre-existing trained runs are pipeline-v1 historical artifacts. They may
 inform hypotheses and mechanics, but they are obsolete as evidence for this
 pipeline-v2 campaign and are never mixed into its reports or Pareto synthesis.
 
+## Current pipeline-v3.2 screen result (2026-07-16 18:54 CEST)
+
+The active trainer has advanced to pipeline v3.2 while retaining dataset v5
+and the vLLM-plus-hidden-cache target pipeline documented below. Eleven of the
+twelve Qwen3.5 screen arms are complete; the 0.8B full-`lens_kl` arm has eight
+of twelve epochs complete and is entering epoch 9. Every epoch traverses the
+same 2,071 examples. The 0.8B and 4B models nevertheless process different
+numbers of aligned tokens because each model's teacher cache contains its own
+generated answers. The complete placement, per-launch speed ledger,
+directional recall decomposition, live status, and next-screen decision draft
+are in [`pareto_v32_training_progress.md`](pareto_v32_training_progress.md).
+
+The overall recall below is the equal mean of next-phrase, previous-phrase,
+and cloze word accuracy over Machado, Quijote chapter 1, and Quijote chapter
+4. These are the fast 8-prompt-per-task-per-corpus monitors, not full-corpus
+checkpoint evaluation.
+
+| Model / arm | Epoch-zero recall | Best recall | Best epoch | Final/current recall | Best delta | Final/current delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 0.8B flow Huber 3e-6 | 0.12150 | 0.15821 | 6 | 0.10117 | +0.03672 | -0.02033 |
+| 0.8B flow Huber 1e-6 | 0.12150 | 0.15622 | 18 | 0.12437 | +0.03472 | +0.00287 |
+| 0.8B flow full KL 1e-6 (epoch 8 cut; live) | 0.12150 | 0.15461 | 4 | 0.11847 | +0.03311 | -0.00303 |
+| 0.8B flow cosine 1e-6 | 0.12150 | 0.14599 | 17 | 0.11834 | +0.02449 | -0.00316 |
+| 0.8B random Huber 3e-6 | 0.12150 | 0.14008 | 7 | 0.11137 | +0.01858 | -0.01013 |
+| 0.8B intact Huber 1e-6 | 0.12150 | 0.13528 | 24 | 0.13056 | +0.01378 | +0.00906 |
+| 4B flow sampled-vocabulary cosine 1e-6 | 0.16209 | 0.16763 | 2 | 0.13824 | +0.00554 | -0.02385 |
+| 4B intact Huber 1e-6 | 0.16209 | 0.16464 | 16 | 0.15909 | +0.00256 | -0.00299 |
+| 4B flow cosine 1e-6 | 0.16209 | 0.16418 | 4 | 0.15565 | +0.00210 | -0.00643 |
+| 4B flow Huber 1e-6 | 0.16209 | 0.16166 | 4 | 0.14375 | -0.00043 | -0.01834 |
+| 4B random Huber 1e-6 | 0.16209 | 0.15877 | 6 | 0.15046 | -0.00332 | -0.01163 |
+| 4B flow Huber 3e-6 | 0.16209 | 0.15781 | 10 | 0.13642 | -0.00427 | -0.02567 |
+
+Damage is the contemporaneous 16-item-per-task standard-benchmark monitor.
+Negative values mean lower macro accuracy than the same model at epoch zero.
+The required 100-item-per-task endpoint evaluations are still missing, so
+these values rank risk but do not certify cleanliness.
+
+| Model / arm | Damage at best-recall epoch | Worst observed damage | Final/current damage |
+|---|---:|---:|---:|
+| 0.8B flow Huber 3e-6 | -0.0417 | -0.1042 | -0.0833 |
+| 0.8B flow Huber 1e-6 | -0.0625 | -0.0833 | -0.0625 |
+| 0.8B flow full KL 1e-6 (epoch 8 cut; live) | -0.0833 | -0.1042 | -0.0833 |
+| 0.8B flow cosine 1e-6 | -0.0417 | -0.0625 | -0.0208 |
+| 0.8B random Huber 3e-6 | -0.0417 | -0.1042 | -0.1042 |
+| 0.8B intact Huber 1e-6 | +0.0000 | +0.0000 | +0.0000 |
+| 4B flow sampled-vocabulary cosine 1e-6 | +0.0000 | +0.0000 | +0.0208 |
+| 4B intact Huber 1e-6 | +0.0000 | +0.0000 | +0.0000 |
+| 4B flow cosine 1e-6 | +0.0000 | -0.0208 | +0.0000 |
+| 4B flow Huber 1e-6 | +0.0000 | -0.0208 | +0.0000 |
+| 4B random Huber 1e-6 | +0.0000 | +0.0000 | +0.0000 |
+| 4B flow Huber 3e-6 | +0.0000 | -0.0417 | -0.0417 |
+
 ## Campaign contract
 
 Target models:
