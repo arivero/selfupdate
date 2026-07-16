@@ -57,6 +57,8 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             text=True).splitlines()
         defaults = {
             "run_name": cfg.run_name,
+            "layerwise_project_version": getattr(
+                cfg, "layerwise_project_version", "3.4"),
             "source_commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=repo_root,
                 text=True).strip(),
@@ -73,6 +75,12 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "model_base_identity": cfg.model.name,
             "student_init_identity": cfg.train.init_from or cfg.model.name,
             "pipeline_version": cfg.train.pipeline_version,
+            "pipeline_revision": cfg.train.pipeline_revision,
+            "pp_execution": cfg.train.pp_execution,
+            "physical_gpu_mapping": list(
+                getattr(cfg.model, "pipeline_devices", []) or []),
+            "partition_profile_id": cfg.train.partition_profile_id,
+            "partition_profile_path": cfg.train.partition_profile_path,
             "update_granularity": cfg.train.update_granularity,
             "answers_per_update": cfg.train.answers_per_update,
             "tokens_per_answer_update": cfg.train.tokens_per_answer_update,
@@ -110,6 +118,7 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "conn_stride": cfg.train.conn_stride,
             "pipeline_split": cfg.model.pipeline_split,
             "pipeline_splits": cfg.model.pipeline_splits,
+            "pipeline_world_size": getattr(cfg.model, "pipeline_world_size", 0),
             "device_map": cfg.model.device_map,
         }
     return run_dir, RunLog(run_dir, defaults=defaults)

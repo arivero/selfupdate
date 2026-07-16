@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from .blocks import BlockStack
+from .ppn import ModelAdapter, partition_from_config
 
 
 def load_causal_lm(src, **kw):
@@ -61,6 +63,9 @@ def pp_device_map(cfg) -> dict:
     n = text_cfg.num_hidden_layers
     splits = list(cfg.model.pipeline_splits or [])
     if splits:
+        if any(left >= right for left, right in zip(splits, splits[1:])):
+            raise ValueError(
+                f"pipeline_splits must be strictly increasing: {splits}")
         if torch.cuda.device_count() < len(splits) + 1:
             raise ValueError(
                 f"pipeline_splits {splits} needs {len(splits) + 1} visible GPUs"
@@ -74,25 +79,44 @@ def pp_device_map(cfg) -> dict:
         if not 0 < split < n:
             raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
         splits = [split]
+    devices = list(getattr(cfg.model, "pipeline_devices", []) or [])
+    if devices and len(devices) != len(splits) + 1:
+        raise ValueError(
+            "model.pipeline_devices must contain one physical id per stage")
+    if len(set(devices)) != len(devices):
+        raise ValueError("model.pipeline_devices must contain unique ids")
+    if not devices:
+        devices = list(range(len(splits) + 1))
+    if any(device < 0 or device >= torch.cuda.device_count()
+           for device in devices):
+        raise ValueError(
+            f"model.pipeline_devices {devices} are not visible on this host")
     # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
     # live on two cards, so the whole vocabulary stack stays on cuda:0 and
     # readout-window loss calls hop back (an [A,H] transfer per call). Untied
     # models put norm+head on cuda:1 with the readout window.
     tied = getattr(mc, "tie_word_embeddings",
                    getattr(text_cfg, "tie_word_embeddings", False))
-    last_dev = len(splits)
-    vocab_dev = 0 if tied else last_dev
-    prefix = "model.language_model" if getattr(mc, "model_type", "") == "gemma4" else "model"
-    dm = {f"{prefix}.embed_tokens": 0, f"{prefix}.rotary_emb": 0,
+    last_dev = devices[-1]
+    first_dev = devices[0]
+    vocab_dev = first_dev if tied else last_dev
+    model_type = getattr(mc, "model_type", "")
+    composite = bool(
+        getattr(mc, "vision_config", None) is not None
+        or getattr(mc, "audio_config", None) is not None
+        or model_type in ("qwen3_6", "qwen3_6_vl", "gemma4"))
+    prefix = "model.language_model" if composite else "model"
+    dm = {f"{prefix}.embed_tokens": first_dev,
+          f"{prefix}.rotary_emb": first_dev,
           f"{prefix}.norm": vocab_dev, "lm_head": vocab_dev}
     if prefix != "model":
-        dm["model.vision_tower"] = 0
-        dm["model.embed_vision"] = 0
+        dm["model.vision_tower"] = first_dev
+        dm["model.embed_vision"] = first_dev
     for i in range(n):
         dev = 0
         while dev < len(splits) and i >= splits[dev]:
             dev += 1
-        dm[f"{prefix}.layers.{i}"] = dev
+        dm[f"{prefix}.layers.{i}"] = devices[dev]
     return dm
 
 
@@ -473,6 +497,28 @@ class TrainingRuntime:
                 self.model.to(torch.bfloat16)
                 self.model.save_pretrained(staging)
             self.tokenizer.save_pretrained(staging)
+            # The model files remain in the Transformers format for backward
+            # compatibility.  PPn metadata is additive and records complete
+            # parameter ownership, legal stage ranges, physical mapping, and
+            # tied vocabulary aliases so a future sharded loader can reload
+            # without assembling a second model on rank 0.
+            adapter = ModelAdapter.from_stack(
+                self.stack, model_identity=self.cfg.model.name)
+            partition = partition_from_config(
+                self.cfg, num_blocks=self.stack.n_layers)
+            (staging / "partition_manifest.json").write_text(
+                json.dumps({
+                    **partition.manifest(),
+                    "pp_execution": self.cfg.train.pp_execution,
+                    "partition_profile_id": self.cfg.train.partition_profile_id,
+                    "checkpoint_storage": "transformers_atomic_with_ppn_ownership",
+                    "checkpoint_ownership": adapter.stack.checkpoint_ownership(),
+                    "legal_cut_positions": list(adapter.legal_cut_positions()),
+                    "frozen_vocabulary_requirements": (
+                        adapter.frozen_vocabulary_requirements()),
+                    "stage_shard_publication": "not_applicable_single_process_runtime",
+                    "tied_weight_aliases": adapter.tied_weight_aliases(),
+                }, indent=2) + "\n")
             staging.rename(target)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)

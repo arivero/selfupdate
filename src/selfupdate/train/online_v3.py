@@ -34,6 +34,8 @@ from .telemetry import (
     _epoch_zero_telemetry,
     _flush_train_log,
 )
+from .ppn import (PPnExecutor, PPnPartition, StageResult, Tile,
+                  boundary_volume_bytes, partition_from_config)
 
 
 def _flow_keep(cfg, it, length: int, device) -> torch.Tensor | None:
@@ -1106,11 +1108,15 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
         heads = int(getattr(text, "num_attention_heads", kv_heads))
         head_dim = int(getattr(
             text, "head_dim", int(getattr(text, "hidden_size")) // heads))
-        empty_kv = torch.empty(
-            (b_now, kv_heads, 0, head_dim), dtype=execution_dtype,
-            device=device)
-        for cache_layer, layer_type in zip(history.layers, layer_types):
+        for layer_index, (cache_layer, layer_type) in enumerate(
+                zip(history.layers, layer_types), start=1):
             if layer_type == "full_attention" and not cache_layer.is_initialized:
+                block_param = next(stack.blocks[layer_index - 1].parameters(), None)
+                block_device = (block_param.device if block_param is not None
+                                else torch.device(device))
+                empty_kv = torch.empty(
+                    (b_now, kv_heads, 0, head_dim), dtype=execution_dtype,
+                    device=block_device)
                 cache_layer.lazy_initialization(empty_kv, empty_kv)
         if teacher_hidden:
             first_prefix = _bk_pinned_gather_hidden(
@@ -1193,9 +1199,11 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
 
 
 def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
-                           teacher_hidden, execution_dtype):
+                           teacher_hidden, execution_dtype, *,
+                           compact_finished=True, isolated_target=False):
     """Materialize one shard's current K-window state, or return None."""
-    _bk_compact_finished_rows(shard, start)
+    if compact_finished:
+        _bk_compact_finished_rows(shard, start)
     if not shard["b_now"] or start >= shard["max_answer"]:
         return None
     logical_stop = min(start + width, shard["max_answer"])
@@ -1217,8 +1225,16 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
         return None
     # Target staging remains bounded by the current K window. The shard
     # boundary exists for backward activations, not for target averaging.
-    staging = shard["target_staging"][
-        :, :shard["b_now"], :tile_width]
+    if isolated_target:
+        # A wavefront stage may still consume tile t while stage 0 admits
+        # tile t+1.  Do not recycle the serial target buffer until the final
+        # stage has drained the tile.
+        staging = torch.empty(
+            (n, shard["b_now"], tile_width, shard["target_staging"].shape[-1]),
+            dtype=shard["target_staging"].dtype, device="cpu", pin_memory=True)
+    else:
+        staging = shard["target_staging"][
+            :, :shard["b_now"], :tile_width]
     staging.zero_()
     for row, (it, count) in enumerate(zip(
             shard["target_items"], valid_widths.tolist())):
@@ -1321,6 +1337,217 @@ def _bk_stage_teacher_tile(shard, layer_index: int,
     return out.to(device, non_blocking=True)
 
 
+def _bk_process_ppn_stage(cfg, stack, loss_fn, tile: Tile, states,
+                          first_layer: int, last_layer: int, device,
+                          teacher_hidden: bool, layer_types, epoch_lr: float):
+    """Process the owned contiguous blocks of one PPn tile.
+
+    ``states`` contains one execution shard per activation-memory shard.  A
+    stage changes only its own blocks and its detached outgoing ``h`` values;
+    the PPn executor detaches the cross-stage packet before the next stage
+    admits it.  The returned scalars are aggregated at the cohort boundary,
+    never inside the stage callback.
+    """
+    cells = int(tile.users)
+    n = stack.n_layers
+    loss_sums = []
+    grad_sums = []
+    ce_sum = None
+    kl_sum = None
+    eval_tokens = 0
+    for layer in range(first_layer, last_layer + 1):
+        params = _clear_block_grads(stack, layer)
+        loss_sum = torch.zeros((), dtype=torch.float32,
+                              device=next(iter(params)).device)
+        eval_student_parts = []
+        eval_teacher_parts = []
+        eval_id_parts = []
+        for state in states:
+            shard = state["shard"]
+            h_in = (_bk_stage_teacher_tile(
+                shard, layer - 1, state["source_index"], device).detach()
+                if teacher_hidden else state["h"].detach())
+            layer_mask = (
+                state["query_valid"]
+                if layer_types[layer - 1] == "linear_attention"
+                else state["full_mask"])
+            with torch.autocast(
+                    device.type, dtype=torch.bfloat16,
+                    enabled=cfg.train.lora.enabled):
+                h_out = stack.run_block(
+                    layer, h_in, state["query_rope"],
+                    position_ids=state["query_positions"],
+                    flow_keep=state["query_valid"],
+                    past_key_values=shard["history"], use_cache=True,
+                    causal_length=shard["full_keep"].shape[1],
+                    prepared_attention_mask=layer_mask)
+                flat_view = stack.loss_view(layer, h_out).reshape(
+                    -1, h_out.shape[-1])
+                valid_view = flat_view.index_select(0, state["valid_index"])
+                target_all = state["window_targets"][layer - 1]
+                flat_target = target_all.reshape(-1, target_all.shape[-1])
+                target = flat_target.index_select(0, state["valid_index"])
+                mean_loss = loss_fn(
+                    valid_view, target, normed=(layer == n), layer=layer)
+                summed_loss = mean_loss * state["cells"]
+            summed_loss.backward()
+            if layer == n and state["eval_index"].numel():
+                eval_student_parts.append(
+                    flat_view.detach().index_select(0, state["eval_index"]))
+                eval_teacher_parts.append(
+                    flat_target.detach().index_select(0, state["eval_index"]))
+                eval_id_parts.append(state["eval_target_ids"])
+            loss_sum.add_(
+                (mean_loss.detach().float() * state["cells"]).to(
+                    loss_sum.device))
+            _detach_cache_layer(shard["history"], layer - 1)
+            if not teacher_hidden:
+                state["h"] = h_out.detach()
+            del h_in, h_out, flat_view, valid_view, target_all
+            del flat_target, target, summed_loss, mean_loss
+        if eval_id_parts:
+            ce_sum, kl_sum, eval_tokens = teacher_output_eval_sums(
+                torch.cat(eval_student_parts),
+                torch.cat(eval_teacher_parts),
+                torch.cat(eval_id_parts),
+                stack.lm_head,
+                chunk_rows=256,
+            )
+        grad = _immediate_sgd(params, epoch_lr)
+        loss_sums.append(loss_sum)
+        grad_sums.append(grad.detach())
+    return StageResult(states, {
+        "loss_sums": loss_sums,
+        "grad_sums": grad_sums,
+        "ce_sum": ce_sum,
+        "kl_sum": kl_sum,
+        "eval_tokens": eval_tokens,
+        "cells": cells,
+        "physical_writes": last_layer - first_layer + 1,
+        "boundary_bytes": int(tile.metadata.get("boundary_bytes", 0)),
+    })
+
+
+def _bk_run_ppn_cohort(cfg, stack, loss_fn, shards, max_answer, n, device,
+                       teacher_hidden, layer_types, epoch_lr, partition,
+                       *, execution: str):
+    """Run every tile in one cohort through a serial or wavefront PPn."""
+    stage_metrics: dict[int, dict[int, Mapping[str, object]]] = {}
+    metrics_lock = threading.Lock()
+
+    def callback(context, tile, states):
+        return _bk_process_ppn_stage(
+            cfg, stack, loss_fn, tile, states, context.first_block,
+            context.last_block, device, teacher_hidden, layer_types, epoch_lr)
+
+    def observe(stage, tile, result):
+        with metrics_lock:
+            stage_metrics.setdefault(tile.index, {})[stage] = result.metrics
+
+    def tile_source():
+        tile_index = 0
+        for start in range(0, max_answer, cfg.train.stale_gradient_window):
+            tile_states = [
+                state for shard in shards
+                if (state := _bk_prepare_shard_tile(
+                    shard, start, cfg.train.stale_gradient_window, n, device,
+                    stack, teacher_hidden, (
+                        torch.bfloat16 if cfg.train.lora.enabled else torch.float32),
+                    compact_finished=False, isolated_target=True))
+            ]
+            cells = sum(state["cells"] for state in tile_states)
+            if not cells:
+                continue
+            live_users = sum(
+                int((shard["lengths_cpu"] > start).sum()) for shard in shards)
+            yield Tile(
+                tile_index, tile_states, users=cells,
+                width=cfg.train.stale_gradient_window,
+                metadata={
+                    "start": start,
+                    "live_users": live_users,
+                    "boundary_bytes": boundary_volume_bytes(
+                        live_users=live_users,
+                        tile_width=min(
+                            cfg.train.stale_gradient_window,
+                            max(0, max_answer - start)),
+                        hidden_size=int(getattr(
+                            stack.text_config, "hidden_size", 0)),
+                        element_size=2 if cfg.train.lora.enabled else 4),
+                },
+            )
+            tile_index += 1
+
+    executor = PPnExecutor(
+        partition,
+        [callback] * partition.stages,
+        detach_boundary=_detach_value,
+        queue_depth=2,
+        telemetry_callback=observe,
+    )
+    results = executor.run(tile_source(), execution=execution)
+    if not results and any(shard["max_answer"] for shard in shards):
+        raise RuntimeError("PPn admitted no nonempty BxK tiles")
+    aggregate_loss = [None] * n
+    aggregate_grad = [None] * n
+    total_cells = 0
+    total_physical_writes = 0
+    total_ce = None
+    total_kl = None
+    total_eval_tokens = 0
+    total_boundary_bytes = 0
+    for result in results:
+        # Stage metrics are collected separately because only the final stage
+        # has output-evaluation values.  All tensors remain on their owning
+        # stage until this cohort boundary.
+        tile_index = next(
+            index for index, values in stage_metrics.items()
+            if values.get(partition.stages - 1) is result.metrics)
+        values_by_stage = stage_metrics[tile_index]
+        for stage, metrics in values_by_stage.items():
+            first, last = partition.ranges[stage]
+            for offset, value in enumerate(metrics["loss_sums"]):
+                layer = first - 1 + offset
+                if aggregate_loss[layer] is None:
+                    aggregate_loss[layer] = value.detach()
+                    aggregate_grad[layer] = metrics["grad_sums"][offset].detach()
+                else:
+                    aggregate_loss[layer].add_(value.to(aggregate_loss[layer].device))
+                    aggregate_grad[layer].add_(
+                        metrics["grad_sums"][offset].to(
+                            aggregate_grad[layer].device))
+            if stage == partition.stages - 1:
+                if metrics["ce_sum"] is not None:
+                    total_ce = (metrics["ce_sum"].detach() if total_ce is None
+                                else total_ce + metrics["ce_sum"].to(total_ce.device))
+                    total_kl = (metrics["kl_sum"].detach() if total_kl is None
+                                else total_kl + metrics["kl_sum"].to(total_kl.device))
+                    total_eval_tokens += int(metrics["eval_tokens"])
+        final_states = result.payload
+        for state in final_states:
+            del state["window_targets"], state["query_rope"]
+            del state["valid_index"], state["full_mask"], state["h"]
+            del state["eval_index"], state["eval_target_ids"]
+            del state["source_index"], state["query_positions"]
+            del state["query_valid"]
+        total_cells += int(result.metrics["cells"])
+        total_physical_writes += int(result.metrics["physical_writes"])
+        total_boundary_bytes += int(result.metrics.get("boundary_bytes", 0))
+    if any(value is None for value in aggregate_loss):
+        raise RuntimeError("PPn did not produce a loss for every owned block")
+    return {
+        "loss_sums": aggregate_loss,
+        "grad_sums": aggregate_grad,
+        "cells": total_cells,
+        "physical_writes": total_physical_writes,
+        "ce_sum": total_ce,
+        "kl_sum": total_kl,
+        "eval_tokens": total_eval_tokens,
+        "boundary_bytes": total_boundary_bytes,
+        "executor": executor,
+    }
+
+
 def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
     """Full dataset-v5 B-user × K-token pipeline-v3.2 training.
 
@@ -1338,8 +1565,6 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
         raise NotImplementedError(
             "causal_bk production runs currently require full epochs; "
             "max_steps would split a fixed cohort ambiguously")
-    if stack.block_devices is not None:
-        raise NotImplementedError("causal_bk currently requires one device")
     layer_types = [_bk_layer_type(stack, layer)
                    for layer in range(1, stack.n_layers + 1)]
     unsupported = sorted(set(layer_types) - {
@@ -1354,6 +1579,11 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
 
     device = torch.device(cfg.model.device)
     n = stack.n_layers
+    partition = partition_from_config(cfg, num_blocks=n)
+    if partition.stages > 1 and stack.block_devices is None:
+        raise ValueError(
+            "a multi-stage PPn execution needs explicit model.pipeline_splits "
+            "so block ownership is unambiguous")
     B = cfg.train.micro_batch
     K = cfg.train.stale_gradient_window
     activation_shard_users = cfg.train.activation_shard_users
@@ -1390,6 +1620,18 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
     delta_tracker.log(log, epoch=0, phase="epoch0", started_at=started)
     log.log(
         kind="pipeline_v32_contract",
+        layerwise_project_version=getattr(
+            cfg, "layerwise_project_version", "3.4"),
+        pp_execution=cfg.train.pp_execution,
+        physical_gpu_mapping=list(
+            partition.physical_devices or range(partition.stages)),
+        ordered_block_ranges=[list(item) for item in partition.ranges],
+        partition_profile_id=partition.profile_id or None,
+        pp_dependency_graph=(
+            "O[s,t]->O[s,t+1] and O[s,t]->O[s+1,t]"),
+        pp_boundary_activation="detached_exact_copy",
+        pp_queue_depth=2,
+        pp_write_semantics="immediate_state_free_sgd_before_next_tile",
         B_simultaneous_users=B,
         activation_shard_users=activation_shard_users,
         K_context_tokens=K,
@@ -1444,7 +1686,47 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
                 layer_types, activation_shard_users, K, execution_dtype)
             b_now = len(items)
             max_answer = max(shard["max_answer"] for shard in shards)
-            for start in range(0, max_answer, K):
+            # PPn owns the stage coordinate while the code below remains the
+            # one-device v3.2 reference.  The cohort is the synchronization
+            # boundary: all wavefront tiles drain before completed users are
+            # released and before stop/checkpoint handling runs.
+            if partition.stages > 1:
+                pp_result = _bk_run_ppn_cohort(
+                    cfg, stack, loss_fn, shards, max_answer, n, device,
+                    teacher_hidden, layer_types, epoch_lr, partition,
+                    execution=cfg.train.pp_execution)
+                tile_loss_sums = pp_result["loss_sums"]
+                tile_grad_sums = pp_result["grad_sums"]
+                if epoch_loss_sums is None:
+                    epoch_loss_sums = tile_loss_sums
+                    epoch_grad_sums = tile_grad_sums
+                else:
+                    _foreach_accumulate(epoch_loss_sums, tile_loss_sums)
+                    _foreach_accumulate(epoch_grad_sums, tile_grad_sums)
+                epoch_cells += pp_result["cells"]
+                token_events += pp_result["cells"]
+                conceptual_writes += pp_result["cells"] * n
+                physical_writes += pp_result["physical_writes"]
+                if pp_result["eval_tokens"]:
+                    epoch_ce_eval_sum.add_(
+                        pp_result["ce_sum"].to(epoch_ce_eval_sum.device))
+                    epoch_kl_eval_sum.add_(
+                        pp_result["kl_sum"].to(epoch_kl_eval_sum.device))
+                    epoch_output_eval_tokens += pp_result["eval_tokens"]
+                log.log(
+                    kind="ppn_cohort",
+                    epoch=epoch + 1,
+                    cohort=cohort_index,
+                    pp_execution=cfg.train.pp_execution,
+                    stage_telemetry=pp_result["executor"].telemetry(),
+                    tile_count=(pp_result["physical_writes"]
+                                // max(partition.stages, 1)),
+                    boundary_bytes_per_tile=pp_result["boundary_bytes"],
+                )
+            # The reference path is deliberately left byte-for-byte in its
+            # tile-major order.  PPn has already consumed this cohort when it
+            # has more than one stage.
+            for start in range(0, 0 if partition.stages > 1 else max_answer, K):
                 tile_states = [
                     state for shard in shards
                     if (state := _bk_prepare_shard_tile(

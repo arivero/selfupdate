@@ -997,7 +997,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          if provenance.get("runtime_dirty") is False else
          "- Runtime tree: cleanliness unavailable (legacy provenance)"),
         f"- Student initialization: `{provenance.get('student_init_identity', train.get('init_from') or model.get('name', 'missing'))}`",
+        f"- Layerwise project: `{cfg.get('layerwise_project_version', 'legacy')}`",
         f"- Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
+        f"- PP executor / partition profile: `{train.get('pp_execution', 'serial')}` / `{train.get('partition_profile_id', '') or 'unpinned'}`",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
         f"- Run class: `{reported_run_class}` (source `{run_class_source}`; "
@@ -1189,7 +1191,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"Status: {'complete' if complete else 'incomplete diagnostic rendering'}",
             f"Model/base: {model.get('name', 'missing')}",
             f"Dataset: {data.get('examples_path', 'missing')}",
+            f"Layerwise project: {cfg.get('layerwise_project_version', 'legacy')}",
             f"Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
+            f"PP executor / partition profile: {train.get('pp_execution', 'serial')} / {train.get('partition_profile_id', '') or 'unpinned'}",
             f"Censorship: {mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}",
             f"Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
             (f"Run class: {reported_run_class} (source {run_class_source}; "
@@ -1253,6 +1257,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "dataset": data.get("examples_path"),
         "pipeline_version": train.get("pipeline_version"),
         "pipeline_revision": train.get("pipeline_revision"),
+        "layerwise_project_version": cfg.get("layerwise_project_version"),
+        "pp_execution": train.get("pp_execution", "serial"),
+        "partition_profile_id": train.get("partition_profile_id"),
+        "pipeline_splits": model.get("pipeline_splits", []),
+        "pipeline_devices": model.get("pipeline_devices", []),
         "run_class": reported_run_class,
         "configured_run_class": configured_run_class,
         "run_class_source": run_class_source,

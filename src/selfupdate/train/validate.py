@@ -16,6 +16,7 @@ from pathlib import Path
 from ..eval.tasks import RECALL_CORPUS_PATHS
 from ..eval.teacher_output import EVALUATION_ONLY_OUTPUT_NAMES
 from ..teacher.cache import resolved_node_epoch0_root
+from .ppn import _strict_splits
 from .runtime import uses_pipeline_map
 
 RUN_CLASSES = {
@@ -29,6 +30,53 @@ def validate_knob_schedule(cfg) -> None:
     sched = cfg.train.schedule
     run_class = cfg.train.run_class
     bad = []
+    if getattr(cfg, "layerwise_project_version", "3.4") != "3.4":
+        bad.append(
+            "layerwise_project_version must be the separate project identity '3.4'")
+    if cfg.train.pp_execution not in ("serial", "wavefront"):
+        bad.append("train.pp_execution must be serial or wavefront")
+    if not 0 < cfg.train.partition_safety_margin <= 1:
+        bad.append("train.partition_safety_margin must be in (0, 1]")
+    pipeline_splits = list(getattr(cfg.model, "pipeline_splits", []) or [])
+    if pipeline_splits:
+        try:
+            _strict_splits(max(pipeline_splits) + 1, pipeline_splits)
+        except ValueError as exc:
+            bad.append(str(exc))
+    if (getattr(cfg.model, "pipeline_split", 0)
+            and pipeline_splits):
+        bad.append("model.pipeline_split and model.pipeline_splits are mutually exclusive")
+    configured_devices = list(getattr(cfg.model, "pipeline_devices", []) or [])
+    configured_stages = len(pipeline_splits) + 1
+    if getattr(cfg.model, "pipeline_split", 0):
+        configured_stages = 2
+    if configured_devices and len(configured_devices) != configured_stages:
+        bad.append("model.pipeline_devices must contain one id per PP stage")
+    if getattr(cfg.model, "pipeline_world_size", 0) and (
+            cfg.model.pipeline_world_size != configured_stages):
+        bad.append("model.pipeline_world_size does not match configured PP stages")
+    if cfg.train.partition_profile_path and not Path(
+            cfg.train.partition_profile_path).is_file():
+        bad.append(
+            f"partition profile does not exist: {cfg.train.partition_profile_path}")
+    if cfg.train.auto_partition and not cfg.train.partition_profile_path:
+        bad.append("train.auto_partition requires train.partition_profile_path")
+    if cfg.train.pp_execution == "wavefront":
+        if cfg.train.pipeline_version != 3 or cfg.train.pipeline_revision != "3.2":
+            bad.append("PPn wavefront requires the preserved pipeline-v3.2 protocol")
+        if cfg.train.history_policy != "causal_bk":
+            bad.append("PPn wavefront requires history_policy=causal_bk")
+        if cfg.train.update_granularity != "online":
+            bad.append("PPn wavefront requires update_granularity=online")
+        if cfg.train.stale_gradient_window <= 0:
+            bad.append("PPn wavefront requires a positive BxK tile width")
+        if cfg.train.grad_accum != 1:
+            bad.append("PPn wavefront requires grad_accum=1")
+        if cfg.train.schedule != "summed":
+            bad.append("PPn wavefront requires schedule=summed")
+        if pipeline_splits and not cfg.train.partition_profile_id:
+            bad.append(
+                "multi-stage PPn wavefront requires a pinned partition_profile_id")
     if cfg.train.hidden_loss in EVALUATION_ONLY_OUTPUT_NAMES:
         raise ValueError(
             f"train.hidden_loss={cfg.train.hidden_loss!r} is forbidden: "

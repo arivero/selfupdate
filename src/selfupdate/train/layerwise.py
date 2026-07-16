@@ -70,6 +70,7 @@ from .losses import HiddenLoss
 from .locality import certify_locality_resident
 from .moe import MoEController, dequantize_overrides
 from .online_v3 import train_online_v3
+from .ppn import CostProfile, ModelAdapter, PartitionConstraints, choose_partition, partition_from_config
 from .anchor import (  # noqa: F401  (AnchorBank re-exported for scripts)
     AnchorBank,
     anchor_trajectory_step,
@@ -123,6 +124,50 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     moe_load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
     rt = TrainingRuntime(cfg).load(moe_load_kw)
     tok, stack = rt.tokenizer, rt.stack
+    pp_adapter = ModelAdapter.from_stack(stack, model_identity=cfg.model.name)
+    pp_partition = partition_from_config(cfg, num_blocks=stack.n_layers)
+    legal_cuts = set(pp_adapter.legal_cut_positions())
+    illegal_cuts = [cut for cut in pp_partition.boundaries if cut not in legal_cuts]
+    if illegal_cuts:
+        raise ValueError(
+            f"pipeline boundaries {illegal_cuts} are not legal for "
+            f"{cfg.model.name}; legal cuts are {sorted(legal_cuts)}")
+    if cfg.train.partition_profile_path:
+        profile = CostProfile.load(cfg.train.partition_profile_path)
+        if profile.model_identity and profile.model_identity != cfg.model.name:
+            raise ValueError(
+                "partition profile model identity does not match the run: "
+                f"{profile.model_identity!r} != {cfg.model.name!r}")
+        if cfg.train.partition_profile_id and (
+                profile.identity != cfg.train.partition_profile_id):
+            raise ValueError(
+                "partition profile identity is not the pinned profile: "
+                f"{profile.identity!r} != {cfg.train.partition_profile_id!r}")
+        if cfg.train.auto_partition:
+            stages = pp_partition.stages
+            constraints = PartitionConstraints(
+                legal_cuts=tuple(sorted(legal_cuts)),
+                safety_margin=cfg.train.partition_safety_margin)
+            pp_partition = choose_partition(
+                profile, stages, constraints=constraints,
+                physical_devices=pp_partition.physical_devices)
+    physical_mapping = list(pp_partition.physical_devices or
+                            range(pp_partition.stages))
+    log.log(
+        kind="ppn_partition",
+        layerwise_project_version=getattr(cfg, "layerwise_project_version", "3.4"),
+        pipeline_version=cfg.train.pipeline_version,
+        pipeline_revision=cfg.train.pipeline_revision,
+        pp_execution=cfg.train.pp_execution,
+        physical_gpu_mapping=physical_mapping,
+        ordered_block_ranges=[list(item) for item in pp_partition.ranges],
+        partition_profile_id=(cfg.train.partition_profile_id or None),
+        selected_partition_profile_id=pp_partition.profile_id or None,
+        legal_cut_positions=sorted(legal_cuts),
+        parameter_ownership=pp_adapter.parameter_ownership(),
+        tied_weight_aliases=pp_adapter.tied_weight_aliases(),
+        frozen_vocabulary_requirements=pp_adapter.frozen_vocabulary_requirements(),
+    )
     # Depth-dependent window checks live here, not in the config validator:
     # n_layers is only known once the model is loaded. Oversized windows
     # previously KeyError'd deep in the walk (readout0 < 1 indexes a

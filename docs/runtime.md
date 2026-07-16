@@ -93,30 +93,35 @@ and the D2H writeback overlaps block i+1. Measured at 0.6B on L40S:
 0.949 → 0.358 s/step (grad_accum 8); step math is bitwise identical to the
 resident path (an archived certification result).
 
-## Pipeline parallelism
+## Layerwise project 3.4 PPn execution
 
-PP is the preferred multi-GPU form for this workload: layerwise execution
-partitions naturally at block boundaries, while tensor parallel puts a
-collective inside every linear (parallel_bench.py keeps TP only as a probe;
-at trainable sizes it loses badly). Two facts from the 2026-07-10
-measurements (issues.md):
+Pipeline-v3.2 remains the scientific BxK protocol. Project 3.4 adds the
+separate `train.pp_execution` identity: `serial` is the placement-controlled
+tile-major reference and `wavefront` uses the arbitrary-stage executor in
+`train/ppn.py`. `model.pipeline_splits` is a strictly increasing list of
+one-based block boundaries; its length infers the number of stages. A
+profile identity and selected boundaries are logged and must be pinned in a
+production config.
 
-- PP is a **memory** technology here, not throughput: the walk is
-  depth-sequential, so PP2 is slower than single-GPU whenever the model
-  fits on one card. Split only when it does not fit.
-- accelerate's per-call dispatch hooks cost ~8% of the PP2 walk. Under an
-  explicit `pipeline_split(s)` map the walk therefore runs **hook-free**:
-  `BlockStack(model, hook_free_walk=True)` calls each block's pre-hook
-  forward and does the boundary moves itself (activation + per-device rope
-  cache). Full-model forwards (recite/general-CE evals, generation) keep
-  their hooks and are unaffected. The bypass never engages when a hook
-  offloads weights (`device_map=auto` spill) or for per-layer-rope bundles
-  (gemma4-style).
+The executor admits exactly the dependency graph
+`O[s,t] -> O[s,t+1]` and `O[s,t] -> O[s+1,t]`. Boundary packets are detached,
+stage queues are depth-one/double-buffered, and a stage cannot accept its
+next tile until its previous local write has completed. Stage callbacks are
+reusable by serial and wavefront runs; telemetry is emitted only at the
+cohort boundary and cannot affect training.
 
-Within a grad-accum window the weights are frozen, so cross-item device
-overlap (item i+1 on partition 0 while item i finishes partition 1) would
-be EXACT — the honest PP throughput move if it is ever needed; not
-implemented.
+Measured-cost partitioning is preparation-only: `scripts/ppn_partition.py`
+uses p50/p95 prompt, tile, local-loss, backward, write, state, workspace,
+gradient, frozen-vocabulary, and boundary costs in a contiguous dynamic
+program. It accounts for stage-0 embedding work and final-stage output
+evaluation, enforces legal cuts and the safety-margin memory budget, and
+emits a manifest whose cuts/profile id should be copied into the campaign
+config. Production does not silently repartition.
+
+`scripts/benchmark_ppn_transport.py` measures exact peer and pinned-host
+boundary copies outside the hot loop; with `torchrun --nccl-p2p` it measures
+rank-owned NCCL send/recv as a separate candidate. The result is evidence for
+the selected transport, not a training semantic knob.
 
 ## Checkpoint publication
 

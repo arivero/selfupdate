@@ -25,6 +25,14 @@ class ModelConfig:
     # our direct block calls.
     pipeline_split: int = 0
     pipeline_splits: list = field(default_factory=list)
+    # Optional physical ids used by a PPn launcher.  An empty list preserves
+    # the historical visible-device order (0 .. P-1); ids are never
+    # renumbered by the runtime.
+    pipeline_devices: list = field(default_factory=list)
+    # A launcher may pin the expected number of stages when it is not
+    # discoverable from the current process (for example before torch.distributed
+    # is initialized).  Zero means infer it from pipeline_splits/devices.
+    pipeline_world_size: int = 0
     # Optional HF placement for large scale probes. "auto" shards across all
     # visible devices; leave empty when using manual pipeline_split(s).
     device_map: str = ""
@@ -179,6 +187,14 @@ class TrainConfig:
     # the within-answer lookahead/staleness coordinate.
     pipeline_version: int = 1
     pipeline_revision: str = ""
+    # Project identity is deliberately separate from the preserved pipeline
+    # protocol.  3.4 is the arbitrary-stage executor; the BxK contract stays
+    # pipeline-v3.2.
+    pp_execution: str = "serial"  # serial | wavefront
+    partition_profile_id: str = ""
+    partition_profile_path: str = ""
+    partition_safety_margin: float = 0.80
+    auto_partition: bool = False
     update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid | online
     # Pipeline-v2 grid geometry.  ``grid`` is an optimizer tile in the
     # answer x aligned-token plane followed by the mandatory forward layer
@@ -378,6 +394,7 @@ class EvalConfig:
 @dataclass
 class ExperimentConfig:
     run_name: str = "dev"
+    layerwise_project_version: str = "3.4"
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     mask: MaskConfig = field(default_factory=MaskConfig)

@@ -56,6 +56,8 @@ def teacher_output_eval_sums(
             "CE-eval-loss/KL-eval-loss require a frozen vocabulary head")
 
     device = student_hidden.device
+    if teacher_answer_ids.device != device:
+        teacher_answer_ids = teacher_answer_ids.to(device)
     ce_sum = torch.zeros((), dtype=torch.float32, device=device)
     kl_sum = torch.zeros((), dtype=torch.float32, device=device)
     count = int(student_hidden.shape[0])
