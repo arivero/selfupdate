@@ -27,7 +27,22 @@ mkdir -p "$(dirname "$OUT")"
 printf 'timestamp,index,uuid,utilization_gpu_pct,power_w,temperature_c,memory_used_mib,memory_total_mib,clocks_sm_mhz\n' > "$OUT"
 
 deadline=$((SECONDS + WAIT_SECONDS))
-while ! pgrep -f "scripts/train.py.*${PATTERN}" >/dev/null; do
+trainer_running() {
+  local cmdline arg has_entry has_pattern
+  for cmdline in /proc/[0-9]*/cmdline; do
+    [[ -r "$cmdline" ]] || continue
+    has_entry=0
+    has_pattern=0
+    while IFS= read -r -d '' arg; do
+      [[ "$arg" == */scripts/train.py ]] && has_entry=1
+      [[ "$arg" == *"$PATTERN"* ]] && has_pattern=1
+    done < "$cmdline"
+    (( has_entry && has_pattern )) && return 0
+  done
+  return 1
+}
+
+while ! trainer_running; do
   (( SECONDS < deadline )) || {
     echo "trainer did not appear within ${WAIT_SECONDS}s: ${PATTERN}" >&2
     exit 1
@@ -35,7 +50,7 @@ while ! pgrep -f "scripts/train.py.*${PATTERN}" >/dev/null; do
   sleep 1
 done
 
-while pgrep -f "scripts/train.py.*${PATTERN}" >/dev/null; do
+while trainer_running; do
   stamp="$(date --iso-8601=seconds)"
   nvidia-smi --query-gpu=index,uuid,utilization.gpu,power.draw,temperature.gpu,memory.used,memory.total,clocks.sm \
     --format=csv,noheader,nounits | sed "s/^/${stamp},/" >> "$OUT"
