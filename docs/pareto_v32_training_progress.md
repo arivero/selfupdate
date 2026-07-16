@@ -45,9 +45,20 @@ exact next-token online learning.
   load because the offline node-local Hugging Face cache did not contain
   Qwen3-0.6B. This is staging evidence, not a trainer result. The gate moved
   to cached Qwen3.5-0.8B on the same node.
+- 13:42: Qwen3.5-0.8B v3.2 retry passed the production startup gate and
+  completed the historically fatal 780-prompt x 844-answer cohort. At the
+  fourth cohort it had processed 267,380 token-events. The deterministic
+  guard estimated 4,212,400,128 bytes (3.92 GiB) incremental peak against
+  45,476,085,760 free bytes after model load; observed process placement was
+  38,598 MiB on the L40S. No OOM or traceback occurred.
 
 ## Launch/results ledger
 
-No v3.2 GPU run has been promoted yet. Superseded jobs are left untouched
-until the v3.2 implementation passes its certification gate; they will then
-be retired rather than interpreted as v3.2 evidence.
+The first promoted run is
+`pareto_v32_qwen35_0p8b_flow_student_b256k16_huber_lr1e6_s17_e40` on
+agpul06 GPU2. A twelve-card, approximately five-hour screen is being launched
+after retiring the superseded queues: six 0.8B arms (Huber learning-rate pair,
+hidden cosine, random-context, intact control, and full KL-lens speed arm) and
+six 4B arms (Huber learning-rate pair, hidden cosine, random-context, intact
+control, and sampled-vocabulary cosine). All use B256/K16 and immediate SGD;
+the KL arm uses an 8-user execution shard solely to bound vocabulary logits.
