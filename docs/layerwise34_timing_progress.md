@@ -148,6 +148,11 @@ from the dependency proof or from a partial run.
    participating node, profile legal text-tower cuts, and run every
    memory-feasible PPn through PP4. Keep complete MoE router+experts on one
    stage and introduce no routing objective or expert parallelism.
+   Qwen3.6-27B admission starts at PP2 on agpul04 physical GPUs 1/3; PP1 is
+   not attempted. Its model snapshot is staged to node-local shared memory.
+   The historical H100 hidden cache is provenance, not a pipeline-v3 runtime
+   cache: the launcher regenerates and publishes a numerically local L40S
+   teacher cache before training.
 7. Conditional InfiniBand bonus, only after the PP4 all-card gate: implement
    real rank-owned detached activation transport and cursor/checkpoint
    coordination, benchmark NCCL point-to-point versus host staging, then test
