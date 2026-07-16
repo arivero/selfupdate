@@ -35,6 +35,8 @@ def validate_knob_schedule(cfg) -> None:
             "cache.runtime_policy must be durable or node_epoch0")
     if cfg.cache.generation_max_tokens < 0:
         raise ValueError("cache.generation_max_tokens must be non-negative")
+    if cfg.cache.item_cache_items < 0:
+        raise ValueError("cache.item_cache_items must be non-negative")
     if (cfg.cache.runtime_policy == "node_epoch0"
             and not cfg.cache.node_root.startswith("/dev/shm/")):
         raise ValueError(
@@ -54,8 +56,8 @@ def validate_knob_schedule(cfg) -> None:
         bad.append(
             "lr_epoch_multipliers is implemented only by pipeline-v3.1")
     if cfg.train.pipeline_version == 3:
-        if cfg.train.pipeline_revision not in ("", "3.0", "3.1"):
-            bad.append("pipeline-v3 revision must be 3.0 or 3.1")
+        if cfg.train.pipeline_revision not in ("", "3.0", "3.1", "3.2"):
+            bad.append("pipeline-v3 revision must be 3.0, 3.1, or 3.2")
         bk_probe = cfg.train.history_policy == "causal_bk_probe"
         bk_training = cfg.train.history_policy == "causal_bk"
         bk_execution = bk_probe or bk_training
@@ -66,21 +68,26 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.grad_accum != 1:
             bad.append("pipeline-v3 requires grad_accum=1")
         if bk_execution:
-            if cfg.train.pipeline_revision != "3.1":
-                bad.append("causal_bk execution requires pipeline_revision=3.1")
+            if cfg.train.pipeline_revision not in ("3.1", "3.2"):
+                bad.append(
+                    "causal_bk execution requires pipeline_revision=3.1 or 3.2")
             if cfg.train.micro_batch < 2:
                 bad.append("causal_bk execution requires micro_batch B >= 2")
             if cfg.train.batching not in ("padded", "bucketed"):
                 bad.append("causal_bk execution requires padded or bucketed batching")
             shard_users = cfg.train.activation_shard_users
-            if shard_users < 0 or shard_users > cfg.train.micro_batch:
+            if shard_users <= 0 or shard_users > cfg.train.micro_batch:
                 bad.append(
-                    "activation_shard_users must be in [0, micro_batch] "
+                    "activation_shard_users must be in [1, micro_batch] "
                     "for causal_bk")
+            if cfg.train.prefill_query_chunk <= 0:
+                bad.append("causal_bk requires prefill_query_chunk > 0")
         else:
             if cfg.train.activation_shard_users:
                 bad.append(
                     "activation_shard_users is implemented only by causal_bk")
+            if cfg.train.prefill_query_chunk != 64:
+                bad.append("prefill_query_chunk is implemented only by causal_bk")
             if cfg.train.micro_batch != 1:
                 bad.append("pipeline-v3.0 requires micro_batch=1")
             if cfg.train.batching != "item":
@@ -116,7 +123,8 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("stale-gradient windows are initially LoRA-only")
             if cfg.train.hidden_loss not in (
                 "nmse", "l2mse", "cosine", "huber", "charbonnier",
-                    "clipped_nmse", "vocab_cosine_sampled"):
+                    "clipped_nmse", "vocab_cosine_sampled", "lens_kl",
+                    "lens_js"):
                 bad.append(
                     "stale-gradient windows initially support stateless "
                     "geometric hidden losses only")

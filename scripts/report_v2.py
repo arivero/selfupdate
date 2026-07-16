@@ -675,7 +675,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             }
     online_bk = (
         train.get("update_granularity") == "online"
-        and train.get("pipeline_revision") == "3.1"
+        and train.get("pipeline_revision") in ("3.1", "3.2")
         and train.get("history_policy") in ("causal_bk", "causal_bk_probe")
     )
     if train.get("update_granularity") == "online":

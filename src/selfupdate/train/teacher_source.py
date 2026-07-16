@@ -136,6 +136,36 @@ class OnlineTeacherSource:
         return inputs
 
     @torch.no_grad()
+    def full_inputs_pinned_batch(self, batch: Batch, device) -> list[torch.Tensor]:
+        """Uncensored block inputs in bounded, host-pinned storage.
+
+        Pipeline-v3.2 gathers only the current BxK tile back to the GPU.  The
+        v3.1 resident variant retained n*[B,T,H] on device and therefore could
+        not fit teacher-hidden 4B cohorts regardless of activation sharding.
+        Copies are issued on the producing stream and synchronized once after
+        the layer walk; returned tensors are immutable staging sources.
+        """
+        if batch.teacher_ids is None:
+            raise ValueError("v3.2 teacher batch needs teacher_ids")
+        device = torch.device(device)
+        t_ids = batch.teacher_ids.to(device)
+        t_pos = torch.arange(t_ids.shape[1], device=device)[None].expand(
+            t_ids.shape[0], -1)
+        inputs = []
+        with self._ctx(), torch.autocast(device.type, dtype=torch.bfloat16):
+            h = self.stack.embed(t_ids)
+            pos_emb = self.stack.rope(h, t_pos)
+            for layer in range(1, self.stack.n_layers + 1):
+                staged = torch.empty(
+                    h.shape, dtype=h.dtype, device="cpu", pin_memory=True)
+                staged.copy_(h.detach(), non_blocking=True)
+                inputs.append(staged)
+                h = self.stack.run_block(layer, h, pos_emb)
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+        return inputs
+
+    @torch.no_grad()
     def aligned_targets(self, it, device) -> dict[int, torch.Tensor]:
         states = self.full_states(it, device)
         return {

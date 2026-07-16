@@ -115,6 +115,10 @@ class CacheConfig:
     source_compaction: str = ""
     shard_size: int = 128
     hidden_dtype: str = "float16"
+    # Bound Python-owned teacher tensors. Safetensors already mmap the durable
+    # cache, so evicted rows remain available through the kernel page cache
+    # without pinning the complete multi-GB corpus in every trainer process.
+    item_cache_items: int = 64
     # Extra generation allowance for question-only RAG teacher targets.  The
     # 96-token margin is certified separately by the RAG gate; it prevents
     # conversational framing from truncating the answer span.
@@ -215,13 +219,17 @@ class TrainConfig:
     # one fused write is exactly sequential replay of gradients precomputed at
     # the same snapshot under state-free SGD.
     stale_gradient_window: int = 1
-    # Pipeline-v3.1 B×K activation-memory shard.  Zero means the complete
-    # logical B-user update is materialized at once.  A positive value splits
+    # Pipeline-v3.1+ B×K activation-memory shard. A positive value splits
     # transient forwards/backwards into that many fixed user lanes while
     # accumulating all shard gradients before the one required block write.
     # It therefore changes memory/dispatch, never the logical B×K geometry,
     # averaging law, or optimizer-update count.
+    # Zero is rejected by causal_bk: silently restoring an unsharded B=256
+    # walk caused deterministic late-cohort OOM retries in v3.1.
     activation_shard_users: int = 0
+    # Static-cache prefill is query-chunked so its additive attention mask is
+    # O(B * chunk * total_length), not O(B * prompt_length**2).
+    prefill_query_chunk: int = 64
     # per_block: backward/write immediately after each block (minimum graph
     # memory). per_token_disconnected: retain the B=1,K=1 block-local graphs
     # for one token, invoke autograd once over their disconnected loss roots,

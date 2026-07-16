@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,17 +141,19 @@ class DistillDataset(Dataset):
         pad_random: bool = False,
         cache_source_compaction: str = "",
         student_compaction: str = "remove",
+        item_cache_items: int = 64,
     ):
         # re-render segments if this tokenizer's chat template differs from
         # the one examples.jsonl was built with (identity for Qwen)
         self.records = adapt_records(load_jsonl(examples_path), tokenizer)
         self.cache = cache
-        # items are memoized after first build: the teacher-cache reads
-        # (Lustre I/O on the training thread, num_workers=0) and tensor
-        # conversions would otherwise repeat every epoch. Cost is host RAM
-        # (~needed cache size, fp16), not VRAM. Consumers treat Items as
-        # read-only — collate and .to(device) both copy.
-        self._item_cache: dict[int, Item] = {}
+        # Keep only a bounded working set. The safetensors reader is mmaped,
+        # so the kernel page cache remains the cross-epoch cache; retaining
+        # every Item here duplicated the complete teacher cache per worker.
+        if item_cache_items < 0:
+            raise ValueError("item_cache_items must be non-negative")
+        self.item_cache_items = item_cache_items
+        self._item_cache: OrderedDict[int, Item] = OrderedDict()
         self.need_layers = need_layers  # via setter: validates cache presence
         self.rebase_gap = rebase_gap
         self.with_teacher_ids = with_teacher_ids
@@ -230,6 +233,7 @@ class DistillDataset(Dataset):
     def __getitem__(self, idx: int) -> Item:
         cached = self._item_cache.get(idx)
         if cached is not None:
+            self._item_cache.move_to_end(idx)
             return cached
         pair = self.pairs[idx]
         ex_id = pair.example_id
@@ -246,7 +250,11 @@ class DistillDataset(Dataset):
             t0=pair.t_aligned.start,
             t_priv=pair.t_privileged or None,
         )
-        self._item_cache[idx] = item
+        if self.item_cache_items:
+            self._item_cache[idx] = item
+            self._item_cache.move_to_end(idx)
+            while len(self._item_cache) > self.item_cache_items:
+                self._item_cache.popitem(last=False)
         return item
 
 
@@ -255,7 +263,7 @@ def collate_items(items: list[Item]) -> list[Item]:
     return items
 
 
-def collate_padded_items(items: list[Item]) -> Batch:
+def collate_padded_items(items: list[Item], *, include_hidden: bool = True) -> Batch:
     """Right-pad items for a real batched forward/backward.
 
     We intentionally pad on the right and keep ``attention_mask=None`` in the
@@ -281,7 +289,7 @@ def collate_padded_items(items: list[Item]) -> Batch:
     aligned_index = torch.zeros(B, Amax, dtype=torch.long)
     hidden_mask = torch.zeros(B, Amax, dtype=torch.bool)
 
-    layers = sorted(items[0].hidden)
+    layers = sorted(items[0].hidden) if include_hidden else []
     hidden: dict[int, torch.Tensor] = {}
     for L in layers:
         H = items[0].hidden[L].shape[-1]
