@@ -33,9 +33,10 @@ complete 2,071-question dataset-v5 traversal, using full B256 cohorts and the
 already staged full teacher cache. This promotion was explicitly authorized
 after the first 0.8B PP1 trace showed bursty small-model execution.
 
-The 0.8B and 4B models are first. Qwen3.6-27B and Qwen3.6-35B-A3B are admitted
-only after their model snapshots, fixed teacher answers, and complete
-teacher-hidden caches exist on `agpul06`.
+The 0.8B and 4B models are first, followed by Qwen3.6-27B. Per owner direction,
+the model-size ladder stops at 27B in this version; Qwen3.6-35B-A3B is not
+admitted. Each model gets at most one final evidence-driven optimization retry,
+after which the measured speeds are frozen rather than tuned indefinitely.
 
 ## Node-local storage
 
@@ -141,16 +142,18 @@ from the dependency proof or from a partial run.
    no-cache as teacher recomputation -- it cannot prove cached-hidden
    throughput even if it wins. This is the expected PPn-dependent crossover
    as model/KV residency per card falls. (The unpleasant third regime: 😭.)
-5. After the Pareto matrix, test fully independent teacher-seeded block
-   trajectories (`trajectory_source: teacher_hidden`). The current code uses
-   online adapters-off teacher prefixes because aligned disk caches lack
-   h[L-1] prefix rows. Re-check host-pinned residency and locality before 4B;
-   do not revive connected credit or final-logit training.
-6. Prepare Qwen3.6-27B and Qwen3.6-35B-A3B black-box MoE: stage snapshots,
-   create fixed teacher answers and complete teacher caches on every
-   participating node, profile legal text-tower cuts, and run every
-   memory-feasible PPn through PP4. Keep complete MoE router+experts on one
-   stage and introduce no routing objective or expert parallelism.
+5. Final mission after freezing ordinary student-hidden speeds: test fully
+   independent teacher-seeded block trajectories (`trajectory_source:
+   teacher_hidden`) for 0.8B, 4B, and 27B. Make this a real no-boundary mode:
+   each block consumes its cached teacher input vector directly, so no student
+   activation is communicated between cards. Re-check cache input ownership,
+   host/GPU residency, locality, and exact write semantics; do not revive
+   connected credit or final-logit training.
+6. Prepare Qwen3.6-27B: stage its snapshot, create fixed teacher answers and a
+   complete numerically local teacher cache, profile legal text-tower cuts,
+   run the first feasible PPn, and permit exactly one measured optimization
+   retry. Then freeze the achieved speed and stop the model ladder. The
+   Qwen3.6-35B-A3B black-box MoE arm is deferred beyond this version.
    Qwen3.6-27B admission starts at PP2 on agpul04 physical GPUs 1/3; PP1 is
    not attempted. Its model snapshot is staged to node-local shared memory.
    The historical H100 hidden cache is provenance, not a pipeline-v3 runtime
