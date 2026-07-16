@@ -77,12 +77,16 @@ On driver-560 L40S nodes, launch v1/v2 training through
 argument. Launch v3 through `scripts/l40s_train_v3.sh`: it coordinates one
 same-runtime epoch-zero teacher pass into `/dev/shm` per node/cache identity,
 and concurrent or later arms reuse the atomically published cache. The cu128
-container is reserved for nodes
-with a compatible newer driver. The
-thin cu126 dependency layer and its no-second-torch invariant are documented
-in `AGENTS.md`. The wrapper enters the cluster's `glibc/2.35` module through
-its supplied dynamic loader so the compiled causal-convolution CUDA kernel is
-available; loading that module without its loader is not sufficient.
+container is reserved for nodes with a compatible newer driver. The thin
+cu126 dependency layer and its no-second-torch invariant are documented in
+`AGENTS.md`. Counterintuitively, these older L40S nodes require the newer
+glibc 2.35 userspace: this is not a GPU or driver requirement, but a
+requirement of the precompiled `causal_conv1d` Python wheel. The wrapper
+starts Python through the glibc 2.35 dynamic loader with an explicit library
+path. Merely running `module load glibc/2.35` keeps the old loader, mixes
+incompatible libc internals (`GLIBC_PRIVATE` failures), and is not a valid
+substitute. The wrapper restores the host library path before child compilers
+run so Triton's host `gcc` does not inherit that mixed userspace.
 The same wrapper resolves model weights from the RAM-backed offline HF cache.
 The standard-damage subsets are consequently vendored under `data/eval/` at
 their pinned revisions; `scripts/vendor_standard_eval.py` is the explicit,
