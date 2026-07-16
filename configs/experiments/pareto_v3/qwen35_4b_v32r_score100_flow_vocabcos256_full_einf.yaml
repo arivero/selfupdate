@@ -1,0 +1,33 @@
+run_name: pareto_v32r_qwen35_4b_score100_flow_vocabcos256_full_lr1e6_s17_einf
+data: {examples_path: data/combined/examples_v5rs_window_qwen35_4b_score100.jsonl}
+mask: {compaction: flow_mask}
+cache: {item_cache_items: 16}
+train:
+  run_class: method
+  pipeline_version: 3
+  pipeline_revision: "3.2"
+  update_granularity: online
+  online_optimizer: immediate_sgd
+  lr_rule: fixed
+  schedule: summed
+  epochs: 1000000
+  seed: 17
+  max_steps: 0
+  micro_batch: 256
+  grad_accum: 1
+  batching: bucketed
+  conn_window: 1
+  conn_stride: 0
+  trajectory_source: student_hidden
+  online_teacher: false
+  history_policy: causal_bk
+  backward_dispatch: per_block
+  online_write_dispatch: after_backward
+  stale_gradient_window: 16
+  activation_shard_users: 8
+  prefill_query_chunk: 16
+  hidden_loss: vocab_cosine_sampled
+  vocab_cosine_samples: 256
+  vocab_cosine_seed: 17
+  lr: 1.0e-6
+  lora: {enabled: false, r: 16, alpha: 32, dropout: 0.0}

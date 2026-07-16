@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "selection": "task_aware_teacher_answer_score_exact",
+  "score": 1.0,
+  "next_previous_metric": "word_acc",
+  "cloze_metric": "containment",
+  "allows_unscored_extra_answer_text": true,
+  "source_examples": "data/combined/examples_v5rs_window.jsonl",
+  "source_examples_sha256": "575b9dea35e0179dcdf7a513416e640db899c9bf9584236088f2921cce7a7042",
+  "source_responses": "runs/vllm_benchmark_l40s/qwen35_4b_fixed4096_exactids_agpul06/responses_bs64.jsonl",
+  "source_responses_sha256": "0933b37fdde2a7b4770a5f03443970ab1420f50673b139548d4d5855f6102fa6",
+  "source_count": 2071,
+  "selected_count": 1772,
+  "selected_fraction": 0.8556253017865766,
+  "selected_teacher_answer_tokens": 76090,
+  "kind_counts": {
+    "cloze": 202,
+    "next": 1354,
+    "prev": 216
+  },
+  "corpus_counts": {
+    "mach": 1290,
+    "quij": 482
+  },
+  "output": "data/combined/examples_v5rs_window_qwen35_4b_score100.jsonl",
+  "output_sha256": "b7ebc19bcd5bc6ad7cf27da571b7c104bc5e9e8039fc1032de0550fa4f2e3358"
+}

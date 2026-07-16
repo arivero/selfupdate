@@ -4,6 +4,10 @@ Started: 2026-07-16 13:20 CEST. Dataset: v5 (`examples_v5rs_window.jsonl`).
 Training pipeline: v3.2. This document is updated during the campaign; each
 completed training also produces its own run-local Markdown/PDF report.
 
+The follow-up exact-100% reduced-epoch LoRA/full-FT campaign is documented
+live in
+[`pareto_v32_reduced100_training_progress.md`](pareto_v32_reduced100_training_progress.md).
+
 ## Whole-training-set output evaluation contract
 
 From the next v3.2 launches, every completed epoch records `CE-eval-loss`
@@ -159,6 +163,20 @@ measured at the epoch with the best *post-training* overall score for that
 run, against the same model's epoch-zero evaluation. These are fast monitors
 with 8 prompts per task per corpus (72 prompt evaluations per epoch), not the
 full-corpus checkpoint evaluation.
+
+For scale, the base models' separate **uncensored original-RAG** generation
+scores on the whole 2,071-example v5 training corpus are:
+
+| Model | Uncensored original-RAG task score | Next/previous word accuracy (n=1,822) | Cloze containment (n=249) | Source |
+|---|---:|---:|---:|---|
+| Qwen3.5-0.8B | 0.62697 | 0.62240 | 0.66043 | [`summary.json`](../runs/vllm_benchmark_l40s/qwen35_0p8b_fixed4096_exactids_agpul05/summary.json) |
+| Qwen3.5-4B | 0.92085 | 0.92018 | 0.92582 | [`summary.json`](../runs/vllm_benchmark_l40s/qwen35_4b_fixed4096_exactids_agpul06/summary.json) |
+
+This is not epoch zero and is not a checkpoint delta baseline: it gives the
+untrained base model the real, unmodified RAG passage. The epoch-zero values
+below instead use the same censored/no-RAG input condition and small recall
+monitor used for the student checkpoints. The scores therefore answer
+different questions and must not be subtracted from one another.
 
 Absolute overall recall from that monitor is:
 

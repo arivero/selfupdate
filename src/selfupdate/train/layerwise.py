@@ -99,6 +99,7 @@ from .steps import (  # noqa: F401  (step primitives re-exported for scripts)
     window_step_batch,
 )
 from .teacher_source import OnlineTeacherSource, _online_targets  # noqa: F401
+from .stop import cooperative_stop_signals
 from .telemetry import (
     ParameterDeltaTracker,
     _epoch_end_telemetry,
@@ -142,17 +143,20 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
             cache_hash=cache._index["config_hash"],
             node_epoch0_manifest=rt.cache_manifest,
         )
-        train_online_v3(cfg, stack, tok, log, cache, teacher=teacher)
-        locality = certify_locality_resident(
-            cfg, stack, tok, cache, run_dir, teacher=teacher)
-        log.log(kind="locality_certification", **{
-            key: locality[key] for key in (
-                "items", "gradient_contract", "final_logit_training",
-                "local_grad_norm", "cross_block_leak_grad_norm",
-                "frozen_vocab_grad_norm",
-                "local_signal_present_in_every_block", "passed")})
-        rt.save_checkpoint(run_dir)
-        log.log(kind="done", **rt.memory_summary())
+        with cooperative_stop_signals():
+            stopped = train_online_v3(
+                cfg, stack, tok, log, cache, teacher=teacher)
+            locality = certify_locality_resident(
+                cfg, stack, tok, cache, run_dir, teacher=teacher)
+            log.log(kind="locality_certification", **{
+                key: locality[key] for key in (
+                    "items", "gradient_contract", "final_logit_training",
+                    "local_grad_norm", "cross_block_leak_grad_norm",
+                    "frozen_vocab_grad_norm",
+                    "local_signal_present_in_every_block", "passed")})
+            rt.save_checkpoint(run_dir)
+            log.log(kind="done", graceful_stop=bool(stopped),
+                    **rt.memory_summary())
         log.close()
         return run_dir
     teacher = rt.load_teacher(moe_load_kw)

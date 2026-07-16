@@ -21,11 +21,13 @@ import time
 
 import torch
 from transformers import DynamicCache, StaticCache
+from transformers.cache_utils import LinearAttentionLayer
 
 from ..data.dataset import DistillDataset, collate_padded_items
 from ..eval.teacher_output import teacher_output_eval_sums
 from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
+from .stop import requested_signal, stop_requested
 from .telemetry import (
     ParameterDeltaTracker,
     _epoch_end_telemetry,
@@ -798,6 +800,46 @@ def _detach_cache_layer(cache, index: int) -> None:
             setattr(layer, name, detached)
 
 
+class _TrainingLinearAttentionLayer(LinearAttentionLayer):
+    """Out-of-place recurrent cache for a forward followed by backward.
+
+    Transformers' inference cache preserves static tensor addresses with
+    ``copy_``.  Qwen3.5's FLA backward saves the predecessor recurrent state,
+    so overwriting that tensor with the successor before backward violates
+    autograd's version contract.  Training needs the opposite ownership law:
+    keep the predecessor alive for backward and publish a detached successor
+    tensor for the next causal tile.
+    """
+
+    def update_conv_state(self, conv_states: torch.Tensor, **kwargs):
+        # Qwen3.5 supplies the complete next convolution window on every
+        # multi-token call.  Retain it without its producer graph.  Single-
+        # token inference updates bypass this method; the BxK trainer avoids
+        # that inference-only path for trainable tail tiles below.
+        self.dtype, self.device = conv_states.dtype, conv_states.device
+        self.max_batch_size = conv_states.shape[0]
+        self.conv_kernel_size = conv_states.shape[-1]
+        self.conv_states = conv_states.detach()
+        self.is_conv_states_initialized = True
+        self.has_previous_state = True
+        return self.conv_states
+
+    def update_recurrent_state(self, recurrent_states: torch.Tensor,
+                               **kwargs):
+        self.recurrent_states = recurrent_states.detach()
+        self.is_recurrent_states_initialized = True
+        return self.recurrent_states
+
+
+def _training_static_cache(config, max_cache_len: int) -> StaticCache:
+    """Construct StaticCache with autograd-safe Qwen3.5 recurrent layers."""
+    cache = StaticCache(config=config, max_cache_len=max_cache_len)
+    for index, layer in enumerate(cache.layers):
+        if isinstance(layer, LinearAttentionLayer):
+            cache.layers[index] = _TrainingLinearAttentionLayer()
+    return cache
+
+
 def _bk_layer_type(stack, layer: int) -> str:
     if layer - 1 < len(stack.layer_types):
         return stack.layer_types[layer - 1]
@@ -945,32 +987,50 @@ def _bk_footprint_guard(cfg, stack, ds, device, layer_types, shard_users,
     """Refuse a deterministic worst tile that cannot fit after model load."""
     max_prompt = max(pair.s_aligned.start for pair in ds.pairs)
     max_answer = max(pair.aligned_len for pair in ds.pairs)
-    max_total = max_prompt + max_answer
+    # One masked sentinel cache slot lets a final logical q=1 tile execute as
+    # a two-query training chunk instead of entering Qwen3.5's inference-only
+    # in-place recurrent kernels.
+    max_total = max_prompt + max_answer + 1
     text = stack.text_config
     hidden = int(getattr(text, "hidden_size"))
     heads = int(getattr(text, "num_attention_heads", 1))
     kv_heads = int(getattr(text, "num_key_value_heads", heads))
     head_dim = int(getattr(text, "head_dim", hidden // heads))
     full_layers = sum(kind == "full_attention" for kind in layer_types)
-    bf16 = 2
+    execution_bytes = 2 if cfg.train.lora.enabled else 4
+    target_bytes_per_value = 2
     kv_bytes = (
-        shard_users * full_layers * max_total * 2 * kv_heads * head_dim * bf16)
+        shard_users * full_layers * max_total * 2 * kv_heads * head_dim
+        * execution_bytes)
     target_bytes = (
-        stack.n_layers * shard_users * window_width * hidden * bf16)
+        stack.n_layers * shard_users * window_width * hidden
+        * target_bytes_per_value)
     mask_bytes = (
         shard_users * min(cfg.train.prefill_query_chunk, max_prompt)
-        * max_total * bf16)
+        * max_total * execution_bytes)
     # Conservative current-block backward workspace. Only one local block's
     # graph is alive, so this does not scale with depth.
-    activation_bytes = shard_users * window_width * hidden * bf16 * 20
+    activation_bytes = (
+        shard_users * window_width * hidden * execution_bytes * 20)
     # Evaluation-only CE/KL decodes student and teacher final states in
     # bounded 256-row chunks. Conservatively account for logits plus fp32
     # log-probabilities for both sides.
     vocab = int(stack.lm_head.weight.shape[0])
     output_eval_rows = min(256, cfg.train.micro_batch * window_width)
     output_eval_bytes = output_eval_rows * vocab * 4 * 4
+    # Full-weight immediate SGD materializes gradients only for the current
+    # block. LoRA makes this negligible; fp32 full-FT does not. Account for
+    # the largest trainable block explicitly after model load so the launch
+    # guard sees the real remaining margin.
+    current_block_grad_bytes = max(
+        (sum(param.numel() * param.element_size()
+             for param in stack.block_params(layer)
+             if param.requires_grad)
+         for layer in range(1, stack.n_layers + 1)),
+        default=0,
+    )
     required = (kv_bytes + target_bytes + mask_bytes + activation_bytes
-                + output_eval_bytes)
+                + output_eval_bytes + current_block_grad_bytes)
     free, total = torch.cuda.mem_get_info(device)
     allowed = int(free * 0.80)
     evidence = {
@@ -978,11 +1038,13 @@ def _bk_footprint_guard(cfg, stack, ds, device, layer_types, shard_users,
         "max_answer": max_answer,
         "max_total": max_total,
         "full_attention_layers": full_layers,
+        "execution_bytes_per_value": execution_bytes,
         "estimated_kv_bytes": kv_bytes,
         "estimated_target_bytes": target_bytes,
         "estimated_mask_bytes": mask_bytes,
         "estimated_activation_bytes": activation_bytes,
         "estimated_output_eval_bytes": output_eval_bytes,
+        "estimated_current_block_grad_bytes": current_block_grad_bytes,
         "estimated_peak_increment_bytes": required,
         "cuda_free_bytes_after_model_load": free,
         "cuda_total_bytes": total,
@@ -999,7 +1061,7 @@ def _bk_footprint_guard(cfg, stack, ds, device, layer_types, shard_users,
 
 def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                               teacher_hidden, layer_types, shard_users,
-                              window_width):
+                              window_width, execution_dtype):
     """Build fixed B-user causal state in bounded activation shards.
 
     The shard boundary is purely an execution/memory boundary.  A later tile
@@ -1027,10 +1089,29 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
         max_answer = int(lengths_cpu.max())
         timeline = torch.arange(max_answer, device=device)[None]
         answer_keep = timeline < lengths[:, None]
-        full_keep = torch.cat((prefix_keep, answer_keep), dim=1)
-        max_cache_len = prompt_length + max_answer
-        history = StaticCache(
+        sentinel_keep = torch.zeros(
+            (b_now, 1), dtype=torch.bool, device=device)
+        full_keep = torch.cat(
+            (prefix_keep, answer_keep, sentinel_keep), dim=1)
+        max_cache_len = full_keep.shape[1]
+        history = _training_static_cache(
             config=stack.text_config, max_cache_len=max_cache_len)
+        # Pin full-attention cache storage to the execution dtype before any
+        # update. Linear-attention layers own a different recurrent state
+        # shape and retain their model-authoritative lazy initialization.
+        text = stack.text_config
+        kv_heads = int(getattr(
+            text, "num_key_value_heads",
+            getattr(text, "num_attention_heads", 1)))
+        heads = int(getattr(text, "num_attention_heads", kv_heads))
+        head_dim = int(getattr(
+            text, "head_dim", int(getattr(text, "hidden_size")) // heads))
+        empty_kv = torch.empty(
+            (b_now, kv_heads, 0, head_dim), dtype=execution_dtype,
+            device=device)
+        for cache_layer, layer_type in zip(history.layers, layer_types):
+            if layer_type == "full_attention" and not cache_layer.is_initialized:
+                cache_layer.lazy_initialization(empty_kv, empty_kv)
         if teacher_hidden:
             first_prefix = _bk_pinned_gather_hidden(
                 teacher_inputs[0], prefix_index).to(device, non_blocking=True)
@@ -1040,7 +1121,8 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
             prefix_hidden = stack.embed(prefix_ids)
             prefix_rope = stack.rope(prefix_hidden, prefix_positions)
         with torch.no_grad(), torch.autocast(
-                device.type, dtype=torch.bfloat16):
+                device.type, dtype=torch.bfloat16,
+                enabled=cfg.train.lora.enabled):
             h = prefix_hidden if not teacher_hidden else None
             for layer in range(1, n + 1):
                 h_in = (
@@ -1058,7 +1140,7 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                         if layer_types[layer - 1] == "linear_attention" else
                         _bk_static_additive_mask(
                             full_keep, query_valid, q0, q1,
-                            torch.bfloat16))
+                            execution_dtype))
                     pieces.append(stack.run_block(
                         layer, h_in[:, q0:q1],
                         _bk_slice_sequence(prefix_rope, q0, q1),
@@ -1111,12 +1193,20 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
 
 
 def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
-                           teacher_hidden):
+                           teacher_hidden, execution_dtype):
     """Materialize one shard's current K-window state, or return None."""
     _bk_compact_finished_rows(shard, start)
     if not shard["b_now"] or start >= shard["max_answer"]:
         return None
-    stop = min(start + width, shard["max_answer"])
+    logical_stop = min(start + width, shard["max_answer"])
+    stop = logical_stop
+    # Qwen3.5 dispatches q=1 through fused inference kernels that mutate
+    # recurrent state in place.  A final one-token training tile therefore
+    # carries one masked, loss-free dummy query through the causal chunk
+    # kernel.  Causality leaves the real first output unchanged, and no later
+    # tile consumes the dummy successor state.
+    if logical_stop - start == 1 and width > 1:
+        stop += 1
     tile_width = stop - start
     offsets = torch.arange(start, stop, device=device)[None]
     query_valid = offsets < shard["lengths"][:, None]
@@ -1141,10 +1231,14 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
     source_index = (shard["student_s0"] + offsets).clamp_max(
         shard["batch_positions"].shape[1] - 1)
     query_positions = shard["batch_positions"].gather(1, source_index)
+    if stop != logical_stop:
+        # The sentinel has a real, in-range cache position even though its
+        # token embedding is an ignored duplicate of the final source token.
+        query_positions[:, -1] = query_positions[:, -2] + 1
     full_mask = _bk_static_additive_mask(
         shard["full_keep"], query_valid,
         shard["prompt_length"] + start,
-        shard["prompt_length"] + stop, torch.bfloat16)
+        shard["prompt_length"] + stop, execution_dtype)
     valid_index_cpu = torch.cat([
         row * tile_width + torch.arange(int(count))
         for row, count in enumerate(valid_widths)
@@ -1227,7 +1321,7 @@ def _bk_stage_teacher_tile(shard, layer_index: int,
     return out.to(device, non_blocking=True)
 
 
-def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
+def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
     """Full dataset-v5 B-user × K-token pipeline-v3.2 training.
 
     One cohort represents B simultaneous conversations. Its causal state is
@@ -1264,6 +1358,17 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
     K = cfg.train.stale_gradient_window
     activation_shard_users = cfg.train.activation_shard_users
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
+    trainable_dtypes = sorted({str(param.dtype)
+                               for layer in range(1, n + 1)
+                               for param in stack.block_params(layer)
+                               if param.requires_grad})
+    if not cfg.train.lora.enabled and trainable_dtypes != ["torch.float32"]:
+        raise RuntimeError(
+            "causal_bk full-weight immediate SGD requires fp32 trainable "
+            f"block weights, got {trainable_dtypes}; reduced-precision direct "
+            "writes can round the configured learning rate to zero")
+    execution_dtype = (
+        torch.bfloat16 if cfg.train.lora.enabled else torch.float32)
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok,
         need_layers=list(range(1, n + 1)),
@@ -1298,6 +1403,9 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
         lr_epoch_multipliers=cfg.train.lr_epoch_multipliers,
         vocab_cosine_samples=cfg.train.vocab_cosine_samples,
         vocab_cosine_seed=cfg.train.vocab_cosine_seed,
+        parameterization=("lora" if cfg.train.lora.enabled else "full_weight"),
+        trainable_parameter_dtypes=trainable_dtypes,
+        execution_dtype=str(execution_dtype),
         output_evaluation=(
             "CE-eval-loss and KL-eval-loss over every answer token in the "
             "whole training-set traversal; evaluation_only=true; "
@@ -1333,14 +1441,15 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
             items = [ds[index] for index in indices]
             shards = _bk_prepare_cohort_shards(
                 cfg, stack, items, device, teacher, teacher_hidden,
-                layer_types, activation_shard_users, K)
+                layer_types, activation_shard_users, K, execution_dtype)
             b_now = len(items)
             max_answer = max(shard["max_answer"] for shard in shards)
             for start in range(0, max_answer, K):
                 tile_states = [
                     state for shard in shards
                     if (state := _bk_prepare_shard_tile(
-                        shard, start, K, n, device, stack, teacher_hidden))
+                        shard, start, K, n, device, stack, teacher_hidden,
+                        execution_dtype))
                 ]
                 cells = sum(state["cells"] for state in tile_states)
                 if not cells:
@@ -1367,7 +1476,9 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                             state["query_valid"]
                             if layer_types[layer - 1] == "linear_attention"
                             else state["full_mask"])
-                        with torch.autocast(device.type, dtype=torch.bfloat16):
+                        with torch.autocast(
+                                device.type, dtype=torch.bfloat16,
+                                enabled=cfg.train.lora.enabled):
                             h_out = stack.run_block(
                                 layer, h_in, state["query_rope"],
                                 position_ids=state["query_positions"],
@@ -1462,6 +1573,100 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
                 del shard["teacher_staging"], shard["lengths_cpu"]
             del shards, items
 
+            # A cohort boundary is a coherent model state: every BxK tile in
+            # the cohort has completed every block-local write, and all CUDA
+            # graphs/caches owned by the cohort have been released. Poll only
+            # here so SIGTERM never publishes a half-written layer tile.
+            if stop_requested():
+                seconds = time.time() - epoch_started
+                events = token_events - epoch_events_start
+                pending_losses = (
+                    [[value / epoch_cells for value in epoch_loss_sums]]
+                    if epoch_cells else [])
+                _flush_train_log(
+                    log, epoch=epoch, step=token_events, accum=answers_seen,
+                    pending=pending_losses, pending_items=epoch_cells,
+                    n_layers=n, partial=True,
+                    pipeline_version=3, update_granularity="online",
+                    update_reduction="unaveraged_sum_BxK",
+                    trajectory_source=cfg.train.trajectory_source,
+                    history_policy=cfg.train.history_policy,
+                    token_events_seen=token_events,
+                    optimizer_updates_seen=conceptual_writes,
+                    physical_optimizer_updates_seen=physical_writes,
+                    optimizer_updates_per_token=n,
+                    stale_gradient_window=K,
+                    lr_rule=cfg.train.lr_rule,
+                    learning_rate=epoch_lr,
+                    lr_multiplier=lr_multiplier,
+                    gradient_aggregation=(
+                        "unaveraged_sum_at_shared_weight_snapshot"),
+                    completed_epochs=epoch, partial_epoch=True,
+                )
+                log.log(
+                    kind="teacher_output_eval_partial",
+                    epoch=epoch + 1,
+                    answer_token_count=epoch_output_eval_tokens,
+                    expected_answer_token_count=full_training_answer_tokens,
+                    dataset_item_count=len(ds),
+                    dataset_coverage="partial_epoch_not_a_validation_result",
+                    evaluation_only=True,
+                    validation_subset=False,
+                    used_for_backward=False,
+                    optimizer_weight=0.0,
+                )
+                if epoch_grad_sums is not None and epoch_cells:
+                    log.log(
+                        kind="v3_gradient_norm",
+                        epoch=epoch + 1,
+                        per_layer_mean=[
+                            float((value / epoch_cells).cpu())
+                            for value in epoch_grad_sums],
+                        measure=(
+                            "BxK_window_sum_gradient_norm_normalized_per_cell"),
+                        token_events_seen=token_events,
+                        optimizer_updates_seen=conceptual_writes,
+                        physical_optimizer_updates_seen=physical_writes,
+                        partial_epoch=True,
+                    )
+                log.log(
+                    kind="v3_throughput", epoch=epoch + 1, seconds=seconds,
+                    token_events=events,
+                    local_writes=(
+                        conceptual_writes - epoch_conceptual_start),
+                    physical_local_writes=(
+                        physical_writes - epoch_physical_start),
+                    token_events_per_s=events / max(seconds, 1e-9),
+                    local_writes_per_s=(
+                        conceptual_writes - epoch_conceptual_start)
+                        / max(seconds, 1e-9),
+                    physical_local_writes_per_s=(
+                        physical_writes - epoch_physical_start)
+                        / max(seconds, 1e-9),
+                    includes=(
+                        "partial_epoch_bucketed_cache_io_plus_prompt_prefill_"
+                        "plus_BxK_writes"),
+                    history_policy=cfg.train.history_policy,
+                    trajectory_source=cfg.train.trajectory_source,
+                    stale_gradient_window=K,
+                    lr_rule=cfg.train.lr_rule,
+                    learning_rate=epoch_lr,
+                    lr_multiplier=lr_multiplier,
+                    completed_epochs=epoch,
+                    partial_epoch=True,
+                )
+                log.log(
+                    kind="graceful_stop",
+                    signal=requested_signal(),
+                    boundary="completed_cohort",
+                    completed_epochs=epoch,
+                    partial_epoch=epoch + 1,
+                    token_events_seen=token_events,
+                    answers_seen=answers_seen,
+                    checkpoint_pending=True,
+                )
+                return True
+
         pending_losses = (
             [[value / epoch_cells for value in epoch_loss_sums]]
             if epoch_cells else [])
@@ -1552,6 +1757,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> None:
         delta_tracker.log(
             log, epoch=epoch + 1, phase=f"after_epoch_{epoch + 1}",
             started_at=started)
+    return False
 
 
 @torch.no_grad()
@@ -1730,7 +1936,7 @@ def _token_cached(cfg, stack, loss_fn, it, offset: int, device,
     return losses, grad_norms
 
 
-def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> None:
+def train_online_v3(cfg, stack, tok, log, cache, teacher=None) -> bool:
     """Run the pipeline-v3 online walk; checkpoint publication stays in runtime."""
     if cfg.train.history_policy == "causal_bk":
         return train_bk_v32(

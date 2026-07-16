@@ -126,7 +126,8 @@ def validate_knob_schedule(cfg) -> None:
             if cfg.train.online_write_dispatch != "after_backward":
                 bad.append(
                     "stale-gradient windows require after_backward fused writes")
-            if not cfg.train.lora.enabled:
+            if (not cfg.train.lora.enabled
+                    and cfg.train.history_policy != "causal_bk"):
                 bad.append("stale-gradient windows are initially LoRA-only")
             if cfg.train.hidden_loss not in (
                 "nmse", "l2mse", "cosine", "huber", "charbonnier",
@@ -243,8 +244,6 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("causal_bk requires per_block")
             if cfg.train.online_write_dispatch != "after_backward":
                 bad.append("causal_bk requires after_backward")
-            if not cfg.train.lora.enabled:
-                bad.append("causal_bk is initially LoRA-only")
             if cfg.train.max_steps:
                 bad.append("causal_bk currently runs complete epochs; max_steps must be 0")
         if cfg.train.conn_window not in (0, 1):
