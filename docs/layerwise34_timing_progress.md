@@ -97,6 +97,7 @@ Lustre during the measured traversal.
 | 06:xx | 4B PP4 two-run budget opened | PP4 receives one baseline `[8,16,25]` run and exactly one evidence-driven repartition; after that the campaign moves to Qwen3.6-27B. PP1 is retained only as the 4B identity/speed denominator and is not attempted for larger models. An initial delegated command mistakenly landed on occupied agpul05 and failed during model-load warmup; it performed no PP4 training and is excluded. The real run has a host-specific agpul06 identity. |
 | 06:xx | 4B PP2 full-v5 completed cleanly | Pinned `[16]` stages on agpul05 physical GPUs 1/3 completed 239,286 valid token-events in 176.072 s: **1,359.0 token-events/s**, 1.313x PP1 (65.7% two-card efficiency), and 35.35 global physical block writes/s. Locality passed with zero cross-block and frozen-vocabulary leakage. CE-eval-loss 2.59285, KL-eval-loss 2.52666, and stage-scoped allocated/reserved VRAM 36.28/37.76 GiB (18.84/18.91 GiB reserved). |
 | 06:xx | 4B PP4 baseline launched on the intended host | Host verified as `agpul06`; PID `3783069` owns all and only GPUs 0/1/2/3 under host-specific run `...pp4...agpul06_0123_v1`. Full-v5 cache `98bb2aff23e25f93` reused. Partition `[8,16,25]` is the first of the two permitted PP4 measurements. |
+| 06:xx | 4B PP4 baseline completed; sole repartition selected | `[8,16,25]` completed 239,286 events in 160.670 s: **1,489.3 token-events/s**, 1.439x PP1 (36.0% four-card efficiency), slightly slower than PP3. Locality and whole-set CE/KL passed; stage VRAM was 11.04/9.70/10.47/10.82 GiB reserved. In the long cohort, stage compute was 25.96/25.95/24.51/21.05 s; stage 0 also accumulated 16.61 s send backpressure. The only retry is `[7,15,23]`: remove the expensive block-8 cycle from stage 0 while giving the underloaded final stage blocks 24--32. The v1 sampler used the run name rather than the config argv substring and produced only a header, so no occupancy claim is made from it. |
 
 ## Matrix
 
@@ -109,7 +110,7 @@ Lustre during the measured traversal.
 | Qwen3.5-4B | 1 | serial | all blocks on GPU 0 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,035.0 | 32.91 / 35.51 GiB allocated/reserved on GPU0 |
 | Qwen3.5-4B | 2 | wavefront | `[16]`, GPUs 1/3 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,359.0 (1.313x PP1) | 18.84 / 18.91 GiB reserved |
 | Qwen3.5-4B | 3 | wavefront | `[11,23]`, ranges 11/12/9, GPUs 1/2/3 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,505.4 (1.454x PP1) | 13.88 / 13.52 / 13.01 GiB allocated; 40.95 GiB aggregate reserved |
-| Qwen3.5-4B | 4 | wavefront | measured profile pending | pending exact-100 | pending |  |  |
+| Qwen3.5-4B | 4 | wavefront | v1 `[8,16,25]`; sole retry v2 `[7,15,23]` | full-v5 cache `98bb2aff23e25f93` | v1 passed scientifically; v2 pending | 1,489.3 v1 (1.439x PP1) | v1 11.04 / 9.70 / 10.47 / 10.82 GiB reserved |
 
 Blank result cells are intentionally unmeasured; no throughput is inferred
 from the dependency proof or from a partial run.
