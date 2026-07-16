@@ -121,3 +121,39 @@ times are appended here as they occur.
 | 20:11-20:17 | Full-FT retry 4 passed the complete signal/checkpoint gate | Three coherent cohorts completed before SIGTERM was observed: 768 answers, 56,370 token events, and 704 physical block writes. Peak VRAM was approximately 40.6 GiB. Locality certification passed on 16 items with local gradient norm 7.2424, cross-block leak gradient 0, frozen-vocabulary gradient 0, and signal present in every block. The trainer recorded `graceful_stop=true`, atomically published the checkpoint, generated the individual PDF report, and exited without a training error. |
 | 20:20 | Eight production runs launched from commit `bd1e82f` | Exactly one trainer occupies each physical GPU 0-3 on agpul04 and agpul05, matching the placement table. All eight reused node-local cache identity `e64dd76e918a1435`; no warning, traceback, or duplicate trainer was present at launch verification. Worker logs and PID files are under `runs/pareto_v32r_score100_worker_logs/<host>/`. agpul06 was not touched. Initial training speed remains pending until each worker emits a coherent cohort boundary. |
 | 20:27 | Four full-FT production workers terminated by explicit OOM; four LoRA workers remain live | `agpul04/gpu1`, `agpul04/gpu3`, `agpul05/gpu1`, and `agpul05/gpu3` all reached epoch-zero evaluation and then raised `torch.OutOfMemoryError` while preparing the first training cohort's static KV cache. The errors requested only 24-44 MiB with roughly 9-17 MiB free; these are genuine memory-capacity failures, not ordinary completion or scheduler termination. The four LoRA workers remain running, so no duplicate or v3.3 relaunch was made. A future v3.3 full-FT arm must change the memory geometry before launch (for example smaller B/K or activation shards), and must use a new run name. |
+
+## Long-run results and best epochs
+
+The four LoRA arms stopped cooperatively after 103-107 complete dataset
+epochs. “Best” below means the maximum corpus-level `overall_word_acc` in
+the structured recall evaluation; epoch 0 is the untrained epoch-zero
+measurement. CE-eval-loss and KL-eval-loss are evaluation-only output
+distances, never training objectives.
+
+| Arm | Completed epochs | Best overall recall | Endpoint recall | Endpoint standard damage | Mean token-events/s |
+|---|---:|---:|---:|---:|---:|
+| Flow cosine | 107 | e7: 0.1625 | e107: 0.1305 | -6.25 pp | 1,464 |
+| Flow Huber | 107 | e3: 0.1633 | e107: 0.1319 | -4.17 pp | 1,475 |
+| Flow sampled-vocabulary cosine-256 | 103 | e5: 0.1656 | e103: 0.1463 | 0.00 pp | 1,386 |
+| Intact Huber | 106 | e20: 0.1697 | e106: 0.1553 | 0.00 pp | 1,463 |
+
+Best task-specific epochs were: flow cosine next/previous/cloze e4/e5/e32;
+flow Huber e29/e10/e50; sampled-vocabulary cosine e1/e1/e11; and intact
+Huber e9/e6/e0. Thus the long runs mostly demonstrate over-training: the
+recall peak arrives in the first 20-50 epochs and later hidden-state updates
+reduce recall, especially under flow censorship.
+
+The scientifically interesting arm is intact Huber. It reaches the highest
+overall recall (0.1697 at epoch 20), keeps the standard benchmark unchanged,
+and drives the whole-training-set evaluation-only output distances from
+approximately CE 2.97 / KL 2.91 near epoch zero to CE 0.0284 / KL 0.000093
+by the end. This is strong hidden-state self-consistency under uncensored
+RAG, not evidence of improved task recall. Sampled-vocabulary cosine is the
+other clean arm: it preserves standard damage at the endpoint and has the
+second-best recall peak, but its output distances remain around CE 4.33 / KL
+4.27 at the endpoint. Flow Huber and flow cosine show the expected trade-off:
+their censorship training modifies behavior enough to damage the standard
+benchmark after prolonged exposure.
+
+All eight reports, including four explicitly incomplete OOM diagnostics, are
+linked chronologically in `runs/report_v2_index/` with date-prefixed names.
