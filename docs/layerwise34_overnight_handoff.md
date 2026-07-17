@@ -2,10 +2,12 @@
 
 ## Purpose
 
-Five full-v5, one-epoch LoRA runs compare block-local teacher-hidden execution
-without the severe B=100 packing confound.  They occupy 12 L40S cards and keep
-the ordinary physical layer distributions unchanged.  Huber and cosine use
-separate trainers but share one immutable full-input cache per model/host.
+Five full-v5, open-ended LoRA runs compare block-local teacher-hidden execution
+without the severe B=100 packing confound.  `epochs: 1000000` is the practical
+infinite ceiling: they run until an external cooperative termination request.
+They occupy 12 L40S cards and keep the ordinary physical layer distributions
+unchanged.  Huber and cosine use separate trainers but share one immutable
+full-input cache per model/host.
 
 ## Expected jobs
 
@@ -30,9 +32,12 @@ exact launcher and trainer PIDs, inspect compact logs with
 every traceback, OOM, cache-capacity failure, duplicate writer, or cursor
 mismatch before changing anything.
 
-For each completed run, require `pipeline_v32_contract`, `v3_throughput`, exact
+When enough complete epochs have accumulated, send `SIGTERM` to each exact
+trainer, admit no replacement cohort, and let it drain, certify, save, and exit;
+never use `SIGKILL` for a healthy trainer.  For each stopped run, require
+`pipeline_v32_contract`, per-completed-epoch `v3_throughput`, exact
 whole-training-set `teacher_output_eval`, `locality_certification.passed=true`,
-`done`, and a published checkpoint.  Verify physical mappings and cuts against
+`done`, and a published checkpoint. Verify physical mappings and cuts against
 the table above, `trajectory_source=teacher_hidden`,
 `teacher_hidden_source=gpu_cache`, zero boundary bytes, 2,071 dataset items,
 and exact evaluated answer-token/item counts.  Compare both token-events/s and
@@ -44,7 +49,7 @@ parameter deltas.  Compare Huber versus cosine only within the same model and
 placement; compare the full-v5 Huber arms with the ordinary full-v5 PP2/PP4
 references in `docs/layerwise34_timing_progress.md`.
 
-After all five terminate, regenerate in order:
+After all five are cooperatively stopped and terminate, regenerate in order:
 
 1. `scripts/layer_loss_plots.py --runs 'layerwise34_overnight_*' --force`
 2. `scripts/delta_profiles.py --runs 'layerwise34_overnight_*' --force`

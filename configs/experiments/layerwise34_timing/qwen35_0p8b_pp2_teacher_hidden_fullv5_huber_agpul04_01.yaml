@@ -14,6 +14,7 @@ cache:
 train:
   pipeline_version: 3
   pipeline_revision: "3.2"
+  epochs: 1000000
   hidden_loss: huber
   update_granularity: online
   history_policy: causal_bk
