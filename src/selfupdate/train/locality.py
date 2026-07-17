@@ -31,7 +31,8 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
     teacher_hidden = (cfg.train.pipeline_version == 3
                       and cfg.train.trajectory_source == "teacher_hidden")
     cached_teacher_hidden = (
-        teacher_hidden and cfg.train.teacher_hidden_source == "cpu_cache")
+        teacher_hidden and cfg.train.teacher_hidden_source in (
+            "cpu_cache", "gpu_cache"))
     ds = DistillDataset(
         cfg.data.examples_path, cache, tok, list(range(1, n + 1)),
         with_teacher_ids=teacher_hidden and not cached_teacher_hidden,

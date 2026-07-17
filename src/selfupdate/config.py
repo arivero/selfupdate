@@ -214,7 +214,7 @@ class TrainConfig:
     # teacher_hidden only: online recomputes full inputs with the frozen
     # teacher; cpu_cache reads the explicit full-prefix cache and permits
     # stages to execute without activation boundaries.
-    teacher_hidden_source: str = "online"  # online | cpu_cache
+    teacher_hidden_source: str = "online"  # online | cpu_cache | gpu_cache
     attention_source: str = "student_attention"    # future: teacher_attention
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"

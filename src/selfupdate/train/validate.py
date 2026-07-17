@@ -314,7 +314,7 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.mask.compaction not in ("flow_mask", "pad_random", "intact"):
             bad.append("pipeline-v3 censorship is flow_mask, pad_random, or intact; removal modes are retired")
         if cfg.train.trajectory_source == "teacher_hidden":
-            if cfg.train.teacher_hidden_source == "cpu_cache":
+            if cfg.train.teacher_hidden_source in ("cpu_cache", "gpu_cache"):
                 if not cfg.cache.store_full_teacher_inputs:
                     bad.append("teacher_hidden cpu_cache requires cache.store_full_teacher_inputs=true")
                 if cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
@@ -333,7 +333,8 @@ def validate_knob_schedule(cfg) -> None:
                 if cfg.train.pp_execution == "independent":
                     bad.append("independent execution requires the cached source; online teacher still has stage dependencies")
             else:
-                bad.append("teacher_hidden_source must be online or cpu_cache")
+                bad.append(
+                    "teacher_hidden_source must be online, cpu_cache, or gpu_cache")
             if cfg.mask.compaction == "pad_random":
                 bad.append("teacher_hidden + pad_random would feed uncensored teacher states at random-fill rows; use flow_mask or intact")
         elif cfg.train.trajectory_source != "student_hidden":

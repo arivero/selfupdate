@@ -886,6 +886,17 @@ def _bk_pinned_gather_hidden(value: torch.Tensor, index: torch.Tensor,
     return out
 
 
+def _bk_teacher_gather_hidden(value: torch.Tensor, index: torch.Tensor,
+                              rows: torch.Tensor | None = None) -> torch.Tensor:
+    """Gather from either pinned-host or explicitly resident teacher input."""
+    if value.device.type == "cpu":
+        return _bk_pinned_gather_hidden(value, index, rows=rows)
+    if rows is not None:
+        value = value.index_select(0, rows.to(value.device))
+    index = index.to(value.device)
+    return _bk_gather_hidden(value, index)
+
+
 def _bk_slice_sequence(value, start: int, stop: int):
     if torch.is_tensor(value):
         return value[:, start:stop]
@@ -1113,6 +1124,10 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                         dtype=values[0].dtype, device="cpu", pin_memory=True)
                     for row, value in enumerate(values):
                         staged[row, :value.shape[0]].copy_(value)
+                    if cfg.train.teacher_hidden_source == "gpu_cache":
+                        block_device = next(
+                            stack.blocks[layer - 1].parameters()).device
+                        staged = staged.to(block_device, non_blocking=True)
                     teacher_inputs.append(staged)
         (prompt_length, prefix_index, prefix_positions, prefix_valid,
          prefix_keep) = _bk_prefix_layout(cfg, shard_items, batch, device)
@@ -1162,7 +1177,7 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                         stack.blocks[layer - 1].parameters()).device
                     layer_positions = prefix_positions.to(
                         block_device, non_blocking=True)
-                    h_in = _bk_pinned_gather_hidden(
+                    h_in = _bk_teacher_gather_hidden(
                         teacher_inputs[layer - 1], prefix_index
                     ).to(block_device, non_blocking=True)
                     layer_rope = stack.rope(h_in, layer_positions)
@@ -1398,9 +1413,12 @@ def _bk_stage_teacher_tile(shard, layer_index: int,
                            device: torch.device,
                            staging: torch.Tensor | None = None) -> torch.Tensor:
     """Gather one teacher layer into the shard's pinned BxK buffer."""
+    value = shard["teacher_inputs"][layer_index]
+    if value.device.type != "cpu":
+        return _bk_teacher_gather_hidden(
+            value, source_index, rows=shard["active_rows_cpu"]).to(device)
     source_cpu = source_index.to("cpu")
-    source = shard["teacher_inputs"][layer_index].index_select(
-        0, shard["active_rows_cpu"])
+    source = value.index_select(0, shard["active_rows_cpu"])
     buffer = staging if staging is not None else shard["teacher_staging"]
     out = buffer[
         :shard["b_now"], :source_cpu.shape[1]]
@@ -1673,7 +1691,8 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
             f"causal_bk lacks authoritative state semantics for {unsupported}")
     teacher_hidden = cfg.train.trajectory_source == "teacher_hidden"
     cached_teacher_hidden = (
-        teacher_hidden and cfg.train.teacher_hidden_source == "cpu_cache")
+        teacher_hidden and cfg.train.teacher_hidden_source in (
+            "cpu_cache", "gpu_cache"))
     if teacher_hidden and not cached_teacher_hidden and teacher is None:
         raise ValueError("online causal_bk teacher_hidden requires a teacher")
     if cached_teacher_hidden and not cache.has_full_teacher_inputs:

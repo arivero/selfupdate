@@ -1,0 +1,31 @@
+run_name: layerwise34_timing_qwen35_0p8b_lora_pp4_teacher_hidden_gpu_cache_100q_agpul04
+mask:
+  compaction: flow_mask
+model:
+  pipeline_split: 0
+  pipeline_splits: [7, 14, 21]
+  pipeline_devices: [0, 1, 2, 3]
+  pipeline_world_size: 4
+cache:
+  store_full_teacher_inputs: true
+  full_input_shard_size: 1
+  item_cache_items: 0
+train:
+  pipeline_version: 3
+  pipeline_revision: "3.2"
+  update_granularity: online
+  history_policy: causal_bk
+  schedule: summed
+  grad_accum: 1
+  stale_gradient_window: 16
+  micro_batch: 256
+  batching: bucketed
+  activation_shard_users: 32
+  prefill_query_chunk: 32
+  online_optimizer: immediate_sgd
+  trajectory_source: teacher_hidden
+  teacher_hidden_source: gpu_cache
+  online_teacher: false
+  frozen_teacher_copy: false
+  pp_execution: independent
+  partition_profile_id: qwen35-0p8b-pp4-measured-v1-teacher-gpu-source
