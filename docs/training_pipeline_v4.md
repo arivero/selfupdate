@@ -110,6 +110,28 @@ Each stage saves an ordinary PEFT checkpoint plus `v4_stage_manifest.json`
 adapter by taking each block's tensors from the one stage that owns it —
 no averaging; the merge is exact because ownership is disjoint.
 
+## Future scale-out (owner, 2026-07-17 — noted, deliberately deferred)
+
+The disjoint-block-ownership abstraction is the load-bearing idea; two
+extensions follow from it and are explicitly left for later:
+
+1. **Layer rotation.** The same ownership contract admits both limits: very
+   small machines, and very large models where even ONE layer needs all the
+   GPUs (tensor-sharded) — the process set then owns layers *in time* rather
+   than in space, rotating each layer's weights (and optimizer state) in and
+   out of GPU while the teacher tensors stream. Deferred because tuning it
+   honestly requires measured PCIe/NVLink bandwidth to choose the batch size
+   that hides the rotation; guessing would reinvent the "optimizing without
+   measuring" failure mode issues.md documents. (`OptimizerPlan.full_offload`
+   already implements the moment-paging half of this.)
+2. **Layer sets on other machines (InfiniBand).** Much easier than it
+   sounds: training needs NO cross-stage communication at all, so joining
+   another machine is only an exception to the *relay's* shared-memory
+   boundary — when the next owned layer set lives on another host, the
+   student-trajectory boundary tensor travels over InfiniBand instead of
+   /dev/shm. Everything else (per-host node caches, per-stage checkpoints,
+   the merge) already works per host.
+
 ## Bibliography
 
 - **Primary blockwise-distillation ancestor (owner-confirmed):** Hui Wang,

@@ -299,6 +299,80 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
 
 
 
+@torch.no_grad()
+def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
+                             epoch: int) -> None:
+    """Deployment-matched CE/KL: the GENUINE censored student forward.
+
+    Full sequential walk over every block with the flow attention mask (the
+    student sequence keeps the privileged tokens; they are censored as
+    attention keys and zeroed as query rows — exactly the deployment view),
+    evaluated over the answer-predictor rows against the frozen head.  This
+    is the metric the teacher-forced training CANNOT see: whether the
+    student can run on its own states.  Single-process form; the staged
+    relay (M3) reproduces it across processes via CPU boundaries.
+    """
+    n = stack.n_layers
+    ce = torch.zeros((), dtype=torch.float64, device=device)
+    kl = torch.zeros((), dtype=torch.float64, device=device)
+    count = 0
+    for cohort in cohorts:
+        B, T = len(cohort.indices), cohort.T
+        ids = torch.zeros((B, T), dtype=torch.long)
+        for b, i in enumerate(cohort.indices):
+            pair = ds.pairs[i]
+            sid = torch.tensor(pair.student_ids, dtype=torch.long)
+            if sid.shape[0] != cohort.t_len[b]:
+                raise RuntimeError(
+                    f"{pair.example_id}: flow_mask student sequence length "
+                    f"{sid.shape[0]} != teacher length {cohort.t_len[b]}")
+            ids[b, : sid.shape[0]] = sid
+        ids = ids.to(device)
+        keep = cohort.keep.to(device)
+        pos = torch.arange(T, device=device)[None].expand(B, -1)
+        h = stack.embed(ids)
+        pe = stack.rope(h, pos)
+        for layer in range(1, n + 1):
+            h = stack.run_block(layer, h, pe, position_ids=pos,
+                                flow_keep=keep, causal_length=T)
+        view = stack.loss_view(n, h)
+        rows_v, rows_t, row_ids = [], [], []
+        for b, example_id in enumerate(cohort.example_ids):
+            r = cohort.eval_rows[b]
+            positions = cohort.qpos[b].index_select(0, r)
+            rows_v.append(view[b].index_select(0, positions.to(device)))
+            teacher_h = cache.hidden(example_id, n)
+            rel = (positions - cohort.t0[b]).clamp_(0, teacher_h.shape[0] - 1)
+            rows_t.append(teacher_h.index_select(0, rel).to(device))
+            row_ids.append(cohort.eval_ids[b])
+        c, k, cnt = teacher_output_eval_sums(
+            torch.cat(rows_v).detach().float(),
+            torch.cat(rows_t).detach().float(),
+            torch.cat(row_ids).to(device), stack.lm_head)
+        ce += c.double()
+        kl += k.double()
+        count += cnt
+    log.log(
+        kind="student_trajectory_eval", epoch=epoch,
+        CE_eval_loss=float(ce.item() / max(count, 1)),
+        KL_eval_loss=float(kl.item() / max(count, 1)),
+        answer_token_count=count,
+        dataset_item_count=len(ds.pairs),
+        dataset_coverage="whole_training_set_once_per_call",
+        token_coverage="every_teacher_realized_answer_token",
+        answer_only=True,
+        evaluation_only=True,
+        validation_subset=False,
+        used_for_backward=False,
+        optimizer_weight=0.0,
+        aggregation="token_weighted_mean",
+        trajectory="student_censored_flow_full_walk",
+        CE_target="teacher_realized_answer_token_ids",
+        KL_direction="teacher_to_student",
+        vocabulary_head="frozen",
+    )
+
+
 def train_online_v4(cfg, stack, tok, log, cache, peft_model=None) -> bool:
     """Run the v4 walk.  Returns True when stopped cooperatively."""
     if cfg.train.pipeline_version != 4:
@@ -564,6 +638,10 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None) -> bool:
         tracker.log(log, epoch=epoch + 1,
                     phase=f"after_epoch_{epoch + 1}", started_at=started_at)
         if single_process and not stopped:
+            if cfg.train.v4_relay_every_cohorts:
+                _student_trajectory_eval(
+                    cfg, stack, ds, cohorts, cache, device, log,
+                    epoch=epoch + 1)
             baseline = _epoch_end_telemetry(
                 cfg, stack, tok, log, epoch=epoch, baseline=baseline,
                 started_at=started_at)
