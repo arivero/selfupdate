@@ -154,6 +154,22 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("v4_teacher_source=store is capture-ONCE; "
                        "residency=rebuild would drop the captured entries "
                        "and there is no per-epoch recapture to rebuild from")
+        if "deepseek" in (cfg.model.name or "").lower():
+            # Plan B8 phase A: the frozen-context adapter (deepseek_ctx.py)
+            # serves sliding K=V + compressed entries + teacher-forced
+            # indexer routing from a per-(layer, cohort) online record.
+            if cfg.train.v4_teacher_source == "store":
+                bad.append("deepseek-v4 store lane not yet implemented: the "
+                           "capture relay does not carry compressor entries "
+                           "or indexer top-k; use v4_teacher_source=online")
+            if cfg.train.v4_kv_source == "student_refresh":
+                bad.append("deepseek-v4 requires v4_kv_source=teacher_frozen:"
+                           " compressed entries and indexer selection are "
+                           "key-side and must stay teacher-recorded")
+            if cfg.train.expert_routing_source != "black_box":
+                bad.append("deepseek-v4 MoE supports black_box routing only "
+                           "(no MoEController router adapter yet; hash-MoE "
+                           "layers are id-routed and identical either way)")
         if cfg.mask.compaction not in ("flow_mask", "intact"):
             bad.append("pipeline-v4 censorship is attention censorship: "
                        "flow_mask (method) or intact (diagnostic control)")

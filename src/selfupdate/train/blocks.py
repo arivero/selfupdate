@@ -130,14 +130,27 @@ class BlockStack:
             getattr(self.text_config, "model_type", "") == "gemma4_text"
             and bool(self.layer_types)
         )
+        # DeepSeek-V4: eager-only attention (no SDPA is_causal fast path), so
+        # full-model walks need an explicit causal mask; every layer type
+        # shares the one sliding-window mask (the compressors extend it
+        # internally via block_bias).  mHC threads hc_mult parallel residual
+        # streams between blocks — the block boundary is [B, T, hc_mult, H].
+        self.needs_deepseek_masks = (
+            getattr(self.text_config, "model_type", "")
+            .startswith("deepseek_v4") and bool(self.layer_types)
+        )
+        self.hc_mult = int(getattr(self.text_config, "hc_mult", 0) or 0)
+        self.hc_head = getattr(inner, "hc_head", None)
         self.blocks = list(inner.layers)
         self._block_params = [list(block.parameters()) for block in self.blocks]
         self._accepts_past_key_values = []
         self._accepts_shared_kv_states = []
+        self._accepts_input_ids = []
         for block in self.blocks:
             params = inspect.signature(block.forward).parameters
             self._accepts_past_key_values.append("past_key_values" in params)
             self._accepts_shared_kv_states.append("shared_kv_states" in params)
+            self._accepts_input_ids.append("input_ids" in params)
         self.final_norm = inner.norm
         self.lm_head = lm_head_owner.lm_head
         self.n_layers = len(self.blocks)
@@ -195,6 +208,10 @@ class BlockStack:
         self.embed_tokens.requires_grad_(False)
         self.final_norm.requires_grad_(False)
         self.lm_head.requires_grad_(False)
+        if self.hc_head is not None:
+            # The mHC stream-collapse head sits between the last block and
+            # the frozen norm/lm_head: same frozen-vocabulary treatment.
+            self.hc_head.requires_grad_(False)
 
     def embed(self, input_ids: torch.Tensor) -> torch.Tensor:
         # KV sharing across layer types (gemma4-class) lives in the per-call
@@ -202,7 +219,14 @@ class BlockStack:
         # instance state here once risked stale wrong-length teacher KV
         # across items (2026-07-10 review, latent).
         with torch.no_grad():
-            return self.embed_tokens(input_ids)
+            h = self.embed_tokens(input_ids)
+            if self.hc_mult > 1:
+                # mHC boundary convention: the inter-block state carries all
+                # hc_mult streams; the model seeds them as copies of the
+                # embedding (DeepseekV4Model.forward does the same expand).
+                h = h.unsqueeze(2).expand(-1, -1, self.hc_mult,
+                                          -1).contiguous()
+            return h
 
     def rope(self, hidden: torch.Tensor, position_ids: torch.Tensor):
         if self.rotary_emb is None:
@@ -242,13 +266,29 @@ class BlockStack:
                     "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
                 }
                 bundle["shared_kv_states"] = UserDict()
+            if self.needs_deepseek_masks:
+                from transformers.masking_utils import (
+                    create_sliding_window_causal_mask,
+                )
+
+                # One sliding-window causal mask serves every V4 layer type
+                # (DeepseekV4Model.forward builds exactly one); rope arrives
+                # as hidden [B,T,hc,H] but the mask helper wants [B,T,H].
+                flat = hidden[..., 0, :] if hidden.dim() == 4 else hidden
+                mask = create_sliding_window_causal_mask(
+                    config=self.text_config, inputs_embeds=flat,
+                    attention_mask=None, past_key_values=None,
+                    position_ids=position_ids)
+                bundle["attention_masks"] = {
+                    t: mask for t in set(self.layer_types)}
             return bundle
         with torch.no_grad():
             return self.rotary_emb(hidden, position_ids)
 
     def run_block(self, L: int, hidden, position_embeddings, position_ids=None,
                   *, flow_keep=None, past_key_values=None, use_cache=False,
-                  causal_length=None, prepared_attention_mask=None):
+                  causal_length=None, prepared_attention_mask=None,
+                  input_ids=None):
         """Forward decoder block L (1-based) on ``[B,n,H]`` states.
 
         ``flow_keep`` is the pipeline-v3 information-flow mask over the full
@@ -290,10 +330,15 @@ class BlockStack:
             if torch.is_tensor(position_ids) and position_ids.device != dev:
                 position_ids = position_ids.to(dev, non_blocking=True)
         local_keep = None
+        keep_bcast = None
         if flow_keep is not None:
             flow_keep = flow_keep.to(hidden.device)
             local_keep = flow_keep[:, -hidden.shape[1]:].to(hidden.dtype)
-            hidden = hidden * local_keep.unsqueeze(-1)
+            # [B, S] -> broadcastable over any trailing state dims (mHC
+            # stream stacks are [B, S, hc_mult, H]).
+            keep_bcast = local_keep.reshape(
+                *local_keep.shape, *([1] * (hidden.dim() - 2)))
+            hidden = hidden * keep_bcast
         if prepared_attention_mask is NO_PREPARED_ATTENTION_MASK:
             attention_mask = None
         elif prepared_attention_mask is not None:
@@ -332,7 +377,12 @@ class BlockStack:
                     past_len, kv_len, device=hidden.device)[:, None]
                 k_pos = torch.arange(kv_len, device=hidden.device)[None, :]
                 allowed = k_pos <= q_pos
-                if layer_type in ("sliding_attention", "chunked_attention"):
+                # DeepSeek-V4's compressed layer types keep a sliding K=V
+                # branch too (the compressor extends KV internally and
+                # carries its own block_bias for those extra columns).
+                if layer_type in ("sliding_attention", "chunked_attention",
+                                  "compressed_sparse_attention",
+                                  "heavily_compressed_attention"):
                     window = getattr(self.text_config, "sliding_window", None)
                     if window is None:
                         window = getattr(
@@ -358,6 +408,11 @@ class BlockStack:
             "position_embeddings": position_embeddings,
             "use_cache": use_cache,
         }
+        if self._accepts_input_ids[L - 1]:
+            # DeepSeek-V4 hash-MoE layers route by a frozen token-id ->
+            # expert table and CRASH on input_ids=None; every caller of a
+            # deepseek block must supply the row-aligned token ids.
+            kwargs["input_ids"] = input_ids
         if past_key_values is not None:
             if not self._accepts_past_key_values[L - 1]:
                 raise NotImplementedError(
@@ -372,8 +427,8 @@ class BlockStack:
                     self._shared_kv_states = {}
                 kwargs["shared_kv_states"] = self._shared_kv_states
         out = self._block_calls[L - 1](hidden, **kwargs)
-        if local_keep is not None:
-            out = out * local_keep.unsqueeze(-1)
+        if keep_bcast is not None:
+            out = out * keep_bcast
         return out
 
     def block_params(self, L: int) -> list[torch.nn.Parameter]:
@@ -387,6 +442,10 @@ class BlockStack:
         norm_parameter = next(self.final_norm.parameters(), None)
         if norm_parameter is not None and block_out.device != norm_parameter.device:
             block_out = block_out.to(norm_parameter.device, non_blocking=True)
+        if self.hc_head is not None and block_out.dim() == 4:
+            # mHC: collapse the hc_mult streams (frozen hyper-head) before
+            # the shared final norm, mirroring DeepseekV4Model.forward.
+            block_out = self.hc_head(block_out)
         return self.final_norm(block_out)
 
     # -- PPn model-adapter surface ---------------------------------------

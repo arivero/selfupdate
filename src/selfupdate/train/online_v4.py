@@ -42,6 +42,8 @@ from safetensors.torch import load_file, save_file
 
 from ..eval.teacher_output import teacher_output_eval_sums
 from .blocks import NO_PREPARED_ATTENTION_MASK
+from .deepseek_ctx import (DeepseekRecorder, FrozenDeepseekCtx,
+                           extended_additive_mask, gather_topk_at_qpos)
 from .losses import HiddenLoss
 from .moe import pending_router_loss
 from .online_v3 import (_bk_bucketed_cohorts, _bk_layer_type,
@@ -95,6 +97,13 @@ class _FrozenKV:
             self.keys = self.keys.pin_memory()
             self.values = self.values.pin_memory()
         return self
+
+    def staged_to(self, device) -> "_FrozenKV":
+        kv = _FrozenKV()
+        kv.keys = self.keys.to(device, non_blocking=True)
+        kv.values = self.values.to(device, non_blocking=True)
+        kv.recording = False
+        return kv
 
     def nbytes(self) -> int:
         if self.keys is None:
@@ -206,7 +215,9 @@ class _V4Cohort:
         return mask[:, None]
 
     def gather_full_inputs(self, cache, layer: int) -> torch.Tensor:
-        """[B, T, H] padded full-sequence i{layer} (prefill input)."""
+        """[B, T, ...] padded full-sequence i{layer} (prefill input).
+        Trailing dims follow the cached state (mHC boundaries are
+        [T, hc_mult, H])."""
         rows = []
         for example_id, t_len in zip(self.example_ids, self.t_len):
             t = cache.teacher_input(example_id, layer)
@@ -215,26 +226,29 @@ class _V4Cohort:
                     f"{example_id}: i{layer:02d} length {t.shape[0]} != "
                     f"index n_teacher {t_len}")
             rows.append(t)
-        out = torch.zeros((len(rows), self.T, rows[0].shape[-1]),
+        out = torch.zeros((len(rows), self.T, *rows[0].shape[1:]),
                           dtype=rows[0].dtype)
         for b, t in enumerate(rows):
             out[b, : t.shape[0]] = t
         return out
 
     def gather_query_inputs(self, full_inputs: torch.Tensor) -> torch.Tensor:
-        """[B, Q, H] block-input rows at the query positions."""
+        """[B, Q, ...] block-input rows at the query positions."""
         index = self.qpos.to(full_inputs.device)
-        index = index[:, :, None].expand(-1, -1, full_inputs.shape[-1])
+        index = index.reshape(*index.shape,
+                              *([1] * (full_inputs.dim() - 2)))
+        index = index.expand(-1, -1, *full_inputs.shape[2:])
         return full_inputs.gather(1, index)
 
     def gather_targets(self, cache, layer: int) -> torch.Tensor:
-        """[B, Q, H] teacher h{layer} rows at the query positions."""
+        """[B, Q, ...] teacher h{layer} rows at the query positions."""
         out = None
         for b, example_id in enumerate(self.example_ids):
             h = cache.hidden(example_id, layer)
             if out is None:
-                out = torch.zeros((len(self.example_ids), self.Q, h.shape[-1]),
-                                  dtype=h.dtype)
+                out = torch.zeros(
+                    (len(self.example_ids), self.Q, *h.shape[1:]),
+                    dtype=h.dtype)
             rel = self.qpos[b] - self.t0[b]
             rel = rel.clamp_(0, h.shape[0] - 1)
             out[b] = h.index_select(0, rel)
@@ -303,10 +317,8 @@ class _TeacherTensors:
     def staged(self, entry: dict):
         if self.residency != "cpu_stream":
             return entry["kv"], entry["inputs"], entry["targets"]
-        kv = _FrozenKV()
-        kv.keys = entry["kv"].keys.to(self.device, non_blocking=True)
-        kv.values = entry["kv"].values.to(self.device, non_blocking=True)
-        kv.recording = False
+        # Both _FrozenKV and FrozenDeepseekCtx implement staged_to.
+        kv = entry["kv"].staged_to(self.device)
         return (kv, entry["inputs"].to(self.device, non_blocking=True),
                 entry["targets"].to(self.device, non_blocking=True))
 
@@ -359,10 +371,14 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
             for layer in range(1, n_layers + 1):
                 if layer in owned:
                     inputs_parts[layer].append(h.clone())
-                h = stack.run_block(layer, h, pe, position_ids=pos)
+                h = stack.run_block(layer, h, pe, position_ids=pos,
+                                    input_ids=ids)
                 if layer in owned:
-                    view = h if layer < n_layers else stack.final_norm(h)
-                    idx = qpos_chunk[:, :, None].expand(-1, -1, view.shape[-1])
+                    view = h if layer < n_layers else stack.loss_view(
+                        n_layers, h)
+                    idx = qpos_chunk.reshape(
+                        *qpos_chunk.shape, *([1] * (view.dim() - 2)))
+                    idx = idx.expand(-1, -1, *view.shape[2:])
                     targets_parts[layer].append(view.gather(1, idx))
                     if layer == n_layers:
                         for bb in range(b0, b1):
@@ -402,7 +418,10 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
         hidden // stack.text_config.num_attention_heads)
     total_positions = sum(
         int(ds.cache.span(p.example_id)["n_teacher"]) for p in ds.pairs)
-    per_layer = total_positions * (2 * n_kv * head_dim + 2 * hidden) * 2
+    # mHC boundaries carry hc_mult streams: inputs/targets scale with it.
+    hc = int(getattr(stack.text_config, "hc_mult", 0) or 1)
+    per_layer = total_positions * (2 * n_kv * head_dim
+                                   + 2 * hidden * max(hc, 1)) * 2
     # BOTH loop orders accumulate every owned layer's tensors in the store
     # across the epoch (that persistence IS the epoch-2 speedup), so the
     # honest requirement is all owned layers. Sizing for one resident layer
@@ -427,10 +446,9 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
 
 
 
-@torch.no_grad()
-def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
-    if boundaries_in is not None:
-        return boundaries_in[idx].to(device)
+def _student_ids(ds, cohort) -> torch.Tensor:
+    """[B, T] censored student token ids of one cohort (flow_mask: same
+    length as the teacher sequence)."""
     B, T = len(cohort.indices), cohort.T
     ids = torch.zeros((B, T), dtype=torch.long)
     for b, i in enumerate(cohort.indices):
@@ -441,7 +459,14 @@ def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
                 f"{pair.example_id}: flow_mask student sequence "
                 f"length {sid.shape[0]} != teacher {cohort.t_len[b]}")
         ids[b, : sid.shape[0]] = sid
-    return stack.embed(ids.to(device))
+    return ids
+
+
+@torch.no_grad()
+def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
+    if boundaries_in is not None:
+        return boundaries_in[idx].to(device)
+    return stack.embed(_student_ids(ds, cohort).to(device))
 
 
 def _relay_segment(cfg, stack, ds, cohorts, device, owned,
@@ -459,6 +484,7 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
     per relay at 397B). All cohorts' boundary hiddens stay resident
     instead (~10 GB at 27B scale) — the cheap side of that trade.
     """
+    deepseek = getattr(stack, "needs_deepseek_masks", False)
     out = {}
     if rotator is None:
         for idx, cohort in enumerate(cohorts):
@@ -467,19 +493,25 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
             pos = torch.arange(T, device=device)[None].expand(B, -1)
             h = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
                                   idx, device)
+            # Hash-MoE routing in the relay uses the STUDENT (censored)
+            # ids — this is the deployment walk.
+            ids = (_student_ids(ds, cohort).to(device) if deepseek else None)
             pe = stack.rope(h, pos)
             for layer in owned:
                 h = stack.run_block(layer, h, pe, position_ids=pos,
-                                    flow_keep=keep, causal_length=T)
+                                    flow_keep=keep, causal_length=T,
+                                    input_ids=ids)
             out[idx] = h
         return out
-    hs, keeps, poss = {}, {}, {}
+    hs, keeps, poss, idss = {}, {}, {}, {}
     for idx, cohort in enumerate(cohorts):
         B, T = len(cohort.indices), cohort.T
         keeps[idx] = cohort.keep.to(device)
         poss[idx] = torch.arange(T, device=device)[None].expand(B, -1)
         hs[idx] = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
                                     idx, device)
+        idss[idx] = (_student_ids(ds, cohort).to(device)
+                     if deepseek else None)
     owned_list = list(owned)
     for pos_i, layer in enumerate(owned_list):
         rotator.activate(layer)
@@ -489,7 +521,8 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
             pe = stack.rope(hs[idx], poss[idx])
             hs[idx] = stack.run_block(
                 layer, hs[idx], pe, position_ids=poss[idx],
-                flow_keep=keeps[idx], causal_length=cohort.T)
+                flow_keep=keeps[idx], causal_length=cohort.T,
+                input_ids=idss[idx])
         rotator.evict(layer)
     return hs
 
@@ -1051,6 +1084,52 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # recurrence, censored by flow_keep row-zeroing. Store the full
             # inputs; no prefill.
             return tensors.put_linear(layer, cohort_idx, full_inputs, targets)
+        if getattr(stack, "needs_deepseek_masks", False):
+            # DeepSeek-V4 record pass: real typed cache layers run the
+            # compressor's genuine window arithmetic; the indexer's top-k is
+            # captured by hook.  Fresh recorder PER CHUNK — the typed cache
+            # treats successive calls as time-continuation, chunks are batch
+            # slices.  Mask-free is exact for everything recorded: sliding
+            # K=V and compressed entries are projections of the input, and
+            # the indexer applies its own causal mask internally.
+            Bc = len(cohort.indices)
+            chunk = cfg.train.v4_capture_micro_batch or Bc
+            ids_full = cohort.teacher_ids.to(device)
+            ctx = (contextlib.nullcontext() if adapters_off is None
+                   else adapters_off())
+            kv_parts, entry_parts, topk_parts = [], [], []
+            with torch.no_grad(), ctx:
+                for b0 in range(0, Bc, chunk):
+                    b1 = min(b0 + chunk, Bc)
+                    fi = full_inputs[b0:b1]
+                    pos = torch.arange(cohort.T, device=device)[None].expand(
+                        b1 - b0, -1)
+                    rec = DeepseekRecorder(stack, layer)
+                    try:
+                        stack.run_block(
+                            layer, fi, stack.rope(fi, pos), position_ids=pos,
+                            past_key_values=rec.shim, use_cache=True,
+                            prepared_attention_mask=NO_PREPARED_ATTENTION_MASK,
+                            input_ids=ids_full[b0:b1])
+                    finally:
+                        rec.close()
+                    kv_c, entries_c, topk_c = rec.harvest()
+                    kv_parts.append(kv_c)
+                    entry_parts.append(entries_c)
+                    topk_parts.append(gather_topk_at_qpos(
+                        topk_c, cohort.qpos_dev[b0:b1]))
+            frozen = FrozenDeepseekCtx(
+                torch.cat(kv_parts, 0) if len(kv_parts) > 1 else kv_parts[0],
+                (None if entry_parts[0] is None else
+                 (torch.cat(entry_parts, 0) if len(entry_parts) > 1
+                  else entry_parts[0])),
+                (None if topk_parts[0] is None else
+                 (torch.cat(topk_parts, 0) if len(topk_parts) > 1
+                  else topk_parts[0])),
+                layer - 1)
+            inputs_q = cohort.gather_query_inputs(full_inputs)
+            del full_inputs
+            return tensors.put(layer, cohort_idx, frozen, inputs_q, targets)
         kv = _FrozenKV()
         Bc = len(cohort.indices)
         # Batch-chunk the prefill for the same reason as the capture: the
@@ -1146,12 +1225,28 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         else:
             kv, inputs_q, targets = tensors.staged(entry)
             rope_q = stack.rope(inputs_q, cohort.qpos_dev)
-            window = None
-            if layer_type in ("sliding_attention", "chunked_attention"):
-                window = (getattr(stack.text_config, "sliding_window", None)
-                          or getattr(stack.text_config,
-                                     "attention_chunk_size", None))
-            mask = cohort.additive_mask(inputs_q.dtype, window=window)
+            input_ids_q = None
+            if isinstance(kv, FrozenDeepseekCtx):
+                # Every V4 layer's K=V branch is sliding-windowed; the
+                # compressed-entry columns (causality + censorship +
+                # teacher-forced indexer selection) extend the mask.
+                rate = None
+                if layer_type != "sliding_attention":
+                    rate = stack.text_config.compress_rates[layer_type]
+                mask = extended_additive_mask(
+                    cohort, kv, rate, stack.text_config.sliding_window,
+                    inputs_q.dtype)
+                # Hash-MoE layers route by the row's own token id.
+                input_ids_q = cohort.teacher_ids.to(device).gather(
+                    1, cohort.qpos_dev)
+            else:
+                window = None
+                if layer_type in ("sliding_attention", "chunked_attention"):
+                    window = (getattr(stack.text_config, "sliding_window",
+                                      None)
+                              or getattr(stack.text_config,
+                                         "attention_chunk_size", None))
+                mask = cohort.additive_mask(inputs_q.dtype, window=window)
             if moe_step:
                 # Query-row pass: student row (b, j) sits at teacher
                 # position qpos[b, j]; padded rows have qpos 0 (never a
@@ -1172,7 +1267,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     layer, inputs_q.requires_grad_(False), rope_q,
                     position_ids=cohort.qpos_dev,
                     past_key_values=kv, use_cache=False,
-                    prepared_attention_mask=mask)
+                    prepared_attention_mask=mask, input_ids=input_ids_q)
                 if moe_step:
                     router_extra = pending_router_loss()
         view = stack.loss_view(layer, out)
@@ -1581,7 +1676,10 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
     checked = 0
     vocab_params = (list(stack.embed_tokens.parameters())
                     + list(stack.final_norm.parameters())
-                    + list(stack.lm_head.parameters()))
+                    + list(stack.lm_head.parameters())
+                    + (list(stack.hc_head.parameters())
+                       if getattr(stack, "hc_head", None) is not None
+                       else []))
     for item_index in range(min(items, len(ds.pairs))):
         cohort = _V4Cohort(cfg, ds, [item_index], device)
         # Online runs carry no hidden cache; regenerate this item's teacher
@@ -1627,6 +1725,40 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                     position_ids=pos, flow_keep=cohort.keep.to(device),
                     causal_length=cohort.T)
                 out = cohort.gather_query_inputs(out_full)
+            elif getattr(stack, "needs_deepseek_masks", False):
+                # Same record/serve procedure as the training walk.
+                pos = torch.arange(cohort.T, device=device)[None]
+                ids_full = cohort.teacher_ids.to(device)
+                ctx = (adapters_off() if adapters_off is not None
+                       else contextlib.nullcontext())
+                rec = DeepseekRecorder(stack, layer)
+                try:
+                    with torch.no_grad(), ctx:
+                        stack.run_block(
+                            layer, full_inputs, stack.rope(full_inputs, pos),
+                            position_ids=pos, past_key_values=rec.shim,
+                            use_cache=True,
+                            prepared_attention_mask=NO_PREPARED_ATTENTION_MASK,
+                            input_ids=ids_full)
+                finally:
+                    rec.close()
+                kv_t, entries_t, topk_t = rec.harvest()
+                frozen = FrozenDeepseekCtx(
+                    kv_t, entries_t,
+                    gather_topk_at_qpos(topk_t, cohort.qpos_dev), layer - 1)
+                inputs_q = cohort.gather_query_inputs(full_inputs)
+                rope_q = stack.rope(inputs_q, cohort.qpos_dev)
+                rate = None
+                if layer_type != "sliding_attention":
+                    rate = stack.text_config.compress_rates[layer_type]
+                mask = extended_additive_mask(
+                    cohort, frozen, rate, stack.text_config.sliding_window,
+                    inputs_q.dtype)
+                out = stack.run_block(
+                    layer, inputs_q, rope_q, position_ids=cohort.qpos_dev,
+                    past_key_values=frozen, use_cache=False,
+                    prepared_attention_mask=mask,
+                    input_ids=ids_full.gather(1, cohort.qpos_dev))
             else:
                 kv = _FrozenKV()
                 pos = torch.arange(cohort.T, device=device)[None]

@@ -164,8 +164,30 @@ def stage_scoped_load(model_name: str, owned0: range, *, dtype,
     model.load_state_dict(partial, strict=False, assign=True)
     if tied:
         model.tie_weights()
+    _apply_fp32_strict(model)
     assert_materialized(model, owned0)
     return model
+
+
+def _apply_fp32_strict(model) -> None:
+    """Honor ``_keep_in_fp32_modules_strict``: DeepSeek-V4 pins its mHC
+    hyper-connections, sinks, position biases and small norms in fp32
+    (Sinkhorn/softmax stability).  ``from_pretrained`` upcasts these during
+    a normal load; the raw shard path must do it itself or the stage would
+    train against subtly different fp32-sensitive numerics."""
+    patterns = (getattr(model, "_keep_in_fp32_modules_strict", None)
+                or getattr(model, "_keep_in_fp32_modules", None) or [])
+    if not patterns:
+        return
+    import itertools
+
+    for name, t in itertools.chain(model.named_parameters(),
+                                   model.named_buffers()):
+        if t.is_meta or not t.is_floating_point() \
+                or t.dtype == torch.float32:
+            continue
+        if any(part in name.split(".") for part in patterns):
+            t.data = t.data.to(torch.float32)
 
 
 def assert_materialized(model, owned0: range) -> None:
