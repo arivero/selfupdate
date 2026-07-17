@@ -1,0 +1,16 @@
+# 4B PPP2: two processes (cards 0,1), 16 blocks each, floor 50 armed.
+run_name: h100_smoke_qwen35_4b_v4_ppp2_e12
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_stage_splits: [16]
+  v4_stage_devices: [0, 1]

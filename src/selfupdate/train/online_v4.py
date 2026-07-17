@@ -39,6 +39,7 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from ..eval.teacher_output import teacher_output_eval_sums
+from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
 from .online_v3 import (_bk_bucketed_cohorts, _bk_layer_type,
                         _clear_block_grads, _immediate_sgd)
@@ -622,10 +623,15 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         ctx = (contextlib.nullcontext() if refresh or adapters_off is None
                else adapters_off())
         with torch.no_grad(), ctx:
+            # Mask-free fast path: the prefill's attention OUTPUT is
+            # discarded — only the K/V stored at update() matter, and they
+            # are projected from the input before any attention math. The
+            # causal_length path would materialize a [B,1,T,T] additive
+            # mask (36 GB at 27B/B=100/T~600); the sentinel avoids it.
             stack.run_block(
                 layer, full_inputs, rope_full, position_ids=pos,
                 past_key_values=kv, use_cache=True,
-                causal_length=cohort.T)
+                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
         kv.recording = False
         inputs_q = cohort.gather_query_inputs(full_inputs)
         del full_inputs, rope_full
@@ -736,7 +742,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             ev["ce"] += ce.double()
             ev["kl"] += kl.double()
             ev["count"] += count
-        del out, view, target, mask, rope_q
+        del out, view, target
 
     stopped = False
     expected_eval = sum(c.n_eval for c in cohorts)
@@ -930,7 +936,8 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
             with torch.no_grad(), ctx:
                 stack.run_block(layer, full_inputs, stack.rope(full_inputs, pos),
                                 position_ids=pos, past_key_values=kv,
-                                use_cache=True, causal_length=cohort.T)
+                                use_cache=True,
+                                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
             kv.recording = False
             inputs_q = cohort.gather_query_inputs(full_inputs.cpu()).to(device)
             targets = cohort.gather_targets(cache, layer).to(device)
