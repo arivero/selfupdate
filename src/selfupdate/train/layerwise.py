@@ -178,6 +178,48 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
             raise ValueError(
                 f"train.{knob}={val} exceeds the model's {stack.n_layers} "
                 f"blocks ({cfg.model.name})")
+    if cfg.train.pipeline_version == 4:
+        from .online_v4 import certify_locality_v4, train_online_v4
+        cache = rt.load_cache()
+        log.log(
+            kind="teacher_cache_source",
+            runtime_policy=cfg.cache.runtime_policy,
+            cache_root=str(cache.root),
+            cache_hash=cache._index["config_hash"],
+            node_epoch0_manifest=rt.cache_manifest,
+        )
+        with cooperative_stop_signals():
+            stopped = train_online_v4(
+                cfg, stack, tok, log, cache, peft_model=rt.peft_model)
+            locality = certify_locality_v4(
+                cfg, stack, tok, cache, run_dir, peft_model=rt.peft_model)
+            log.log(kind="locality_certification", **{
+                key: locality[key] for key in (
+                    "items", "gradient_contract", "final_logit_training",
+                    "local_grad_norm", "cross_block_leak_grad_norm",
+                    "frozen_vocab_grad_norm",
+                    "local_signal_present_in_every_block", "passed")})
+            if not locality["passed"]:
+                raise RuntimeError(
+                    "pipeline-v4 locality certification failed; checkpoint "
+                    f"withheld: {locality}")
+            rt.save_checkpoint(run_dir)
+            # Per-stage ownership manifest: scripts/merge_v4_adapters.py
+            # takes each block's adapter tensors from the ONE stage that
+            # owns it, so the manifest is the merge contract.
+            from .online_v4 import _owned_range
+            owned = _owned_range(cfg, stack.n_layers)
+            import json as _json
+            (run_dir / "checkpoint" / "v4_stage_manifest.json").write_text(
+                _json.dumps({
+                    "v4_stage": cfg.train.v4_stage,
+                    "v4_stage_splits": list(cfg.train.v4_stage_splits or []),
+                    "owned_blocks": [owned.start, owned.stop - 1],
+                }, indent=2) + "\n")
+            log.log(kind="done", graceful_stop=bool(stopped),
+                    **rt.memory_summary())
+        log.close()
+        return run_dir
     if cfg.train.pipeline_version == 3:
         teacher = rt.load_teacher(moe_load_kw)
         cache = rt.load_cache()

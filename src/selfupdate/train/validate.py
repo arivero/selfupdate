@@ -84,8 +84,8 @@ def validate_knob_schedule(cfg) -> None:
             "CE-eval-loss and KL-eval-loss are evaluation-only measurements "
             "over the whole training-set traversal and are NEVER used for "
             "backward or optimizer updates")
-    if cfg.train.pipeline_version not in (1, 2, 3):
-        raise ValueError("train.pipeline_version must be 1, 2, or 3")
+    if cfg.train.pipeline_version not in (1, 2, 3, 4):
+        raise ValueError("train.pipeline_version must be 1, 2, 3, or 4")
     if cfg.cache.runtime_policy not in ("durable", "node_epoch0"):
         raise ValueError(
             "cache.runtime_policy must be durable or node_epoch0")
@@ -111,6 +111,95 @@ def validate_knob_schedule(cfg) -> None:
             and cfg.train.lr_epoch_multipliers):
         bad.append(
             "lr_epoch_multipliers is implemented only by pipeline-v3.1")
+    if cfg.train.pipeline_version == 4:
+        # v4 = blockwise teacher-forced training with frozen teacher KV.
+        # Both the block input and the attention context are teacher-fixed,
+        # so layers are independent; multi-GPU is layer-sharding via
+        # v4_stage_splits/-devices, never the PP device_map.
+        if cfg.train.pipeline_revision not in ("", "4.0"):
+            bad.append("pipeline-v4 revision must be 4.0")
+        if cfg.train.trajectory_source != "teacher_hidden":
+            bad.append("pipeline-v4 is teacher-forced per layer: "
+                       "trajectory_source must be teacher_hidden")
+        if cfg.train.update_granularity != "online":
+            bad.append("pipeline_version=4 requires update_granularity=online")
+        if sched != "summed":
+            bad.append("pipeline-v4 uses the summed layer objective")
+        if cfg.train.grad_accum != 1:
+            bad.append("pipeline-v4 requires grad_accum=1 (one write per "
+                       "block per cohort is the update law)")
+        if not cfg.cache.store_full_teacher_inputs:
+            bad.append("pipeline-v4 needs the full-prefix teacher cache: "
+                       "cache.store_full_teacher_inputs must be true "
+                       "(i{L}=h[L-1] feeds both block inputs and teacher KV)")
+        if cfg.mask.compaction not in ("flow_mask", "intact"):
+            bad.append("pipeline-v4 censorship is attention censorship: "
+                       "flow_mask (method) or intact (diagnostic control)")
+        if cfg.train.v4_kv_source not in ("teacher_frozen", "student_refresh"):
+            bad.append("v4_kv_source must be teacher_frozen or student_refresh")
+        if (cfg.train.v4_kv_source == "student_refresh"
+                and cfg.train.v4_kv_refresh_epochs <= 0):
+            bad.append("v4_kv_source=student_refresh requires "
+                       "v4_kv_refresh_epochs > 0")
+        if (cfg.train.v4_kv_source == "teacher_frozen"
+                and cfg.train.v4_kv_refresh_epochs):
+            bad.append("v4_kv_refresh_epochs is set but v4_kv_source is "
+                       "teacher_frozen (frozen KV never refreshes)")
+        if cfg.train.v4_optimizer not in ("immediate_sgd", "adam"):
+            bad.append("v4_optimizer must be immediate_sgd or adam")
+        if cfg.train.v4_loop_order not in ("layer_major", "item_major"):
+            bad.append("v4_loop_order must be layer_major or item_major")
+        if cfg.train.v4_loss_positions not in (
+                "answer", "aligned", "thinking_answer"):
+            bad.append("v4_loss_positions must be answer, aligned, or "
+                       "thinking_answer")
+        if cfg.train.v4_teacher_residency not in (
+                "auto", "gpu_corpus", "cpu_stream"):
+            bad.append("v4_teacher_residency must be auto, gpu_corpus, or "
+                       "cpu_stream")
+        if cfg.train.v4_relay_every_cohorts < 0:
+            bad.append("v4_relay_every_cohorts must be >= 0")
+        if cfg.model.pipeline_split or cfg.model.pipeline_splits:
+            bad.append(
+                "pipeline-v4 processes each load the full model on one card; "
+                "model.pipeline_split(s) drive the PP device_map loader and "
+                "must stay empty — layer ownership is train.v4_stage_splits")
+        splits = list(cfg.train.v4_stage_splits or [])
+        if any(left >= right for left, right in zip(splits, splits[1:])):
+            bad.append(
+                f"v4_stage_splits must be strictly increasing: {splits}")
+        if splits and splits[0] <= 0:
+            bad.append("v4_stage_splits are one-based block cuts and must "
+                       "be positive")
+        stages = len(splits) + 1
+        devices = list(cfg.train.v4_stage_devices or [])
+        if devices and len(devices) != stages:
+            bad.append("v4_stage_devices must name one physical id per stage")
+        if len(set(devices)) != len(devices):
+            bad.append("v4_stage_devices must be unique physical ids")
+        if not -1 <= cfg.train.v4_stage < stages:
+            bad.append(
+                f"v4_stage {cfg.train.v4_stage} outside -1..{stages - 1}")
+        if cfg.train.conn_window > 1:
+            bad.append("pipeline-v4 is strictly block-local: conn_window <= 1")
+        if cfg.train.window_dedup:
+            bad.append("pipeline-v4 has no connected windows to deduplicate")
+        if cfg.train.moe_mode != "dense_or_black_box":
+            bad.append("pipeline-v4 MoE routing interventions are not "
+                       "implemented")
+        if (cfg.train.hidden_loss.startswith("delta_")
+                or cfg.train.hidden_loss == "multi_delta_nmse"):
+            bad.append("pipeline-v4 supports absolute local hidden losses "
+                       "only")
+        if cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
+            bad.append("pipeline-v4 is cache-driven: no online teacher or "
+                       "frozen teacher copy")
+        if cfg.train.offload_adam:
+            bad.append("offload_adam is the v1/v2 summed knob; pipeline-v4 "
+                       "Adam is v4_optimizer=adam")
+    elif cfg.train.v4_stage != -1 or cfg.train.v4_stage_splits:
+        bad.append("v4_stage/v4_stage_splits are set but pipeline_version "
+                   "is not 4")
     if cfg.train.pipeline_version == 3:
         if cfg.train.pipeline_revision not in ("", "3.0", "3.1", "3.2"):
             bad.append("pipeline-v3 revision must be 3.0, 3.1, or 3.2")
@@ -387,7 +476,9 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("grid aggregation requires padded or bucketed batching")
             if cfg.train.online_teacher:
                 bad.append("grid aggregation with an online teacher is not implemented")
-    elif cfg.train.update_granularity != "legacy_answer_sum":
+    elif (cfg.train.pipeline_version != 4
+          and cfg.train.update_granularity != "legacy_answer_sum"):
+        # pipeline-v4's online granularity is validated in its own branch.
         bad.append("non-legacy update granularity requires its matching pipeline version")
     if (cfg.train.pipeline_version != 3
             and (cfg.train.backward_dispatch != "per_block"
@@ -409,10 +500,10 @@ def validate_knob_schedule(cfg) -> None:
     ):
         if value != implemented:
             bad.append(f"{knob}={value!r} is reserved but not implemented")
-    if (cfg.train.pipeline_version != 3
+    if (cfg.train.pipeline_version not in (3, 4)
             and cfg.train.trajectory_source != "student_hidden"):
         bad.append(
-            f"trajectory_source={cfg.train.trajectory_source!r} is implemented only by pipeline-v3")
+            f"trajectory_source={cfg.train.trajectory_source!r} is implemented only by pipeline-v3/v4")
     if run_class not in RUN_CLASSES:
         raise ValueError(f"unknown train.run_class {run_class!r}")
     if run_class == "teacher_reference":
@@ -425,8 +516,10 @@ def validate_knob_schedule(cfg) -> None:
         "remove", "stub", "stub_gap", "remove_gap", "pad_random", "flow_mask", "intact",
     ):
         raise ValueError(f"unknown mask.compaction {cfg.mask.compaction!r}")
-    if cfg.mask.compaction == "flow_mask" and cfg.train.pipeline_version != 3:
-        bad.append("flow_mask is wired only into pipeline-v3 block execution")
+    if (cfg.mask.compaction == "flow_mask"
+            and cfg.train.pipeline_version not in (3, 4)):
+        bad.append(
+            "flow_mask is wired only into pipeline-v3/v4 block execution")
     if cfg.cache.source_compaction and cfg.cache.source_compaction not in (
         "remove", "stub", "stub_gap", "remove_gap", "pad_random",
     ):

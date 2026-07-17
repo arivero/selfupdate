@@ -1,0 +1,102 @@
+# Pipeline-v4 bring-up base: Qwen3-0.6B, blockwise teacher-forced training
+# with frozen teacher KV, LoRA, one epoch, 100 items.
+#
+# MECHANICS ONLY: far below the 12k-item scientific floor. Placement overlays
+# (single-process vs 4-stage layer shard) live beside this file and change
+# only v4_stage wiring, so the pair is a same-method/different-placement
+# comparison whose per-layer losses must match bit-for-bit at equal seed.
+#
+# The cache is the store_full_teacher_inputs identity: i{L}=h[L-1] over the
+# FULL teacher sequence for every layer (feeds block inputs AND the frozen
+# teacher KV prefill), plus the ordinary aligned h{L} targets. source
+# compaction `remove` + student flow_mask is the licensed cross-view pair —
+# see the Hard-Won Lessons entry; the teacher-side payload is view-neutral.
+run_name: h100_smoke_qwen3_0p6b_v4_base_never_train
+layerwise_project_version: "3.4"
+model:
+  name: Qwen/Qwen3-0.6B
+  dtype: bfloat16
+  device: cuda
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [0]
+  pipeline_world_size: 1
+data:
+  examples_path: data/combined/examples_v5rs_window_deciepoch100.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: caches/h100_smoke_0p6b_v4
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-smoke
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  store_full_teacher_inputs: true
+  full_input_shard_size: 8
+  item_cache_items: 16
+  generation_batch: 64
+  teacher_batch: 64
+  generation_budget_bucket: 32
+  generation_max_tokens: 4096
+  generation_responses_path: ""
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  answers_per_update: 0
+  tokens_per_answer_update: 0
+  update_reduction: ""
+  trajectory_source: teacher_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: open
+  schedule: summed
+  epochs: 1
+  max_steps: 0
+  seed: 17
+  lr: 1.0e-6
+  online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_bk
+  micro_batch: 64
+  grad_accum: 1
+  batching: bucketed
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  window_dedup: false
+  window_hidden_weight: 1.0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  v4_kv_source: teacher_frozen
+  v4_kv_refresh_epochs: 0
+  v4_optimizer: immediate_sgd
+  v4_loop_order: layer_major
+  v4_loss_positions: answer
+  v4_relay_every_cohorts: 0
+  v4_teacher_residency: auto
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8

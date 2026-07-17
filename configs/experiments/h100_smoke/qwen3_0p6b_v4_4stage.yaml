@@ -1,0 +1,28 @@
+# v4 leg 2/2: four-process layer shard across the four H100s.
+# Placement-only overlay on base_qwen3_0p6b_v4_lora.yaml.
+#
+# Qwen3-0.6B has 28 blocks; cuts [7, 14, 21] give stages of 7 blocks each.
+# These are OWNERSHIP cuts, not activation boundaries — v4 layers are
+# independent, so any partition is numerically identical to single-process.
+# Each stage is launched as its own process with `--v4-stage k`
+# (scripts/launch_v4_h100.sh), loads the FULL model on its own physical card,
+# trains only its owned blocks, and writes runs/<name>/stage<k>/.
+# Do NOT narrow CUDA_VISIBLE_DEVICES: v4_stage_devices are physical ids.
+run_name: h100_smoke_qwen3_0p6b_v4_4stage_e1
+# The audit sweeps every overlay against configs/base.yaml alone, so the
+# v4-defining protocol knobs are repeated here (repo convention, cf. the
+# layerwise34_timing wavefront overlays).
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_stage_splits: [7, 14, 21]
+  v4_stage_devices: [0, 1, 2, 3]

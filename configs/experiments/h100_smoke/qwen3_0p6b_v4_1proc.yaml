@@ -1,0 +1,23 @@
+# v4 leg 1/2: single process, all 28 blocks, one H100.
+# Placement-only overlay on base_qwen3_0p6b_v4_lora.yaml. This is the M1
+# correctness reference: the 4-stage overlay must reproduce its per-layer
+# epoch losses bit-for-bit at the same seed.
+run_name: h100_smoke_qwen3_0p6b_v4_1proc_e1
+# Protocol knobs repeated for the standalone audit (see the 4stage overlay).
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+model:
+  device: cuda:0
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1

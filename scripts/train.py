@@ -27,11 +27,29 @@ def main() -> None:
         description="Layerwise forward-distillation trainer")
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--experiment", default=None)
+    ap.add_argument(
+        "--v4-stage", type=int, default=None,
+        help="pipeline-v4 layer-shard stage this process runs (placement "
+             "only: selects the owned block range from train.v4_stage_splits "
+             "and pins model.device to that stage's physical card)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
 
     if cfg.train.method != "layerwise":
         sys.exit(f"unsupported train.method {cfg.train.method!r}; use 'layerwise'")
+
+    if args.v4_stage is not None:
+        if cfg.train.pipeline_version != 4:
+            sys.exit("--v4-stage requires train.pipeline_version=4")
+        cfg.train.v4_stage = args.v4_stage
+        stages = len(cfg.train.v4_stage_splits or []) + 1
+        devices = list(cfg.train.v4_stage_devices or range(stages))
+        if not 0 <= args.v4_stage < stages:
+            sys.exit(f"--v4-stage {args.v4_stage} outside 0..{stages - 1}")
+        # Physical id, never renumbered; each stage is one full-model process
+        # on one card writing its own runs/<name>/stage<k>/ directory.
+        cfg.model.device = f"cuda:{devices[args.v4_stage]}"
+        cfg.run_name = f"{cfg.run_name}/stage{args.v4_stage}"
 
     run_dir = train_layerwise(cfg)
     print(f"run complete: {run_dir}")

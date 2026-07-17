@@ -45,7 +45,7 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
         yaml.safe_dump(dataclasses.asdict(cfg), allow_unicode=True)
     )
     defaults = {}
-    if cfg.train.pipeline_version in (2, 3):
+    if cfg.train.pipeline_version in (2, 3, 4):
         repo_root = Path(__file__).resolve().parents[3]
         examples = Path(cfg.data.examples_path)
         runtime_diff = subprocess.check_output(
@@ -119,6 +119,20 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "conn_stride": cfg.train.conn_stride,
             "pipeline_split": cfg.model.pipeline_split,
             "pipeline_splits": cfg.model.pipeline_splits,
+            "v4_stage": (cfg.train.v4_stage
+                         if cfg.train.pipeline_version == 4 else None),
+            "v4_stage_splits": (list(cfg.train.v4_stage_splits)
+                                if cfg.train.pipeline_version == 4 else None),
+            "v4_stage_devices": (list(cfg.train.v4_stage_devices)
+                                 if cfg.train.pipeline_version == 4 else None),
+            "v4_kv_source": (cfg.train.v4_kv_source
+                             if cfg.train.pipeline_version == 4 else None),
+            "v4_optimizer": (cfg.train.v4_optimizer
+                             if cfg.train.pipeline_version == 4 else None),
+            "v4_loop_order": (cfg.train.v4_loop_order
+                              if cfg.train.pipeline_version == 4 else None),
+            "v4_loss_positions": (cfg.train.v4_loss_positions
+                                  if cfg.train.pipeline_version == 4 else None),
             "pipeline_world_size": getattr(cfg.model, "pipeline_world_size", 0),
             "device_map": cfg.model.device_map,
         }

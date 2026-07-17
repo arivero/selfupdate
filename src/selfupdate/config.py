@@ -383,6 +383,57 @@ class TrainConfig:
     # warm-start: load student weights from runs/<init_from>/checkpoint
     # (teacher stays the base model — cache identity is untouched)
     init_from: str = ""
+    # ------------------------------------------------------------------
+    # Pipeline-v4: blockwise teacher-forced training with frozen teacher KV.
+    # Every training loss is block-local against cached teacher states; the
+    # attention context is the teacher's OWN frozen K/V (adapters-off
+    # projections of cached i{L}=h[L-1]); the student's trajectory is never a
+    # loss input.  Because both the block input and the attention context are
+    # teacher-fixed, layers are fully independent — the multi-GPU strategy is
+    # layer-sharding across processes, not pipelining.
+    # ------------------------------------------------------------------
+    # teacher_frozen: K/V from adapters-off projections, computed once (they
+    # never change). student_refresh: recompute the K/V through the current
+    # adapters every v4_kv_refresh_epochs epochs (still no gradient through
+    # K/V; inputs stay teacher states).
+    v4_kv_source: str = "teacher_frozen"  # teacher_frozen | student_refresh
+    v4_kv_refresh_epochs: int = 0
+    # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
+    # law. adam gives each owned block its own AdamW (more memory; pairs
+    # naturally with layer_major, which keeps one block's moments hot).
+    v4_optimizer: str = "immediate_sgd"  # immediate_sgd | adam
+    # layer_major: for each owned layer, traverse every cohort (teacher
+    # tensors and optimizer state stay hot per layer). item_major: for each
+    # cohort, walk the owned layers (v3-like order; streaming-friendly).
+    v4_loop_order: str = "layer_major"  # layer_major | item_major
+    # Which teacher-coordinate positions carry the training loss. answer =
+    # teacher-realized answer tokens (v3 law). aligned = the whole cached
+    # aligned span (shared_mid + answer; everything non-censored the cache
+    # carries targets for). thinking_answer is reserved: it needs per-record
+    # thinking-span metadata the dataset does not expose yet, so dispatch
+    # raises rather than silently training on a guess.
+    v4_loss_positions: str = "answer"  # answer | aligned | thinking_answer
+    # Cadence (in cohorts) of the student-trajectory validation relay across
+    # stages; 0 disables the relay (single-process runs still emit the
+    # teacher-forced CE/KL eval at the final layer every epoch).
+    v4_relay_every_cohorts: int = 4
+    # Where per-layer teacher tensors live during training. gpu_corpus keeps
+    # the active layer's whole-corpus inputs/targets/KV resident (layer_major
+    # on small models: ~4 GB/layer at 0.6B). cpu_stream stages per cohort
+    # from pinned host memory. auto sizes the corpus and picks.
+    v4_teacher_residency: str = "auto"  # auto | gpu_corpus | cpu_stream
+    # Layer-ownership partition for multi-process v4. Deliberately SEPARATE
+    # from model.pipeline_split(s): those drive the PP device_map loader,
+    # while every v4 process loads the full model on ONE card and trains only
+    # its owned contiguous block range. Cuts use pipeline_splits semantics
+    # (blocks 1..n; cut c means the next stage starts at block c+1). Empty =
+    # one stage owning every block.
+    v4_stage_splits: list = field(default_factory=list)
+    # One physical CUDA device id per stage (never renumbered).
+    v4_stage_devices: list = field(default_factory=list)
+    # Which stage THIS process is (set via scripts/train.py --v4-stage).
+    # -1 = single-process mode: one process owns every block.
+    v4_stage: int = -1
     lora: LoraConfig = field(default_factory=LoraConfig)
 
 
