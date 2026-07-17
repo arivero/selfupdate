@@ -360,7 +360,8 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
 
 @torch.no_grad()
 def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
-                     epoch: int, finals: dict, trajectory: str) -> None:
+                     epoch: int, finals: dict, trajectory: str,
+                     serviced_at_epoch: int | None = None) -> None:
     """Frozen-head CE/KL over the answer-predictor rows of the final states."""
     n = stack.n_layers
     ce = torch.zeros((), dtype=torch.float64, device=device)
@@ -399,6 +400,7 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
         optimizer_weight=0.0,
         aggregation="token_weighted_mean",
         trajectory=trajectory,
+        serviced_at_epoch=serviced_at_epoch,
         CE_target="teacher_realized_answer_token_ids",
         KL_direction="teacher_to_student",
         vocabulary_head="frozen",
@@ -451,32 +453,71 @@ class _RelayFiles:
         return path
 
 
-def _staged_relay_epoch(cfg, stack, ds, cohorts, cache, device, log,
-                        epoch: int, run_dir: Path, owned) -> None:
-    """One student-trajectory relay across the stage processes.
+class _RelayServicer:
+    """Non-blocking student-trajectory relay for one stage process.
 
-    Stage 0 embeds and runs its blocks; each later stage waits for its
-    predecessor's boundary file, continues the walk, and the LAST stage
-    evaluates CE/KL through the frozen head.  Boundaries flow through the
-    shared filesystem (CPU), never card-to-card, so stages may keep
-    training while a predecessor's boundary is still pending.
+    The blocking design serialized every stage behind the slowest one
+    (stage 0's eval battery) — measured as whole-node ~8% while two cards
+    idled at the barrier (2026-07-17). Now each epoch boundary SUBMITS the
+    relay and immediately returns to training; pending relays are serviced
+    whenever their predecessor boundary has arrived, and drained (blocking)
+    only after the final epoch so the last CE/KL always lands.
+
+    Consequence, stated not hidden: a stage may service epoch e's relay
+    after it has trained past e, so the segment runs on slightly newer
+    weights. The skew is bounded by pipeline depth, evaluation-only, and
+    recorded in the eval row as ``serviced_at_epoch`` per the owner's sync
+    contract ("until the next gpu has already trained at that level").
     """
-    stage = cfg.train.v4_stage
-    stages = len(cfg.train.v4_stage_splits or []) + 1
-    rf = _RelayFiles(run_dir.parent)
-    if stage == 0:
-        boundaries = None
-    else:
-        prev = rf.wait(rf.path(epoch, f"stage{stage - 1}.st"))
-        loaded = load_file(str(prev))
-        boundaries = {int(k[1:]): v for k, v in loaded.items()}
-    out = _relay_segment(cfg, stack, ds, cohorts, device, owned, boundaries)
-    if stage == stages - 1:
-        _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log, epoch,
-                         out, trajectory="student_censored_flow_staged_relay")
-    else:
-        rf.write(rf.path(epoch, f"stage{stage}.st"),
-                 {f"c{idx}": t.detach().cpu() for idx, t in out.items()})
+
+    def __init__(self, cfg, stack, ds, cohorts, cache, device, log,
+                 run_dir: Path, owned):
+        self.cfg, self.stack, self.ds = cfg, stack, ds
+        self.cohorts, self.cache = cohorts, cache
+        self.device, self.log, self.owned = device, log, owned
+        self.stage = cfg.train.v4_stage
+        self.stages = len(cfg.train.v4_stage_splits or []) + 1
+        self.rf = _RelayFiles(run_dir.parent)
+        self.pending: list[int] = []
+        self.trained_epochs = 0
+
+    def submit(self, epoch: int) -> None:
+        self.trained_epochs = max(self.trained_epochs, epoch)
+        if self.stage == 0:
+            # Producer: own segment starts from embeddings — no wait ever.
+            self._produce(epoch, None)
+        else:
+            self.pending.append(epoch)
+            self.service(block=False)
+
+    def service(self, block: bool = False) -> None:
+        while self.pending:
+            epoch = self.pending[0]
+            path = self.rf.path(epoch, f"stage{self.stage - 1}.st")
+            if not path.exists():
+                if not block:
+                    return
+                self.rf.wait(path)
+            loaded = load_file(str(path))
+            boundaries = {int(k[1:]): v for k, v in loaded.items()}
+            self._produce(epoch, boundaries)
+            self.pending.pop(0)
+
+    def drain(self) -> None:
+        self.service(block=True)
+
+    def _produce(self, epoch: int, boundaries) -> None:
+        out = _relay_segment(self.cfg, self.stack, self.ds, self.cohorts,
+                             self.device, self.owned, boundaries)
+        if self.stage == self.stages - 1:
+            _relay_eval_tail(self.cfg, self.stack, self.ds, self.cohorts,
+                             self.cache, self.device, self.log, epoch, out,
+                             trajectory="student_censored_flow_staged_relay",
+                             serviced_at_epoch=self.trained_epochs)
+        else:
+            self.rf.write(self.rf.path(epoch, f"stage{self.stage}.st"),
+                          {f"c{idx}": t.detach().cpu()
+                           for idx, t in out.items()})
 
 
 def _owned_adapter_tensors(stack, owned) -> dict:
@@ -764,6 +805,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     # multi-process runs defer them to the merged-adapter pass (M3); the
     # single-process mode runs them exactly as v3 does.
     single_process = cfg.train.v4_stage == -1
+    relay = None
+    if (not single_process and cfg.train.v4_relay_every_cohorts
+            and run_dir is not None):
+        relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
+                               run_dir, owned)
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
@@ -892,9 +938,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             if run_dir is None:
                 raise ValueError("staged pipeline-v4 needs run_dir for the "
                                  "relay/battery exchange")
-            if cfg.train.v4_relay_every_cohorts:
-                _staged_relay_epoch(cfg, stack, ds, cohorts, cache, device,
-                                    log, epoch + 1, run_dir, owned)
+            if relay is not None:
+                relay.submit(epoch + 1)
             baseline = _staged_epoch_battery(
                 cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
                 started_at)
@@ -902,6 +947,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             log.log(kind="v4_epoch_boundary", epoch=epoch + 1,
                     boundary_seconds=round(
                         time.perf_counter() - boundary_started, 3))
+    if relay is not None and not stopped:
+        relay.drain()
     return stopped
 
 
