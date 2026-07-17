@@ -1167,7 +1167,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # watchers see the same signal in the v4_epoch rows and the
             # sample_gpu_telemetry.sh CSV.
             floor = cfg.train.v4_min_train_gpu_util
-            if floor and len(samples) >= 256 and len(samples) % 64 == 0:
+            # Epoch 1 (0-indexed 0) is exempt, mirroring the epoch-boundary
+            # gate below: the first epoch's cache/prefill warm-up (v4
+            # online teacher recaptures per cohort) is capture-bound, not a
+            # steady-state utilization signal.
+            if (floor and epoch_state.get("_epoch", 0) > 0
+                    and len(samples) >= 256 and len(samples) % 64 == 0):
                 rolling = sum(samples[-128:]) / 128.0
                 if rolling < floor:
                     raise RuntimeError(
@@ -1242,7 +1247,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             break
         epoch_started = time.time()
         epoch_lr = cfg.train.lr
-        epoch_state: dict = {"_util": []}
+        epoch_state: dict = {"_util": [], "_epoch": epoch}
         rng = random.Random(cfg.train.seed + epoch)
         visit = list(range(len(cohorts)))
         rng.shuffle(visit)
