@@ -1,0 +1,22 @@
+# OVERNIGHT: 27B PPP4, infinite epochs (stop by SIGTERM; graceful drain).
+# Relay (student validation loss) EVERY epoch - the owner favours reports
+# with the validation curve. Consumed relay files are deleted, so relay/
+# stays bounded. Floor 50 armed with mid-epoch abort; reaper + lease +
+# envelopes active via the launcher.
+run_name: h100_27b_v4_ppp4_einf
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 1000000
+  v4_relay_every_cohorts: 1
+  v4_stage_splits: [16, 32, 48]
+  v4_stage_devices: [0, 1, 2, 3]

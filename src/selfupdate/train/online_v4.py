@@ -565,6 +565,11 @@ class _RelayServicer:
                                   as_stage=self.stage)
             boundaries = {int(k[1:]): v for k, v in loaded.items()}
             self._produce(epoch, boundaries)
+            # Consumed: delete our input so an infinite run's relay/ stays
+            # bounded (every file has exactly one addressee).
+            path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                path.parent.rmdir()
             self.pending.pop(0)
 
     def drain(self) -> None:
@@ -610,16 +615,21 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
     rf = _RelayFiles(run_dir.parent)
-    rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
-             _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
     if stage != 0:
+        # Stage 0 is the only consumer; it needs no copy of its own.
+        rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
+                 _owned_adapter_tensors(stack, owned), stage=stage,
+                 epoch=epoch)
         return baseline
     n = stack.n_layers
     with torch.no_grad():
         for other in range(1, stages):
             path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
-            for key, value in rf.read(path, expect_epoch=epoch,
-                                      as_stage=0).items():
+            grafted = rf.read(path, expect_epoch=epoch, as_stage=0)
+            path.unlink(missing_ok=True)
+            with contextlib.suppress(OSError):
+                path.parent.rmdir()
+            for key, value in grafted.items():
                 layer_tag, _, local = key.partition(".")
                 layer = int(layer_tag[1:])
                 if layer in owned:
@@ -994,7 +1004,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     phase=f"after_epoch_{epoch + 1}", started_at=started_at)
         boundary_started = time.perf_counter()
         if single_process and not stopped:
-            if cfg.train.v4_relay_every_cohorts:
+            if cfg.train.v4_relay_every_cohorts and (
+                    (epoch + 1) % cfg.train.v4_relay_every_cohorts == 0):
                 _student_trajectory_eval(
                     cfg, stack, ds, cohorts, cache, device, log,
                     epoch=epoch + 1)
@@ -1005,7 +1016,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             if run_dir is None:
                 raise ValueError("staged pipeline-v4 needs run_dir for the "
                                  "relay/battery exchange")
-            if relay is not None:
+            if relay is not None and (
+                    (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
+                    == 0):
                 relay.submit(epoch + 1)
             baseline = _staged_epoch_battery(
                 cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
