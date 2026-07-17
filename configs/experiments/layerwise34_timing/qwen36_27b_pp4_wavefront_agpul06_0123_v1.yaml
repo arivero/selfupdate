@@ -1,0 +1,25 @@
+run_name: layerwise34_timing_qwen36_27b_lora_pp4_wavefront_fullv5_agpul06_0123_v1
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  compaction: flow_mask
+model:
+  pipeline_split: 0
+  pipeline_splits: [16, 32, 48]
+  pipeline_devices: [0, 1, 2, 3]
+  pipeline_world_size: 4
+train:
+  pipeline_version: 3
+  pipeline_revision: "3.2"
+  update_granularity: online
+  history_policy: causal_bk
+  schedule: summed
+  grad_accum: 1
+  stale_gradient_window: 16
+  micro_batch: 256
+  batching: bucketed
+  activation_shard_users: 16
+  prefill_query_chunk: 16
+  online_optimizer: immediate_sgd
+  pp_execution: wavefront
+  partition_profile_id: qwen36-27b-pp4-equal-admission-v1
