@@ -80,6 +80,10 @@ for ((k = 0; k < STAGES; k++)); do
   sleep 5
 done
 printf '%s\n' "${pids[@]}" > "$LEASE"
-echo "stage pids: ${pids[*]}"
+# Reaper: if one stage dies of OOM/gate-abort, terminate the siblings — a
+# set with a dead stage cannot publish; do not burn the other cards.
+nohup setsid "$ROOT/scripts/v4_stage_reaper.sh" "$LEASE" \
+  "$ROOT/runs/${RUN_NAME}_stage" >> "$ROOT/runs/${RUN_NAME}_reaper.log" 2>&1 &
+echo "stage pids: ${pids[*]}  (reaper pid $!)"
 echo "watch:  tail -f runs/${RUN_NAME}_stage*.log"
 echo "merge:  $PY scripts/merge_v4_adapters.py runs/$RUN_NAME"
