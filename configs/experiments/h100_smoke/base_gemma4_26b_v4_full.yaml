@@ -76,9 +76,13 @@ train:
   # of SDPA scores and OOMs an 80 GB card. Per-item forwards are independent,
   # so a small capture chunk is numerically exact and bounds the spike. At
   # chunk=8 the full-attention score matrix ([chunk,16,T,T]) still peaked the
-  # card past 76 GB alongside the ~52 GB resident model on the longest cohort;
-  # chunk=4 halves that transient with headroom to spare.
-  v4_capture_micro_batch: 4
+  # card past 76 GB alongside the ~52 GB resident model on the longest cohort
+  # (T~5070); chunk=4 also OOMed there (77 GB). The longest cohort's full-
+  # attention score matrix is the peak contributor, so chunk=2 is needed to
+  # clear the ~52 GB resident model + ~6 GB accumulated owned-layer inputs.
+  # Capture runs only in epoch 1 (cpu_stream stores it; epochs 2+ stream from
+  # host), so the small chunk's extra passes cost one warm-up epoch only.
+  v4_capture_micro_batch: 2
   v4_min_train_gpu_util: 50.0
   v4_stage_splits: []
   v4_stage_devices: []
