@@ -128,10 +128,24 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.grad_accum != 1:
             bad.append("pipeline-v4 requires grad_accum=1 (one write per "
                        "block per cohort is the update law)")
-        if not cfg.cache.store_full_teacher_inputs:
-            bad.append("pipeline-v4 needs the full-prefix teacher cache: "
-                       "cache.store_full_teacher_inputs must be true "
-                       "(i{L}=h[L-1] feeds both block inputs and teacher KV)")
+        if cfg.train.v4_teacher_source not in ("cache", "online"):
+            bad.append("v4_teacher_source must be cache or online")
+        if (cfg.train.v4_teacher_source == "cache"
+                and not cfg.cache.store_full_teacher_inputs):
+            bad.append("pipeline-v4 cache source needs the full-prefix "
+                       "teacher cache: cache.store_full_teacher_inputs=true")
+        if cfg.train.v4_teacher_source == "online":
+            if cfg.train.v4_loop_order != "item_major":
+                bad.append("v4_teacher_source=online requires "
+                           "v4_loop_order=item_major (one capture per "
+                           "cohort; layer_major would recapture per layer)")
+            if cfg.train.v4_kv_source != "teacher_frozen":
+                bad.append("v4_teacher_source=online implements "
+                           "teacher_frozen only for now (student_refresh "
+                           "online capture is the phase-2 follow-up)")
+            if not cfg.train.lora.enabled:
+                bad.append("v4_teacher_source=online derives the teacher by "
+                           "disabling adapters: requires train.lora.enabled")
         if cfg.mask.compaction not in ("flow_mask", "intact"):
             bad.append("pipeline-v4 censorship is attention censorship: "
                        "flow_mask (method) or intact (diagnostic control)")

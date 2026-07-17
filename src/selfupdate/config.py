@@ -397,6 +397,15 @@ class TrainConfig:
     # adapters every v4_kv_refresh_epochs epochs (still no gradient through
     # K/V; inputs stay teacher states).
     v4_kv_source: str = "teacher_frozen"  # teacher_frozen | student_refresh
+    # Where teacher hidden states come from (owner contract: "where IF ANY
+    # the teacher hidden are cached ... or just keep calculating it").
+    #   cache  — read i{L}/h{L} from the store_full_teacher_inputs cache.
+    #   online — ONE adapters-off forward per cohort per epoch captures the
+    #            owned layers' inputs and targets on the GPU; the cache
+    #            shrinks to an index of spans + generated answer ids
+    #            (build_teacher_cache.py --index-only). Requires item_major
+    #            (layer_major would redo the capture once per layer).
+    v4_teacher_source: str = "cache"  # cache | online
     v4_kv_refresh_epochs: int = 0
     # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
     # law. adam gives each owned block its own AdamW (more memory; pairs

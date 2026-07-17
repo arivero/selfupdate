@@ -179,6 +179,10 @@ class _V4Cohort:
         self.n_eval = sum(len(i) for i in eval_ids)
         self.t0 = torch.tensor([p.t_aligned.start for p in pairs],
                                dtype=torch.long)
+        self.teacher_ids = torch.zeros((B, self.T), dtype=torch.long)
+        for b, pair in enumerate(pairs):
+            self.teacher_ids[b, : len(pair.teacher_ids)] = torch.tensor(
+                pair.teacher_ids, dtype=torch.long)
         self.keep = keep
         # Additive mask [B, 1, Q, T]: causal at each query row's own teacher
         # position, privileged and padded keys removed.  Padded query rows
@@ -310,7 +314,54 @@ class _TeacherTensors:
             del self.store[key]
 
 
+@torch.no_grad()
+def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
+                            device, n_layers):
+    """One adapters-off forward per cohort: teacher states computed by OUR
+    runtime instead of read from a stored cache (owner contract: "just keep
+    calculating it"). vLLM contributes only answer token ids; hidden states
+    always come from this stack, numerically identical to what the builder
+    would have stored minus the cache bf16 re-quantization.
+
+    Returns owned-layer transient tensors: inputs {L: [B,T,H]}, targets
+    {L: [B,Q,H]}, and (when the final layer is owned) the post-norm teacher
+    rows at the eval positions.
+    """
+    B, T = len(cohort.indices), cohort.T
+    ids = cohort.teacher_ids.to(device)
+    pos = torch.arange(T, device=device)[None].expand(B, -1)
+    ctx = (adapters_off() if adapters_off is not None
+           else contextlib.nullcontext())
+    inputs, targets = {}, {}
+    eval_rows_teacher = None
+    with ctx:
+        h = stack.embed(ids)
+        pe = stack.rope(h, pos)
+        for layer in range(1, n_layers + 1):
+            if layer in owned:
+                inputs[layer] = h.clone()
+            h = stack.run_block(
+                layer, h, pe, position_ids=pos,
+                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+            if layer in owned:
+                view = h if layer < n_layers else stack.final_norm(h)
+                targets[layer] = cohort.gather_query_inputs(view)
+                if layer == n_layers:
+                    rows = []
+                    for b in range(B):
+                        r = cohort.eval_rows[b].to(device)
+                        positions = cohort.qpos_dev[b].index_select(0, r)
+                        rows.append(view[b].index_select(0, positions))
+                    eval_rows_teacher = rows
+    return {"inputs": inputs, "targets": targets,
+            "eval_rows_teacher": eval_rows_teacher}
+
+
 def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
+    # online source uses the SAME store and sizing: epoch-1 captures are
+    # retained per residency (cache-after-first-production) or re-captured
+    # each epoch under "rebuild" — the owner's calibration point. The
+    # measured capture seconds land in the v4_epoch prep split.
     if cfg.train.v4_teacher_residency != "auto":
         return cfg.train.v4_teacher_residency
     hidden = stack.text_config.hidden_size
@@ -690,10 +741,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         student_compaction=cfg.mask.compaction,
         item_cache_items=cfg.cache.item_cache_items,
     )
-    if not cache.has_full_teacher_inputs:
+    online_source = cfg.train.v4_teacher_source == "online"
+    if not online_source and not cache.has_full_teacher_inputs:
         raise ValueError(
-            "pipeline-v4 needs cache.store_full_teacher_inputs=true "
-            "(i{L}=h[L-1] over the full teacher sequence)")
+            "pipeline-v4 cache source needs "
+            "cache.store_full_teacher_inputs=true; or set "
+            "v4_teacher_source=online (index-only cache)")
+    teacher_eval_rows: dict = {}
     n = stack.n_layers
     owned = _owned_range(cfg, n)
     device = torch.device(cfg.model.device)
@@ -746,14 +800,19 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         dataset_items=len(ds.pairs),
     )
 
-    def build_layer_cohort(layer: int, cohort_idx: int) -> dict:
+    def build_layer_cohort(layer: int, cohort_idx: int,
+                           capture: dict | None = None) -> dict:
         cohort = cohorts[cohort_idx]
         entry = tensors.get(layer, cohort_idx)
         if entry is not None:
             return entry
         layer_type = _bk_layer_type(stack, layer)
-        full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
-        targets = cohort.gather_targets(cache, layer).to(device)
+        if capture is not None:
+            full_inputs = capture["inputs"][layer]
+            targets = capture["targets"][layer]
+        else:
+            full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
+            targets = cohort.gather_targets(cache, layer).to(device)
         if layer_type == "linear_attention":
             # Recurrent mixers have no K/V to freeze: the layer runs the
             # FULL teacher-forced sequence with its own (trainable)
@@ -783,11 +842,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         return tensors.put(layer, cohort_idx, kv, inputs_q, targets)
 
     def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
-                          epoch_lr: float) -> None:
+                          epoch_lr: float, capture: dict | None = None
+                          ) -> None:
         cohort = cohorts[cohort_idx]
         layer_type = _bk_layer_type(stack, layer)
         prep_started = time.perf_counter()
-        entry = build_layer_cohort(layer, cohort_idx)
+        entry = build_layer_cohort(layer, cohort_idx, capture)
         if layer_type == "linear_attention":
             full_inputs, targets = tensors.staged_linear(entry)
             B = full_inputs.shape[0]
@@ -952,8 +1012,26 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             for cohort_idx in visit:
                 if stopped:
                     break
+                capture = None
+                if online_source:
+                    missing = any(
+                        tensors.get(layer, cohort_idx) is None
+                        for layer in owned)
+                    if missing:
+                        cap_started = time.perf_counter()
+                        capture = _online_teacher_capture(
+                            cfg, stack, adapters_off, cohorts[cohort_idx],
+                            owned, device, n)
+                        epoch_state["_capture_s"] = (
+                            epoch_state.get("_capture_s", 0.0)
+                            + time.perf_counter() - cap_started)
+                        if capture["eval_rows_teacher"] is not None:
+                            teacher_eval_rows[cohort_idx] = [
+                                r.detach() for r in
+                                capture["eval_rows_teacher"]]
                 for layer in owned:
-                    layer_cohort_step(layer, cohort_idx, epoch_state, epoch_lr)
+                    layer_cohort_step(layer, cohort_idx, epoch_state,
+                                      epoch_lr, capture)
                 if stop_requested():
                     stopped = True
         # One host sync per epoch: flush per-layer telemetry.
@@ -983,6 +1061,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 train_phase_gpu_util=train_util,
                 train_util_samples=len(util_samples),
                 prep_seconds=round(epoch_state.get("_prep_s", 0.0), 3),
+                capture_seconds=round(
+                    epoch_state.get("_capture_s", 0.0), 3),
                 exec_seconds=round(epoch_state.get("_exec_s", 0.0), 3),
                 prep_fraction=round(
                     epoch_state.get("_prep_s", 0.0)

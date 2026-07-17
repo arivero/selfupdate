@@ -55,6 +55,18 @@ another layer. Consequences, all implemented:
 3. **Loop order is free** (`v4_loop_order`): `layer_major` (default) keeps
    one layer's teacher tensors and optimizer state hot across all cohorts;
    `item_major` walks owned layers per cohort.
+4a. **Teacher source** (`v4_teacher_source`, owner contract "where IF ANY
+   cached … or just keep calculating it"): `cache` reads the
+   store_full_teacher_inputs cache; `online` computes teacher states with
+   ONE adapters-off forward per cohort (vLLM contributes only answer token
+   ids via an index-only cache; hidden states always come from OUR stack).
+   Online capture feeds the SAME per-(layer,cohort) store, so residency
+   decides cache-after-first-production vs recompute-per-epoch
+   (`rebuild`). The placement triangle — GPU memory (`gpu_corpus`) vs
+   pinned process CPU (`cpu_stream`) vs /dev/shm mmap (cache mode from the
+   node cache) vs recompute — is a MEASURED choice: `capture_seconds` and
+   the prep split in every v4_epoch row are the calibration data; do not
+   hardcode a winner.
 4. **Teacher tensors are constant** (`v4_kv_source: teacher_frozen`), so
    per-(layer, cohort) K/V, inputs, and targets are built once and reused
    every epoch. Residency (`v4_teacher_residency`): `gpu_corpus` keeps them
