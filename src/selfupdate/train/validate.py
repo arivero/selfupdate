@@ -163,6 +163,19 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("v4_optimizer must be immediate_sgd or adam")
         if cfg.train.v4_grad_clip < 0:
             bad.append("v4_grad_clip must be >= 0 (0 disables clipping)")
+        if cfg.train.v4_stage_scoped:
+            if cfg.train.v4_stage < 0:
+                bad.append("v4_stage_scoped is the staged scaling lane; a "
+                           "single process owning every block should load "
+                           "the full model (unset v4_stage_scoped)")
+            if not cfg.train.lora.enabled:
+                bad.append("v4_stage_scoped requires lora (full-FT master "
+                           "weights are not stage-assembled)")
+            if cfg.train.v4_teacher_source == "online":
+                bad.append("v4_stage_scoped cannot use v4_teacher_source="
+                           "online: the per-cohort capture walks EVERY "
+                           "layer and foreign blocks are meta — use cache "
+                           "(or the capture-relay store when it lands)")
         betas = tuple(cfg.train.v4_adam_betas)
         if len(betas) != 2 or not all(0.0 <= b < 1.0 for b in betas):
             bad.append("v4_adam_betas must be two values in [0, 1)")

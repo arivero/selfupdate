@@ -455,6 +455,12 @@ class TrainConfig:
     # mechanics runs). The measured mean is logged in every v4_epoch row as
     # train_phase_gpu_util.
     v4_min_train_gpu_util: float = 0.0
+    # Scaling lane (models over one card per stage): materialize only the
+    # owned blocks + vocab stack from the safetensors index; foreign blocks
+    # stay on the meta device (shard_load.py). Requires a staged launch and
+    # LoRA; the per-epoch battery degrades to a loudly-marked skip row until
+    # v4_battery_mode=subprocess lands (plan B6).
+    v4_stage_scoped: bool = False
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
     # clips each block's gradient to that max L2 norm before the step, and the

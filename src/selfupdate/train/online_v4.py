@@ -715,6 +715,18 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
     rf = _RelayFiles(run_dir.parent)
+    if cfg.train.v4_stage_scoped:
+        # Grafting requires stage 0 to hold the FULL model; under stage-
+        # scoped loading foreign blocks are meta. Until the battery
+        # subprocess (plan B6) lands, record the omission loudly instead of
+        # crashing — a skipped battery must never be mistaken for a run
+        # without the obligation.
+        if stage == 0:
+            log.log(kind="epoch_battery_skipped", epoch=epoch,
+                    reason="v4_stage_scoped_pending_battery_subprocess",
+                    owner_law="per-epoch battery is NON-NEGOTIABLE; this "
+                              "row marks debt, not permission")
+        return baseline
     if stage != 0:
         # Stage 0 is the only consumer; it needs no copy of its own.
         rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),

@@ -417,15 +417,54 @@ class TrainingRuntime:
         model.to(self.device)
         return model
 
-    def load(self, moe_load_kw: dict | None = None) -> "TrainingRuntime":
-        moe_load_kw = moe_load_kw or {}
-        self.model = self._load_placed(self.student_src, self.base_dtype,
-                                       **moe_load_kw)
+    def _load_stage_scoped(self):
+        """Scaling lane (plan B3): materialize only this stage's owned
+        blocks + the vocab stack; foreign blocks stay meta (zero bytes,
+        loud on touch). LoRA attaches to owned layers only, then every
+        real tensor moves to the stage device — `.to(device)` on the whole
+        model would raise on meta params, so movement is per-tensor."""
+        from transformers import AutoConfig
+
+        from .online_v4 import _owned_range
+        from .shard_load import stage_scoped_load
+
+        if self.cfg.train.init_from:
+            raise NotImplementedError(
+                "stage-scoped warm start needs per-stage checkpoint "
+                "assembly; init_from is not wired for v4_stage_scoped yet")
+        acfg = AutoConfig.from_pretrained(self.cfg.model.name)
+        text = getattr(acfg, "text_config", None) or acfg
+        owned = _owned_range(self.cfg, int(text.num_hidden_layers))
+        owned0 = range(owned.start - 1, owned.stop - 1)  # 1-based -> 0-based
+        model = stage_scoped_load(self.cfg.model.name, owned0,
+                                  dtype=self.base_dtype)
         if self.cfg.train.lora.enabled:
             from .lora import attach_lora
 
-            self.peft_model = attach_lora(self.model, self.cfg.train.lora)
-            self.model = self.peft_model.get_base_model()
+            self.peft_model = attach_lora(model, self.cfg.train.lora,
+                                          owned_layers=owned0)
+            model = self.peft_model.get_base_model()
+        with torch.no_grad():
+            for p in model.parameters():
+                if not p.is_meta:
+                    p.data = p.data.to(self.device)
+            for b in model.buffers():
+                if not b.is_meta:
+                    b.data = b.data.to(self.device)
+        return model
+
+    def load(self, moe_load_kw: dict | None = None) -> "TrainingRuntime":
+        moe_load_kw = moe_load_kw or {}
+        if getattr(self.cfg.train, "v4_stage_scoped", False):
+            self.model = self._load_stage_scoped()
+        else:
+            self.model = self._load_placed(self.student_src, self.base_dtype,
+                                           **moe_load_kw)
+            if self.cfg.train.lora.enabled:
+                from .lora import attach_lora
+
+                self.peft_model = attach_lora(self.model, self.cfg.train.lora)
+                self.model = self.peft_model.get_base_model()
         self.model.train()
         # explicit pipeline placement runs the walk hook-free: BlockStack
         # moves activations at partition boundaries itself (issues.md

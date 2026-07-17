@@ -7,8 +7,42 @@ with the teacher cache is preserved exactly.
 
 from __future__ import annotations
 
+import re
+
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 TARGET_LEAVES = tuple(TARGET_MODULES)
+
+_LAYER_RE = re.compile(r"\blayers\.(\d+)\.")
+
+
+def _owned_targets(model, owned_layers) -> list[str]:
+    """Exact adapter targets restricted to the owned decoder layers.
+
+    Stage-scoped loads (shard_load.py) leave foreign blocks on the meta
+    device; PEFT would happily create adapters on meta Linears and the
+    stage checkpoint would then carry dead zero shards for blocks it never
+    trains. Matching by exact name keeps adapters exactly where gradients
+    can flow. Vision towers are excluded by name and by requiring plain
+    nn.Linear (gemma4 vision wraps projections in Gemma4ClippableLinear)."""
+    import torch
+
+    targets = []
+    for name, module in model.named_modules():
+        if name.split(".")[-1] not in TARGET_LEAVES:
+            continue
+        if not isinstance(module, torch.nn.Linear):
+            continue
+        if "visual" in name or "vision" in name:
+            continue
+        m = _LAYER_RE.search(name)
+        if m is None or int(m.group(1)) not in owned_layers:
+            continue
+        targets.append(name)
+    if not targets:
+        raise ValueError(
+            f"owned-layer LoRA target discovery found no projections for "
+            f"layers {sorted(owned_layers)[:4]}...")
+    return targets
 
 
 def _target_modules(model):
@@ -34,16 +68,18 @@ def _target_modules(model):
     return targets
 
 
-def attach_lora(model, lora_cfg):
+def attach_lora(model, lora_cfg, owned_layers=None):
     from peft import LoraConfig, get_peft_model
 
+    targets = (_owned_targets(model, set(owned_layers))
+               if owned_layers is not None else _target_modules(model))
     peft_model = get_peft_model(
         model,
         LoraConfig(
             r=lora_cfg.r,
             lora_alpha=lora_cfg.alpha,
             lora_dropout=lora_cfg.dropout,
-            target_modules=_target_modules(model),
+            target_modules=targets,
             bias="none",
             task_type="CAUSAL_LM",
         ),
