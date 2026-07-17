@@ -1,0 +1,33 @@
+# M1 leg D — C + weight rotation (differs from C ONLY in
+# v4_weight_residency). The owner's demonstration target: rotation is pure
+# transport — frozen masters paged one-way, Adam moments paged both ways —
+# so every trained tensor and both Adam moments must be BIT-identical to C
+# (scripts/compare_v4_shard_numerics.py).
+run_name: h100_m1d_0p6b_ppp2_store_adam_rotate_e2
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 2
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  v4_grad_clip: 0.0
+  v4_teacher_residency: auto
+  v4_stage_scoped: true
+  v4_battery_mode: subprocess
+  v4_weight_residency: rotate
+  v4_stage_splits: [14]
+  v4_stage_devices: [1, 2]

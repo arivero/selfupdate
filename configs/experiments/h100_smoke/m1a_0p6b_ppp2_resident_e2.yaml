@@ -1,0 +1,24 @@
+# M1 leg A — resident online reference (plan M1, task #6). Two stages on
+# GPUs 1-2 (0/3 busy 2026-07-18). Every M1 leg pins seed/splits/devices/
+# epochs; legs differ ONLY in the knobs named in their header comment.
+run_name: h100_m1a_0p6b_ppp2_resident_e2
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 2
+  seed: 17
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_optimizer: immediate_sgd
+  v4_weight_residency: resident
+  v4_stage_splits: [14]
+  v4_stage_devices: [1, 2]
