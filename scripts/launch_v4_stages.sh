@@ -40,6 +40,20 @@ export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=erro
 export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}"
 
 mkdir -p "$ROOT/runs"
+# Launch lease: a second invocation for the same run must refuse while the
+# first one's stages are alive (the 2026-07-17 double-launch near-miss:
+# two watchers raced; both sets would have written the same run directory
+# and OOMed every card). Stale leases from dead pids are reclaimed.
+LEASE="$ROOT/runs/.v4-launch-$(echo "$RUN_NAME" | tr '/' '_').pids"
+if [[ -f "$LEASE" ]]; then
+  while read -r oldpid; do
+    if kill -0 "$oldpid" 2>/dev/null; then
+      echo "REFUSED: $RUN_NAME already launched (live pid $oldpid, lease $LEASE)" >&2
+      exit 3
+    fi
+  done < "$LEASE"
+  rm -f "$LEASE"
+fi
 echo "launching $STAGES v4 stages of $RUN_NAME"
 pids=()
 for ((k = 0; k < STAGES; k++)); do
@@ -52,6 +66,7 @@ for ((k = 0; k < STAGES; k++)); do
   # Small stagger so concurrent model loads do not thrash the snapshot cache.
   sleep 5
 done
+printf '%s\n' "${pids[@]}" > "$LEASE"
 echo "stage pids: ${pids[*]}"
 echo "watch:  tail -f runs/${RUN_NAME}_stage*.log"
 echo "merge:  $PY scripts/merge_v4_adapters.py runs/$RUN_NAME"
