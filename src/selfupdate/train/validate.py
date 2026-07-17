@@ -128,8 +128,8 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.grad_accum != 1:
             bad.append("pipeline-v4 requires grad_accum=1 (one write per "
                        "block per cohort is the update law)")
-        if cfg.train.v4_teacher_source not in ("cache", "online"):
-            bad.append("v4_teacher_source must be cache or online")
+        if cfg.train.v4_teacher_source not in ("cache", "online", "store"):
+            bad.append("v4_teacher_source must be cache, online, or store")
         if (cfg.train.v4_teacher_source == "cache"
                 and not cfg.cache.store_full_teacher_inputs):
             bad.append("pipeline-v4 cache source needs the full-prefix "
@@ -139,13 +139,21 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("v4_teacher_source=online requires "
                            "v4_loop_order=item_major (one capture per "
                            "cohort; layer_major would recapture per layer)")
+        if cfg.train.v4_teacher_source in ("online", "store"):
             if cfg.train.v4_kv_source != "teacher_frozen":
-                bad.append("v4_teacher_source=online implements "
-                           "teacher_frozen only for now (student_refresh "
-                           "online capture is the phase-2 follow-up)")
+                bad.append("v4_teacher_source=online/store implements "
+                           "teacher_frozen only: the captured KV/store IS "
+                           "the frozen teacher; student_refresh would "
+                           "rebuild it from weights that keep moving")
             if not cfg.train.lora.enabled:
-                bad.append("v4_teacher_source=online derives the teacher by "
-                           "disabling adapters: requires train.lora.enabled")
+                bad.append("v4_teacher_source=online/store derives the "
+                           "teacher by disabling adapters: requires "
+                           "train.lora.enabled")
+        if (cfg.train.v4_teacher_source == "store"
+                and cfg.train.v4_teacher_residency == "rebuild"):
+            bad.append("v4_teacher_source=store is capture-ONCE; "
+                       "residency=rebuild would drop the captured entries "
+                       "and there is no per-epoch recapture to rebuild from")
         if cfg.mask.compaction not in ("flow_mask", "intact"):
             bad.append("pipeline-v4 censorship is attention censorship: "
                        "flow_mask (method) or intact (diagnostic control)")

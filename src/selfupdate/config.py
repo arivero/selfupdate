@@ -405,7 +405,17 @@ class TrainConfig:
     #            shrinks to an index of spans + generated answer ids
     #            (build_teacher_cache.py --index-only). Requires item_major
     #            (layer_major would redo the capture once per layer).
-    v4_teacher_source: str = "cache"  # cache | online
+    #   store  — capture ONCE before the epoch loop via the stage relay
+    #            (v4_store.py): stage 0 embeds and walks its owned layers
+    #            adapters-off, ships the boundary hidden downstream; every
+    #            stage fills its per-(layer,cohort) store and later epochs
+    #            run ZERO teacher forwards (the measured 3.2x lever at 27B;
+    #            the 122B/397B scaling lane pairs it with v4_stage_scoped).
+    v4_teacher_source: str = "cache"  # cache | online | store
+    # Backpressure for the store capture relay: at most this many boundary
+    # files of one producer stage alive in the exchange (consumer deletion
+    # is the ack).
+    v4_capture_inflight: int = 2
     v4_kv_refresh_epochs: int = 0
     # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
     # law. adam gives each owned block its own AdamW (more memory; pairs

@@ -809,11 +809,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         item_cache_items=cfg.cache.item_cache_items,
     )
     online_source = cfg.train.v4_teacher_source == "online"
-    if not online_source and not cache.has_full_teacher_inputs:
+    store_source = cfg.train.v4_teacher_source == "store"
+    if (cfg.train.v4_teacher_source == "cache"
+            and not cache.has_full_teacher_inputs):
         raise ValueError(
             "pipeline-v4 cache source needs "
             "cache.store_full_teacher_inputs=true; or set "
-            "v4_teacher_source=online (index-only cache)")
+            "v4_teacher_source=online/store (index-only cache)")
     teacher_eval_rows: dict = {}
     n = stack.n_layers
     owned = _owned_range(cfg, n)
@@ -843,6 +845,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     cohorts = [
         _V4Cohort(cfg, ds, indices, device) for indices in cohort_indices]
     residency = _resolve_residency(cfg, cohorts, ds, stack, owned)
+    if store_source and residency == "rebuild":
+        # Capture-once data has no per-epoch recapture to rebuild from;
+        # validate already rejects an EXPLICIT rebuild — this guards the
+        # auto policy resolving there under memory pressure.
+        residency = "cpu_stream"
     tensors = _TeacherTensors(residency, device)
 
     # Frozen teacher projections = LoRA adapters disabled. The PEFT handle
@@ -922,6 +929,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         entry = tensors.get(layer, cohort_idx)
         if entry is not None:
             return entry
+        if store_source:
+            raise RuntimeError(
+                f"store mode: no captured entry for layer {layer} cohort "
+                f"{cohort_idx} — the capture relay must prefill every "
+                "(owned layer, cohort) pair; a dropped entry means the "
+                "residency policy evicted capture-once data")
         layer_type = _bk_layer_type(stack, layer)
         if capture is not None:
             full_inputs = capture["inputs"][layer]
@@ -1146,6 +1159,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
                                run_dir, owned, rotator=rotator,
                                teacher_eval_rows=teacher_eval_rows)
+    if store_source:
+        # Capture ONCE, before any epoch: the relay fills this stage's
+        # per-(layer, cohort) store; every epoch then runs with zero
+        # teacher forwards (the measured 3.2x lever at 27B).
+        from .v4_store import capture_relay_store
+        capture_relay_store(
+            cfg, stack, ds, cohorts, tensors, adapters_off, device,
+            run_dir, log, owned=owned, n_layers=n, moe_ctrl=moe_ctrl,
+            moe_routing=moe_routing, teacher_eval_rows=teacher_eval_rows,
+            rotator=rotator)
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
@@ -1368,7 +1391,20 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
 
     n = stack.n_layers
     owned = _owned_range(cfg, n)
-    online_source = cfg.train.v4_teacher_source == "online"
+    # store regenerates exactly like online here: one adapters-off forward
+    # per sampled item (teacher states are the same computation the relay
+    # captured; certification needs no store plumbing).
+    online_source = cfg.train.v4_teacher_source in ("online", "store")
+    if cfg.train.v4_stage_scoped and cfg.train.v4_teacher_source != "cache":
+        # The certification capture walks EVERY layer; foreign blocks are
+        # meta under stage-scoped loading. A cert relay is future work —
+        # report the debt loudly instead of crashing the end of a run.
+        return {
+            "items": 0,
+            "skipped": "stage_scoped_store_certification_pending_relay",
+            "passed": False,
+            "owner_note": "locality certification debt, not evidence",
+        }
     device = torch.device(cfg.model.device)
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     ds = DistillDataset(
