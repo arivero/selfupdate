@@ -622,7 +622,13 @@ class _RelayServicer:
 
     def __init__(self, cfg, stack, ds, cohorts, cache, device, log,
                  run_dir: Path, owned, teacher_eval_rows: dict | None = None):
-        self.teacher_eval_rows = teacher_eval_rows or {}
+        # Keep the SHARED reference: an empty dict is falsy, so `... or {}`
+        # would swap in a fresh dict and sever the link to the training loop's
+        # `teacher_eval_rows`, which is populated cohort-by-cohort DURING the
+        # run. That severance made the last stage's CE/KL relay fall back to
+        # `cache.hidden` and die on the index-only online cache (2026-07-17).
+        self.teacher_eval_rows = (teacher_eval_rows
+                                  if teacher_eval_rows is not None else {})
         self.cfg, self.stack, self.ds = cfg, stack, ds
         self.cohorts, self.cache = cohorts, cache
         self.device, self.log, self.owned = device, log, owned
@@ -1172,6 +1178,7 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
 
     n = stack.n_layers
     owned = _owned_range(cfg, n)
+    online_source = cfg.train.v4_teacher_source == "online"
     device = torch.device(cfg.model.device)
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     ds = DistillDataset(
@@ -1192,14 +1199,25 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                     + list(stack.lm_head.parameters()))
     for item_index in range(min(items, len(ds.pairs))):
         cohort = _V4Cohort(cfg, ds, [item_index], device)
+        # Online runs carry no hidden cache; regenerate this item's teacher
+        # inputs/targets with one adapters-off forward (the same source the
+        # training walk uses) instead of reading the absent cache shards.
+        online_cap = (
+            _online_teacher_capture(cfg, stack, adapters_off, cohort,
+                                    owned, device, n)
+            if online_source else None)
         for layer in sample_layers:
             for foreign in range(1, n + 1):
                 for p in stack.block_params(foreign):
                     p.grad = None
             for p in vocab_params:
                 p.grad = None
-            full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
-            targets = cohort.gather_targets(cache, layer).to(device)
+            if online_cap is not None:
+                full_inputs = online_cap["inputs"][layer].to(device)
+                targets = online_cap["targets"][layer].to(device)
+            else:
+                full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
+                targets = cohort.gather_targets(cache, layer).to(device)
             layer_type = _bk_layer_type(stack, layer)
             if layer_type == "linear_attention":
                 # Same routing as the walk: recurrent mixers take the full
