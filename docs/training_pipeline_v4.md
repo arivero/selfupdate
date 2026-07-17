@@ -77,9 +77,12 @@ another layer. Consequences, all implemented:
 
 Position classes store different things (v4_loss_positions=answer):
 
-1. **Common system prefix** — identical text at identical positions across
-   the corpus, causally self-contained → teacher KV is identical across
-   items: store ONCE per layer (dedup factor ~corpus size).
+1. **Common system prefix** — identical text at identical positions,
+   causally self-contained → teacher KV identical across the items that
+   share it. The v5 set is TRI-PARTITE (machado, quijote ch.1, quijote
+   ch.4) with per-corpus system prompts, so dedup keys on the prefix
+   TOKEN-ID hash — one stored KV per (layer, prefix class), ~3 classes
+   here, generalizing to any corpus mix.
 2. **Per-item prompt remainder** (privileged + mid + question) — attention
    context only, never a loss position → KV only (~4 KB/pos at 27B), no
    hidden vectors. Censorship stays in the mask, orthogonal to storage.
