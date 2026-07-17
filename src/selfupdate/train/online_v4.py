@@ -337,12 +337,16 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
     with ctx:
         h = stack.embed(ids)
         pe = stack.rope(h, pos)
+        # No prepared mask: with a plain rope, run_block leaves attention_mask
+        # None and SDPA's is_causal fast path gives exact causal attention
+        # (why the 0.6B online-vs-cache equivalence held). With a gemma4-class
+        # rope BUNDLE, run_block instead applies the per-layer-type mask from
+        # the bundle — REQUIRED so sliding-window layers' teacher states are
+        # windowed, not full-causal. NO_PREPARED here would discard that mask.
         for layer in range(1, n_layers + 1):
             if layer in owned:
                 inputs[layer] = h.clone()
-            h = stack.run_block(
-                layer, h, pe, position_ids=pos,
-                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+            h = stack.run_block(layer, h, pe, position_ids=pos)
             if layer in owned:
                 view = h if layer < n_layers else stack.final_norm(h)
                 targets[layer] = cohort.gather_query_inputs(view)
@@ -767,6 +771,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     teacher_eval_rows: dict = {}
     n = stack.n_layers
     owned = _owned_range(cfg, n)
+    # Frozen-KV contract tripwire: KV-sharing layers (gemma-class
+    # num_kv_shared_layers > 0) read another layer's KV through the
+    # shared_kv_states side channel and never call past_key_values.update,
+    # so _FrozenKV would stay empty and fail later with a generic consume
+    # error. The 2026-07 gemma-4 targets set 0; fail loudly and by name if
+    # a future variant does not.
+    shared_kv = int(getattr(stack.text_config, "num_kv_shared_layers", 0)
+                    or 0)
+    if shared_kv:
+        raise NotImplementedError(
+            f"pipeline-v4 frozen teacher KV does not support KV-sharing "
+            f"layers yet (num_kv_shared_layers={shared_kv}): the shared "
+            f"layers bypass past_key_values.update; a shared-kv arm of "
+            f"_FrozenKV is required")
     device = torch.device(cfg.model.device)
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     B = cfg.train.micro_batch
