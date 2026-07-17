@@ -12,6 +12,7 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
+  micro_batch: 16
   epochs: 40
   v4_teacher_source: online
   v4_loop_order: item_major
