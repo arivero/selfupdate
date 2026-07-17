@@ -209,6 +209,21 @@ class BlockStack:
             return None  # attention computes rotary internally (MLA-style)
         if self.rotary_needs_layer_type:
             bundle = {"position_ids": position_ids}
+            rope_types = sorted(
+                name[: -len("_inv_freq")]
+                for name in dir(self.rotary_emb)
+                if name.endswith("_inv_freq") and not name.startswith("_"))
+            if (rope_types
+                    and getattr(self.text_config, "model_type", "")
+                    .startswith("deepseek")):
+                # MLA-family contract (deepseek_v4): attention consumes the
+                # WHOLE dict — position_embeddings[self.rope_layer_type] —
+                # so precompute every rope type's (cos, sin) once per walk.
+                with torch.no_grad():
+                    bundle["rope_dict"] = {
+                        t: self.rotary_emb(hidden, position_ids,
+                                           layer_type=t)
+                        for t in rope_types}
             if self.needs_gemma4_masks:
                 from transformers.masking_utils import (
                     create_causal_mask,
@@ -259,9 +274,14 @@ class BlockStack:
             if masks is not None:
                 attention_mask = masks[layer_type]
             shared_kv_states = bundle.get("shared_kv_states")
-            with torch.no_grad():
-                position_embeddings = self.rotary_emb(
-                    hidden, position_ids, layer_type=layer_type)
+            if "rope_dict" in bundle:
+                # deepseek-style: the attention module indexes the dict by
+                # its own rope_layer_type; never collapse to one pair.
+                position_embeddings = bundle["rope_dict"]
+            else:
+                with torch.no_grad():
+                    position_embeddings = self.rotary_emb(
+                        hidden, position_ids, layer_type=layer_type)
         if self.hook_free_walk:
             dev = self.block_devices[L - 1]
             if hidden.device != dev:

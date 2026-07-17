@@ -10,7 +10,13 @@ from __future__ import annotations
 import re
 
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-TARGET_LEAVES = tuple(TARGET_MODULES)
+# MLA families (deepseek_v4) name their attention projections by the
+# latent decomposition; without these the adapter would only reach o_proj
+# and the MLP — a silently weaker attention adapter (plan B8).
+MLA_TARGET_MODULES = ["q_a_proj", "q_b_proj", "kv_a_proj_with_mqa",
+                      "kv_b_proj", "o_proj",
+                      "gate_proj", "up_proj", "down_proj"]
+TARGET_LEAVES = tuple(set(TARGET_MODULES) | set(MLA_TARGET_MODULES))
 
 _LAYER_RE = re.compile(r"\blayers\.(\d+)\.")
 
@@ -49,7 +55,10 @@ def _target_modules(model):
     """Gemma 4's vision tower wraps projections in Gemma4ClippableLinear,
     while the text stack uses ordinary Linear projections. Return exact
     text-stack module names so PEFT does not inject adapters into vision."""
-    if getattr(getattr(model, "config", None), "model_type", "") != "gemma4":
+    model_type = getattr(getattr(model, "config", None), "model_type", "")
+    if model_type in ("deepseek_v4", "deepseek_v3"):
+        return MLA_TARGET_MODULES
+    if model_type != "gemma4":
         return TARGET_MODULES
     import torch
 
