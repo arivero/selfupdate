@@ -44,6 +44,13 @@ lease.  At launch verification there were no tracebacks or OOMs.  agpul06 kept
 the required 63-GiB 27B model snapshot and had 694 GiB free before its clean
 full-input cache build; obsolete node-local teacher caches were evicted.
 
+At approximately 03:00, the 0.8B cache `633ce19cf18c5963` published all 2,071
+examples/24 layers after 219.5 seconds.  Huber trainer PID `1885904` and cosine
+trainer PID `1885954` replaced their builders, and both telemetry CSVs began
+recording.  The 4B and 27B full-input cache builders remained active with no
+logged error.  Wrapper shells created only to inspect delegated launches were
+removed; persistent launchers, builders/trainers, and samplers were retained.
+
 ## Prompt for tomorrow's analysing agent
 
 Read `AGENTS.md`, `docs/layerwise34_timing_progress.md`, this file, and each
