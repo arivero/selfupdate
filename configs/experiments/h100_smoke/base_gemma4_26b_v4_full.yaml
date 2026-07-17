@@ -74,8 +74,11 @@ train:
   # Chunk the online teacher-capture forward: a full-attention gemma4 block
   # over a long cohort (T~4096) at the full micro_batch=32 materializes ~30 GB
   # of SDPA scores and OOMs an 80 GB card. Per-item forwards are independent,
-  # so an 8-item capture chunk is numerically exact and bounds the spike.
-  v4_capture_micro_batch: 8
+  # so a small capture chunk is numerically exact and bounds the spike. At
+  # chunk=8 the full-attention score matrix ([chunk,16,T,T]) still peaked the
+  # card past 76 GB alongside the ~52 GB resident model on the longest cohort;
+  # chunk=4 halves that transient with headroom to spare.
+  v4_capture_micro_batch: 4
   v4_min_train_gpu_util: 50.0
   v4_stage_splits: []
   v4_stage_devices: []
