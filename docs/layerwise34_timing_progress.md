@@ -125,9 +125,10 @@ Lustre during the measured traversal.
 | Qwen3.5-4B | 2 | wavefront | `[16]`, GPUs 1/3 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,359.0 (1.313x PP1) | 18.84 / 18.91 GiB reserved |
 | Qwen3.5-4B | 3 | wavefront | `[11,23]`, ranges 11/12/9, GPUs 1/2/3 | full-v5 cache `98bb2aff23e25f93` | passed; full traversal, locality certified | 1,505.4 (1.454x PP1) | 13.88 / 13.52 / 13.01 GiB allocated; 40.95 GiB aggregate reserved |
 | Qwen3.5-4B | 4 | wavefront | v1 `[8,16,25]`; v2 `[7,15,23]` | full-v5 cache `98bb2aff23e25f93` | scientific checks pass; saturation rejected; tuning closed | 1,503.1 best (1.452x PP1) | v2 9.54 / 9.72 / 9.72 / 13.01 GiB reserved |
-| Qwen3.6-27B | 2 | wavefront | `[32]`, GPUs 0/1 | full-v5 cache `ef92bc2ccff8c62d` | fit retry active after prefill OOM at shard 16 | pending | first fit sample 43.1 / 42.5 GiB used |
-| Qwen3.5-0.8B | 4 | independent teacher input | `[7,14,21]`, GPUs 0/1/2/3 | 100q full-input cache `1e992e1638f30bee` | active | pending | pending |
-| Qwen3.5-4B | 3 | independent teacher input | `[11,23]`, GPUs 1/2/3 | 100q full-input cache `fd80e3e399e9b809` | active | pending | pending |
+| Qwen3.6-27B | 2 | wavefront | `[32]`, GPUs 0/1 | full-v5 cache `ef92bc2ccff8c62d` | memory-infeasible before first write at shard widths 16/8/4 | none | 43.7--43.8 GiB allocated at OOM |
+| Qwen3.6-27B | 4 | wavefront | `[16,32,48]`, GPUs 0/1/2/3 | full-v5 cache `ef92bc2ccff8c62d` | active first feasible candidate | pending | model-only sample 15.3/12.9/12.9/15.3 GiB used |
+| Qwen3.5-0.8B | 4 | independent teacher input | `[7,14,21]`, GPUs 0/1/2/3 | 100q full-input cache `1e992e1638f30bee` | initial CPU-cache 255.12/s invalidated by teacher-coordinate defect; corrected GPU-cache run active | pending | pending |
+| Qwen3.5-4B | 3 | independent teacher input | `[11,23]`, GPUs 1/2/3 | 100q full-input cache `fd80e3e399e9b809` | CPU-cache 259.40/s and first GPU-cache 536.32/s invalidated by teacher-coordinate defect; corrected GPU-cache run active | pending | invalid CPU-cache peak used 8.7/8.1/8.0 GiB |
 
 Blank result cells are intentionally unmeasured; no throughput is inferred
 from the dependency proof or from a partial run.
