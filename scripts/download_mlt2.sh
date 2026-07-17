@@ -9,12 +9,15 @@
 set -u
 cd "$(dirname "$0")/.." || exit 1
 export SSL_CERT_FILE=/fs/agustina/arivero/supercomplex/.local/lib/python3.11/site-packages/certifi/cacert.pem
+# The runtime venv lives in node-local /tmp (repo law: no Lustre .venv). Point
+# the CLI there; override with HF_CLI=... if a node uses a different path.
+HF_CLI="${HF_CLI:-/tmp/$USER/selfupdate-venv/bin/hf}"
 
 dl() {  # dl <repo> <sentinel>
     local repo="$1" sentinel="$2"
     if [ -e "$sentinel" ]; then echo "[skip] $repo"; return 0; fi
     echo "[$(date '+%F %T')] downloading $repo"
-    if .venv/bin/hf download "$repo" --max-workers 2; then
+    if "$HF_CLI" download "$repo" --max-workers 2; then
         touch "$sentinel"
         echo "[$(date '+%F %T')] done $repo"
     else
@@ -22,6 +25,9 @@ dl() {  # dl <repo> <sentinel>
     fi
 }
 
+# Envelope target: the only model not yet on Lustre (owner decision 2026-07-17,
+# FP8 variant, ~406 GB). Everything below it is already complete in the cache.
+dl Qwen/Qwen3.5-397B-A17B-FP8        runs/.dl_qwen35_397b_fp8.done
 dl Qwen/Qwen3.5-122B-A10B            runs/.dl_qwen35_122b.done
 dl Qwen/Qwen3.5-122B-A10B-GPTQ-Int4  runs/.dl_qwen35_122b_gptq.done
 dl mistralai/Mistral-Medium-3.5-128B runs/.dl_mistralmed35.done
