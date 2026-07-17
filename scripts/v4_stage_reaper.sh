@@ -26,9 +26,11 @@ while true; do
       if echo "$recent" | grep -q 'run complete'; then
         continue
       fi
-      if echo "$recent" | grep -q -E 'OutOfMemoryError|UTILIZATION GATE'; then
-        dead_bad="stage $i (pid $pid)"
-      fi
+      # Any other death is fatal to the set. A pattern list (the old
+      # OOM|UTILIZATION GATE grep) is always one novel crash behind: the
+      # 2026-07-17 relay-envelope RuntimeError matched nothing and left two
+      # stages burning cards for hours on an unpublishable run.
+      dead_bad="stage $i (pid $pid)"
     fi
   done
   [ "$alive" = "0" ] && exit 0

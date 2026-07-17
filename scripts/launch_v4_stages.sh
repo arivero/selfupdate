@@ -72,6 +72,12 @@ fi
 export SELFUPDATE_V4_LAUNCH_ID="v4-$(date +%Y%m%d%H%M%S)-$$"
 export SELFUPDATE_V4_RELAY_ROOT="${SELFUPDATE_V4_RELAY_ROOT:-/dev/shm/$USER/selfupdate-v4-relay}"
 mkdir -p "$SELFUPDATE_V4_RELAY_ROOT"
+# Wipe this run's relay exchange: we hold the lease, so no live stage of this
+# run exists, and any files there are dead mail from a previous launch. The
+# envelope check would refuse them fatally (2026-07-17 19:00 incident: a
+# leftover e0001/stage1.st from a 17:31 launch killed stage 2 of the 17:53
+# relaunch); prevention beats detection.
+rm -rf "${SELFUPDATE_V4_RELAY_ROOT:?}/$RUN_NAME"
 echo "launching $STAGES v4 stages of $RUN_NAME  (launch id $SELFUPDATE_V4_LAUNCH_ID)"
 pids=()
 for ((k = 0; k < STAGES; k++)); do
