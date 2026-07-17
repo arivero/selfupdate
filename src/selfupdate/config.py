@@ -253,6 +253,9 @@ class TrainConfig:
     # Zero is rejected by causal_bk: silently restoring an unsharded B=256
     # walk caused deterministic late-cohort OOM retries in v3.1.
     activation_shard_users: int = 0
+    # Read-only prompt prefill can pipeline independent activation shards
+    # across PP stages. One preserves historical serial preparation.
+    prefill_parallel_shards: int = 1
     # Static-cache prefill is query-chunked so its additive attention mask is
     # O(B * chunk * total_length), not O(B * prompt_length**2).
     prefill_query_chunk: int = 64

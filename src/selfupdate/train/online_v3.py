@@ -1107,6 +1107,24 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
     B×K update remains intact even though no backward graph spans all B rows.
     """
     n = stack.n_layers
+    groups = [items[first:first + shard_users]
+              for first in range(0, len(items), shard_users)]
+    parallel = int(cfg.train.prefill_parallel_shards)
+    if parallel > 1 and len(groups) > 1:
+        if any(getattr(stack, "_accepts_shared_kv_states", ())):
+            raise RuntimeError(
+                "parallel shard prefill requires no model-global shared KV state")
+        from concurrent.futures import ThreadPoolExecutor
+
+        def prepare(group):
+            return _bk_prepare_cohort_shards(
+                cfg, stack, group, device, teacher, teacher_hidden,
+                layer_types, shard_users, window_width, execution_dtype)[0]
+
+        with ThreadPoolExecutor(
+                max_workers=min(parallel, len(groups)),
+                thread_name_prefix="selfupdate-prefill-shard") as pool:
+            return list(pool.map(prepare, groups))
     shards = []
     for first in range(0, len(items), shard_users):
         shard_items = items[first:first + shard_users]

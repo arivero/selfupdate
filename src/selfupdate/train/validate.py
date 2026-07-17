@@ -138,12 +138,17 @@ def validate_knob_schedule(cfg) -> None:
                     "for causal_bk")
             if cfg.train.prefill_query_chunk <= 0:
                 bad.append("causal_bk requires prefill_query_chunk > 0")
+            if cfg.train.prefill_parallel_shards < 1:
+                bad.append("causal_bk prefill_parallel_shards must be positive")
         else:
             if cfg.train.activation_shard_users:
                 bad.append(
                     "activation_shard_users is implemented only by causal_bk")
             if cfg.train.prefill_query_chunk != 64:
                 bad.append("prefill_query_chunk is implemented only by causal_bk")
+            if cfg.train.prefill_parallel_shards != 1:
+                bad.append(
+                    "prefill_parallel_shards is implemented only by causal_bk")
             if cfg.train.micro_batch != 1:
                 bad.append("pipeline-v3.0 requires micro_batch=1")
             if cfg.train.batching != "item":
