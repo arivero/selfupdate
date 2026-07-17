@@ -86,6 +86,28 @@ def _chatml_fallback_pieces(tokenizer, system: str) -> TemplatePieces | None:
     )
 
 
+def _deepseek_fallback_pieces(tokenizer, system: str) -> TemplatePieces | None:
+    """DeepSeek V3/V4-family tokenizers (DeepSeek-V4-Flash) ship the
+    ``<｜User｜>``/``<｜Assistant｜>`` turn markers but no chat_template
+    metadata. Family convention: BOS, bare system text, then marker-framed
+    turns; the answer closes with ``<｜end▁of▁sentence｜>``."""
+    if getattr(tokenizer, "chat_template", None):
+        return None
+    user = tokenizer.convert_tokens_to_ids("<｜User｜>")
+    asst = tokenizer.convert_tokens_to_ids("<｜Assistant｜>")
+    unk = getattr(tokenizer, "unk_token_id", None)
+    if (user is None or asst is None or user < 0 or asst < 0
+            or user == unk or asst == unk):
+        return None
+    bos = getattr(tokenizer, "bos_token", None) or ""
+    eos = getattr(tokenizer, "eos_token", None) or "<｜end▁of▁sentence｜>"
+    return TemplatePieces(
+        pre=f"{bos}{system.strip()}<｜User｜>",
+        mid="<｜Assistant｜>",
+        answer_close=eos,
+    )
+
+
 def _render(tokenizer, msgs, **kw) -> str:
     return tokenizer.apply_chat_template(
         msgs, tokenize=False, enable_thinking=False, **kw
@@ -98,6 +120,8 @@ def template_pieces(tokenizer, system: str = DEFAULT_SYSTEM) -> TemplatePieces:
         return _pieces_cache[key]
 
     pieces = _chatml_fallback_pieces(tokenizer, system)
+    if pieces is None:
+        pieces = _deepseek_fallback_pieces(tokenizer, system)
     if pieces is None:
         gen = _render(
             tokenizer,
