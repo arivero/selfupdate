@@ -70,6 +70,8 @@ fi
 # One identity per coordinated launch: every relay/adapter file is stamped
 # with it and stages refuse tensors from any other launch.
 export SELFUPDATE_V4_LAUNCH_ID="v4-$(date +%Y%m%d%H%M%S)-$$"
+export SELFUPDATE_V4_RELAY_ROOT="${SELFUPDATE_V4_RELAY_ROOT:-/dev/shm/$USER/selfupdate-v4-relay}"
+mkdir -p "$SELFUPDATE_V4_RELAY_ROOT"
 echo "launching $STAGES v4 stages of $RUN_NAME  (launch id $SELFUPDATE_V4_LAUNCH_ID)"
 pids=()
 for ((k = 0; k < STAGES; k++)); do

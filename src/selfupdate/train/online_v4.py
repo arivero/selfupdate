@@ -261,20 +261,27 @@ class _TeacherTensors:
         self.store: dict[tuple[int, int], dict] = {}
 
     def get(self, layer: int, cohort_idx: int):
+        if self.residency == "rebuild":
+            return None
         return self.store.get((layer, cohort_idx))
 
     def put(self, layer: int, cohort_idx: int, kv: _FrozenKV,
             inputs: torch.Tensor, targets: torch.Tensor) -> dict:
+        entry = {"kv": kv, "inputs": inputs, "targets": targets}
+        if self.residency == "rebuild":
+            return entry  # never stored: rebuilt from the shm cache per visit
         if self.residency == "cpu_stream":
             kv = kv.to("cpu").pin()
             inputs = inputs.cpu().pin_memory()
             targets = targets.cpu().pin_memory()
-        entry = {"kv": kv, "inputs": inputs, "targets": targets}
+            entry = {"kv": kv, "inputs": inputs, "targets": targets}
         self.store[(layer, cohort_idx)] = entry
         return entry
 
     def put_linear(self, layer: int, cohort_idx: int,
                    full_inputs: torch.Tensor, targets: torch.Tensor) -> dict:
+        if self.residency == "rebuild":
+            return {"full_inputs": full_inputs, "targets": targets}
         if self.residency == "cpu_stream":
             full_inputs = full_inputs.cpu().pin_memory()
             targets = targets.cpu().pin_memory()
@@ -321,7 +328,20 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
     needed = per_layer * len(owned)
     free, _total = torch.cuda.mem_get_info(
         torch.device(cfg.model.device))
-    return "gpu_corpus" if needed < 0.5 * free else "cpu_stream"
+    if needed < 0.5 * free:
+        return "gpu_corpus"
+    # Host check: pinned staging must fit beside the sibling stages. At the
+    # 27B full corpus this is ~480 GB per stage — pinning that much kills
+    # the node; fall back to rebuild-per-visit (one extra forward per
+    # (layer, cohort); the shm cache serves the reads at RAM speed).
+    stages = max(len(cfg.train.v4_stage_splits or []) + 1, 1)
+    with open("/proc/meminfo") as fh:
+        available_kb = next(
+            int(line.split()[1]) for line in fh
+            if line.startswith("MemAvailable"))
+    if needed < 0.3 * available_kb * 1024 / stages:
+        return "cpu_stream"
+    return "rebuild"
 
 
 
@@ -450,7 +470,14 @@ class _RelayFiles:
     """
 
     def __init__(self, base_dir: Path):
-        self.dir = Path(base_dir) / "relay"
+        root = os.environ.get("SELFUPDATE_V4_RELAY_ROOT")
+        if root:
+            # Full-corpus boundaries are ~GBs per stage per epoch: exchange
+            # them through node-local RAM, never Lustre. Consumers delete
+            # consumed files, so the footprint stays ~2 epochs in flight.
+            self.dir = Path(root) / Path(base_dir).name / "relay"
+        else:
+            self.dir = Path(base_dir) / "relay"
         self.launch_id = _launch_identity()
 
     def path(self, epoch: int, name: str) -> Path:

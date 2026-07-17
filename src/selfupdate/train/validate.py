@@ -154,9 +154,9 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("v4_loss_positions must be answer, aligned, or "
                        "thinking_answer")
         if cfg.train.v4_teacher_residency not in (
-                "auto", "gpu_corpus", "cpu_stream"):
-            bad.append("v4_teacher_residency must be auto, gpu_corpus, or "
-                       "cpu_stream")
+                "auto", "gpu_corpus", "cpu_stream", "rebuild"):
+            bad.append("v4_teacher_residency must be auto, gpu_corpus, "
+                       "cpu_stream, or rebuild")
         if cfg.train.v4_relay_every_cohorts < 0:
             bad.append("v4_relay_every_cohorts must be >= 0")
         if cfg.model.pipeline_split or cfg.model.pipeline_splits:
