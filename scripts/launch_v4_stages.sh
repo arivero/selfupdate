@@ -38,6 +38,13 @@ EOF2
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error
 export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}"
+# Offline discipline (same as l40s_exec.sh / staged vLLM launches): snapshots
+# and eval data are local — the RAM stage or the account cache for weights,
+# vendored data/eval/*.json for standard damage. Without this every stage
+# pings the Hub unauthenticated at startup; a genuinely cold cache must fail
+# loudly instead. Override with HF_HUB_OFFLINE=0 for a first-time download.
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export HF_DATASETS_OFFLINE="${HF_DATASETS_OFFLINE:-1}"
 
 # Prefer a completed RAM stage of the model snapshots (the container-era
 # convention): N stage processes cold-loading a 54 GB model from Lustre sit
