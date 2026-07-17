@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import os
 import random
+import socket
 import time
 from pathlib import Path
 
@@ -455,27 +456,52 @@ class _RelayFiles:
     def path(self, epoch: int, name: str) -> Path:
         return self.dir / f"e{epoch:04d}" / name
 
-    def write(self, path: Path, tensors: dict, *, stage: int,
-              epoch: int) -> None:
+    def write(self, path: Path, tensors: dict, *, stage: int, epoch: int,
+              to_stage: int | None = None) -> None:
+        """Post a tensor file with a full envelope.
+
+        The envelope is the postal address of the exchange (owner metaphor,
+        2026-07-17): FROM host+stage of THIS launch, TO the addressee stage
+        (None = broadcast, e.g. adapter publications any stage may read),
+        for one epoch of one run. The cross-machine (InfiniBand) relay of
+        the scale-out plan keeps this envelope unchanged — only the
+        directory moves.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
         save_file(tensors, str(tmp), metadata={
             "launch_id": self.launch_id,
-            "producer_stage": str(stage),
+            "from_host": socket.gethostname(),
+            "from_stage": str(stage),
+            "to_stage": "broadcast" if to_stage is None else str(to_stage),
             "epoch": str(epoch),
         })
         tmp.rename(path)
 
-    def read(self, path: Path) -> dict:
+    def read(self, path: Path, *, expect_epoch: int | None = None,
+             as_stage: int | None = None) -> dict:
         from safetensors import safe_open
         with safe_open(str(path), framework="pt") as handle:
             meta = handle.metadata() or {}
             if meta.get("launch_id") != self.launch_id:
                 raise RuntimeError(
-                    f"relay provenance mismatch at {path}: file from launch "
-                    f"{meta.get('launch_id')!r}, this process is "
+                    f"relay envelope mismatch at {path}: from launch "
+                    f"{meta.get('launch_id')!r} (host "
+                    f"{meta.get('from_host')!r}, stage "
+                    f"{meta.get('from_stage')!r}), this process is launch "
                     f"{self.launch_id!r} — a stale stage from another launch "
                     "is writing into this run's exchange")
+            addressee = meta.get("to_stage")
+            if (as_stage is not None and addressee not in
+                    ("broadcast", str(as_stage))):
+                raise RuntimeError(
+                    f"relay envelope at {path} is addressed to stage "
+                    f"{addressee!r}, but stage {as_stage} tried to read it")
+            if (expect_epoch is not None
+                    and meta.get("epoch") != str(expect_epoch)):
+                raise RuntimeError(
+                    f"relay envelope at {path} carries epoch "
+                    f"{meta.get('epoch')!r}, expected {expect_epoch}")
             return {key: handle.get_tensor(key) for key in handle.keys()}
 
     def wait(self, path: Path, timeout_s: float = 3600.0,
@@ -535,7 +561,8 @@ class _RelayServicer:
                 if not block:
                     return
                 self.rf.wait(path)
-            loaded = self.rf.read(path)
+            loaded = self.rf.read(path, expect_epoch=epoch,
+                                  as_stage=self.stage)
             boundaries = {int(k[1:]): v for k, v in loaded.items()}
             self._produce(epoch, boundaries)
             self.pending.pop(0)
@@ -555,7 +582,8 @@ class _RelayServicer:
             self.rf.write(self.rf.path(epoch, f"stage{self.stage}.st"),
                           {f"c{idx}": t.detach().cpu()
                            for idx, t in out.items()},
-                          stage=self.stage, epoch=epoch)
+                          stage=self.stage, epoch=epoch,
+                          to_stage=self.stage + 1)
 
 
 def _owned_adapter_tensors(stack, owned) -> dict:
@@ -590,7 +618,8 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     with torch.no_grad():
         for other in range(1, stages):
             path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
-            for key, value in rf.read(path).items():
+            for key, value in rf.read(path, expect_epoch=epoch,
+                                      as_stage=0).items():
                 layer_tag, _, local = key.partition(".")
                 layer = int(layer_tag[1:])
                 if layer in owned:
