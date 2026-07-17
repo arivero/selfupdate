@@ -40,7 +40,8 @@ from safetensors.torch import load_file, save_file
 
 from ..eval.teacher_output import teacher_output_eval_sums
 from .losses import HiddenLoss
-from .online_v3 import _bk_bucketed_cohorts, _clear_block_grads, _immediate_sgd
+from .online_v3 import (_bk_bucketed_cohorts, _bk_layer_type,
+                        _clear_block_grads, _immediate_sgd)
 from .stop import stop_requested
 from .telemetry import (
     ParameterDeltaTracker,
@@ -187,8 +188,11 @@ class _V4Cohort:
         self.loss_valid_dev = self.loss_valid.to(device)
         self.cells = int(self.loss_valid.sum())
 
-    def additive_mask(self, dtype) -> torch.Tensor:
+    def additive_mask(self, dtype, window: int | None = None) -> torch.Tensor:
         allowed = self._mask_cpu.to(self.device)
+        if window:
+            k_pos = torch.arange(self.T, device=self.device)[None, None, :]
+            allowed = allowed & (k_pos > (self.qpos_dev[:, :, None] - int(window)))
         mask = torch.zeros(allowed.shape, dtype=dtype, device=self.device)
         mask.masked_fill_(~allowed, torch.finfo(dtype).min)
         return mask[:, None]
@@ -265,6 +269,21 @@ class _TeacherTensors:
         entry = {"kv": kv, "inputs": inputs, "targets": targets}
         self.store[(layer, cohort_idx)] = entry
         return entry
+
+    def put_linear(self, layer: int, cohort_idx: int,
+                   full_inputs: torch.Tensor, targets: torch.Tensor) -> dict:
+        if self.residency == "cpu_stream":
+            full_inputs = full_inputs.cpu().pin_memory()
+            targets = targets.cpu().pin_memory()
+        entry = {"full_inputs": full_inputs, "targets": targets}
+        self.store[(layer, cohort_idx)] = entry
+        return entry
+
+    def staged_linear(self, entry: dict):
+        if self.residency != "cpu_stream":
+            return entry["full_inputs"], entry["targets"]
+        return (entry["full_inputs"].to(self.device, non_blocking=True),
+                entry["targets"].to(self.device, non_blocking=True))
 
     def staged(self, entry: dict):
         if self.residency != "cpu_stream":
@@ -564,6 +583,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         kind="pipeline_v4_contract",
         objective="student_block_L(teacher_h[L-1]) vs teacher_h[L]",
         attention_context="frozen_teacher_kv_full_sequence",
+        linear_attention_rule=(
+            "full_sequence_teacher_forced_own_recurrence_flow_censored"),
+        sliding_attention_rule="frozen_teacher_kv_windowed_mask",
         kv_gradient="none_query_side_only",
         kv_source=cfg.train.v4_kv_source,
         censorship="privileged_keys_removed_from_attention",
@@ -583,7 +605,15 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         entry = tensors.get(layer, cohort_idx)
         if entry is not None:
             return entry
+        layer_type = _bk_layer_type(stack, layer)
         full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
+        targets = cohort.gather_targets(cache, layer).to(device)
+        if layer_type == "linear_attention":
+            # Recurrent mixers have no K/V to freeze: the layer runs the
+            # FULL teacher-forced sequence with its own (trainable)
+            # recurrence, censored by flow_keep row-zeroing. Store the full
+            # inputs; no prefill.
+            return tensors.put_linear(layer, cohort_idx, full_inputs, targets)
         kv = _FrozenKV()
         pos = torch.arange(cohort.T, device=device)[None].expand(
             len(cohort.indices), -1)
@@ -598,22 +628,38 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 causal_length=cohort.T)
         kv.recording = False
         inputs_q = cohort.gather_query_inputs(full_inputs)
-        targets = cohort.gather_targets(cache, layer).to(device)
         del full_inputs, rope_full
         return tensors.put(layer, cohort_idx, kv, inputs_q, targets)
 
     def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
                           epoch_lr: float) -> None:
         cohort = cohorts[cohort_idx]
+        layer_type = _bk_layer_type(stack, layer)
         entry = build_layer_cohort(layer, cohort_idx)
-        kv, inputs_q, targets = tensors.staged(entry)
-        rope_q = stack.rope(inputs_q, cohort.qpos_dev)
-        mask = cohort.additive_mask(inputs_q.dtype)
-        out = stack.run_block(
-            layer, inputs_q.requires_grad_(False), rope_q,
-            position_ids=cohort.qpos_dev,
-            past_key_values=kv, use_cache=False,
-            prepared_attention_mask=mask)
+        if layer_type == "linear_attention":
+            full_inputs, targets = tensors.staged_linear(entry)
+            B = full_inputs.shape[0]
+            pos = torch.arange(cohort.T, device=device)[None].expand(B, -1)
+            keep = cohort.keep.to(device)
+            out_full = stack.run_block(
+                layer, full_inputs, stack.rope(full_inputs, pos),
+                position_ids=pos, flow_keep=keep, causal_length=cohort.T)
+            out = cohort.gather_query_inputs(out_full)
+            del out_full
+        else:
+            kv, inputs_q, targets = tensors.staged(entry)
+            rope_q = stack.rope(inputs_q, cohort.qpos_dev)
+            window = None
+            if layer_type in ("sliding_attention", "chunked_attention"):
+                window = (getattr(stack.text_config, "sliding_window", None)
+                          or getattr(stack.text_config,
+                                     "attention_chunk_size", None))
+            mask = cohort.additive_mask(inputs_q.dtype, window=window)
+            out = stack.run_block(
+                layer, inputs_q.requires_grad_(False), rope_q,
+                position_ids=cohort.qpos_dev,
+                past_key_values=kv, use_cache=False,
+                prepared_attention_mask=mask)
         view = stack.loss_view(layer, out)
         target = targets.to(view.dtype)
         valid = cohort.loss_valid_dev
@@ -646,6 +692,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         state["cells"] += flat_view.shape[0]
         state["grad_sq"] += grad_norm.double().square()
         state["writes"] += 1
+        try:
+            util = torch.cuda.utilization(device)
+        except Exception:
+            util = -1
+        if util >= 0:
+            samples = epoch_state.setdefault("_util", [])
+            samples.append(util)
         if layer == n:
             # CE/KL eval over the answer-predictor rows, streaming, before
             # any later write touches this block again this epoch.
@@ -690,7 +743,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             break
         epoch_started = time.time()
         epoch_lr = cfg.train.lr
-        epoch_state: dict = {}
+        epoch_state: dict = {"_util": []}
         rng = random.Random(cfg.train.seed + epoch)
         visit = list(range(len(cohorts)))
         rng.shuffle(visit)
@@ -732,6 +785,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             grad_norms[str(layer)] = float(state["grad_sq"].sqrt().item())
             token_events += state["cells"]
         elapsed = max(time.time() - epoch_started, 1e-9)
+        util_samples = epoch_state.get("_util", [])
+        train_util = (sum(util_samples) / len(util_samples)
+                      if util_samples else None)
         log.log(kind="v4_epoch", epoch=epoch + 1,
                 partial=bool(stopped),
                 layer_losses=layer_losses,
@@ -740,7 +796,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 physical_writes=sum(
                     s["writes"] for k, s in epoch_state.items()
                     if isinstance(k, int)),
+                train_phase_gpu_util=train_util,
+                train_util_samples=len(util_samples),
                 epoch_seconds=elapsed)
+        # Utilization gate (owner, 2026-07-17): training-phase mean below
+        # the configured floor is a FAIL — abort loudly, never let an idle
+        # card masquerade as a run. Epoch 1 is exempt (cache/prefill warm-up).
+        floor = cfg.train.v4_min_train_gpu_util
+        if (floor and epoch > 0 and not stopped and train_util is not None
+                and train_util < floor):
+            raise RuntimeError(
+                f"UTILIZATION GATE: training-phase GPU utilization "
+                f"{train_util:.1f}% < {floor:.0f}% floor at epoch "
+                f"{epoch + 1} (goal is 90%). This run is a FAIL by owner "
+                f"criterion; profile the walk instead of letting it idle.")
         log.log(kind="v4_gradient_norm", epoch=epoch + 1,
                 grad_norms=grad_norms)
         ev = epoch_state.get("_eval")

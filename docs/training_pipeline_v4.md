@@ -121,6 +121,63 @@ Each stage saves an ordinary PEFT checkpoint plus `v4_stage_manifest.json`
 adapter by taking each block's tensors from the one stage that owns it —
 no averaging; the merge is exact because ownership is disjoint.
 
+## Speed & utilization — how the GPU got busy, and what regresses it to 3%
+
+Owner criterion (2026-07-17): a run whose TRAINING-PHASE GPU utilization is
+below 50% is a FAIL and must abort; the goal is 90%. The trainer enforces
+this itself: `train.v4_min_train_gpu_util` (NVML-sampled at cohort
+boundaries during the walk, mean logged as `train_phase_gpu_util` in every
+`v4_epoch` row, RuntimeError below the floor from epoch 2 on). The
+per-epoch generation evals are excluded from the gate on purpose — they are
+owner-mandated and inherently low-util; their fix is batching the eval
+generation, not skipping them.
+
+Measured levers, 0.6B smoke on one H100 (each was worth what it says —
+do not undo one "for cleanliness" without re-measuring):
+
+1. **Whole-cohort batched passes.** One `[B, Q, H]` (or `[B, T, H]` for
+   linear layers) pass per (layer, cohort) instead of v3's per-token tiles.
+   v3 measured 9–12 token-events/s dispatch-bound; v4 epoch 1 measured
+   **34,413 ev/s** — the Python dispatch simply left the hot path. This is
+   only legal because inputs AND attention context are teacher-fixed
+   (whole-answer processing is exact, not stale).
+2. **Per-(layer, cohort) tensor caching across epochs.** Teacher-frozen
+   K/V, inputs, and targets never change, so epoch 1 builds them and every
+   later epoch reuses: leg A measured epoch 1 at 7.3 s and epoch 2 at
+   **1.1 s (390,363 ev/s)** — 6.6×. Over 40 epochs the build cost
+   amortizes to ~2%. `v4_kv_source: student_refresh` deliberately re-pays
+   it per refresh (leg B: epoch 2 at 95k ev/s — the designed price).
+3. **`gpu_corpus` residency** when the owned layers' corpus fits (auto):
+   zero per-step host transfers. `cpu_stream` is the big-model fallback,
+   pinned + async.
+4. **One fused optimizer write per block per cohort** (foreach kernels) —
+   never per parameter tensor, never per token.
+5. **One host sync per epoch.** All loss/grad/util accumulators stay on
+   GPU; the only `.item()` calls happen in the epoch-boundary telemetry
+   flush. This is the v3 sync-bound lesson applied structurally.
+
+The regression list — any of these quietly returns the run to v3-like idle:
+
+- `.item()`, `.cpu()`, `print`, or per-cohort logging inside
+  `layer_cohort_step` (per-layer × per-cohort syncs re-serialize the GPU);
+- shrinking `micro_batch` (small matmuls can't feed an H100 — B=256 is the
+  campaign default, 64 was smoke-only);
+- `cpu_stream` residency where `gpu_corpus` fits (auto exists — trust it or
+  measure);
+- rebuilding teacher tensors every epoch without `student_refresh` needing
+  it (the cache key is (layer, cohort) — keep cohort composition fixed
+  across epochs, which is also why within-cohort shuffle was dropped: order
+  is irrelevant to a summed per-cohort write);
+- reading WHOLE-RUN utilization as training utilization: on smoke-sized
+  corpora the mandated per-epoch generation evals dominate wall-clock (the
+  observed "3% with bursts"); judge the training phase by
+  `train_phase_gpu_util` and fix eval throughput separately.
+
+Known remaining wall-clock sink: recall/standard-damage generation runs at
+tiny batch (`eval.generation_batch: 8`, and `tasks_eval` is B=1 per the
+memory note). Batching/vLLM-ing the eval path is part of the speed program,
+NOT reducing eval coverage — the per-epoch battery is non-negotiable.
+
 ## Future scale-out (owner, 2026-07-17 — noted, deliberately deferred)
 
 The disjoint-block-ownership abstraction is the load-bearing idea; two

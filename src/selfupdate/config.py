@@ -438,6 +438,14 @@ class TrainConfig:
     # Which stage THIS process is (set via scripts/train.py --v4-stage).
     # -1 = single-process mode: one process owns every block.
     v4_stage: int = -1
+    # Utilization gate (owner, 2026-07-17): any run whose TRAINING-phase GPU
+    # utilization stays below this percentage is a FAIL and must abort; the
+    # goal is 90. Measured by NVML sampling at cohort boundaries during the
+    # v4 walk only — the mandated per-epoch generation evals are inherently
+    # low-util and are excluded from the gate on purpose. 0 disables (smoke
+    # mechanics runs). The measured mean is logged in every v4_epoch row as
+    # train_phase_gpu_util.
+    v4_min_train_gpu_util: float = 0.0
     lora: LoraConfig = field(default_factory=LoraConfig)
 
 
