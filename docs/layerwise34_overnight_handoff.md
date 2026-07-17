@@ -47,9 +47,12 @@ full-input cache build; obsolete node-local teacher caches were evicted.
 At approximately 03:00, the 0.8B cache `633ce19cf18c5963` published all 2,071
 examples/24 layers after 219.5 seconds.  Huber trainer PID `1885904` and cosine
 trainer PID `1885954` replaced their builders, and both telemetry CSVs began
-recording.  The 4B and 27B full-input cache builders remained active with no
-logged error.  Wrapper shells created only to inspect delegated launches were
-removed; persistent launchers, builders/trainers, and samplers were retained.
+recording.  Both initial shard-64 trainers then OOMed before an accepted epoch:
+GPU1/GPU3 each held 43.44 GiB allocated with about 108 MiB free when another
+130 MiB was requested.  They were not externally stopped.  Unique `shard32`
+retries preserve B256/K16, PP2 cut `[12]`, loss, seed, and write semantics while
+halving only transient activation/prefill shard width.  Do not analyze the
+shard-64 directories as completed runs.
 
 At approximately 03:01, the 4B cache `e6659930d7736004` published all 2,071
 examples/32 layers after 380.6 seconds (132 GiB immediately before atomic
