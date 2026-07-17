@@ -10,7 +10,17 @@
 set -euo pipefail
 LEASE="${1:?lease file}"
 LOGPREFIX="${2:?stage log prefix}"
-mapfile -t PIDS < "$LEASE"
+# Lease lines are "pid" (stage = line index, the historical all-local form)
+# or "pid stage" (multi-host launches supervise a local SUBSET whose line
+# index is not the stage number — the log lookup must use the real stage).
+PIDS=() STAGE_OF=()
+idx=0
+while read -r pid stg; do
+  [[ -n "$pid" ]] || continue
+  PIDS+=("$pid")
+  STAGE_OF+=("${stg:-$idx}")
+  idx=$((idx + 1))
+done < "$LEASE"
 while true; do
   alive=0 dead_bad=""
   for i in "${!PIDS[@]}"; do
@@ -22,7 +32,7 @@ while true; do
       # failure, whatever older tracebacks remain in the appended log
       # (the 16:36 false kill: stage 0 finished normally while an OLD OOM
       # from a prior launch attempt was still inside the tail window).
-      recent=$(tail -c 3000 "${LOGPREFIX}${i}.log" 2>/dev/null)
+      recent=$(tail -c 3000 "${LOGPREFIX}${STAGE_OF[$i]}.log" 2>/dev/null)
       if echo "$recent" | grep -q 'run complete'; then
         continue
       fi
@@ -30,7 +40,7 @@ while true; do
       # OOM|UTILIZATION GATE grep) is always one novel crash behind: the
       # 2026-07-17 relay-envelope RuntimeError matched nothing and left two
       # stages burning cards for hours on an unpublishable run.
-      dead_bad="stage $i (pid $pid)"
+      dead_bad="stage ${STAGE_OF[$i]} (pid $pid)"
     fi
   done
   [ "$alive" = "0" ] && exit 0
