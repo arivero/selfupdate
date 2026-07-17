@@ -17,6 +17,23 @@ They occupy 12 L40S cards and keep the ordinary physical layer distributions
 unchanged.  Huber and cosine use separate trainers but share one immutable
 full-input cache per model/host.
 
+## Admission checklist (not implicit jargon)
+
+These are the only go/no-go checks for the corrected overnight launch:
+
+- [x] runtime committed and config audit passed (`051fc3f`);
+- [x] exact cached `h[L] == i[L+1]` chain, numerical comparison, locality,
+  and frozen-vocabulary certification passed on the 100-question gate;
+- [x] one real full-v5 B256 cohort drained without the former invariant
+  43.44-GiB residency OOM;
+- [ ] the bounded full-v5 epoch publishes exact whole-set CE/KL, locality,
+  `done`, and a checkpoint.
+
+GPU utilization, power, and temperature are recorded evidence, not admission
+conditions for these teacher-hidden overnight runs. The older all-card
+saturation condition applies only to unlocking the optional Pareto/InfiniBand
+extension and is explicitly waived here.
+
 ## Expected jobs
 
 | Host | GPUs | Model/loss | Cut | Run directory |
