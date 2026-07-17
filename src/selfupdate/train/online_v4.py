@@ -937,6 +937,25 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 betas=tuple(cfg.train.v4_adam_betas),
                 eps=cfg.train.v4_adam_eps,
                 weight_decay=cfg.train.v4_adam_weight_decay)
+        if cfg.train.init_from:
+            # Warm start restores momentum (plan B0). Missing file = cold
+            # moments, logged not raised; a param-group mismatch raises
+            # loudly inside load_state_dict.
+            mpath = (Path("runs") / cfg.train.init_from / "checkpoint"
+                     / "adam_moments.pt")
+            if mpath.exists():
+                saved = torch.load(mpath, map_location="cpu",
+                                   weights_only=False)
+                restored = [L for L in optimizers if L in saved]
+                for L in restored:
+                    optimizers[L].load_state_dict(saved[L])
+                log.log(kind="v4_adam_moments", action="restored",
+                        layers=sorted(restored),
+                        missing_layers=sorted(
+                            L for L in optimizers if L not in saved))
+            else:
+                log.log(kind="v4_adam_moments", action="cold_start",
+                        reason=f"no {mpath}")
 
     # Weight rotation (plan B4): when the stage-scoped load left owned
     # frozen block weights on host (v4_weight_residency rotate, or auto
@@ -1433,7 +1452,33 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         time.perf_counter() - boundary_started, 3))
     if relay is not None and not stopped:
         relay.drain()
+    if optimizers and run_dir is not None:
+        # Warm starts keep momentum (plan B0): per-block AdamW state,
+        # CPU-serialized, outside the epoch loop (no hot-loop syncs).
+        ckpt = Path(run_dir) / "checkpoint"
+        ckpt.mkdir(parents=True, exist_ok=True)
+        payload = {layer: _cpu_state_dict(opt)
+                   for layer, opt in optimizers.items() if opt.state}
+        if payload:
+            torch.save(payload, ckpt / "adam_moments.pt")
+            log.log(kind="v4_adam_moments", action="saved",
+                    layers=sorted(payload))
     return stopped
+
+
+def _cpu_state_dict(opt) -> dict:
+    """Optimizer state_dict with every tensor moved to CPU (checkpoint
+    serialization; the restore side's load_state_dict casts back to the
+    params' device, and rotation's _moments_to keeps paging afterwards)."""
+    def mv(x):
+        if torch.is_tensor(x):
+            return x.cpu()
+        if isinstance(x, dict):
+            return {k: mv(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [mv(v) for v in x]
+        return x
+    return mv(opt.state_dict())
 
 
 @torch.no_grad()
