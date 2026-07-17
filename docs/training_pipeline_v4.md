@@ -142,6 +142,26 @@ gate (>50% floor, 90% goal) at PPP stage counts up to 4:
    embed, and norm/head on the last stage) — the natural completion of
    disjoint ownership; also relaxes gemma-4-31b's ~62 GB fit.
 
+## CERTIFIED utilization (agpuh01, 2026-07-17, floor 50 armed, NVML in-trainer)
+
+Owner goal met: the envelope trains above 50% training-phase GPU utilization
+at 2-, 3-, and 4-GPU PPP launches — at ~90%+ steady state:
+
+| launch | model | per-stage train-phase util, epochs 2+ (min–max) |
+|---|---|---|
+| PPP1 | Qwen3.5-4B | 99.4–99.97% |
+| PPP2 | Qwen3.5-4B | s0 95.3–99.9, s1 95.3–99.8 |
+| PPP3 | Qwen3.5-4B | s0 93.3–100, s1 88.5–97.2, s2 97.2–100 |
+| PPP4 | Qwen3.6-27B | s0 91.1–98.1, s1 90.6–97.8, s2 88.9–96.4, s3 82.8–97.6 |
+
+Cold build epochs ran 52–84% (still above floor); steady prep_fraction
+0.003–0.04. Locality certification passed wherever the run reached it
+(4B PPP3 all stages with published checkpoints; 27B stage 0; 27B siblings
+were reaped mid-drain by a reaper false positive, fixed in
+scripts/v4_stage_reaper.sh — their training telemetry is complete).
+Relay CE agreed across PPP1/3/4 to 4 decimals at 0.6B and was stable
+(3.0402±0.0005) at 4B.
+
 ## Speed & utilization — how the GPU got busy, and what regresses it to 3%
 
 Owner criterion (2026-07-17): a run whose TRAINING-PHASE GPU utilization is

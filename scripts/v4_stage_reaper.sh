@@ -18,8 +18,15 @@ while true; do
     if kill -0 "$pid" 2>/dev/null; then
       alive=$((alive + 1))
     else
-      recent=$(tail -c 3000 "${LOGPREFIX}${i}.log" 2>/dev/null | grep -c -E 'OutOfMemoryError|UTILIZATION GATE' || true)
-      if [ -n "$recent" ] && [ "$recent" != "0" ]; then
+      # A stage that printed "run complete" exited cleanly - never a
+      # failure, whatever older tracebacks remain in the appended log
+      # (the 16:36 false kill: stage 0 finished normally while an OLD OOM
+      # from a prior launch attempt was still inside the tail window).
+      recent=$(tail -c 3000 "${LOGPREFIX}${i}.log" 2>/dev/null)
+      if echo "$recent" | grep -q 'run complete'; then
+        continue
+      fi
+      if echo "$recent" | grep -q -E 'OutOfMemoryError|UTILIZATION GATE'; then
         dead_bad="stage $i (pid $pid)"
       fi
     fi
