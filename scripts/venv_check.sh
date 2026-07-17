@@ -79,6 +79,25 @@ for name in ("safetensors", "yaml", "pandas", "tabulate", "matplotlib", "tqdm"):
     except Exception as exc:
         failures.append(f"{name}: import failed ({exc})")
 
+# The eval path is where a half-installed venv actually bites, and it bites
+# LATE: selfupdate/eval/standard.py imports `datasets` at module level, and a
+# config with eval.standard_damage_every_epochs > 0 only reaches it during
+# epoch-zero telemetry -- after model load, teacher-cache load and epoch-zero
+# recall. Importing it here turns minutes of wasted GPU into an instant fail.
+try:
+    import datasets  # noqa: F401
+    print(f"datasets     {datasets.__version__}")
+except Exception as exc:
+    failures.append(
+        f"datasets: import failed ({exc}) -- training with standard-damage "
+        "eval will die at epoch-zero telemetry. Install "
+        "requirements-optional.txt (scripts/venv_setup.sh does by default)")
+try:
+    from selfupdate.eval.standard import STANDARD_TASKS  # noqa: F401
+    print(f"eval.standard ok ({', '.join(list(STANDARD_TASKS)[:3])})")
+except Exception as exc:
+    failures.append(f"selfupdate.eval.standard: import failed ({exc})")
+
 # The venv carries no editable install by design; entry points pin their own
 # tree. Confirm we resolved to THIS checkout and not a sibling.
 import selfupdate

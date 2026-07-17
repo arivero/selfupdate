@@ -55,25 +55,46 @@ if [[ -x "$VENV/bin/python" ]]; then
   exit 0
 fi
 
-echo "building $VENV (python $PYTHON_VERSION) ..."
+# requirements-cu128.txt is the ONE source of truth for the pins -- do not
+# duplicate versions here. It carries the cu128 extra-index-url, so torch's
+# CUDA build comes from it too. torch is the one dependency that must match
+# the node's driver: cu128 needs a >=12.8-capable driver (agpuh01: 565.57.01
+# -> OK). An older-driver node (driver-560 L40S) needs a different torch, so
+# it needs a different requirements file -- not an edit to this script.
+REQS="${SELFUPDATE_REQUIREMENTS:-$ROOT/requirements-cu128.txt}"
+if [[ ! -f "$REQS" ]]; then
+  echo "error: requirements file not found: $REQS" >&2
+  exit 1
+fi
+
+# --index-strategy unsafe-best-match: requirements-cu128.txt carries
+# `--extra-index-url .../whl/cu128`, and uv by default only considers versions
+# from the FIRST index that lists a package (a dependency-confusion guard).
+# The pytorch index lists tqdm etc. but not at our pinned versions, so the
+# default strategy fails with "tqdm was found on download.pytorch.org, but not
+# at the requested version". pip searches both indexes implicitly; this flag
+# restores that behaviour. Both indexes here are trusted, and every version is
+# pinned in the requirements file, which is what actually bounds the risk.
+UV_INDEX_ARGS=(--index-strategy unsafe-best-match)
+
+echo "building $VENV (python $PYTHON_VERSION) from $(basename "$REQS") ..."
 "$UV" venv "$VENV" --python "$PYTHON_VERSION"
+"$UV" pip install --python "$VENV/bin/python" "${UV_INDEX_ARGS[@]}" -r "$REQS"
 
-# Torch comes from the cu128 index and is pinned: it is the one dependency
-# whose CUDA build must match the node's driver. cu128 needs a >=12.8-capable
-# driver (agpuh01: 565.57.01 -> OK). Older-driver nodes need a matching torch,
-# not this pin -- check `nvidia-smi` before assuming.
-"$UV" pip install --python "$VENV/bin/python" \
-  torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
-
-# Everything else. kernels MUST stay ==0.12.0 with transformers 5.12.1:
-# kernels 0.16 breaks ALL model loading with
-# "ValueError: Either a revision or a version ...".
-"$UV" pip install --python "$VENV/bin/python" \
-  transformers==5.12.1 \
-  accelerate==1.14.0 \
-  peft==0.19.1 \
-  kernels==0.12.0 \
-  safetensors pyyaml pandas tabulate matplotlib tqdm
+# requirements-optional.txt is named "optional" but is NOT optional for
+# training: src/selfupdate/eval/standard.py does a module-level
+# `from datasets import load_dataset`, and any config with
+# eval.standard_damage_every_epochs > 0 (i.e. the normal ones) reaches it
+# during epoch-zero telemetry. Skipping it dies with
+# "ModuleNotFoundError: No module named 'datasets'" AFTER model load, teacher
+# cache load and epoch-zero recall -- minutes of GPU time in. Installed by
+# default; set SELFUPDATE_VENV_CORE_ONLY=1 for a deliberately eval-free node.
+# The library is needed even though the standard subsets are vendored under
+# data/eval/ at pinned revisions; vendoring removes the DOWNLOAD, not the
+# import.
+if [[ "${SELFUPDATE_VENV_CORE_ONLY:-0}" != "1" ]]; then
+  "$UV" pip install --python "$VENV/bin/python" "${UV_INDEX_ARGS[@]}" -r "$ROOT/requirements-optional.txt"
+fi
 
 echo
 echo "done: $VENV"
