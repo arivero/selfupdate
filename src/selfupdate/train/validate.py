@@ -326,11 +326,11 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.trajectory_source == "teacher_hidden":
             if cfg.train.teacher_hidden_source in ("cpu_cache", "gpu_cache"):
                 if not cfg.cache.store_full_teacher_inputs:
-                    bad.append("teacher_hidden cpu_cache requires cache.store_full_teacher_inputs=true")
+                    bad.append("cached teacher_hidden requires cache.store_full_teacher_inputs=true")
                 if cfg.train.online_teacher or cfg.train.frozen_teacher_copy:
-                    bad.append("teacher_hidden cpu_cache must not load an online/frozen teacher")
+                    bad.append("cached teacher_hidden must not load an online/frozen teacher")
                 if cfg.train.pp_execution != "independent":
-                    bad.append("teacher_hidden cpu_cache requires pp_execution=independent")
+                    bad.append("cached teacher_hidden requires pp_execution=independent")
             elif cfg.train.teacher_hidden_source == "online":
                 if not (cfg.train.online_teacher or cfg.train.frozen_teacher_copy):
                     bad.append("teacher_hidden online needs online_teacher (LoRA) or frozen_teacher_copy (full weights)")

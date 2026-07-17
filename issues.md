@@ -659,7 +659,10 @@ served from RAM merely from low aggregate CPU, and do not increase thread caps
 until this correlation is measured: prior shape-varying compile pools already
 caused severe CPU oversubscription on these nodes.
 
-# GPU teacher-input cache defeats activation-shard memory bounding (2026-07-17)
+# GPU teacher-input cache defeated activation-shard memory bounding
+
+Status: resolved by target reuse on 2026-07-17; full-v5 admission remains the
+production gate.
 
 The full-v5 Qwen3.5-0.8B PP2 Huber and cosine arms OOMed twice, first with
 `activation_shard_users: 64` and then 32, at the same 43.44-GiB allocation.
@@ -669,10 +672,17 @@ copied to its block-owner GPU and retained in the returned `shards` list for
 the whole cohort.  Halving shard width merely doubles the number of resident
 shards; it bounds backward-graph size but not total teacher-input residency.
 
-Until residency is budgeted explicitly, full-v5 runs that exceed card memory
-must pin `teacher_hidden_source: cpu_cache`, which preserves teacher-hidden
-training and stages only the active K tile to the owner GPU.  A future GPU
-mode needs a declared bounded policy (for example, a fixed number of resident
-shards with eviction/double buffering) and the footprint guard must include
-the sum of owned teacher-input tensors.  Do not silently fall back from GPU to
-CPU cache: source mode is an experimental variable and belongs in telemetry.
+The fix removes the redundant full teacher-input residency rather than falling
+back to CPU-cache semantics.  During prompt prefill, one full teacher layer is
+packed transiently and only `i1=h0` persists for answer tiles.  During a tile,
+the owner copies only its active BxK target range to its GPU; `h[L]`, already
+needed for block L's loss, is detached and reused exactly as `i[L+1]`.  A
+startup tripwire checks that equality over every cached boundary before any
+write.  The first corrected 0.8B PP4 gate matched the prior per-layer losses
+and gradient norms exactly, had checkpoint relative-L2 drift 1.57e-13 with
+cosine 1.0, and reduced aggregate reserved VRAM from 42.66 to 24.25 GiB.
+
+Production still requires a full-v5 first-cohort admission because the
+100-question gate cannot certify the largest B256 cohort.  Do not silently
+fall back between `gpu_cache` and `cpu_cache`: source mode remains an
+experimental variable and belongs in telemetry.

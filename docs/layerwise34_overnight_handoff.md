@@ -1,5 +1,13 @@
 # Layerwise 3.4 overnight teacher-hidden handoff
 
+> **Critical status, 2026-07-17 04:1x CEST:** no overnight trainer or sampler
+> is currently authorized or running. All five defective launches were
+> stopped and all 12 L40S GPUs were verified idle. The target-reuse refactor's
+> 100-question numerical/locality gate passed, but the one-epoch full-v5 PP2
+> memory admission has not yet passed. The PID table below is historical
+> evidence only. Do not relaunch its CPU-cache workarounds. This file must be
+> rewritten with fresh run identities and PIDs only after full-v5 admission.
+
 ## Purpose
 
 Five full-v5, open-ended LoRA runs compare block-local teacher-hidden execution
@@ -13,14 +21,14 @@ full-input cache per model/host.
 
 | Host | GPUs | Model/loss | Cut | Run directory |
 |---|---|---|---|---|
-| agpul04 | 0,1 | Qwen3.5-0.8B Huber, CPU-cache tiles | `[12]` | `runs/layerwise34_overnight_qwen35_0p8b_lora_pp2_teacher_hidden_fullv5_huber_agpul04_01_cpu` |
-| agpul04 | 2,3 | Qwen3.5-0.8B cosine, CPU-cache tiles | `[12]` | `runs/layerwise34_overnight_qwen35_0p8b_lora_pp2_teacher_hidden_fullv5_cosine_agpul04_23_cpu` |
-| agpul05 | 0,1 | Qwen3.5-4B Huber | `[16]` | `runs/layerwise34_overnight_qwen35_4b_lora_pp2_teacher_hidden_fullv5_huber_agpul05_01` |
-| agpul05 | 2,3 | Qwen3.5-4B cosine | `[16]` | `runs/layerwise34_overnight_qwen35_4b_lora_pp2_teacher_hidden_fullv5_cosine_agpul05_23` |
-| agpul06 | 0,1,2,3 | Qwen3.6-27B Huber, CPU-cache tiles | `[16,32,48]` | `runs/layerwise34_overnight_qwen36_27b_lora_pp4_teacher_hidden_fullv5_huber_agpul06_0123_cpu` |
+| agpul04 | 0,1 | Qwen3.5-0.8B Huber, target reuse | `[12]` | `runs/layerwise34_overnight_v2_qwen35_0p8b_lora_pp2_teacher_hidden_target_reuse_fullv5_huber_agpul04_01` |
+| agpul04 | 2,3 | Qwen3.5-0.8B cosine, target reuse | `[12]` | `runs/layerwise34_overnight_v2_qwen35_0p8b_lora_pp2_teacher_hidden_target_reuse_fullv5_cosine_agpul04_23` |
+| agpul05 | 0,1 | Qwen3.5-4B Huber, target reuse | `[16]` | `runs/layerwise34_overnight_v2_qwen35_4b_lora_pp2_teacher_hidden_target_reuse_fullv5_huber_agpul05_01` |
+| agpul05 | 2,3 | Qwen3.5-4B cosine, target reuse | `[16]` | `runs/layerwise34_overnight_v2_qwen35_4b_lora_pp2_teacher_hidden_target_reuse_fullv5_cosine_agpul05_23` |
+| agpul06 | 0,1,2,3 | Qwen3.6-27B Huber, target reuse | `[16,32,48]` | `runs/layerwise34_overnight_v2_qwen36_27b_lora_pp4_teacher_hidden_target_reuse_fullv5_huber_agpul06_0123` |
 
 Worker logs and one-second GPU CSVs are under
-`runs/layerwise34_overnight_logs/<host>/`.
+`runs/layerwise34_overnight_v2_logs/<host>/`.
 
 ## Launch state (2026-07-17 02:54 Europe/Madrid)
 
@@ -91,7 +99,10 @@ whole-training-set `teacher_output_eval`, `locality_certification.passed=true`,
 the table above, `trajectory_source=teacher_hidden`, the explicitly configured
 `teacher_hidden_source` (`cpu_cache` on 0.8B/27B; `gpu_cache` on 4B), zero
 boundary bytes, 2,071 dataset items,
-and exact evaluated answer-token/item counts.  Compare both token-events/s and
+and exact evaluated answer-token/item counts. All corrected runs explicitly
+use `teacher_hidden_source: gpu_cache`, whose contract is owner-local active
+BxK targets plus detached target reuse, not full-cohort GPU residency. Compare
+both token-events/s and
 physical block-writes/s: the earlier 100-question runs were underfilled, so a
 token-events/s comparison alone was misleading.  Report per-stage compute and
 wait time, full-trace mean/p95/max GPU utilization and power, peak VRAM, cache

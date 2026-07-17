@@ -212,8 +212,10 @@ class TrainConfig:
     update_reduction: str = ""  # answer_mean | token_mean (grid only)
     trajectory_source: str = "student_hidden"      # student_hidden | teacher_hidden (v3)
     # teacher_hidden only: online recomputes full inputs with the frozen
-    # teacher; cpu_cache reads the explicit full-prefix cache and permits
-    # stages to execute without activation boundaries.
+    # teacher; cached modes read the explicit full-prefix cache and permit
+    # stages to execute without activation boundaries. gpu_cache means only
+    # the active BxK targets are cached on each owning card, never a complete
+    # cohort or a full-depth cache on GPU0.
     teacher_hidden_source: str = "online"  # online | cpu_cache | gpu_cache
     attention_source: str = "student_attention"    # future: teacher_attention
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache

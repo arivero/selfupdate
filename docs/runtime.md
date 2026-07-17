@@ -110,6 +110,17 @@ next tile until its previous local write has completed. Stage callbacks are
 reusable by serial and wavefront runs; telemetry is emitted only at the
 cohort boundary and cannot affect training.
 
+Cached `teacher_hidden` independent execution has no student-activation edge.
+Its answer path does not maintain a second full-input cache: the immutable
+`h[L]` already staged for block L's local loss is detached and reused as
+`i[L+1]`, the input of the next local block. At a partition cut the adjacent
+stage stages that same target on its owning card. `gpu_cache` means the active
+BxK target range for the owned stage, never every layer and every sequence in
+a cohort on GPU0. Full-prefix `iL` values are packed one layer at a time only
+to construct each block's prompt causal state, then released; only `i1=h0`
+persists on pinned host memory for answer tiles. A startup tripwire verifies
+the cache identity `h[L] == i[L+1]` exactly before the first cohort.
+
 Measured-cost partitioning is preparation-only: `scripts/ppn_partition.py`
 uses p50/p95 prompt, tile, local-loss, backward, write, state, workspace,
 gradient, frozen-vocabulary, and boundary costs in a contiguous dynamic
