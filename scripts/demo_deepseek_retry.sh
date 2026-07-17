@@ -14,6 +14,7 @@ exec /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python \
   --model deepseek-ai/DeepSeek-V4-Flash \
   --examples data/combined/examples_v5rs_window.jsonl \
   --batch-sizes 256 --tensor-parallel-size 4 \
+  --kv-cache-dtype fp8 \
   --gpu-memory-utilization 0.85 --max-model-len 6144 \
   --prompt-format native --generation-extra-tokens 96 \
   --generation-max-tokens 4096 --reasoning-effort low \

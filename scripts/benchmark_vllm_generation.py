@@ -203,6 +203,10 @@ def main() -> None:
     ap.add_argument("--pipeline-parallel-size", type=int, default=1)
     ap.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     ap.add_argument("--max-model-len", type=int, default=4096)
+    ap.add_argument("--kv-cache-dtype", default=None,
+                    help="vLLM kv_cache_dtype; DeepSeek-V4 fp8_ds_mla layout "
+                         "requires 'fp8' (its workers assert on the default "
+                         "'auto').")
     ap.add_argument("--max-num-seqs", type=int, default=None,
                     help="vLLM concurrent-sequence ceiling; set explicitly for capacity sweeps")
     ap.add_argument("--max-num-batched-tokens", type=int, default=None,
@@ -298,6 +302,8 @@ def main() -> None:
                       pipeline_parallel_size=args.pipeline_parallel_size,
                       gpu_memory_utilization=args.gpu_memory_utilization,
                       max_model_len=args.max_model_len, disable_log_stats=True)
+        if args.kv_cache_dtype is not None:
+            llm_kw["kv_cache_dtype"] = args.kv_cache_dtype
         if args.max_num_seqs is not None:
             llm_kw["max_num_seqs"] = args.max_num_seqs
         if args.max_num_batched_tokens is not None:
