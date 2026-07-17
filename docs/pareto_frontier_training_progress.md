@@ -33,6 +33,20 @@ and cloze word accuracy over Machado, Quijote chapter 1, and Quijote chapter
 4. These are the fast 8-prompt-per-task-per-corpus monitors, not full-corpus
 checkpoint evaluation.
 
+The separate **uncensored original-RAG** base-model evaluation is much higher:
+
+| Model | Uncensored original-RAG task score | Next/previous word accuracy (n=1,822) | Cloze containment (n=249) | Coverage |
+|---|---:|---:|---:|---:|
+| Qwen3.5-0.8B | 0.62697 | 0.62240 | 0.66043 | 2,071/2,071 |
+| Qwen3.5-4B | 0.92085 | 0.92018 | 0.92582 | 2,071/2,071 |
+
+These values give the untrained base model the real, unmodified RAG passage.
+They are not epoch-zero checkpoint baselines. Epoch zero below is the
+untrained model under the same censored/no-RAG input and 72-prompt scoring
+procedure used for later checkpoints; the two measurements are not directly
+subtractable. Sources: [0.8B](../runs/vllm_benchmark_l40s/qwen35_0p8b_fixed4096_exactids_agpul05/summary.json)
+and [4B](../runs/vllm_benchmark_l40s/qwen35_4b_fixed4096_exactids_agpul06/summary.json).
+
 | Model / arm | Epoch-zero recall | Best recall | Best epoch | Final/current recall | Best delta | Final/current delta |
 |---|---:|---:|---:|---:|---:|---:|
 | 0.8B flow Huber 3e-6 | 0.12150 | 0.15821 | 6 | 0.10117 | +0.03672 | -0.02033 |
@@ -180,8 +194,10 @@ safetensors with CPU-readable metadata and contains no H100-specific CUDA
 state. They are intended to be consumed by the current L40S training
 runtime. The Qwen3.5 4B and larger target caches use bfloat16; the existing
 Qwen3.5 9B cache uses float16. Portability covers the cache format and
-tensors, not differences in throughput, peak memory, or runtime versions;
-those will be recorded when training starts on L40S.
+tensors, not numerical identity of a fresh forward pass across GPU
+architectures/kernel choices, nor differences in throughput, peak memory, or
+runtime versions. The intact-RAG control below measures that cross-hardware
+residual explicitly.
 
 Times are wall-clock seconds from the recorded artifacts. vLLM load and
 generation are reported separately; cache time includes response import,
@@ -271,7 +287,11 @@ Cache finalization timestamps:
 | 2026-07-14 20:54–20:56 CEST | First strict-local screen completions | complete | Huber/remove completed six v5 epochs in 11.7 min and cosine/remove in 12.2 min. Both published a 16-item model-resident locality certificate (positive signal in every block; zero cross-block and frozen-vocabulary leakage) and their individual report-v2 manifests. Initial report rendering failed only because the thin L40S environment omits optional `tabulate`; commit `16e4ace` makes report-v2 self-contained, and report-only retries succeeded without rerunning training. |
 | 2026-07-14 20:54–21:01 CEST | Broad-tile four-arm result | complete/control | All `B=8 × all` Huber/cosine × remove/pad-random controls completed strict-local certification and report-v2. Mean recall changed: Huber/remove 16.21→13.26% (−2.95 pp); Huber/pad-random 15.82→14.98% (−0.84 pp); cosine/remove 16.21→12.52% (−3.68 pp); cosine/pad-random 16.21→13.49% (−2.72 pp). These controls motivate finite small-tile testing; they do not select a final recipe. |
 | 2026-07-14 21:xx CEST | Finite tile scales promoted | queued | The first broad `B=8 × all` deleted-RAG arms reduced mean recall by 2.95–3.68 percentage points after six epochs. Token-mean averaging avoids a raw gradient-sum increase but still yields only 1,572 optimizer updates. Unstarted successors first use the finite 128-cell diagonal—`1×128`, `2×64`, `4×32`, `8×16`, `16×8`—a controlled fourfold-smaller comparison to 512-cell tiles; then the 16/32-cell small-update diagonal—`1×16`, `1×32`, `2×16`, `4×8`, `8×4`. The in-flight broad delta-cosine and lens-KL controls continue to the required 12,426-item budget; no completed or live run is discarded. |
-| 2026-07-15 01:xx CEST | Intact-RAG cache/read-path null control | gating | Added an explicitly typed Huber `B=8,K=all` control whose student token and position sequence includes the original privileged RAG and is therefore identical to the teacher sequence. Prelaunch audit passed all 2,071 token/position identities, exact index identity between Lustre and tmpfs, and 128 sampled layer tensors (four examples × 32 layers) byte-for-byte between roots with no neighboring-layer duplicates. Expected loss and parameter movement are only bfloat16-cache/batch-kernel noise; structured depth error fails the campaign gate. |
+| 2026-07-15 01:00 CEST | Intact-RAG H100→L40S control launched | live/gating | Explicitly typed Huber `B=8,K=all`, six epochs. Student token and position sequences retain privileged RAG and equal the teacher sequences. Prelaunch audit passed all 2,071 identities, exact Lustre/tmpfs index identity, and 128 sampled tensors byte-for-byte between roots with no neighboring-layer duplicates. This is a cross-hardware self-distillation control: parameter motion toward the cached H100 trajectory is allowed; material behavioral damage is the failure criterion. |
+| 2026-07-15 01:14–01:19 CEST | Cache null diagnosis | cache alignment passes; cross-hardware residual measured | A same-process adapters-disabled L40S teacher is exactly equal to the student at all 32 layers, excluding an off-by-one/cache-read walk defect. A complete no-gradient pass over 2,071 examples (263 bucketed B=8 batches; 223,575 aligned vectors/layer; 149.0 s) measured H100-cache versus L40S mean relative vector L2 from 0.448% at L1 to about 2% deep (maximum 2.135% at L17), while mean cosine error remained at most 0.000705. Representative normalized Huber: L1 1.262e-5, L8 1.012e-4, L16 4.069e-4, L24 4.295e-4, L31 6.285e-4, L32 6.603e-4. Artifact: `runs/diagnostics/cache_null_full_qwen35_4b.json`. |
+| 2026-07-15 10:49 CEST | Historical strict `vocab_mse` reproduction | live | Dedicated sibling worktree `../strict_vocab_repro` is detached at execution-era commit `4a7fa99`, where the positive `lw_i_vocab_strict_0p6b_rag` result had been recorded. The exact 0.6B full-parameter, cached-teacher, dataset-v2, 40-epoch arm runs on physical GPU 1 (worker 3216278). A concurrent Qwen3-8B scale companion uses the same strict readout-free `vocab_mse` objective and dataset but the era's feasible 8B placement—LoRA at 1e-4 plus online teacher—on physical GPU 0 (worker 3205228); it is a scale companion, not a parameterization-matched reproduction. Both launched through delegated Luna log ownership after adding historical `jiwer==4.0.0` and `rapidfuzz==3.14.5` only to the node-local thin L40S dependency layer; no Torch package was installed. First train evidence: 0.6B epoch 0 step 39, loss 0.04598; 8B epoch 0 step 10, loss 0.33627. |
+| 2026-07-15 10:47 CEST | Historical Campaign-2 8B endpoint audit | live/report pending | The retained `repro_c2_slide8pure_8b_e40` worker reached perfect inline subset recall at epochs 17, 25, 27, and 29, but regressed at epoch 31 to CER 0.0572 / 92.2% line exact. It was at epoch 33 with recent epochs averaging 389 s; projected training completion about 11:32 CEST. A modern-like individual report is gated on final full-corpus recall plus paired epoch-zero/final standard-benchmark evaluation: intermittent best-checkpoint recall alone cannot support “perfect at no cost.” |
+| 2026-07-15 21:47–22:03 CEST | Qwen3.5-0.8B uncensored original-RAG base generation | complete | Pipeline-v3.1 mechanics target, dataset v5 with 2,071 examples. Programmatic vLLM 0.25 generated exact token IDs under a fixed 4,096-token allowance: 947,644 tokens in 197.3 s (4,802 tok/s), 6.33% hard cuts, mean task score 0.6270. This is the uncensored teacher-target generation, not the censored checkpoint epoch-zero evaluation. The independent L40S torch 2.7.1/cu126 hidden pass published 24-layer bfloat16 target cache `b632054c01558f61` atomically in `/dev/shm` (50 GiB; 259.6 s teacher compute, 291.9 s measured total, 334 s launcher wall). Source responses: `runs/vllm_benchmark_l40s/qwen35_0p8b_fixed4096_exactids_agpul05/responses_bs256.jsonl`; subsequent per-training reports are generated only after each training completes. |
 | pending | Qwen3.5 9B student training | pending | — |
 | pending | Gemma4 26B student training | pending | — |
 | pending | Qwen3.6 35B student training | pending | — |
@@ -279,7 +299,7 @@ Cache finalization timestamps:
 | pending | Gemma4 31B student training | pending | — |
 
 Future entries must record the start/end timestamp, model/config, GPU
-placement, dataset identity, pipeline-v2 commit, checkpoint path, item
+placement, dataset identity, pipeline-version commit, checkpoint path, item
 count, and any failure or restart reason.
 
 ### Strict-local 4B tile screen

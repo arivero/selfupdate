@@ -109,9 +109,15 @@ same finite B, K, seed, and loss before attributing the change to tile shape.
 The cache/read-path null control uses `mask.compaction: intact`: the student
 receives the original privileged RAG block, hence its complete token and
 position-id sequence equals the teacher's. With the base initialization its
-hidden loss should be limited to cached-bfloat16 and batch-kernel numerical
-noise. A structured depth profile or material parameter movement fails the
-cache/alignment gate and invalidates censored-arm interpretation until fixed.
+hidden loss should be limited to cached-bfloat16, hardware, and batch-kernel
+numerical differences. The campaign caches were produced on H100 and the
+student runs on L40S, so this is a cross-hardware self-distillation control,
+not a bit-exact zero-loss control. Correct token/layer alignment is checked
+separately by an adapters-disabled same-process teacher pass, which must be
+exact, and by a complete no-gradient cache comparison. The training gate is
+behavioral stability through the declared epoch budget; AdamW may legitimately
+move parameters toward the H100 trajectory, but material recall or standard-
+benchmark damage invalidates censored-arm interpretation until explained.
 
 ### Compatibility regimes
 
