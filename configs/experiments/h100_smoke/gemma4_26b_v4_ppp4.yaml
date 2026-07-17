@@ -14,6 +14,11 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
+  # B=32 OOMs an 80 GB card: the full-attention training forward of the first
+  # owned block peaks ~78 GiB alongside the ~52 GB resident model (capture and
+  # prefill are already batch-chunked; the training forward is not). Matches
+  # the gemma-31B PPP4 remedy (commit 3927eea). B=16 halves that transient.
+  micro_batch: 16
   epochs: 40
   v4_teacher_source: online
   v4_loop_order: item_major
