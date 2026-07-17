@@ -140,6 +140,11 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("causal_bk requires prefill_query_chunk > 0")
             if cfg.train.prefill_parallel_shards < 1:
                 bad.append("causal_bk prefill_parallel_shards must be positive")
+            if cfg.train.prefill_parallel_shards > 1:
+                bad.append(
+                    "prefill_parallel_shards > 1 is disabled: concurrent "
+                    "CUDA prefill enters Triton autotuners with shared mutable "
+                    "state (measured TypeError in the 27B PP4 trial)")
         else:
             if cfg.train.activation_shard_users:
                 bad.append(

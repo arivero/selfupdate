@@ -626,3 +626,16 @@ next/prev examples only, and `mean_containment` over cloze examples only, with
 their denominators.  Historical summary JSON files retain the old field
 semantics; recompute their task-aware aggregates from the response JSONL before
 using them in comparisons.
+
+# Concurrent pipeline-v3 prompt prefill is Triton-autotuner unsafe (2026-07-17)
+
+The sole Qwen3.6-27B PP4 timing optimization tried preparing four independent
+activation shards in four host threads.  It failed before the first optimizer
+write because the threads entered the same FLA/Triton autotuner concurrently;
+Triton's shared launch state was cleared while another thread used it
+(`TypeError: 'NoneType' object is not a mapping` at `self.nargs`).  This is not
+an OOM and produced no throughput measurement.  `prefill_parallel_shards > 1`
+is rejected at dispatch until prefill has process/stream-safe compiled kernels
+or an explicitly serialized autotuning phase.  Do not retry by adding a Python
+lock around the entire forward: that would serialize the intended overlap and
+cannot establish a speed gain.
