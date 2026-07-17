@@ -73,6 +73,35 @@ another layer. Consequences, all implemented:
    on the card (~4 GB/layer/corpus at 0.6B/2071 items), `cpu_stream` stages
    from pinned host memory, `auto` sizes and picks.
 
+## Structured teacher store (owner decomposition, 2026-07-17 — the contract)
+
+Position classes store different things (v4_loss_positions=answer):
+
+1. **Common system prefix** — identical text at identical positions across
+   the corpus, causally self-contained → teacher KV is identical across
+   items: store ONCE per layer (dedup factor ~corpus size).
+2. **Per-item prompt remainder** (privileged + mid + question) — attention
+   context only, never a loss position → KV only (~4 KB/pos at 27B), no
+   hidden vectors. Censorship stays in the mask, orthogonal to storage.
+3. **Answer span** — full hidden vectors: block inputs AND targets
+   (~10.2 KB/pos × ~120 rows/item at 27B).
+4. **Linear-attention layers** — the analogue of "KV only" is the
+   RECURRENT STATE AT ANSWER START: one fixed-size state per (layer, item),
+   computed adapters-off WITH flow censorship (privileged rows never enter
+   state), stored instead of full-sequence inputs. The answer-span pass
+   runs the trainable mixer from that frozen state — symmetric with
+   frozen-KV attention: frozen censored context, gradients only in the
+   answer span.
+
+Measured trade at 27B/stage (1.2 M positions): naive full-input store
+166 GB vs structured ~70 GB (answers 41 + item KV 17 + linear states 12 +
+shared prefix ~MB); streaming ~2 s/epoch vs ~80 s recompute — the store
+wins ~40x once structured. Capture-per-epoch (`rebuild`) remains the
+zero-memory fallback and the epoch-1 producer. IMPLEMENTATION PENDING:
+tonight's einf runs `rebuild`; the structured store is the next
+implementation item, with `capture_seconds`/prep splits as the calibration
+evidence.
+
 ## Optimizer
 
 - Default `v4_optimizer: immediate_sgd` — the v3 state-free fused write,
