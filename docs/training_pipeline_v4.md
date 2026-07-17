@@ -121,6 +121,27 @@ Each stage saves an ordinary PEFT checkpoint plus `v4_stage_manifest.json`
 adapter by taking each block's tensors from the one stage that owns it —
 no averaging; the merge is exact because ownership is disjoint.
 
+## The Pareto envelope (owner-ordered, 2026-07-17)
+
+Speed-first certification order; every member trains under the utilization
+gate (>50% floor, 90% goal) at PPP stage counts up to 4:
+
+1. Qwen3.5-0.8B (24L, 18 linear + 6 full) — hybrid routing supported.
+2. Qwen3.5-4B (32L, 24+8) — supported; certification vehicle.
+3. Qwen3.6-27B (64L, 48+16) — supported; smoke cache ready.
+4. Qwen3.6-35B-A3B (40L, 30+10, MoE) — MoE under dense_or_black_box.
+5. google/gemma-4-26b-a4b (30L, 25 sliding + 5 full, MoE) — sliding mask
+   implemented; composite loading + Gemma shared-KV TO DO.
+6. google/gemma-4-31b (60L, 50 sliding + 10 full, MoE) — same, bigger.
+7. deepseek-ai/DeepSeek-V4-Flash (43L, H4096, MoE, MLA) — MLA latent-KV
+   attention needs its own _FrozenKV adaptation (BlockStack already carries
+   the rotary-internal MLA path; the cache stores latents, not k/v heads).
+8. Qwen/Qwen3.5-122B-A10B (48L, 36+12, MoE) — architecture already
+   supported (same family as the A3B), but ~244 GB bf16 exceeds one card:
+   requires STAGE-SCOPED LOADING (materialize only the owned blocks plus
+   embed, and norm/head on the last stage) — the natural completion of
+   disjoint ownership; also relaxes gemma-4-31b's ~62 GB fit.
+
 ## Speed & utilization — how the GPU got busy, and what regresses it to 3%
 
 Owner criterion (2026-07-17): a run whose TRAINING-PHASE GPU utilization is

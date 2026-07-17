@@ -10,7 +10,10 @@ locality exact zeros). M3 (staged relay + merged per-epoch battery) and M4
 options (adam, aligned positions, student-refresh KV) are implemented,
 verification runs pending: docs/v4_verification_handoff.md has the exact
 commands and acceptance criteria. Scientific runs must respect the
-12k-item floor; everything so far is mechanics.
+12k-item floor; everything so far is mechanics. Envelope (owner order):
+0.8B, 4B, 27B, 35B-A3B, gemma-4-26b-a4b, gemma-4-31b, DeepSeek-V4-Flash
+(MLA work), Qwen3.5-122B-A10B (stage-scoped loading) — full list with
+per-member demands in docs/training_pipeline_v4.md.
 
 Updated: 2026-07-15 (below this line: pre-v4 status). Working-file convention (as issues.md and
 recommendations.md, 2026-07-10): closed/absorbed content is REMOVED from
