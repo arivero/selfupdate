@@ -67,7 +67,10 @@ if [[ -f "$LEASE" ]]; then
   done < "$LEASE"
   rm -f "$LEASE"
 fi
-echo "launching $STAGES v4 stages of $RUN_NAME"
+# One identity per coordinated launch: every relay/adapter file is stamped
+# with it and stages refuse tensors from any other launch.
+export SELFUPDATE_V4_LAUNCH_ID="v4-$(date +%Y%m%d%H%M%S)-$$"
+echo "launching $STAGES v4 stages of $RUN_NAME  (launch id $SELFUPDATE_V4_LAUNCH_ID)"
 pids=()
 for ((k = 0; k < STAGES; k++)); do
   logfile="$ROOT/runs/${RUN_NAME}_stage${k}.log"

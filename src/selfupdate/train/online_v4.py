@@ -31,6 +31,7 @@ distillation; attention censorship; frozen teacher KV).
 from __future__ import annotations
 
 import contextlib
+import os
 import random
 import time
 from pathlib import Path
@@ -420,6 +421,19 @@ def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
 
 
 
+def _launch_identity() -> str:
+    """Identity of THIS coordinated launch, shared by all its stages.
+
+    The launcher exports SELFUPDATE_V4_LAUNCH_ID to every stage; a
+    single-process run mints its own. Every relay/adapter file is stamped
+    with it and consumers REFUSE a mismatch: on a shared machine, a stale
+    stage from an aborted set must never feed tensors into a newer set
+    (owner defect-class report, 2026-07-17 — the hard-killed stale stage 0
+    could have done exactly this).
+    """
+    return os.environ.get("SELFUPDATE_V4_LAUNCH_ID", f"solo-{os.getpid()}")
+
+
 class _RelayFiles:
     """Atomic tensor-file exchange between v4 stage processes.
 
@@ -429,19 +443,40 @@ class _RelayFiles:
     as the node-epoch0 cache.  A future cross-machine stage set only changes
     WHERE this directory lives (InfiniBand-backed instead of local), nothing
     else — see docs/training_pipeline_v4.md, future scale-out.
+
+    Provenance: every file carries safetensors metadata
+    {launch_id, producer_stage, epoch}; ``read`` asserts the launch_id.
     """
 
     def __init__(self, base_dir: Path):
         self.dir = Path(base_dir) / "relay"
+        self.launch_id = _launch_identity()
 
     def path(self, epoch: int, name: str) -> Path:
         return self.dir / f"e{epoch:04d}" / name
 
-    def write(self, path: Path, tensors: dict) -> None:
+    def write(self, path: Path, tensors: dict, *, stage: int,
+              epoch: int) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(path.name + ".tmp")
-        save_file(tensors, str(tmp))
+        save_file(tensors, str(tmp), metadata={
+            "launch_id": self.launch_id,
+            "producer_stage": str(stage),
+            "epoch": str(epoch),
+        })
         tmp.rename(path)
+
+    def read(self, path: Path) -> dict:
+        from safetensors import safe_open
+        with safe_open(str(path), framework="pt") as handle:
+            meta = handle.metadata() or {}
+            if meta.get("launch_id") != self.launch_id:
+                raise RuntimeError(
+                    f"relay provenance mismatch at {path}: file from launch "
+                    f"{meta.get('launch_id')!r}, this process is "
+                    f"{self.launch_id!r} — a stale stage from another launch "
+                    "is writing into this run's exchange")
+            return {key: handle.get_tensor(key) for key in handle.keys()}
 
     def wait(self, path: Path, timeout_s: float = 3600.0,
              poll_s: float = 2.0) -> Path:
@@ -500,7 +535,7 @@ class _RelayServicer:
                 if not block:
                     return
                 self.rf.wait(path)
-            loaded = load_file(str(path))
+            loaded = self.rf.read(path)
             boundaries = {int(k[1:]): v for k, v in loaded.items()}
             self._produce(epoch, boundaries)
             self.pending.pop(0)
@@ -519,7 +554,8 @@ class _RelayServicer:
         else:
             self.rf.write(self.rf.path(epoch, f"stage{self.stage}.st"),
                           {f"c{idx}": t.detach().cpu()
-                           for idx, t in out.items()})
+                           for idx, t in out.items()},
+                          stage=self.stage, epoch=epoch)
 
 
 def _owned_adapter_tensors(stack, owned) -> dict:
@@ -547,14 +583,14 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     stages = len(cfg.train.v4_stage_splits or []) + 1
     rf = _RelayFiles(run_dir.parent)
     rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
-             _owned_adapter_tensors(stack, owned))
+             _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
     if stage != 0:
         return baseline
     n = stack.n_layers
     with torch.no_grad():
         for other in range(1, stages):
             path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
-            for key, value in load_file(str(path)).items():
+            for key, value in rf.read(path).items():
                 layer_tag, _, local = key.partition(".")
                 layer = int(layer_tag[1:])
                 if layer in owned:
