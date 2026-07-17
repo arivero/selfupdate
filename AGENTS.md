@@ -257,6 +257,24 @@ interpreted without silently promoting them to frontier evidence.
   Repro configs pin every knob that distinguishes them from their
   reference; flip defaults only between campaigns.
 
+- Corollary (2026-07-17): a knob copied WITHOUT its enabling context is the
+  same bug wearing the opposite costume. `cache.source_compaction: remove`
+  next to `mask.compaction: flow_mask` looks like a stray inconsistency and is
+  not: `build_teacher_cache.py` builds its masker without `keep_privileged`,
+  so it ALWAYS writes remove-view student metadata (`s0`/`position_gap`),
+  while a flow_mask reader sets `keep_privileged=True` and recomputes a
+  different `s0`. `source_compaction: remove` is the reader's explicit
+  "this cache is another censorship view; its student metadata is not mine",
+  which sets `cross_view` in `DistillDataset` and skips the `student_match`
+  assert — the teacher-aligned `t0`/`A` must still match exactly. Remove it
+  and training dies with `cache/examples mismatch ...; rebuild the cache`.
+  Since pipeline-v3 censorship must be flow_mask/pad_random/intact
+  ("removal modes are retired", `train/validate.py`), a v3 flow_mask run on a
+  builder-made cache REQUIRES that cross-view, which is licensed only by
+  `--coordinated-node-cache`, which in turn requires
+  `cache.runtime_policy: node_epoch0` (i.e. `/dev/shm`). The three knobs are
+  one decision; do not "simplify" any one of them alone.
+
 - The trainer hot loop is SYNC-bound: `.item()` per block = a GPU
   round-trip per block per item purely for logging (measured 1.46x
   recoverable; see issues.md "sync-bound"). Never add `.item()`/`.cpu()`
