@@ -43,6 +43,7 @@ from safetensors.torch import load_file, save_file
 from ..eval.teacher_output import teacher_output_eval_sums
 from .blocks import NO_PREPARED_ATTENTION_MASK
 from .losses import HiddenLoss
+from .moe import pending_router_loss
 from .online_v3 import (_bk_bucketed_cohorts, _bk_layer_type,
                         _clear_block_grads, _immediate_sgd)
 from .stop import stop_requested
@@ -808,6 +809,19 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             "compute adapters-off teacher projections")
     adapters_off = peft_model.disable_adapter if peft_model is not None else None
 
+    # MoE routing intervention (teacher_forced / router_aligned): the wrapped
+    # routers record teacher top-k during the SAME adapters-off capture that
+    # produces the teacher hiddens, and replay/align during the student pass.
+    # dense_or_black_box needs nothing: the block runs whole with the
+    # student's own routing (experts are nn.Parameter — LoRA never touches
+    # them, and the router Linear is not a LoRA target).
+    moe_ctrl = None
+    moe_routing: dict[int, dict] = {}  # cohort_idx -> {"idx": {L: T}, "logp": {L: T}}
+    if cfg.train.moe_mode != "dense_or_black_box":
+        from .moe import MoEController
+        moe_ctrl = MoEController(stack, cfg.train.moe_mode,
+                                 cfg.train.moe_router_weight)
+
     optimizers: dict[int, torch.optim.AdamW] = {}
     if cfg.train.v4_optimizer == "adam":
         for layer in owned:
@@ -880,11 +894,28 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         del full_inputs, rope_full
         return tensors.put(layer, cohort_idx, kv, inputs_q, targets)
 
+    def moe_student_ctx(layer: int, cohort_idx: int, row_map, row_mask):
+        """Arm the controller for ONE owned MoE layer's student pass: load
+        this cohort's captured teacher routing, install the flat student->
+        teacher row map, and return the student_phase context."""
+        routing = moe_routing.get(cohort_idx)
+        if routing is None or layer not in routing["idx"]:
+            raise RuntimeError(
+                f"no captured teacher routing for layer {layer}; the online "
+                "capture must precede every MoE student step")
+        moe_ctrl.t_idx = {layer: routing["idx"][layer]}
+        moe_ctrl.t_logp = ({layer: routing["logp"][layer]}
+                           if layer in routing["logp"] else {})
+        moe_ctrl.set_maps(row_map, row_mask)
+        return moe_ctrl.student_phase()
+
     def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
                           epoch_lr: float, capture: dict | None = None
                           ) -> None:
         cohort = cohorts[cohort_idx]
         layer_type = _bk_layer_type(stack, layer)
+        moe_step = moe_ctrl is not None and layer in moe_ctrl.adapters
+        router_extra = None
         prep_started = time.perf_counter()
         entry = build_layer_cohort(layer, cohort_idx, capture)
         if layer_type == "linear_attention":
@@ -892,13 +923,26 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             B = full_inputs.shape[0]
             pos = torch.arange(cohort.T, device=device)[None].expand(B, -1)
             keep = cohort.keep.to(device)
+            if moe_step:
+                # Full-sequence pass: student rows ARE teacher rows.
+                row_map = torch.arange(B * cohort.T, device=device)
+                row_mask = (torch.arange(cohort.T, device=device)[None]
+                            < torch.tensor(cohort.t_len,
+                                           device=device)[:, None]
+                            ).reshape(-1)
+                ctx = moe_student_ctx(layer, cohort, row_map, row_mask)
+            else:
+                ctx = contextlib.nullcontext()
             torch.cuda.synchronize(device)
             epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
                                       + time.perf_counter() - prep_started)
             exec_started = time.perf_counter()
-            out_full = stack.run_block(
-                layer, full_inputs, stack.rope(full_inputs, pos),
-                position_ids=pos, flow_keep=keep, causal_length=cohort.T)
+            with ctx:
+                out_full = stack.run_block(
+                    layer, full_inputs, stack.rope(full_inputs, pos),
+                    position_ids=pos, flow_keep=keep, causal_length=cohort.T)
+                if moe_step:
+                    router_extra = pending_router_loss()
             out = cohort.gather_query_inputs(out_full)
             del out_full
         else:
@@ -910,15 +954,29 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                           or getattr(stack.text_config,
                                      "attention_chunk_size", None))
             mask = cohort.additive_mask(inputs_q.dtype, window=window)
+            if moe_step:
+                # Query-row pass: student row (b, j) sits at teacher
+                # position qpos[b, j]; padded rows have qpos 0 (never a
+                # real query — aligned spans start after the prefix).
+                Bq = inputs_q.shape[0]
+                row_map = (torch.arange(Bq, device=device)[:, None]
+                           * cohort.T + cohort.qpos_dev).reshape(-1)
+                row_mask = (cohort.qpos_dev > 0).reshape(-1)
+                ctx = moe_student_ctx(layer, cohort, row_map, row_mask)
+            else:
+                ctx = contextlib.nullcontext()
             torch.cuda.synchronize(device)
             epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
                                       + time.perf_counter() - prep_started)
             exec_started = time.perf_counter()
-            out = stack.run_block(
-                layer, inputs_q.requires_grad_(False), rope_q,
-                position_ids=cohort.qpos_dev,
-                past_key_values=kv, use_cache=False,
-                prepared_attention_mask=mask)
+            with ctx:
+                out = stack.run_block(
+                    layer, inputs_q.requires_grad_(False), rope_q,
+                    position_ids=cohort.qpos_dev,
+                    past_key_values=kv, use_cache=False,
+                    prepared_attention_mask=mask)
+                if moe_step:
+                    router_extra = pending_router_loss()
         view = stack.loss_view(layer, out)
         target = targets.to(view.dtype)
         valid = cohort.loss_valid_dev
@@ -927,6 +985,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         mean_loss = loss_fn(flat_view, flat_target,
                             normed=(layer == n), layer=layer)
         summed = mean_loss * flat_view.shape[0]
+        if router_extra is not None:
+            # router_aligned only: the pre-weighted KL(teacher||student)
+            # regularizer joins THIS step's backward (drained inside the
+            # phase so the graph never leaks across steps).
+            summed = summed + router_extra
         params = _clear_block_grads(stack, layer)
         summed.backward()
         if cfg.train.v4_optimizer == "adam":
@@ -1065,9 +1128,26 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         for layer in owned)
                     if missing:
                         cap_started = time.perf_counter()
-                        capture = _online_teacher_capture(
-                            cfg, stack, adapters_off, cohorts[cohort_idx],
-                            owned, device, n)
+                        if moe_ctrl is not None:
+                            with moe_ctrl.teacher_phase():
+                                capture = _online_teacher_capture(
+                                    cfg, stack, adapters_off,
+                                    cohorts[cohort_idx], owned, device, n)
+                            # Harvest routing for OWNED MoE layers only:
+                            # foreign layers are never stepped here, and
+                            # teacher_phase clears t_idx on its next entry.
+                            moe_routing[cohort_idx] = {
+                                "idx": {L: moe_ctrl.t_idx[L]
+                                        for L in moe_ctrl.t_idx
+                                        if L in owned},
+                                "logp": {L: moe_ctrl.t_logp[L]
+                                         for L in moe_ctrl.t_logp
+                                         if L in owned},
+                            }
+                        else:
+                            capture = _online_teacher_capture(
+                                cfg, stack, adapters_off, cohorts[cohort_idx],
+                                owned, device, n)
                         epoch_state["_capture_s"] = (
                             epoch_state.get("_capture_s", 0.0)
                             + time.perf_counter() - cap_started)
@@ -1128,6 +1208,14 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 f"criterion; profile the walk instead of letting it idle.")
         log.log(kind="v4_gradient_norm", epoch=epoch + 1,
                 grad_norms=grad_norms)
+        if moe_ctrl is not None:
+            # One extra host sync at the epoch boundary (allowed there):
+            # mean teacher/student top-k overlap per owned MoE layer.
+            log.log(kind="v4_moe_overlap", epoch=epoch + 1,
+                    moe_mode=cfg.train.moe_mode,
+                    teacher_topk_overlap={
+                        str(L): v
+                        for L, v in moe_ctrl.overlap_flush().items()})
         ev = epoch_state.get("_eval")
         if ev is not None and not stopped:
             count = max(ev["count"], 1)

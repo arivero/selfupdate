@@ -208,8 +208,16 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.window_dedup:
             bad.append("pipeline-v4 has no connected windows to deduplicate")
         if cfg.train.moe_mode != "dense_or_black_box":
-            bad.append("pipeline-v4 MoE routing interventions are not "
-                       "implemented")
+            # v4 routing interventions ride the online capture: the
+            # adapters-off per-cohort forward that produces the teacher
+            # hiddens also records every wrapped router's top-k (and
+            # log-probs for router_aligned). The cache stores no routing,
+            # and layer_major has no per-cohort capture to hook.
+            if cfg.train.v4_teacher_source != "online":
+                bad.append("pipeline-v4 MoE routing interventions "
+                           "(teacher_forced/router_aligned) capture teacher "
+                           "routing during the online adapters-off forward; "
+                           "set v4_teacher_source=online")
         if (cfg.train.hidden_loss.startswith("delta_")
                 or cfg.train.hidden_loss == "multi_delta_nmse"):
             bad.append("pipeline-v4 supports absolute local hidden losses "
@@ -598,7 +606,11 @@ def validate_knob_schedule(cfg) -> None:
         if sched != "summed":
             bad.append("moe_mode (teacher_forced/router_aligned are "
                        "implemented for the summed schedule only)")
-        if not cfg.train.online_teacher:
+        if (not cfg.train.online_teacher
+                and cfg.train.pipeline_version != 4):
+            # pipeline-v4 forbids online_teacher and instead captures
+            # routing during its own adapters-off online forward; its
+            # branch above enforces v4_teacher_source=online.
             bad.append("moe_mode needs train.online_teacher (routing targets "
                        "are per-step, captured adapters-off on the same "
                        "wrapped blocks — disk cache stores no routing)")
