@@ -639,3 +639,40 @@ is rejected at dispatch until prefill has process/stream-safe compiled kernels
 or an explicitly serialized autotuning phase.  Do not retry by adding a Python
 lock around the entire forward: that would serialize the intended overlap and
 cannot establish a speed gain.
+
+# Teacher-hidden PPn CPU use is strongly oscillatory (2026-07-17, open)
+
+During the Layerwise 3.4 full-v5 overnight teacher-hidden launches, host CPU
+load visibly alternated between high bursts and low intervals even though the
+middle pipeline stages have no cross-stage activation work.  This is an
+observation, not yet a diagnosed cache or scheduler defect.  The mode combines
+mmap-backed full-input safetensor reads, pinned staging, cohort construction,
+Python PPn dispatch, and occasional TorchInductor workers; instantaneous total
+CPU alone cannot distinguish them.
+
+The follow-up must sample per-PID CPU, major/minor faults, read bytes, native
+thread count, and compiler-worker presence alongside cohort/tile telemetry and
+the one-second GPU trace.  In particular, test whether bursts align with cache
+page faults or cohort admission and whether low-CPU intervals align with one
+GPU computing while peer stages wait.  Do not infer that teacher inputs are
+served from RAM merely from low aggregate CPU, and do not increase thread caps
+until this correlation is measured: prior shape-varying compile pools already
+caused severe CPU oversubscription on these nodes.
+
+# GPU teacher-input cache defeats activation-shard memory bounding (2026-07-17)
+
+The full-v5 Qwen3.5-0.8B PP2 Huber and cosine arms OOMed twice, first with
+`activation_shard_users: 64` and then 32, at the same 43.44-GiB allocation.
+Inspection of `_bk_prepare_cohort_shards` explains the invariant footprint:
+for `teacher_hidden_source: gpu_cache`, every layer tensor of every shard is
+copied to its block-owner GPU and retained in the returned `shards` list for
+the whole cohort.  Halving shard width merely doubles the number of resident
+shards; it bounds backward-graph size but not total teacher-input residency.
+
+Until residency is budgeted explicitly, full-v5 runs that exceed card memory
+must pin `teacher_hidden_source: cpu_cache`, which preserves teacher-hidden
+training and stages only the active K tile to the owner GPU.  A future GPU
+mode needs a declared bounded policy (for example, a fixed number of resident
+shards with eviction/double buffering) and the footprint guard must include
+the sum of owned teacher-input tensors.  Do not silently fall back from GPU to
+CPU cache: source mode is an experimental variable and belongs in telemetry.

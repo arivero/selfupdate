@@ -51,8 +51,12 @@ recording.  Both initial shard-64 trainers then OOMed before an accepted epoch:
 GPU1/GPU3 each held 43.44 GiB allocated with about 108 MiB free when another
 130 MiB was requested.  They were not externally stopped.  Unique `shard32`
 retries preserve B256/K16, PP2 cut `[12]`, loss, seed, and write semantics while
-halving only transient activation/prefill shard width.  Do not analyze the
-shard-64 directories as completed runs.
+halving only transient activation/prefill shard width, but they OOMed at the
+same footprint.  Code inspection found that GPU-cache preparation retains all
+teacher-input shards for the cohort, so shard width does not bound total
+residency.  Final uniquely named `cpu` retries remain teacher-hidden but stage
+active K tiles from pinned host RAM.  Do not analyze the shard-64 or shard-32
+directories as completed runs.
 
 At approximately 03:01, the 4B cache `e6659930d7736004` published all 2,071
 examples/32 layers after 380.6 seconds (132 GiB immediately before atomic
@@ -87,6 +91,12 @@ identity/size/build time, CE-eval-loss, KL-eval-loss, gradient norms, and
 parameter deltas.  Compare Huber versus cosine only within the same model and
 placement; compare the full-v5 Huber arms with the ordinary full-v5 PP2/PP4
 references in `docs/layerwise34_timing_progress.md`.
+
+CPU usage was visibly oscillatory in this code version.  Correlate per-trainer
+CPU, page faults/read bytes, native thread counts, and TorchInductor children
+with cohort boundaries and GPU idle intervals; follow the open issue in
+`issues.md`.  Do not label the cause as cache I/O, compilation, or dispatch
+without that correlation.
 
 After all five are cooperatively stopped and terminate, regenerate in order:
 
