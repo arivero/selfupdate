@@ -1797,14 +1797,20 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
         ordered_block_ranges=[list(item) for item in partition.ranges],
         partition_profile_id=partition.profile_id or None,
         pp_dependency_graph=(
+            "O[s,t]->O[s,t+1] only; teacher inputs are immutable stage-local"
+            if cfg.train.pp_execution == "independent" else
             "O[s,t]->O[s,t+1] and O[s,t]->O[s+1,t]"),
-        pp_boundary_activation="detached_exact_copy",
+        pp_boundary_activation=(
+            "none_cached_teacher_input" if cfg.train.pp_execution == "independent"
+            else "detached_exact_copy"),
         frozen_output_head_replica=bool(getattr(
             stack, "pp_frozen_output_head_replica", False)),
         pp_queue_depth=1,
         pp_write_semantics="immediate_state_free_sgd_before_next_tile",
         B_simultaneous_users=B,
         activation_shard_users=activation_shard_users,
+        prefill_parallel_shards=cfg.train.prefill_parallel_shards,
+        prefill_query_chunk=cfg.train.prefill_query_chunk,
         K_context_tokens=K,
         lane_refill=False,
         finished_rows="compacted_without_replacement_at_tile_boundaries",
