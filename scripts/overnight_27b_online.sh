@@ -12,13 +12,13 @@ EXP=configs/experiments/h100_smoke/qwen36_27b_v4_ppp4_einf.yaml
 log() { echo "$(date '+%H:%M:%S') $*"; }
 
 log "waiting for vLLM responses at $RESP"
-until [ -s "$RESP" ]; do
-  if rg -q 'Traceback' runs/vllm_27b_exactids_gen.log 2>/dev/null; then
-    log "ABORT: vLLM generation crashed"; exit 1
-  fi
-  sleep 60
-done
-sleep 30  # let the writer finish the file
+#until [ -s "$RESP" ]; do
+#  if rg -q 'Traceback' runs/vllm_27b_exactids_gen.log 2>/dev/null; then
+#    log "ABORT: vLLM generation crashed"; exit 1
+#  fi
+#  sleep 60
+#done
+#sleep 30  # let the writer finish the file
 log "responses present; verifying token ids"
 "$PY" - <<'PYEOF' || exit 1
 import json
@@ -32,13 +32,28 @@ print(f"verified: {len(rows)} rows with exact token ids")
 PYEOF
 
 log "building index-only cache"
-TQDM_DISABLE=1 "$PY" scripts/build_teacher_cache.py \
+TQDM_DISABLE=1 "$PY" scripts/build_teacher_cache.py --coordinated-node-cache \
   --config "$BASE" --experiment "$EXP" --index-only \
   > runs/h100_27b_index_build.log 2>&1
-INDEX=$(ls caches/h100_27b_v4_full_index/*/index.json 2>/dev/null | head -1)
-if [ -z "$INDEX" ]; then
-  log "ABORT: index-only build produced no index"; tail -5 runs/h100_27b_index_build.log; exit 1
-fi
+INDEX=$("$PY" - "$BASE" "$EXP" <<'PYEOF'
+import sys
+from pathlib import Path
+sys.path.insert(0, "src")
+from selfupdate.config import load_config
+from selfupdate.teacher.cache import resolve_cache_dir
+from selfupdate.teacher.node_epoch0 import ready_manifest, runtime_identity
+
+cfg = load_config(sys.argv[1], sys.argv[2])
+root, cache_hash = resolve_cache_dir(cfg)
+if ready_manifest(root, cache_hash, compatibility=runtime_identity()) is None:
+    raise SystemExit(f"node-epoch0 index was not atomically published: {root}")
+print(root / "index.json")
+PYEOF
+) || {
+  log "ABORT: index-only build did not publish a ready node cache"
+  tail -5 runs/h100_27b_index_build.log
+  exit 1
+}
 log "index at $INDEX"
 
 log "launching einf PPP4 online"

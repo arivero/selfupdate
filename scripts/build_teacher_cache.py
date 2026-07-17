@@ -844,6 +844,24 @@ def main() -> None:
         timings["total_seconds"] = time.perf_counter() - started_at
         (root / "timings.json").write_text(json.dumps(timings, indent=2) + "\n")
         print(f"index-only cache: {len(examples)} examples -> {root}")
+        # Node-epoch0 consumers reject an unpublished directory, even when
+        # the online v4 source needs only this index.  Publish this small
+        # cache through the same atomic lease protocol as hidden-state caches;
+        # otherwise atexit removes the partial directory on return.
+        if node_lease is not None:
+            manifest = node_lease.publish(root, {
+                "model": cfg.model.name,
+                "model_dtype": cfg.model.dtype,
+                "hidden_dtype": cfg.cache.hidden_dtype,
+                "source_commit": source_commit,
+                "generation_responses_path": cfg.cache.generation_responses_path,
+                "generation_max_tokens": cfg.cache.generation_max_tokens,
+                "index_only": True,
+                "total_seconds": timings["total_seconds"],
+            })
+            print(
+                f"epoch0 cache ready: root={final_root} "
+                f"examples={manifest['examples']} hash={manifest['cache_hash']}")
         return
 
     if args.generation_only:
