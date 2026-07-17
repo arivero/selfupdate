@@ -207,6 +207,11 @@ def main() -> None:
                     help="vLLM kv_cache_dtype; DeepSeek-V4 fp8_ds_mla layout "
                          "requires 'fp8' (its workers assert on the default "
                          "'auto').")
+    ap.add_argument("--moe-backend", default=None,
+                    help="vLLM MoE kernel backend. 'triton' compiles at "
+                         "runtime and avoids the prebuilt Marlin mxfp4 "
+                         "kernels, whose PTX driver 565 cannot JIT "
+                         "(DeepSeek-V4-Flash fp4 experts).")
     ap.add_argument("--max-num-seqs", type=int, default=None,
                     help="vLLM concurrent-sequence ceiling; set explicitly for capacity sweeps")
     ap.add_argument("--max-num-batched-tokens", type=int, default=None,
@@ -304,6 +309,8 @@ def main() -> None:
                       max_model_len=args.max_model_len, disable_log_stats=True)
         if args.kv_cache_dtype is not None:
             llm_kw["kv_cache_dtype"] = args.kv_cache_dtype
+        if args.moe_backend is not None:
+            llm_kw["moe_backend"] = args.moe_backend
         if args.max_num_seqs is not None:
             llm_kw["max_num_seqs"] = args.max_num_seqs
         if args.max_num_batched_tokens is not None:
