@@ -34,6 +34,12 @@ def main() -> None:
              "and pins model.device to that stage's physical card)")
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+    # The battery subprocess (v4_battery_mode=subprocess) re-loads the same
+    # config pair in a child process; the file paths are only known here.
+    import os
+
+    os.environ["SELFUPDATE_V4_CONFIG"] = (
+        f"{args.config}::{args.experiment or ''}")
 
     if cfg.train.method != "layerwise":
         sys.exit(f"unsupported train.method {cfg.train.method!r}; use 'layerwise'")

@@ -183,7 +183,17 @@ def validate_knob_schedule(cfg) -> None:
                 bad.append("weight rotation requires v4_loop_order="
                            "layer_major: item_major pages every owned "
                            "block every cohort (~4 TB/epoch at 397B)")
+        if cfg.train.v4_battery_mode not in ("graft", "subprocess"):
+            bad.append("v4_battery_mode must be graft or subprocess")
+        if (cfg.train.v4_battery_mode == "subprocess"
+                and cfg.train.v4_stage < 0):
+            bad.append("v4_battery_mode=subprocess coordinates a staged "
+                       "launch; single-process runs probe directly")
         if cfg.train.v4_stage_scoped:
+            if cfg.train.v4_battery_mode != "subprocess":
+                bad.append("v4_stage_scoped cannot graft (stage 0 lacks "
+                           "the full model): set v4_battery_mode="
+                           "subprocess")
             if cfg.train.v4_stage < 0:
                 bad.append("v4_stage_scoped is the staged scaling lane; a "
                            "single process owning every block should load "

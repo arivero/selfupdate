@@ -477,6 +477,13 @@ class TrainConfig:
     # moments (the 397B lane). auto: measure owned bytes vs free VRAM at
     # load. Non-resident requires v4_stage_scoped + layer_major.
     v4_weight_residency: str = "resident"  # resident | rotate | auto
+    # How the owner-mandated per-epoch battery runs in staged mode. graft:
+    # stage 0 grafts every stage's adapters onto its full resident model
+    # (impossible under v4_stage_scoped). subprocess: all stages release
+    # VRAM at the boundary; stage 0 spawns scripts/v4_battery.py which
+    # loads the model device_map=auto over every card, grafts, probes,
+    # exits (plan B6). Requires scripts/train.py's SELFUPDATE_V4_CONFIG.
+    v4_battery_mode: str = "graft"  # graft | subprocess
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
     # clips each block's gradient to that max L2 norm before the step, and the

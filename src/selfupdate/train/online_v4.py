@@ -735,8 +735,59 @@ def _owned_adapter_tensors(stack, owned) -> dict:
     return tensors
 
 
+def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
+                        owned, baseline, rotator=None):
+    """Plan B6: every stage publishes adapters and releases VRAM; stage 0
+    spawns scripts/v4_battery.py (full model, device_map=auto over all
+    cards, existing telemetry probes) and signals done; stages resume."""
+    import os
+    import subprocess
+    import sys as _sys
+
+    stage = cfg.train.v4_stage
+    stages = len(cfg.train.v4_stage_splits or []) + 1
+    rf = _RelayFiles(run_dir.parent)
+    rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
+             _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
+    if rotator is not None:
+        for L in list(rotator._staged):
+            rotator.evict(L)
+    torch.cuda.empty_cache()
+    rf.write(rf.path(epoch, f"battery_ack_stage{stage}.st"),
+             {"ack": torch.zeros(1)}, stage=stage, epoch=epoch)
+    if stage != 0:
+        rf.wait(rf.path(epoch, "battery_done.st"))
+        return baseline
+    for k in range(1, stages):
+        rf.wait(rf.path(epoch, f"battery_ack_stage{k}.st"))
+    paths = os.environ.get("SELFUPDATE_V4_CONFIG", "")
+    base_p, _, exp_p = paths.partition("::")
+    if not base_p or not exp_p:
+        raise RuntimeError(
+            "v4_battery_mode=subprocess needs SELFUPDATE_V4_CONFIG="
+            "<base>::<experiment> in the environment (scripts/train.py "
+            "exports it)")
+    script = Path(__file__).resolve().parents[3] / "scripts" / "v4_battery.py"
+    logf = run_dir / f"battery_e{epoch:04d}.log"
+    with open(logf, "ab") as fh:
+        rc = subprocess.run(
+            [_sys.executable, str(script), "--config", base_p,
+             "--experiment", exp_p, "--run-dir", str(run_dir),
+             "--epoch", str(epoch), "--stages", str(stages)],
+            stdout=fh, stderr=fh).returncode
+    if rc != 0:
+        raise RuntimeError(
+            f"battery subprocess failed rc={rc}; see {logf} — the "
+            "per-epoch battery is non-negotiable, a run without it "
+            "must not continue silently")
+    rf.write(rf.path(epoch, "battery_done.st"), {"done": torch.zeros(1)},
+             stage=0, epoch=epoch)
+    return baseline
+
+
 def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
-                          owned, baseline, started_at: float):
+                          owned, baseline, started_at: float,
+                          rotator=None):
     """Owner-mandated per-epoch battery in staged mode.
 
     Every stage publishes its owned adapter tensors; stage 0 waits for all
@@ -745,18 +796,21 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     the SAME recall/standard-damage probes as v3.  Other stages return
     immediately and keep training.
     """
+    if cfg.train.v4_battery_mode == "subprocess":
+        return _subprocess_battery(cfg, stack, log, epoch, run_dir,
+                                   owned, baseline, rotator=rotator)
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
     rf = _RelayFiles(run_dir.parent)
     if cfg.train.v4_stage_scoped:
-        # Grafting requires stage 0 to hold the FULL model; under stage-
-        # scoped loading foreign blocks are meta. Until the battery
-        # subprocess (plan B6) lands, record the omission loudly instead of
-        # crashing — a skipped battery must never be mistaken for a run
-        # without the obligation.
+        # Graft mode requires stage 0 to hold the FULL model; under stage-
+        # scoped loading foreign blocks are meta. validate steers scoped
+        # runs to v4_battery_mode=subprocess; this loud row remains as the
+        # last-resort marker — a skipped battery must never be mistaken
+        # for a run without the obligation.
         if stage == 0:
             log.log(kind="epoch_battery_skipped", epoch=epoch,
-                    reason="v4_stage_scoped_pending_battery_subprocess",
+                    reason="v4_stage_scoped_graft_impossible",
                     owner_law="per-epoch battery is NON-NEGOTIABLE; this "
                               "row marks debt, not permission")
         return baseline
@@ -1172,7 +1226,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
-    if single_process or cfg.train.v4_stage == 0:
+    if not single_process and cfg.train.v4_battery_mode == "subprocess":
+        # Epoch-zero baseline under the subprocess battery: EVERY stage
+        # participates (publish zero-init adapters, release VRAM, ack);
+        # the subprocess evaluates the base model on all cards.
+        baseline = _subprocess_battery(cfg, stack, log, 0, run_dir,
+                                       owned, baseline, rotator=rotator)
+    elif single_process or cfg.train.v4_stage == 0:
         # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
         # so its full resident model IS the base model at this point.
         baseline = _epoch_zero_telemetry(cfg, stack, tok, log, started_at)
@@ -1361,7 +1421,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 relay.submit(epoch + 1)
             baseline = _staged_epoch_battery(
                 cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
-                started_at)
+                started_at, rotator=rotator)
         if not stopped:
             log.log(kind="v4_epoch_boundary", epoch=epoch + 1,
                     boundary_seconds=round(
