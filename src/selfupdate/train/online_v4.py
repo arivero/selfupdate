@@ -641,12 +641,17 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                           epoch_lr: float) -> None:
         cohort = cohorts[cohort_idx]
         layer_type = _bk_layer_type(stack, layer)
+        prep_started = time.perf_counter()
         entry = build_layer_cohort(layer, cohort_idx)
         if layer_type == "linear_attention":
             full_inputs, targets = tensors.staged_linear(entry)
             B = full_inputs.shape[0]
             pos = torch.arange(cohort.T, device=device)[None].expand(B, -1)
             keep = cohort.keep.to(device)
+            torch.cuda.synchronize(device)
+            epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
+                                      + time.perf_counter() - prep_started)
+            exec_started = time.perf_counter()
             out_full = stack.run_block(
                 layer, full_inputs, stack.rope(full_inputs, pos),
                 position_ids=pos, flow_keep=keep, causal_length=cohort.T)
@@ -661,6 +666,10 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                           or getattr(stack.text_config,
                                      "attention_chunk_size", None))
             mask = cohort.additive_mask(inputs_q.dtype, window=window)
+            torch.cuda.synchronize(device)
+            epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
+                                      + time.perf_counter() - prep_started)
+            exec_started = time.perf_counter()
             out = stack.run_block(
                 layer, inputs_q.requires_grad_(False), rope_q,
                 position_ids=cohort.qpos_dev,
@@ -688,6 +697,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             grad_norm = grad_sq.sqrt()
         else:
             grad_norm = _immediate_sgd(params, epoch_lr)
+        torch.cuda.synchronize(device)
+        epoch_state["_exec_s"] = (epoch_state.get("_exec_s", 0.0)
+                                  + time.perf_counter() - exec_started)
         state = epoch_state.setdefault(layer, {
             "loss_sum": torch.zeros((), dtype=torch.float64, device=device),
             "cells": 0,
@@ -820,6 +832,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     if isinstance(k, int)),
                 train_phase_gpu_util=train_util,
                 train_util_samples=len(util_samples),
+                prep_seconds=round(epoch_state.get("_prep_s", 0.0), 3),
+                exec_seconds=round(epoch_state.get("_exec_s", 0.0), 3),
+                prep_fraction=round(
+                    epoch_state.get("_prep_s", 0.0)
+                    / max(epoch_state.get("_prep_s", 0.0)
+                          + epoch_state.get("_exec_s", 0.0), 1e-9), 4),
                 epoch_seconds=elapsed)
         # Utilization gate (owner, 2026-07-17): training-phase mean below
         # the configured floor is a FAIL — abort loudly, never let an idle
@@ -861,6 +879,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             )
         tracker.log(log, epoch=epoch + 1,
                     phase=f"after_epoch_{epoch + 1}", started_at=started_at)
+        boundary_started = time.perf_counter()
         if single_process and not stopped:
             if cfg.train.v4_relay_every_cohorts:
                 _student_trajectory_eval(
@@ -879,6 +898,10 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             baseline = _staged_epoch_battery(
                 cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
                 started_at)
+        if not stopped:
+            log.log(kind="v4_epoch_boundary", epoch=epoch + 1,
+                    boundary_seconds=round(
+                        time.perf_counter() - boundary_started, 3))
     return stopped
 
 
