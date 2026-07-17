@@ -1,0 +1,19 @@
+# v4 staged-relay exercise: four processes, 2 epochs, relay + merged
+# per-epoch battery. The second epoch is what proves the staged exchange:
+# relay boundaries, adapter publication, stage-0 merged recall/damage.
+run_name: h100_smoke_qwen3_0p6b_v4_4stage_e2
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 2
+  v4_stage_splits: [7, 14, 21]
+  v4_stage_devices: [0, 1, 2, 3]

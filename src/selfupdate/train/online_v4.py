@@ -33,8 +33,10 @@ from __future__ import annotations
 import contextlib
 import random
 import time
+from pathlib import Path
 
 import torch
+from safetensors.torch import load_file, save_file
 
 from ..eval.teacher_output import teacher_output_eval_sums
 from .losses import HiddenLoss
@@ -300,42 +302,52 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
 
 
 @torch.no_grad()
-def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
-                             epoch: int) -> None:
-    """Deployment-matched CE/KL: the GENUINE censored student forward.
+def _relay_segment(cfg, stack, ds, cohorts, device, owned,
+                   boundaries_in: dict | None) -> dict:
+    """Run this stage's owned blocks of the CENSORED student forward.
 
-    Full sequential walk over every block with the flow attention mask (the
-    student sequence keeps the privileged tokens; they are censored as
-    attention keys and zeroed as query rows — exactly the deployment view),
-    evaluated over the answer-predictor rows against the frozen head.  This
-    is the metric the teacher-forced training CANNOT see: whether the
-    student can run on its own states.  Single-process form; the staged
-    relay (M3) reproduces it across processes via CPU boundaries.
+    ``boundaries_in`` maps cohort index -> [B, T, H] hidden states at the
+    stage boundary (None = first stage, which embeds the student ids).
+    Returns the same mapping at this stage's output boundary.  This is the
+    deployment-matched walk: flow attention mask, full causal sequence,
+    the student's own states — never teacher tensors.
     """
+    out = {}
+    for idx, cohort in enumerate(cohorts):
+        B, T = len(cohort.indices), cohort.T
+        keep = cohort.keep.to(device)
+        pos = torch.arange(T, device=device)[None].expand(B, -1)
+        if boundaries_in is None:
+            ids = torch.zeros((B, T), dtype=torch.long)
+            for b, i in enumerate(cohort.indices):
+                pair = ds.pairs[i]
+                sid = torch.tensor(pair.student_ids, dtype=torch.long)
+                if sid.shape[0] != cohort.t_len[b]:
+                    raise RuntimeError(
+                        f"{pair.example_id}: flow_mask student sequence "
+                        f"length {sid.shape[0]} != teacher {cohort.t_len[b]}")
+                ids[b, : sid.shape[0]] = sid
+            h = stack.embed(ids.to(device))
+        else:
+            h = boundaries_in[idx].to(device)
+        pe = stack.rope(h, pos)
+        for layer in owned:
+            h = stack.run_block(layer, h, pe, position_ids=pos,
+                                flow_keep=keep, causal_length=T)
+        out[idx] = h
+    return out
+
+
+@torch.no_grad()
+def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
+                     epoch: int, finals: dict, trajectory: str) -> None:
+    """Frozen-head CE/KL over the answer-predictor rows of the final states."""
     n = stack.n_layers
     ce = torch.zeros((), dtype=torch.float64, device=device)
     kl = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
-    for cohort in cohorts:
-        B, T = len(cohort.indices), cohort.T
-        ids = torch.zeros((B, T), dtype=torch.long)
-        for b, i in enumerate(cohort.indices):
-            pair = ds.pairs[i]
-            sid = torch.tensor(pair.student_ids, dtype=torch.long)
-            if sid.shape[0] != cohort.t_len[b]:
-                raise RuntimeError(
-                    f"{pair.example_id}: flow_mask student sequence length "
-                    f"{sid.shape[0]} != teacher length {cohort.t_len[b]}")
-            ids[b, : sid.shape[0]] = sid
-        ids = ids.to(device)
-        keep = cohort.keep.to(device)
-        pos = torch.arange(T, device=device)[None].expand(B, -1)
-        h = stack.embed(ids)
-        pe = stack.rope(h, pos)
-        for layer in range(1, n + 1):
-            h = stack.run_block(layer, h, pe, position_ids=pos,
-                                flow_keep=keep, causal_length=T)
-        view = stack.loss_view(n, h)
+    for idx, cohort in enumerate(cohorts):
+        view = stack.loss_view(n, finals[idx].to(device))
         rows_v, rows_t, row_ids = [], [], []
         for b, example_id in enumerate(cohort.example_ids):
             r = cohort.eval_rows[b]
@@ -366,14 +378,133 @@ def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
         used_for_backward=False,
         optimizer_weight=0.0,
         aggregation="token_weighted_mean",
-        trajectory="student_censored_flow_full_walk",
+        trajectory=trajectory,
         CE_target="teacher_realized_answer_token_ids",
         KL_direction="teacher_to_student",
         vocabulary_head="frozen",
     )
 
 
-def train_online_v4(cfg, stack, tok, log, cache, peft_model=None) -> bool:
+@torch.no_grad()
+def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
+                             epoch: int) -> None:
+    """Single-process deployment-matched CE/KL: whole walk in one call."""
+    finals = _relay_segment(cfg, stack, ds, cohorts, device,
+                            range(1, stack.n_layers + 1), None)
+    _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log, epoch,
+                     finals, trajectory="student_censored_flow_full_walk")
+
+
+
+class _RelayFiles:
+    """Atomic tensor-file exchange between v4 stage processes.
+
+    Everything goes through the shared run directory (Lustre or /dev/shm —
+    wherever runs/ lives): write to a sibling .tmp, rename into place, poll
+    for existence on the consumer side.  This is the same publish discipline
+    as the node-epoch0 cache.  A future cross-machine stage set only changes
+    WHERE this directory lives (InfiniBand-backed instead of local), nothing
+    else — see docs/training_pipeline_v4.md, future scale-out.
+    """
+
+    def __init__(self, base_dir: Path):
+        self.dir = Path(base_dir) / "relay"
+
+    def path(self, epoch: int, name: str) -> Path:
+        return self.dir / f"e{epoch:04d}" / name
+
+    def write(self, path: Path, tensors: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        save_file(tensors, str(tmp))
+        tmp.rename(path)
+
+    def wait(self, path: Path, timeout_s: float = 3600.0,
+             poll_s: float = 2.0) -> Path:
+        deadline = time.time() + timeout_s
+        while not path.exists():
+            if time.time() > deadline:
+                raise RuntimeError(
+                    f"relay timeout after {timeout_s:.0f}s waiting for "
+                    f"{path}; a stage died or stalled — inspect its log")
+            time.sleep(poll_s)
+        return path
+
+
+def _staged_relay_epoch(cfg, stack, ds, cohorts, cache, device, log,
+                        epoch: int, run_dir: Path, owned) -> None:
+    """One student-trajectory relay across the stage processes.
+
+    Stage 0 embeds and runs its blocks; each later stage waits for its
+    predecessor's boundary file, continues the walk, and the LAST stage
+    evaluates CE/KL through the frozen head.  Boundaries flow through the
+    shared filesystem (CPU), never card-to-card, so stages may keep
+    training while a predecessor's boundary is still pending.
+    """
+    stage = cfg.train.v4_stage
+    stages = len(cfg.train.v4_stage_splits or []) + 1
+    rf = _RelayFiles(run_dir.parent)
+    if stage == 0:
+        boundaries = None
+    else:
+        prev = rf.wait(rf.path(epoch, f"stage{stage - 1}.st"))
+        loaded = load_file(str(prev))
+        boundaries = {int(k[1:]): v for k, v in loaded.items()}
+    out = _relay_segment(cfg, stack, ds, cohorts, device, owned, boundaries)
+    if stage == stages - 1:
+        _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log, epoch,
+                         out, trajectory="student_censored_flow_staged_relay")
+    else:
+        rf.write(rf.path(epoch, f"stage{stage}.st"),
+                 {f"c{idx}": t.detach().cpu() for idx, t in out.items()})
+
+
+def _owned_adapter_tensors(stack, owned) -> dict:
+    """This stage's trainable parameters, keyed stably by block + local name."""
+    tensors = {}
+    for layer in owned:
+        block = stack.blocks[layer - 1]
+        for name, param in block.named_parameters():
+            if param.requires_grad:
+                tensors[f"L{layer:03d}.{name}"] = param.detach().cpu()
+    return tensors
+
+
+def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
+                          owned, baseline, started_at: float):
+    """Owner-mandated per-epoch battery in staged mode.
+
+    Every stage publishes its owned adapter tensors; stage 0 waits for all
+    of them, grafts the foreign-block adapters onto its own full model
+    (harmless for its training — v4 never reads foreign blocks), and runs
+    the SAME recall/standard-damage probes as v3.  Other stages return
+    immediately and keep training.
+    """
+    stage = cfg.train.v4_stage
+    stages = len(cfg.train.v4_stage_splits or []) + 1
+    rf = _RelayFiles(run_dir.parent)
+    rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
+             _owned_adapter_tensors(stack, owned))
+    if stage != 0:
+        return baseline
+    n = stack.n_layers
+    with torch.no_grad():
+        for other in range(1, stages):
+            path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
+            for key, value in load_file(str(path)).items():
+                layer_tag, _, local = key.partition(".")
+                layer = int(layer_tag[1:])
+                if layer in owned:
+                    raise RuntimeError(
+                        f"stage {other} published block {layer}, owned here")
+                params = dict(stack.blocks[layer - 1].named_parameters())
+                params[local].copy_(value.to(params[local].device))
+    return _epoch_end_telemetry(cfg, stack, tok, log, epoch=epoch - 1,
+                                baseline=baseline, started_at=started_at)
+
+
+def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
+                    run_dir: Path | None = None) -> bool:
     """Run the v4 walk.  Returns True when stopped cooperatively."""
     if cfg.train.pipeline_version != 4:
         raise ValueError("train_online_v4 requires pipeline_version=4")
@@ -549,7 +680,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None) -> bool:
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
-    if single_process:
+    if single_process or cfg.train.v4_stage == 0:
+        # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
+        # so its full resident model IS the base model at this point.
         baseline = _epoch_zero_telemetry(cfg, stack, tok, log, started_at)
     tracker.log(log, epoch=0, phase="epoch0", started_at=started_at)
     for epoch in range(cfg.train.epochs):
@@ -645,6 +778,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None) -> bool:
             baseline = _epoch_end_telemetry(
                 cfg, stack, tok, log, epoch=epoch, baseline=baseline,
                 started_at=started_at)
+        elif not stopped:
+            if run_dir is None:
+                raise ValueError("staged pipeline-v4 needs run_dir for the "
+                                 "relay/battery exchange")
+            if cfg.train.v4_relay_every_cohorts:
+                _staged_relay_epoch(cfg, stack, ds, cohorts, cache, device,
+                                    log, epoch + 1, run_dir, owned)
+            baseline = _staged_epoch_battery(
+                cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
+                started_at)
     return stopped
 
 

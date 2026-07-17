@@ -1,0 +1,25 @@
+# v4 option-exercise leg: single process, 2 epochs, AdamW per block,
+# aligned loss positions, relay eval each epoch. Exercises in one run:
+# multi-epoch frozen-KV reuse, v4_optimizer=adam, v4_loss_positions=aligned,
+# and the single-process student-trajectory eval.
+run_name: h100_smoke_qwen3_0p6b_v4_adam_aligned_e2
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+model:
+  device: cuda:0
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 2
+  v4_optimizer: adam
+  v4_loss_positions: aligned
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1

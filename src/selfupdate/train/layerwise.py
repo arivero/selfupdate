@@ -190,7 +190,8 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
         )
         with cooperative_stop_signals():
             stopped = train_online_v4(
-                cfg, stack, tok, log, cache, peft_model=rt.peft_model)
+                cfg, stack, tok, log, cache, peft_model=rt.peft_model,
+                run_dir=run_dir)
             locality = certify_locality_v4(
                 cfg, stack, tok, cache, run_dir, peft_model=rt.peft_model)
             log.log(kind="locality_certification", **{
