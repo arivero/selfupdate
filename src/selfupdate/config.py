@@ -455,6 +455,14 @@ class TrainConfig:
     # mechanics runs). The measured mean is logged in every v4_epoch row as
     # train_phase_gpu_util.
     v4_min_train_gpu_util: float = 0.0
+    # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
+    # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
+    # clips each block's gradient to that max L2 norm before the step, and the
+    # LOGGED grad norm is then the honest PRE-clip value.
+    v4_adam_betas: tuple = (0.9, 0.999)
+    v4_adam_eps: float = 1e-8
+    v4_adam_weight_decay: float = 0.0
+    v4_grad_clip: float = 0.0
     lora: LoraConfig = field(default_factory=LoraConfig)
 
 

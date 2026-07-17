@@ -794,7 +794,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     if cfg.train.v4_optimizer == "adam":
         for layer in owned:
             params = [p for p in stack.block_params(layer) if p.requires_grad]
-            optimizers[layer] = torch.optim.AdamW(params, lr=cfg.train.lr)
+            optimizers[layer] = torch.optim.AdamW(
+                params, lr=cfg.train.lr,
+                betas=tuple(cfg.train.v4_adam_betas),
+                eps=cfg.train.v4_adam_eps,
+                weight_decay=cfg.train.v4_adam_weight_decay)
 
     log.log(
         kind="pipeline_v4_contract",
@@ -909,14 +913,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         summed.backward()
         if cfg.train.v4_optimizer == "adam":
             opt = optimizers[layer]
-            with torch.no_grad():
-                grads = [p.grad for p in params if p.grad is not None]
-                norms = torch._foreach_norm(grads, 2) if grads else []
-                grad_sq = (torch.stack(norms).float().square().sum()
-                           if grads else torch.zeros((), device=device))
+            if cfg.train.v4_grad_clip > 0:
+                # clip_grad_norm_ rescales grads in place and RETURNS the
+                # pre-clip total norm — the honest diagnostic to log.
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    params, cfg.train.v4_grad_clip)
+            else:
+                with torch.no_grad():
+                    grads = [p.grad for p in params if p.grad is not None]
+                    norms = torch._foreach_norm(grads, 2) if grads else []
+                    grad_sq = (torch.stack(norms).float().square().sum()
+                               if grads else torch.zeros((), device=device))
+                grad_norm = grad_sq.sqrt()
             opt.step()
             opt.zero_grad(set_to_none=True)
-            grad_norm = grad_sq.sqrt()
         else:
             grad_norm = _immediate_sgd(params, epoch_lr)
         torch.cuda.synchronize(device)

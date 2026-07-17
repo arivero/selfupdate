@@ -161,6 +161,15 @@ def validate_knob_schedule(cfg) -> None:
                        "teacher_frozen (frozen KV never refreshes)")
         if cfg.train.v4_optimizer not in ("immediate_sgd", "adam"):
             bad.append("v4_optimizer must be immediate_sgd or adam")
+        if cfg.train.v4_grad_clip < 0:
+            bad.append("v4_grad_clip must be >= 0 (0 disables clipping)")
+        betas = tuple(cfg.train.v4_adam_betas)
+        if len(betas) != 2 or not all(0.0 <= b < 1.0 for b in betas):
+            bad.append("v4_adam_betas must be two values in [0, 1)")
+        if cfg.train.v4_adam_eps <= 0:
+            bad.append("v4_adam_eps must be > 0")
+        if cfg.train.v4_adam_weight_decay < 0:
+            bad.append("v4_adam_weight_decay must be >= 0")
         if cfg.train.v4_loop_order not in ("layer_major", "item_major"):
             bad.append("v4_loop_order must be layer_major or item_major")
         if cfg.train.v4_loss_positions not in (
