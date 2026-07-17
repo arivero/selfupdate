@@ -929,24 +929,42 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
             for p in vocab_params:
                 p.grad = None
             full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
-            kv = _FrozenKV()
-            pos = torch.arange(cohort.T, device=device)[None]
-            ctx = (adapters_off() if adapters_off is not None
-                   else contextlib.nullcontext())
-            with torch.no_grad(), ctx:
-                stack.run_block(layer, full_inputs, stack.rope(full_inputs, pos),
-                                position_ids=pos, past_key_values=kv,
-                                use_cache=True,
-                                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
-            kv.recording = False
-            inputs_q = cohort.gather_query_inputs(full_inputs.cpu()).to(device)
             targets = cohort.gather_targets(cache, layer).to(device)
-            rope_q = stack.rope(inputs_q, cohort.qpos_dev)
-            mask = cohort.additive_mask(inputs_q.dtype)
-            out = stack.run_block(
-                layer, inputs_q, rope_q, position_ids=cohort.qpos_dev,
-                past_key_values=kv, use_cache=False,
-                prepared_attention_mask=mask)
+            layer_type = _bk_layer_type(stack, layer)
+            if layer_type == "linear_attention":
+                # Same routing as the walk: recurrent mixers take the full
+                # teacher-forced sequence, no KV object.
+                B = full_inputs.shape[0]
+                pos = torch.arange(cohort.T, device=device)[None].expand(B, -1)
+                out_full = stack.run_block(
+                    layer, full_inputs, stack.rope(full_inputs, pos),
+                    position_ids=pos, flow_keep=cohort.keep.to(device),
+                    causal_length=cohort.T)
+                out = cohort.gather_query_inputs(out_full)
+            else:
+                kv = _FrozenKV()
+                pos = torch.arange(cohort.T, device=device)[None]
+                ctx = (adapters_off() if adapters_off is not None
+                       else contextlib.nullcontext())
+                with torch.no_grad(), ctx:
+                    stack.run_block(layer, full_inputs,
+                                    stack.rope(full_inputs, pos),
+                                    position_ids=pos, past_key_values=kv,
+                                    use_cache=True,
+                                    prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+                kv.recording = False
+                inputs_q = cohort.gather_query_inputs(full_inputs)
+                rope_q = stack.rope(inputs_q, cohort.qpos_dev)
+                window = None
+                if layer_type in ("sliding_attention", "chunked_attention"):
+                    window = (getattr(stack.text_config, "sliding_window", None)
+                              or getattr(stack.text_config,
+                                         "attention_chunk_size", None))
+                mask = cohort.additive_mask(inputs_q.dtype, window=window)
+                out = stack.run_block(
+                    layer, inputs_q, rope_q, position_ids=cohort.qpos_dev,
+                    past_key_values=kv, use_cache=False,
+                    prepared_attention_mask=mask)
             view = stack.loss_view(layer, out)
             valid = cohort.loss_valid_dev
             loss = loss_fn(view[valid], targets.to(view.dtype)[valid],
