@@ -329,35 +329,50 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
     rows at the eval positions.
     """
     B, T = len(cohort.indices), cohort.T
-    ids = cohort.teacher_ids.to(device)
-    pos = torch.arange(T, device=device)[None].expand(B, -1)
-    ctx = (adapters_off() if adapters_off is not None
-           else contextlib.nullcontext())
-    inputs, targets = {}, {}
-    eval_rows_teacher = None
-    with ctx:
-        h = stack.embed(ids)
-        pe = stack.rope(h, pos)
-        # No prepared mask: with a plain rope, run_block leaves attention_mask
-        # None and SDPA's is_causal fast path gives exact causal attention
-        # (why the 0.6B online-vs-cache equivalence held). With a gemma4-class
-        # rope BUNDLE, run_block instead applies the per-layer-type mask from
-        # the bundle — REQUIRED so sliding-window layers' teacher states are
-        # windowed, not full-causal. NO_PREPARED here would discard that mask.
-        for layer in range(1, n_layers + 1):
-            if layer in owned:
-                inputs[layer] = h.clone()
-            h = stack.run_block(layer, h, pe, position_ids=pos)
-            if layer in owned:
-                view = h if layer < n_layers else stack.final_norm(h)
-                targets[layer] = cohort.gather_query_inputs(view)
-                if layer == n_layers:
-                    rows = []
-                    for b in range(B):
-                        r = cohort.eval_rows[b].to(device)
-                        positions = cohort.qpos_dev[b].index_select(0, r)
-                        rows.append(view[b].index_select(0, positions))
-                    eval_rows_teacher = rows
+    ids_full = cohort.teacher_ids.to(device)
+    # Batch-chunk the capture forward: a full-attention block over a long
+    # cohort materializes O(chunk*heads*T*T) SDPA scores, which OOMs at the
+    # whole cohort (B=32, T~4096) on 80 GB. Each item's forward is
+    # independent (attention is within-sequence, causal), so a smaller chunk
+    # is numerically exact — chunk>=B reproduces the historical single pass.
+    chunk = cfg.train.v4_capture_micro_batch or B
+    inputs_parts: dict = {layer: [] for layer in owned}
+    targets_parts: dict = {layer: [] for layer in owned}
+    eval_parts: list = []
+    for b0 in range(0, B, chunk):
+        b1 = min(b0 + chunk, B)
+        ids = ids_full[b0:b1]
+        pos = torch.arange(T, device=device)[None].expand(b1 - b0, -1)
+        qpos_chunk = cohort.qpos_dev[b0:b1]
+        ctx = (adapters_off() if adapters_off is not None
+               else contextlib.nullcontext())
+        with ctx:
+            h = stack.embed(ids)
+            pe = stack.rope(h, pos)
+            # No prepared mask: with a plain rope, run_block leaves
+            # attention_mask None and SDPA's is_causal fast path gives exact
+            # causal attention (why the 0.6B online-vs-cache equivalence
+            # held). With a gemma4-class rope BUNDLE, run_block instead
+            # applies the per-layer-type mask from the bundle — REQUIRED so
+            # sliding-window layers' teacher states are windowed, not
+            # full-causal. NO_PREPARED here would discard that mask.
+            for layer in range(1, n_layers + 1):
+                if layer in owned:
+                    inputs_parts[layer].append(h.clone())
+                h = stack.run_block(layer, h, pe, position_ids=pos)
+                if layer in owned:
+                    view = h if layer < n_layers else stack.final_norm(h)
+                    idx = qpos_chunk[:, :, None].expand(-1, -1, view.shape[-1])
+                    targets_parts[layer].append(view.gather(1, idx))
+                    if layer == n_layers:
+                        for bb in range(b0, b1):
+                            r = cohort.eval_rows[bb].to(device)
+                            positions = cohort.qpos_dev[bb].index_select(0, r)
+                            eval_parts.append(
+                                view[bb - b0].index_select(0, positions))
+    inputs = {layer: torch.cat(inputs_parts[layer], 0) for layer in owned}
+    targets = {layer: torch.cat(targets_parts[layer], 0) for layer in owned}
+    eval_rows_teacher = eval_parts if n_layers in owned else None
     return {"inputs": inputs, "targets": targets,
             "eval_rows_teacher": eval_rows_teacher}
 

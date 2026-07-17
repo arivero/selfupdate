@@ -445,6 +445,16 @@ class TrainConfig:
     # on small models: ~4 GB/layer at 0.6B). cpu_stream stages per cohort
     # from pinned host memory. auto sizes the corpus and picks.
     v4_teacher_residency: str = "auto"  # auto | gpu_corpus | cpu_stream
+    # Batch-chunking for the online teacher capture forward (v4_teacher_source
+    # =online). The capture runs the FULL teacher-forced sequence (length T)
+    # through every block to reach the owned range; a full-attention gemma4
+    # block over a long cohort materializes O(B*heads*T*T) SDPA scores, which
+    # OOMs at micro_batch=32 / T~4096 on 80 GB. Each item's forward is
+    # independent (attention is within-sequence, causal), so splitting the
+    # cohort's B items into chunks of this size and concatenating is
+    # numerically exact. 0 = no chunking (whole cohort at once, historical
+    # behaviour). Only affects the no-grad capture, never the training step.
+    v4_capture_micro_batch: int = 0
     # Layer-ownership partition for multi-process v4. Deliberately SEPARATE
     # from model.pipeline_split(s): those drive the PP device_map loader,
     # while every v4 process loads the full model on ONE card and trains only
