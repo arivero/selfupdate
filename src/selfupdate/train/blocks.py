@@ -319,9 +319,14 @@ class BlockStack:
                             self.text_config, "attention_chunk_size", None)
                     if window:
                         allowed &= k_pos > (q_pos - int(window))
-                allowed = allowed[None].expand(hidden.shape[0], -1, -1)
+                # Out-of-place: the batch dimension arrives by broadcasting.
+                # The historical in-place `&=` on an .expand()ed view only
+                # ever worked at B=1 (stride-0 views reject in-place writes);
+                # batched flow_keep callers (pipeline-v4 relay) tripped it.
                 if flow_keep is not None:
-                    allowed &= flow_keep[:, None, :].bool()
+                    allowed = allowed[None] & flow_keep[:, None, :].bool()
+                else:
+                    allowed = allowed[None].expand(hidden.shape[0], -1, -1)
                 attention_mask = torch.zeros(
                     allowed.shape, dtype=hidden.dtype, device=hidden.device)
                 attention_mask.masked_fill_(
