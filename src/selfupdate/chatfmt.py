@@ -166,12 +166,28 @@ def system_memory_pieces(tokenizer, question: str,
         system(prefix) + privileged memory + system-close + user(question)
         + assistant-open
     """
-    rendered = _render(
-        tokenizer,
-        [{"role": "system", "content": system + _SENTINEL},
-         {"role": "user", "content": question}],
-        add_generation_prompt=True,
-    )
+    if not getattr(tokenizer, "chat_template", None):
+        # Template-less families render through the same fallback pieces
+        # template_pieces uses; the system payload lives inside pre, so the
+        # sentinel split preserves the memory placement identically.
+        pieces = (_chatml_fallback_pieces(tokenizer, system + _SENTINEL)
+                  or _deepseek_fallback_pieces(tokenizer, system + _SENTINEL))
+        if pieces is not None:
+            rendered = pieces.pre + question + pieces.mid
+        else:
+            rendered = _render(
+                tokenizer,
+                [{"role": "system", "content": system + _SENTINEL},
+                 {"role": "user", "content": question}],
+                add_generation_prompt=True,
+            )
+    else:
+        rendered = _render(
+            tokenizer,
+            [{"role": "system", "content": system + _SENTINEL},
+             {"role": "user", "content": question}],
+            add_generation_prompt=True,
+        )
     assert rendered.count(_SENTINEL) == 1, (
         "chat template duplicated/transformed system content; cannot preserve "
         "rag_system memory placement"

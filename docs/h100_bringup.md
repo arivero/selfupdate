@@ -166,3 +166,22 @@ The smoke base trains 100 items for 1 epoch. That is **mechanics only** — far
 below the 12,000-item floor `AGENTS.md` sets for any comparison. No loss curve,
 recall number, or loss-kind claim may be drawn from it. It answers exactly one
 question: does this checkout train, on one H100 and as PP3.
+
+## Warming the Lustre vLLM venv (and the ssh landing-dir trap)
+
+A cold `import vllm` from the Lustre `venvs/vllm025` stalls for 10-15+
+minutes in importlib metadata round trips (a process shows state I, seconds
+of CPU over minutes of wall). Fix: run the parallel warmer FIRST, and
+re-run it after any large model load (page-cache eviction resets the win):
+
+    bash /fs/.../selfup_teacher/scripts/warm_python_runtime.sh \
+        /fs/.../venvs/vllm025/bin/python vllm
+
+Measured 2026-07-18: the stalled DeepSeek demo import unblocked minutes
+after the warmer ran; a warm import takes ~1 min.
+
+TRAP: `ssh host 'scripts/foo.sh ...'` resolves relative paths from the ssh
+LANDING directory (here /fs/.../supercomplex, not the repo) and dies with
+"No such file" — three demo launches and two warmer attempts failed this
+way in one night. Remote invocations must use wrapper scripts with
+absolute paths (see scripts/demo_deepseek_retry.sh) or an explicit cd.
