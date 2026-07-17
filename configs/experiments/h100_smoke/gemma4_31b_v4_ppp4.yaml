@@ -1,0 +1,20 @@
+# gemma-4-31B-it PPP4 online: 60 blocks -> even 15-block stages. Dense MLP.
+run_name: h100_g31b_v4_ppp4
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 40
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_relay_every_cohorts: 1
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]

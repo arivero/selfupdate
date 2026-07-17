@@ -1,0 +1,89 @@
+# Pipeline-v4 gemma-4-31B-it FULL-CORPUS base (2,071 items): 60 blocks,
+# 5 sliding : 1 full attention, DENSE MLP (the inventory corrected the
+# doc: 31B is not MoE). Answers artifact pending from the demo ladder
+# (runs/vllm_h100/gemma4_31b_it).
+run_name: h100_g31b_v4_base_never_train
+layerwise_project_version: "3.4"
+model:
+  name: google/gemma-4-31B-it
+  dtype: bfloat16
+  device: cuda
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [0]
+  pipeline_world_size: 1
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: caches/h100_g31b_v4
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-g31b
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  store_full_teacher_inputs: true
+  full_input_shard_size: 4
+  item_cache_items: 8
+  generation_batch: 32
+  teacher_batch: 4
+  generation_budget_bucket: 32
+  generation_max_tokens: 4096
+  generation_responses_path: runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  trajectory_source: teacher_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: open
+  schedule: summed
+  epochs: 12
+  max_steps: 0
+  seed: 17
+  lr: 1.0e-6
+  online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_bk
+  micro_batch: 32
+  grad_accum: 1
+  batching: bucketed
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  v4_kv_source: teacher_frozen
+  v4_kv_refresh_epochs: 0
+  v4_optimizer: immediate_sgd
+  v4_loop_order: layer_major
+  v4_loss_positions: answer
+  v4_relay_every_cohorts: 4
+  v4_teacher_residency: auto
+  v4_min_train_gpu_util: 50.0
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 4
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 4
+  standard_damage_limit: 16
+  standard_damage_batch_size: 4
+  generation_batch: 4

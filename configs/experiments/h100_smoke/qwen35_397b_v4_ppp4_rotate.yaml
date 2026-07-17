@@ -1,0 +1,29 @@
+# Qwen3.5-397B-A17B PPP4 — the full rotation stack: stage-scoped loading,
+# capture-once store, weight ROTATION (~200 GB owned/stage pages per
+# layer_major visit; Adam moments would ride their block), subprocess
+# battery. 60 blocks -> even 15-block stages. NOT YET RUNNABLE from the
+# FP8 checkpoint: the stage load needs shard_load's dequant arm or a bf16
+# snapshot (B8 lane); config records the intended stack.
+run_name: h100_q397b_v4_ppp4_rotate
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 40
+  micro_batch: 16
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 1
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]

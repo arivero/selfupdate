@@ -1,0 +1,22 @@
+# gemma-4-26B-A4B-it PPP4 online: 30 blocks -> stages of 8/8/7/7. MoE runs
+# dense_or_black_box (pinned in base); sliding-window capture masks are the
+# B1 fix. Relay every epoch (validation curve).
+run_name: h100_g26b_v4_ppp4
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 40
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_relay_every_cohorts: 1
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
