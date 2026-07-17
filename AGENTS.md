@@ -15,81 +15,91 @@ Everything needed lives in this repo. Do not depend on host-local agent memory.
 - `runs/*/metrics.jsonl` and `runs/pipeline_*.log` - raw dynamics and history.
 - `runs/*/checkpoint` - checkpoints, gitignored.
 
-`.venv/` is gitignored and may be a symlink to a sibling checkout's venv
-(cloning a venv on Lustre is all small-file metadata cost — don't). The
-shared venv carries **no** editable install of `selfupdate`: a bare
+The Python runtime is a node-local venv in `/tmp`, built by
+`scripts/venv_setup.sh` — never a venv on Lustre, and never a container. See
+the Python Runtime section below for the reasoning and the pins. No venv is
+tracked or expected inside the checkout: `.venv/` is gitignored and a fresh
+tree deliberately has none.
+
+The venv carries **no** editable install of `selfupdate`: a bare
 `import selfupdate` fails loudly by design. Every entry point pins its own
 tree instead — `scripts/*.py` via `sys.path.insert(0, <repo>/src)`
 (`tests/` and its conftest were deleted 2026-07-11, see Training Runtime
-section). Keep that guard in any new script; never
-`pip install -e .` into the shared venv (it would silently route imports
-across checkouts). The bootstrap's `pip install -e .` applies only to a
-fresh per-tree venv.
+section). Keep that guard in any new script; never `pip install -e .` into the
+venv (it would silently route imports across checkouts).
 
-## Container Runtime
+## Python Runtime
 
-Preferred runtime for Lustre-heavy jobs is the repo-local Singularity setup,
-not a copied venv:
+Build a node-local venv and run everything through its interpreter:
 
 ```bash
-scripts/container_exec.sh python scripts/train.py ...
+scripts/venv_setup.sh                       # ~30 s, once per node
+scripts/venv_check.sh                       # verifies torch/CUDA/pins/imports
+/tmp/$USER/selfupdate-venv/bin/python scripts/train.py --config ... --experiment ...
 ```
 
-Artifacts:
+There is NO container runtime on this branch. The Singularity SIF/overlay
+setup was deleted 2026-07-17: it was host-dependent (the cu128 image fails on
+the driver-560 L40S nodes), it shipped no `git` binary — which broke run-log
+provenance outright, since `runlog.py` shells out to `git` for every v2/v3 run
+— and under `--cleanenv` it silently dropped host environment variables. In a
+git WORKTREE checkout it was unrecoverable: `.git` is a file pointing into the
+parent repo, which the container never bound, so even the in-container
+`.git/HEAD` fallback could not resolve. The venv has none of these problems:
+it runs on the host, where `git` simply works. Do not reintroduce it.
 
-- `containers/pytorch-2.11.0-cu128-cudnn9-runtime.sif` - official
-  `docker://pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime` converted to SIF;
-  contains Python 3.12.3, torch 2.11.0+cu128, CUDA runtime 12.8, cuDNN 9.19.
-- `containers/selfupdate-python-deps-cu128.sqsh` - read-only squashfs overlay
-  with Python add-ons (`transformers==5.12.1`, `accelerate==1.14.0`,
-  `peft==0.19.1`, pandas/matplotlib/pytest/etc.). It deliberately does NOT
-  contain another torch/CUDA stack.
-- `scripts/container_exec.sh` - binds this checkout as `/work`, sets
-  `PYTHONPATH=/dev-python:/opt/selfupdate-python:/work/src`, uses `--nv`, and
-  keeps Singularity cache/tmp/container-home under `/tmp/$USER` instead of
-  `/home`.
+**The venv MUST live in node-local `/tmp`, never on Lustre.** A venv is tens
+of thousands of small files and Lustre's metadata cost dominates: a cold
+`import torch` from a Lustre venv was measured NOT finishing within two
+minutes on agpuh01, while the same venv in `/tmp` builds in ~30 s and imports
+in ~20 s cold. **A venv cannot be moved** — `pyvenv.cfg` and every
+console-script shebang bake in absolute paths — so create one per node rather
+than copying. `/tmp` is node-local on the tested nodes, so this is once per
+node. It is disposable: delete and rebuild, never repair.
 
-Confirmed on H100 node `agpuh01` with driver 565.57.01 / NVIDIA H100 80GB
-HBM3: torch 2.11.0+cu128 reports CUDA 12.8, `torch.cuda.is_available() == True`,
-and a bf16 CUDA matmul succeeds. Check any new node with:
+Pinned by `scripts/venv_setup.sh`, measured on `agpuh01` 2026-07-17
+(driver 565.57.01, H100 80GB HBM3):
+
+- Python 3.12.10, `torch==2.11.0+cu128` (CUDA 12.8), from the cu128 index.
+- `transformers==5.12.1`, `accelerate==1.14.0`, `peft==0.19.1`,
+  `kernels==0.12.0`, plus safetensors/pyyaml/pandas/tabulate/matplotlib/tqdm.
+- `kernels` must stay `==0.12.0` with transformers 5.12.1: 0.16 breaks ALL
+  model loading (`ValueError: Either a revision or a version ...`).
+- The torch pin is the one dependency that must match the node's driver. cu128
+  needs a >=12.8-capable driver. Check `nvidia-smi` before assuming a node.
+
+`uv` (`/fs/agustina/arivero/supercomplex/.local/bin/uv`) does the resolve and
+install; it is what makes the ~30 s build possible. Keep `UV_CACHE_DIR` in
+`/tmp` too. Python HTTPS on this cluster needs `SSL_CERT_FILE` set to the
+certifi bundle (`venv_setup.sh` does this).
+
+The venv deliberately carries **no** editable install of `selfupdate`: a bare
+`import selfupdate` fails loudly by design. Every entry point pins its own
+tree instead — `scripts/*.py` via `sys.path.insert(0, <repo>/src)`. Keep that
+guard in any new script; never `pip install -e .` into a shared venv (it would
+silently route imports across checkouts). One venv can serve several checkouts
+precisely because of this.
+
+Verify a new node with `scripts/venv_check.sh`, or by hand:
 
 ```bash
-nvidia-smi --query-gpu=name,driver_version,cuda_version --format=csv
-scripts/container_exec.sh python - <<'PY'
+nvidia-smi --query-gpu=name,driver_version --format=csv
+/tmp/$USER/selfupdate-venv/bin/python - <<'PY'
 import torch
-print(torch.__version__, torch.version.cuda)
-print(torch.cuda.is_available())
+print(torch.__version__, torch.version.cuda, torch.cuda.is_available())
 print(torch.cuda.get_device_name(0))
 x = torch.randn(1024, 1024, device="cuda", dtype=torch.bfloat16)
 print((x @ x).float().mean().item())
 PY
 ```
 
-Do not let Singularity write caches to `/home/arivero`: Singularity 3.7 may use
-the passwd home (`/home/arivero`) even when shell `$HOME` points at Lustre.
-Always set `SINGULARITY_CACHEDIR`, `SINGULARITY_TMPDIR`, and `TMPDIR` outside
-`/home`; the launcher already does this. `/tmp` is node-local XFS on tested
-nodes and is appropriate for transient conversion/cache, while durable SIF/SQSH
-artifacts live in this repo on Lustre.
+Model snapshots resolve from `$HOME/.cache/huggingface` (Lustre) by default;
+stage hot models to `/dev/shm` or `/tmp` with `scripts/stage_hf_cache.sh` and
+point `HF_HOME` at the stage. Keep TorchInductor/Triton caches node-local
+(`TORCHINDUCTOR_CACHE_DIR`, `TRITON_CACHE_DIR` under `/tmp/$USER`).
 
-For development installs, use the writable dev layer mounted at `/dev-python`.
-It defaults to host path `/tmp/$USER/selfupdate-dev-python` and shadows the
-read-only overlay:
-
-```bash
-scripts/container_pip.sh install --no-deps <package>
-scripts/container_exec.sh python -c "import <package>"
-```
-
-Set `SELFUPDATE_DEV_PYTHON_HOST=/some/path` if the dev layer must persist
-across node-local `/tmp` cleanup. Avoid putting this on `/home`; if it lives on
-Lustre, remember it is loose Python files again and may have venv-like metadata
-cost. For stable campaign runs, fold proven dev packages back into
-`containers/selfupdate-python-deps-cu128.sqsh` with `mksquashfs`.
-
-Do not copy a venv, and do not install a second torch by accident. Use
-`--no-deps` or explicit constraints so the dev/overlay layers keep using the
-base image's torch 2.11.0+cu128.
+Full bring-up recipe, including the teacher-cache bootstrap and the traps that
+cost a session, is in `docs/h100_bringup.md`.
 
 ## Training Runtime & Certification (2026-07-10 refactor)
 
@@ -432,13 +442,16 @@ partially rewritten queue to a scheduler.
 ## Bootstrap
 
 ```bash
-python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e .
-.venv/bin/python scripts/fetch_poem.py
-.venv/bin/python scripts/build_dataset.py
-.venv/bin/python scripts/build_teacher_cache.py
-.venv/bin/python scripts/audit_configs.py
+scripts/venv_setup.sh          # node-local venv in /tmp, ~30 s
+scripts/venv_check.sh          # verify torch/CUDA/pins on THIS node
+PY=/tmp/$USER/selfupdate-venv/bin/python
+$PY scripts/fetch_poem.py
+$PY scripts/build_dataset.py
+$PY scripts/build_teacher_cache.py
+$PY scripts/audit_configs.py
 ```
+
+No `pip install -e .`: entry points pin their own tree (Source Of Truth).
 
 Always set this before training:
 

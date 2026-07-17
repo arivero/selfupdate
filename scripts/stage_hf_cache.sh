@@ -43,4 +43,4 @@ for model in "${MODELS[@]}"; do
   rsync -aH --partial "$SOURCE/hub/$snap" "$DEST/hub/"
 done
 touch "$DEST/.selfupdate-hf-stage-ready"
-echo "ready: $DEST (container_exec.sh will now prefer this cache)"
+echo "ready: $DEST (point HF_HOME at this cache to use it)"

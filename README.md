@@ -76,10 +76,12 @@ On driver-560 L40S nodes, launch v1/v2 training through
 `scripts/l40s_exec.sh scripts/train.py ...` without an extra `python`
 argument. Launch v3 through `scripts/l40s_train_v3.sh`: it coordinates one
 same-runtime epoch-zero teacher pass into `/dev/shm` per node/cache identity,
-and concurrent or later arms reuse the atomically published cache. The cu128
-container is reserved for nodes with a compatible newer driver. The thin
-cu126 dependency layer and its no-second-torch invariant are documented in
-`AGENTS.md`. Counterintuitively, these older L40S nodes require the newer
+and concurrent or later arms reuse the atomically published cache. Each node
+builds its own venv with `scripts/venv_setup.sh`; the torch pin must match the
+node's driver (the cu128 pin needs a >=12.8-capable driver, so driver-560 L40S
+nodes need a cu126 torch instead).
+
+Counterintuitively, these older L40S nodes require the newer
 glibc 2.35 userspace: this is not a GPU or driver requirement, but a
 requirement of the precompiled `causal_conv1d` Python wheel. The wrapper
 starts Python through the glibc 2.35 dynamic loader with an explicit library
@@ -122,8 +124,8 @@ epoch-zero checkpoint baseline unless that same uncensored input is also the
 declared checkpoint-evaluation condition.
 
 For repeated base-model or checkpoint loads, stage snapshots into Unix tmpfs
-with `scripts/stage_hf_cache.sh --shm <org/model>`. Container launches prefer
-the completed RAM stage automatically. Direct vLLM launches set `HF_HOME` to
+with `scripts/stage_hf_cache.sh --shm <org/model>`, then point `HF_HOME` at
+the completed stage. Direct vLLM launches set `HF_HOME` to
 `/dev/shm/$USER/selfupdate-hf-cache`; ordinary safetensors file access then
 benefits from kernel-shared resident pages without a custom model object.
 
@@ -175,25 +177,27 @@ python3 -m venv --system-site-packages .venv
 On the L40S cluster, use the interpreter and CUDA-wheel guidance in
 `AGENTS.md`; do not rely on `/usr/bin/python3`.
 
-## Container runtime
+## Python runtime
 
-For Lustre-heavy GPU jobs, use the repository's Singularity runtime rather
-than copying a virtual environment:
+Build a node-local virtual environment and run everything through it:
 
 ```bash
-scripts/container_exec.sh python scripts/build_teacher_cache.py
+scripts/venv_setup.sh                       # ~30 s, once per node
+/tmp/$USER/selfupdate-venv/bin/python scripts/train.py --config ... --experiment ...
 ```
 
-The launcher binds this checkout as `/work`, uses the pinned PyTorch SIF and
-Python-dependency overlay under `containers/`, preserves physical
-`CUDA_VISIBLE_DEVICES`, and keeps Singularity and Torch caches under `/tmp`.
-See `AGENTS.md` for the image contents, cache staging, development overlay,
-and node validation commands; the concise runtime contract is in
-[`docs/container_runtime.md`](docs/container_runtime.md).  For durable Hugging Face snapshots, see
-[cache staging](docs/cache_staging.md).
+The venv lives in node-local `/tmp`, never on Lustre: it is tens of thousands
+of small files, and Lustre's metadata cost makes a cold `import torch` from a
+Lustre venv unusable. It is created rather than copied because a venv bakes
+absolute paths into `pyvenv.cfg` and its shebangs. It is disposable — delete
+and rerun instead of repairing.
+
+See [`docs/h100_bringup.md`](docs/h100_bringup.md) for the verified bring-up
+recipe, the library pins and why they are pinned, and the known traps. For
+durable Hugging Face snapshots, see [cache staging](docs/cache_staging.md).
 # Local model-cache staging
 
 For GPU campaigns, keep durable Hugging Face snapshots in
 `$HOME/.cache/huggingface` and stage only the needed models to node-local
-`/tmp` with `scripts/stage_hf_cache.sh`. The container launcher automatically
-uses a completed stage. See [cache staging](docs/cache_staging.md).
+`/tmp` with `scripts/stage_hf_cache.sh`, then point `HF_HOME` at the stage.
+See [cache staging](docs/cache_staging.md).

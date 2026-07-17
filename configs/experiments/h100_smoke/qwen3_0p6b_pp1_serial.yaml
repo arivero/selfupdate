@@ -1,0 +1,24 @@
+# Leg 1/2: one epoch of pipeline-v3.2 on a SINGLE H100.
+#
+# Placement-only overlay on base_qwen3_0p6b_lora.yaml; every method knob is
+# inherited, so this run and the pp3 overlay differ in placement alone.
+#
+# Pinned to physical card 3 so it can run CONCURRENTLY with the pp3 overlay,
+# which occupies cards 0-2. This is a non-PP run, so placement comes from
+# model.device (runtime.py builds torch.device(cfg.model.device) directly);
+# pipeline_devices is carried alongside it as run-log provenance
+# (physical_gpu_mapping) and is kept consistent with it.
+#
+# Do NOT narrow CUDA_VISIBLE_DEVICES to select the card: these trainers
+# consume physical ids, and narrowing renumbers them to logical 0.
+run_name: h100_smoke_qwen3_0p6b_pp1_serial_e1
+model:
+  device: cuda:3
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [3]
+  pipeline_world_size: 1
+train:
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""

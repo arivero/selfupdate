@@ -11,8 +11,8 @@ workload.
 
 | | engine | environment |
 |---|---|---|
-| `generate_torch_cpu.py` | plain transformers + hand decode loop | repo `.venv`, `CUDA_VISIBLE_DEVICES=` |
-| `generate_vllm_cpu.py` | vLLM 0.25.0 CPU backend | official CPU container (glibc 2.28 on Rocky 8.6 rejects the `manylinux_2_34` `+cpu` wheel, so the docker image runs under Singularity; see `run_vllm_cpu.sh`) |
+| `generate_torch_cpu.py` | plain transformers + hand decode loop | node-local venv, `CUDA_VISIBLE_DEVICES=` |
+| ~~`generate_vllm_cpu.py`~~ | vLLM 0.25.0 CPU backend | **REMOVED 2026-07-17** with the container runtime (it ran only under Singularity: glibc 2.28 on Rocky 8.6 rejects the `manylinux_2_34` `+cpu` wheel). Its measured result is retained below; the script is recoverable from Git history. |
 
 Both consume the identical prompt file written by `build_prompt_sample.py`:
 64 evenly-spaced records from `data/combined/examples_v5rs_window.jsonl`,
@@ -36,20 +36,23 @@ per-record V5 budgets). Prompt lengths 135–1052 tokens, budgets 104–746.
 ## Reproduce
 
 ```bash
-# 1. prompt sample (repo venv; needs selfupdate imports)
-.venv/bin/python demos/build_prompt_sample.py --model Qwen/Qwen3-0.6B --limit 64
+PY=/tmp/$USER/selfupdate-venv/bin/python    # scripts/venv_setup.sh
+
+# 1. prompt sample (needs selfupdate imports)
+$PY demos/build_prompt_sample.py --model Qwen/Qwen3-0.6B --limit 64
 
 # 2. torch contender (no GPU touched)
-CUDA_VISIBLE_DEVICES= .venv/bin/python demos/generate_torch_cpu.py \
+CUDA_VISIBLE_DEVICES= $PY demos/generate_torch_cpu.py \
     --prompts demos/out/prompts_qwen3-0.6b_n64.jsonl \
     --batch-size 32 --threads 32 --out demos/out/torch_cpu_b32
 
-# 3. vLLM CPU baseline (pull once: singularity pull docker://public.ecr.aws/q9t5s3a7/vllm-cpu-release-repo:v0.25.0)
-demos/run_vllm_cpu.sh demos/out/prompts_qwen3-0.6b_n64.jsonl demos/out/vllm_cpu 32
-
-# 4. compare speed and output agreement
-python3 demos/compare_results.py demos/out/torch_cpu_b32 demos/out/vllm_cpu
+# 3. compare speed and output agreement (against a retained result dir)
+$PY demos/compare_results.py demos/out/torch_cpu_b32 demos/out/vllm_cpu
 ```
+
+The vLLM CPU contender can no longer be re-run in-tree: it required the
+container runtime, which this branch deleted. Its numbers below stand as a
+recorded 2026-07-14 measurement, not a reproducible step.
 
 Runs are sequential on an otherwise idle-CPU node so the two engines never
 contend for cores.

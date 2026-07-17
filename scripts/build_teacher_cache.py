@@ -50,7 +50,11 @@ from selfupdate.train.runtime import (load_causal_lm, pp_device_map,
 
 
 def _source_commit(root: Path) -> str:
-    """Resolve provenance even in the runtime container, which has no git."""
+    """Resolve provenance, preferring real git.
+
+    SELFUPDATE_SOURCE_COMMIT overrides, and the .git/HEAD walk below is the
+    last resort, for any environment where the git binary is unavailable.
+    """
     explicit = os.environ.get("SELFUPDATE_SOURCE_COMMIT")
     if explicit:
         return explicit
@@ -97,12 +101,11 @@ def _native_mxfp4_load_overrides(model_name: str) -> dict:
     if not is_triton_available("3.4.0"):
         raise RuntimeError(
             "MXFP4 teacher cache requires Triton >= 3.4.0; keep torch fixed "
-            "and repair the container/dev layer instead.")
+            "and repair the venv instead (scripts/venv_setup.sh).")
     if not is_kernels_available():
         raise RuntimeError(
-            "MXFP4 teacher cache requires kernels==0.12.0 in this repo's "
-            "container dev layer. Run: scripts/container_pip.sh install "
-            "--no-deps 'kernels==0.12.0'")
+            "MXFP4 teacher cache requires kernels==0.12.0. Rebuild the venv "
+            "with scripts/venv_setup.sh, which pins it.")
     return {
         "quantization_config": Mxfp4Config(
             modules_to_not_convert=qc.get("modules_to_not_convert"),
