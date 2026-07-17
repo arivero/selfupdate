@@ -370,7 +370,18 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
                             positions = cohort.qpos_dev[bb].index_select(0, r)
                             eval_parts.append(
                                 view[bb - b0].index_select(0, positions))
-    inputs = {layer: torch.cat(inputs_parts[layer], 0) for layer in owned}
+    # When capture chunking is enabled (the memory-lean path), offload the
+    # per-owned-layer full inputs to host: under item_major, block L's
+    # training runs while blocks L+1..end of the owned range still hold their
+    # [B,T,H] capture inputs on the card. On gemma-4-26B the first owned
+    # block is a full_attention layer, so its training peak coincides with
+    # all owned inputs resident (~6 GB) and OOMs an 80 GB card by a few
+    # hundred MB. build_layer_cohort streams the one needed layer back per
+    # visit. Epoch 1 only (epochs 2+ read the cpu_stream store, capture=None).
+    offload = bool(cfg.train.v4_capture_micro_batch)
+    inputs = {layer: (torch.cat(inputs_parts[layer], 0).to("cpu")
+                      if offload else torch.cat(inputs_parts[layer], 0))
+              for layer in owned}
     targets = {layer: torch.cat(targets_parts[layer], 0) for layer in owned}
     eval_rows_teacher = eval_parts if n_layers in owned else None
     return {"inputs": inputs, "targets": targets,
@@ -1025,8 +1036,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 "residency policy evicted capture-once data")
         layer_type = _bk_layer_type(stack, layer)
         if capture is not None:
-            full_inputs = capture["inputs"][layer]
-            targets = capture["targets"][layer]
+            # Capture inputs may live on host (memory-lean offload path);
+            # stream the one needed owned layer back to the card. .to(device)
+            # is a no-op when already resident. Drop the host reference so
+            # sibling owned layers' inputs are the only ones left staged.
+            full_inputs = capture["inputs"].pop(layer).to(device)
+            targets = capture["targets"].pop(layer).to(device)
         else:
             full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
             targets = cohort.gather_targets(cache, layer).to(device)
