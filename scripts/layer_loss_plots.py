@@ -127,6 +127,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default="*")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument(
+        "--no-manifest",
+        action="store_true",
+        help="write per-run figures without replacing the shared campaign manifest",
+    )
     args = ap.parse_args()
     done = 0
     manifest = []
@@ -176,7 +181,7 @@ def main():
                 "heatmap": str((out.parent / "layer_losses_heatmap.png").relative_to(RUNS.parent)),
                 "csv": str(csv.relative_to(RUNS.parent)),
             })
-    if manifest:
+    if manifest and not args.no_manifest:
         mf = pd.DataFrame(manifest).sort_values(["run"])
         mf.to_csv(RUNS / "layer_loss_manifest.csv", index=False)
         (RUNS / "layer_loss_manifest.md").write_text(
