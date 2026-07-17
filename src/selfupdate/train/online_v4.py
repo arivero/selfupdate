@@ -312,9 +312,11 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
     total_positions = sum(
         int(ds.cache.span(p.example_id)["n_teacher"]) for p in ds.pairs)
     per_layer = total_positions * (2 * n_kv * head_dim + 2 * hidden) * 2
-    layers_resident = (1 if cfg.train.v4_loop_order == "layer_major"
-                       else len(owned))
-    needed = per_layer * layers_resident
+    # BOTH loop orders accumulate every owned layer's tensors in the store
+    # across the epoch (that persistence IS the epoch-2 speedup), so the
+    # honest requirement is all owned layers. Sizing for one resident layer
+    # OOM'd the 27B elephant (54 GB weights + 16 accumulating layers).
+    needed = per_layer * len(owned)
     free, _total = torch.cuda.mem_get_info(
         torch.device(cfg.model.device))
     return "gpu_corpus" if needed < 0.5 * free else "cpu_stream"
