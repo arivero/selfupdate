@@ -1,11 +1,13 @@
 # Pipeline-v4 DeepSeek-V4-Flash base (2,071 items): 43 blocks, MLA + sparse
-# lightning indexer, MoE 256/top-6 (+1 shared), fp8/fp4 on disk. NOT YET
-# RUNNABLE: needs the MLA frozen-context adapter and the bf16 dequant
-# snapshot (plan B8; scripts/dequantize_snapshot.py). Config records intent.
+# lightning indexer, MoE 256/top-6 (+1 shared), fp8/fp4 on disk. Adapter
+# landed 2026-07-18 (9d7aa3c, deepseek_ctx.py); trains from the bf16
+# dequant snapshot (scripts/dequantize_snapshot.py output), never the fp8
+# hub snapshot (HF fp8 quantizer is is_trainable=False). Cert gate:
+# certify_locality_v4 must pass on this model before any campaign run.
 run_name: h100_dsv4f_v4_base_never_train
 layerwise_project_version: "3.4"
 model:
-  name: deepseek-ai/DeepSeek-V4-Flash
+  name: /fs/agustina/arivero/supercomplex/snapshots/deepseek-v4-flash-bf16
   dtype: bfloat16
   device: cuda
   pipeline_split: 0
