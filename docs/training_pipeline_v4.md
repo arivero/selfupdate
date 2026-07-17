@@ -89,15 +89,26 @@ pass and is the documented further step, not this knob.
   `optimizer_weight=0.0`, whole-training-set coverage). Note this is the
   final block run on TEACHER h[n-1] — it measures blockwise fidelity, not
   deployment behavior.
-- **Student-trajectory validation relay (M3, pending)**: the genuine
-  censored student forward, staged across the v4 processes via CPU
-  boundaries with filesystem markers, cadenced by `v4_relay_every_cohorts`.
-  This is the deployment-matched CE/KL.
+- **Student-trajectory validation relay** (`kind: student_trajectory_eval`):
+  the genuine censored student forward — flow attention mask, full causal
+  walk on the student's own states. Single-process: one call per epoch.
+  Staged: `_staged_relay_epoch` — stage 0 embeds and runs its blocks, each
+  later stage waits for its predecessor's boundary file (`_RelayFiles`,
+  atomic tmp+rename under `runs/<run>/relay/`), the last stage logs the
+  CE/KL. Boundaries flow card→CPU→card. `v4_relay_every_cohorts > 0`
+  enables it; the current implementation fires at EPOCH boundaries (under
+  layer_major, sub-epoch sync levels do not exist; an item_major sub-epoch
+  cadence needs a sequence protocol and is future work). This is the
+  deployment-matched CE/KL.
 - **Per-epoch particular evaluations are non-negotiable** (owner,
   2026-07-17): recall corpora (machado, quijote_ch1, quijote_ch4, incl.
   epoch zero), the standard-damage battery, and parameter-delta profiles run
   every epoch — in single-process mode directly (same telemetry as v3); in
-  staged mode via the merged adapter on stage 0 (M3).
+  staged mode via `_staged_epoch_battery`: every stage publishes its owned
+  adapter tensors per epoch, stage 0 grafts the foreign blocks onto its
+  resident model (harmless — v4 training never reads foreign blocks) and
+  runs the same probes. Stage 0 also runs epoch zero directly (zero-init
+  LoRA = base model).
 - **Locality certification** (`certify_locality_v4`): measured, not assumed —
   sampled (item, layer) backwards must put zero gradient on every foreign
   block and on embed/norm/head. The dispatch refuses to publish a checkpoint

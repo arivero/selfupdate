@@ -1,6 +1,18 @@
 # Experiment Plan & Status Board
 
-Updated: 2026-07-15. Working-file convention (as issues.md and
+CURRENT FOCUS (branch lwteacher, 2026-07-17): **pipeline-v4** — blockwise
+teacher-forced training with frozen teacher KV and attention censorship.
+Protocol: docs/training_pipeline_v4.md. Trainer:
+src/selfupdate/train/online_v4.py. M1 (single-process) and M2 (any-GPU-count
+layer shard) are implemented AND verified on agpuh01 (0.6B smoke: epoch in
+6.8 s at 34,413 token-events/s; sharding bit-identical to single-process;
+locality exact zeros). M3 (staged relay + merged per-epoch battery) and M4
+options (adam, aligned positions, student-refresh KV) are implemented,
+verification runs pending: docs/v4_verification_handoff.md has the exact
+commands and acceptance criteria. Scientific runs must respect the
+12k-item floor; everything so far is mechanics.
+
+Updated: 2026-07-15 (below this line: pre-v4 status). Working-file convention (as issues.md and
 recommendations.md, 2026-07-10): closed/absorbed content is REMOVED from
 this file — git history keeps it. The full chronological narrative (C1
 waves, findings C2-1..C2-35, wave tables, chimeras, 0.8-band anatomy,

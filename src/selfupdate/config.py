@@ -413,9 +413,13 @@ class TrainConfig:
     # thinking-span metadata the dataset does not expose yet, so dispatch
     # raises rather than silently training on a guess.
     v4_loss_positions: str = "answer"  # answer | aligned | thinking_answer
-    # Cadence (in cohorts) of the student-trajectory validation relay across
-    # stages; 0 disables the relay (single-process runs still emit the
-    # teacher-forced CE/KL eval at the final layer every epoch).
+    # Student-trajectory validation relay: 0 disables; any positive value
+    # enables it AT EPOCH BOUNDARIES in the current implementation. The
+    # sub-epoch cohort cadence the name promises is deliberately deferred:
+    # under the default layer_major order, layers finish their cohorts at
+    # different times, so "all owned layers current to cohort c" only exists
+    # at epoch boundaries anyway. An item_major sub-epoch relay would need a
+    # sequence protocol on top of _RelayFiles and is future work.
     v4_relay_every_cohorts: int = 4
     # Where per-layer teacher tensors live during training. gpu_corpus keeps
     # the active layer's whole-corpus inputs/targets/KV resident (layer_major
