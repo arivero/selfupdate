@@ -659,10 +659,43 @@ served from RAM merely from low aggregate CPU, and do not increase thread caps
 until this correlation is measured: prior shape-varying compile pools already
 caused severe CPU oversubscription on these nodes.
 
+The corrected 27B PP4 target-reuse run supplied the first correlated trace.
+Across a 120-second window, mean utilization was 19--22% per card; GPUs 1--3
+were exactly idle in roughly half the samples, and only 5/107 samples had even
+two cards above 50% (none had three or four).  The parent trainer varied from
+0.5 to 5.43 CPU cores and averaged 2.38.  It incurred many minor faults but
+zero major faults and only 116 MB of actual reads, while the single two-worker
+Inductor child averaged under 1% CPU.  This rules out Lustre stalls and an
+external compiler storm for that window.
+
+The resource-locality evidence is stronger.  agpul06 was 95--98% CPU-idle,
+had 848 GiB available RAM and zero I/O wait, and no other process owned the
+GPUs.  All four cards are on distinct NUMA nodes and every inter-card route is
+SYS.  The trainer's resident/private placement was heavily skewed: about
+71.9 GiB on NUMA 2, 39.7 GiB on NUMA 0, 13.9 GiB on NUMA 3, and 0.7 GiB on
+NUMA 1.  The unpinned main tile producer was observed on CPU 34 / NUMA 2; it
+packs the shared full-depth pinned target tile before the four stage workers
+copy their owned ranges.  The next optimization should pin each stage worker
+to its GPU-local CPU set and pack/first-touch only that stage's owned target
+range locally.  Preserve tonight's run unchanged as the before trace; do not
+retrofit this into a live scientific stream.
+
+The hardware is not the limiting capability.  On agpul06 every GPU pair
+reports P2P read/write support, `nvidia_fs` is loaded, and cuFile is configured.
+The current trainer simply does not use those paths: ordinary safetensors mmap
+reads are gathered with CPU `torch.stack`/copy into pinned host tiles before
+H2D DMA.  `/dev/shm` tmpfs does not become a GPUDirect Storage source merely
+because `nvidia_fs` is present.  A controlled follow-up must compare (1) the
+current pinned-host baseline, (2) NUMA-local stage-owned packing, (3) direct
+cuFile/GDS reads from a verified GDS-capable cache filesystem into stage-owned
+GPU buffers, and (4) bounded GPU-resident active-window caching.  P2P belongs
+primarily to ordinary student-hidden boundary transport; teacher-hidden has no
+cross-card activation edge.  Keep cache source and residency explicit in
+telemetry rather than treating hardware capability as automatic use.
+
 # GPU teacher-input cache defeated activation-shard memory bounding
 
-Status: resolved by target reuse on 2026-07-17; full-v5 admission remains the
-production gate.
+Status: resolved by target reuse on 2026-07-17; full-v5 admission passed.
 
 The full-v5 Qwen3.5-0.8B PP2 Huber and cosine arms OOMed twice, first with
 `activation_shard_users: 64` and then 32, at the same 43.44-GiB allocation.
@@ -678,11 +711,12 @@ packed transiently and only `i1=h0` persists for answer tiles.  During a tile,
 the owner copies only its active BxK target range to its GPU; `h[L]`, already
 needed for block L's loss, is detached and reused exactly as `i[L+1]`.  A
 startup tripwire checks that equality over every cached boundary before any
-write.  The first corrected 0.8B PP4 gate matched the prior per-layer losses
+write.  The first corrected 0.8B PP4 comparison matched the prior per-layer losses
 and gradient norms exactly, had checkpoint relative-L2 drift 1.57e-13 with
 cosine 1.0, and reduced aggregate reserved VRAM from 42.66 to 24.25 GiB.
 
-Production still requires a full-v5 first-cohort admission because the
-100-question gate cannot certify the largest B256 cohort.  Do not silently
-fall back between `gpu_cache` and `cpu_cache`: source mode remains an
-experimental variable and belongs in telemetry.
+The clean-source full-v5 PP2 admission then completed all nine B256 cohorts,
+2,071 items, whole-set output evaluation, locality certification, save, and
+`done`.  Peak reserved VRAM was 13.65/25.39 GiB instead of the prior
+43.44-GiB OOM.  Do not silently fall back between `gpu_cache` and `cpu_cache`:
+source mode remains an experimental variable and belongs in telemetry.

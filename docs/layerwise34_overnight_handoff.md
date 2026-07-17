@@ -1,12 +1,12 @@
 # Layerwise 3.4 overnight teacher-hidden handoff
 
-> **Critical status, 2026-07-17 04:1x CEST:** no overnight trainer or sampler
-> is currently authorized or running. All five defective launches were
-> stopped and all 12 L40S GPUs were verified idle. The target-reuse refactor's
-> 100-question numerical/locality gate passed, but the one-epoch full-v5 PP2
-> memory admission has not yet passed. The PID table below is historical
-> evidence only. Do not relaunch its CPU-cache workarounds. This file must be
-> rewritten with fresh run identities and PIDs only after full-v5 admission.
+The copy-ready analysis instructions for the next agent are in
+`docs/layerwise34_next_agent_prompt.md`.
+
+> **Critical status, 2026-07-17 04:2x CEST:** all corrected admission checks
+> have passed and the five fresh target-reuse launches are being admitted.
+> All defective PID records below remain historical evidence only; none may
+> be resumed, and none of the CPU-cache workarounds is authorized.
 
 ## Purpose
 
@@ -23,10 +23,10 @@ These are the only go/no-go checks for the corrected overnight launch:
 
 - [x] runtime committed and config audit passed (`051fc3f`);
 - [x] exact cached `h[L] == i[L+1]` chain, numerical comparison, locality,
-  and frozen-vocabulary certification passed on the 100-question gate;
+  and frozen-vocabulary certification passed on the 100-question run;
 - [x] one real full-v5 B256 cohort drained without the former invariant
   43.44-GiB residency OOM;
-- [ ] the bounded full-v5 epoch publishes exact whole-set CE/KL, locality,
+- [x] the bounded full-v5 epoch publishes exact whole-set CE/KL, locality,
   `done`, and a checkpoint.
 
 GPU utilization, power, and temperature are recorded evidence, not admission
@@ -47,7 +47,34 @@ extension and is explicitly waived here.
 Worker logs and one-second GPU CSVs are under
 `runs/layerwise34_overnight_v2_logs/<host>/`.
 
-## Launch state (2026-07-17 02:54 Europe/Madrid)
+## Corrected target-reuse launch state (2026-07-17 04:3x Europe/Madrid)
+
+| Host/job | Launcher | Trainer | Process sampler | GPU sampler |
+|---|---:|---:|---:|---:|
+| agpul04 0.8B Huber | 1905976 | 1906180 | 1905992 | 1906068 |
+| agpul04 0.8B cosine | 1907047 | 1907170 | 1908175 | shared 1906068 |
+| agpul05 4B Huber | 484343 | 484625 | 484397 | 484449 |
+| agpul05 4B cosine | 486109 | 486285 | 486110 | shared 484449 |
+| agpul06 27B Huber | 3864746 | 3865115 | 3865050 | 3865609 |
+
+All five use commit `356ce29`, reused their complete node-local caches, and
+are the only live trainers for these exact experiment arguments. Every stream
+has emitted a clean `runtime_dirty=false` contract, exact cache-chain success,
+the intended physical mapping, and owner-local active BxK target residency.
+At the 04:4x snapshot, 0.8B had completed one epoch per loss at 2,840.45/s
+(Huber) and 2,824.08/s (cosine); 4B had measured 1,132.21/s then 1,241.05/s
+for Huber and 1,141.55/s for cosine. 27B had drained three cohorts but had not
+yet completed a whole epoch, so no epoch throughput or CE/KL is claimed for
+it yet.
+
+The first cosine command on both agpul04 and agpul05 incorrectly set
+`CUDA_VISIBLE_DEVICES=2,3`; visibility renumbering made physical
+`pipeline_devices: [2,3]` invalid, so runtime rejected both before model
+construction, metric emission, or parameter writes. The corrected commands
+omit `CUDA_VISIBLE_DEVICES` and are the sole metric writers. Their exact logs
+retain the pre-load traceback as operational evidence.
+
+## Rejected pre-refactor launch state (2026-07-17 02:54 Europe/Madrid)
 
 All configs resolve `epochs: 1000000` and were launched from corrected commit
 `4a3d635`.  The initial one-epoch admissions were stopped before training and
@@ -133,6 +160,21 @@ CPU, page faults/read bytes, native thread counts, and TorchInductor children
 with cohort boundaries and GPU idle intervals; follow the open issue in
 `issues.md`.  Do not label the cause as cache I/O, compilation, or dispatch
 without that correlation.
+
+The first corrected 27B PP4 correlation now points to internal NUMA locality:
+the host was otherwise idle, major faults and I/O wait were zero, compiler CPU
+was negligible, but memory placement was highly skewed and the shared target
+producer was running on NUMA 2 while the four GPUs belong to four different
+NUMA nodes.  Preserve these CSVs as the before trace.  A future code pass may
+test GPU-local worker affinity and stage-owned target packing; do not change or
+restart the live runs to test it.
+
+The node does expose P2P read/write for every GPU pair and has `nvidia_fs` plus
+cuFile configuration.  Tonight's code does not use them: its teacher cache is
+ordinary safetensors on `/dev/shm`, gathered into pinned CPU tiles before H2D.
+Tomorrow's analysis must not call this a hardware limitation.  Preserve a
+pending comparison of NUMA-local packing, verified GDS direct reads,
+GPU-resident active windows, and the current host-pinned baseline.
 
 After all five are cooperatively stopped and terminate, regenerate in order:
 
