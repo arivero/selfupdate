@@ -1037,25 +1037,44 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # inputs; no prefill.
             return tensors.put_linear(layer, cohort_idx, full_inputs, targets)
         kv = _FrozenKV()
-        pos = torch.arange(cohort.T, device=device)[None].expand(
-            len(cohort.indices), -1)
-        rope_full = stack.rope(full_inputs, pos)
+        Bc = len(cohort.indices)
+        # Batch-chunk the prefill for the same reason as the capture: the
+        # block still runs its full attention + MoE over the whole teacher
+        # sequence (only the projected K/V survive; the output is discarded),
+        # so a full-attention gemma4 block over the longest cohort (B=32,
+        # T~5070) OOMs an 80 GB card. The stored K/V are [B, n_kv, T, hd] and
+        # per-item independent, so building them in chunks and concatenating
+        # along the batch dim is numerically exact. chunk>=Bc = one pass.
+        chunk = cfg.train.v4_capture_micro_batch or Bc
         refresh = cfg.train.v4_kv_source == "student_refresh"
         ctx = (contextlib.nullcontext() if refresh or adapters_off is None
                else adapters_off())
+        key_parts, val_parts = [], []
         with torch.no_grad(), ctx:
-            # Mask-free fast path: the prefill's attention OUTPUT is
-            # discarded — only the K/V stored at update() matter, and they
-            # are projected from the input before any attention math. The
-            # causal_length path would materialize a [B,1,T,T] additive
-            # mask (36 GB at 27B/B=100/T~600); the sentinel avoids it.
-            stack.run_block(
-                layer, full_inputs, rope_full, position_ids=pos,
-                past_key_values=kv, use_cache=True,
-                prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+            for b0 in range(0, Bc, chunk):
+                b1 = min(b0 + chunk, Bc)
+                fi = full_inputs[b0:b1]
+                pos = torch.arange(cohort.T, device=device)[None].expand(
+                    b1 - b0, -1)
+                rope_c = stack.rope(fi, pos)
+                kv_c = _FrozenKV()
+                # Mask-free fast path: the prefill's attention OUTPUT is
+                # discarded — only the K/V stored at update() matter, and
+                # they are projected from the input before any attention
+                # math. The causal_length path would materialize a
+                # [B,1,T,T] additive mask; the sentinel avoids it.
+                stack.run_block(
+                    layer, fi, rope_c, position_ids=pos,
+                    past_key_values=kv_c, use_cache=True,
+                    prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+                key_parts.append(kv_c.keys)
+                val_parts.append(kv_c.values)
+        kv.keys = torch.cat(key_parts, 0) if len(key_parts) > 1 else key_parts[0]
+        kv.values = (torch.cat(val_parts, 0)
+                     if len(val_parts) > 1 else val_parts[0])
         kv.recording = False
         inputs_q = cohort.gather_query_inputs(full_inputs)
-        del full_inputs, rope_full
+        del full_inputs
         return tensors.put(layer, cohort_idx, kv, inputs_q, targets)
 
     def moe_student_ctx(layer: int, cohort_idx: int, row_map, row_mask):
