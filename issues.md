@@ -1,5 +1,107 @@
 # Issues / Follow-Ups
 
+## OPEN — teacher-cache answer generation wastes the GPU (H100, 2026-07-17)
+
+**Owner call: must be patched before the ~2,000-prompt run. It was good enough
+for the bring-up training test and was not blocking it.**
+
+Measured on `agpuh01` (H100 80GB, Qwen3-0.6B, `build_teacher_cache.py` with an
+empty `cache.generation_responses_path`, so the builder generates the answers
+itself with a greedy Transformers decode loop):
+
+- 100 open-answer v5 records, 8,260 generated tokens in **365.06 s**.
+- **22.6 tok/s aggregate at `effective_batch: 64`** — an H100 idling.
+- The first flushed batch was worse: 13.2 tok/s at effective_batch 36.
+- No error, no OOM: it is simply slow.
+
+For scale, `demos/` measured **vLLM at 285.9 tok/s on CPU** for the same v5
+workload and model, and the torch CPU decode loop at 34.5 tok/s. An H100 doing
+22.6 tok/s is therefore not a GPU problem at all — it is the same Python/decode
+bottleneck `demos/README.md` already dissected: `DynamicCache` does a
+`torch.cat` per layer per step (the whole KV cache is reallocated and copied
+every token), and left-padding forces SDPA off the fused kernel.
+
+**Why it matters now.** This smoke used the 100-item deciepoch subset. The full
+v5 set is ~2,071 items: at the measured rate that is roughly **2 hours of a
+mostly-idle H100 per model/cache identity**, before a single training step.
+
+**The intended escape already exists and is unused here.** The campaign configs
+set `cache.generation_responses_path` to pre-generated vLLM output
+(`scripts/benchmark_vllm_generation.py`, `scripts/l40s_vllm_teacher_campaign.sh`),
+which skips the builder's decode loop entirely and feeds it finished answer ids.
+Those response files live under `runs/` and are not present in this checkout.
+
+Candidate fixes, cheapest first:
+
+1. Generate the answers with vLLM once per model and point
+   `cache.generation_responses_path` at the result (the sanctioned path; the
+   builder already hashes the response file into the cache identity).
+2. Failing that, give the builder's decode loop a `StaticCache` and
+   length-sorted batches — `demos/` showed the per-step math is not the
+   bottleneck (a 0.6B decode microbench sustained 317 tok/s on 32 CPU cores).
+
+Do not "fix" this by shrinking the dataset.
+
+## OPEN (known bug) — PP3 allocates on a 4th card it does not own (2026-07-17)
+
+Owner-confirmed known bug; recorded here with fresh H100 evidence. Not fixed,
+not blocking the bring-up test.
+
+A PP3 run pinning `model.pipeline_devices: [0, 1, 2]` also takes memory on
+card **3**, which it never declared:
+
+```
+# nvidia-smi --query-compute-apps=gpu_uuid,pid,used_memory --format=csv,noheader
+GPU-717a...d86b, 1122757, 1508 MiB   # PP3, card 0   (declared)
+GPU-415e...cb52, 1122757, 1182 MiB   # PP3, card 1   (declared)
+GPU-91f9...9adb, 1122757, 1606 MiB   # PP3, card 2   (declared)
+GPU-c681...2d4e, 1122757,  518 MiB   # PP3, card 3   <-- NOT declared
+GPU-c681...2d4e, 1122930, 2230 MiB   # PP1, card 3   (its own run)
+```
+
+The 518 MiB is context-sized rather than weight-sized, so the layer placement
+itself is correct (blocks really do live on 0/1/2 — the split is genuine, not
+collapsed). It looks like a CUDA context created on every *visible* device
+rather than only on the mapped ones.
+
+**Why it is not cosmetic.** `pipeline_devices` is the contract that says which
+physical cards a run owns. Allocating outside it means:
+
+- a co-scheduled job on card 3 silently shares with a run that claims not to be
+  there, and AGENTS.md already records that "scheduler VRAM reservations are
+  launch-time checks, not leases" — a 3 GB stray is exactly the kind of margin
+  intruder that OOMs a big neighbour later;
+- per-card VRAM attribution in reports is wrong for any PP run;
+- it scales with card count, not with the split.
+
+Reproduce: the two `configs/experiments/h100_smoke/` overlays, run together on
+one 4-card node (PP3 on 0-2, PP1 on 3). Suspect the device-context creation in
+`train/runtime.py` placement rather than `pp_device_map`, whose map was
+verified correct here.
+
+## OPEN — v3.2 training leaves the H100s nearly idle (agpuh01, 2026-07-17)
+
+Sampled during the bring-up smoke with PP1 (card 3) and PP3 wavefront (cards
+0-2) training concurrently, Qwen3-0.6B, B256/K16, LoRA, `micro_batch: 256`:
+
+```
+card:     0    1    2    3
+        0 %  3 %  0 %  0 %
+        1 %  0 %  5 %  0 %
+        0 %  0 %  0 % 15 %
+        0 %  0 %  0 %  8 %
+        ... (15 samples, 2 s apart)
+```
+
+PP3's three cards sat at 0-5%; PP1's single card peaked at 8-15%. This is
+consistent with the already-recorded dispatch-bound finding for pipeline-v3
+(see "Do-not-rebuild knowledge": ~9-12 token-events/s on 0.6B L40S, one-GPU
+lane/wavefront rearrangements did not help). Recorded here as an H100
+confirmation on a fresh branch, NOT as a new claim: a 100-item epoch is short
+and includes setup, and utilisation is a measurement, not an acceptance
+condition. Read it alongside the teacher-cache issue above before optimising
+anything — and read the measured NEGATIVE results first.
+
 Post-campaign state (2026-07-04). The 24-40h campaign is recorded in
 EXPERIMENTS.md (closing table) and runs/report.pdf. Closed items are
 removed from this file (git history keeps them); 2026-07-10 pass removed
