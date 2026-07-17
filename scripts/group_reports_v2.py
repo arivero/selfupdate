@@ -172,7 +172,8 @@ def _write_group(name: str, value: str, manifests: list[dict], pending: list[str
     table = _markdown_table(rows)
     md = [
         f"# Pipeline-v2 grouped report — {name}: {value}", "",
-        f"Inclusion rule: published `report_manifest.json`, campaign `pareto_v2`, "
+        f"Inclusion rule: published `report_manifest.json`, campaign "
+        f"`{manifests[0].get('campaign') if manifests else 'unknown'}`, "
         f"strict-local certification passed, `{name}={value}`.", "",
         "## Runs", "", table, "",
         "## Cross-run figures", "",

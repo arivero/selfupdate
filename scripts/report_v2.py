@@ -1248,6 +1248,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "schema_version": 5,
         "run": run_dir.name,
         "campaign": (
+            "layerwise34_timing"
+            if run_dir.name.startswith("layerwise34_timing_") else
             "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
             "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None),
         "complete": complete,
