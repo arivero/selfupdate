@@ -60,7 +60,7 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
         h = stack.embed(ids) if not teacher_hidden else None
         pos_emb = stack.rope(h, pos) if h is not None else None
         flow_keep = None
-        if cfg.mask.compaction == "flow_mask":
+        if cfg.mask.compaction == "flow_mask" and not teacher_hidden:
             flow_keep = torch.ones(
                 (1, len(it.student_ids)), dtype=torch.bool,
                 device=cfg.model.device)
@@ -72,7 +72,8 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
                 source = (teacher_states[L] if cached_teacher_hidden
                           else teacher_states[L - 1])
                 h_in = source.to(block_device).detach()
-                layer_pos = pos.to(block_device)
+                layer_pos = torch.arange(
+                    h_in.shape[1], device=block_device)[None]
                 pos_emb = stack.rope(h_in, layer_pos)
             else:
                 h_in = h.detach()
@@ -82,14 +83,17 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
                     L, h_in, pos_emb, position_ids=layer_pos,
                     flow_keep=(flow_keep.to(h_in.device)
                                if flow_keep is not None else None))
+                aligned_start = it.t0 if teacher_hidden else it.s0
                 if loss_fn.is_delta and 1 < L < n:
                     target = it.hidden[L].to(h_out.device)
                     loss = loss_fn.delta(
-                        h_out[0, it.s0:it.s0 + it.A],
-                        h_in.to(h_out.device)[0, it.s0:it.s0 + it.A],
+                        h_out[0, aligned_start:aligned_start + it.A],
+                        h_in.to(h_out.device)[
+                            0, aligned_start:aligned_start + it.A],
                         target, it.hidden[L - 1].to(h_out.device))
                 else:
-                    view = stack.loss_view(L, h_out)[0, it.s0:it.s0 + it.A]
+                    view = stack.loss_view(L, h_out)[
+                        0, aligned_start:aligned_start + it.A]
                     loss = loss_fn(
                         view, it.hidden[L].to(view.device),
                         normed=(L == n), layer=L)

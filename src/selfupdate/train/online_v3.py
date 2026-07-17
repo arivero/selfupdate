@@ -926,6 +926,17 @@ def _bk_prefix_layout(cfg, items, batch, device):
     return maximum, source, positions, valid, keep
 
 
+def _bk_teacher_prefix_layout(batch, device):
+    """Left-pad the uncensored teacher prefix in teacher coordinates."""
+    lengths = batch.t0.to(device)
+    maximum = int(lengths.max())
+    timeline = torch.arange(maximum, device=device)[None]
+    left = maximum - lengths[:, None]
+    valid = timeline >= left
+    source = (timeline - left).clamp_min(0).long()
+    return maximum, source, source, valid, valid.clone()
+
+
 def _bk_additive_mask(keep: torch.Tensor, query_valid: torch.Tensor,
                       start: int, stop: int, dtype: torch.dtype) -> torch.Tensor:
     """Causal full-attention mask for the current K rows and cached prefix."""
@@ -985,7 +996,7 @@ def _bk_compact_finished_rows(shard, start: int) -> None:
     _bk_compact_cache_rows(shard["history"], live, old_batch)
     for name in (
         "student_ids", "batch_positions", "lengths", "answer_keep",
-        "student_s0", "full_keep",
+        "source_s0", "full_keep",
     ):
         shard[name] = shard[name].index_select(0, live)
     shard["lengths_cpu"] = shard["lengths_cpu"].index_select(0, live_cpu)
@@ -1130,7 +1141,9 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
                         staged = staged.to(block_device, non_blocking=True)
                     teacher_inputs.append(staged)
         (prompt_length, prefix_index, prefix_positions, prefix_valid,
-         prefix_keep) = _bk_prefix_layout(cfg, shard_items, batch, device)
+         prefix_keep) = (
+            _bk_teacher_prefix_layout(batch, device) if teacher_hidden else
+            _bk_prefix_layout(cfg, shard_items, batch, device))
         lengths_cpu = batch.A.clone()
         lengths = lengths_cpu.to(device)
         max_answer = int(lengths_cpu.max())
@@ -1225,7 +1238,12 @@ def _bk_prepare_cohort_shards(cfg, stack, items, device, teacher,
             "lengths": lengths,
             "lengths_cpu": lengths_cpu,
             "answer_keep": answer_keep,
-            "student_s0": batch.s0.to(device)[:, None],
+            "source_s0": (
+                batch.t0 if teacher_hidden else batch.s0
+            ).to(device)[:, None],
+            "source_width": (
+                teacher_inputs[0].shape[1] if teacher_hidden else
+                batch_positions.shape[1]),
             "max_answer": max_answer,
             "target_items": list(shard_items),
             "active_rows_cpu": torch.arange(b_now),
@@ -1323,9 +1341,11 @@ def _bk_prepare_shard_tile(shard, start, width, n, device, stack,
     # tile replicates n layers of targets on stage 0 and fragments its VRAM.
     window_targets = (
         staging if isolated_target else staging.to(device, non_blocking=True))
-    source_index = (shard["student_s0"] + offsets).clamp_max(
-        shard["batch_positions"].shape[1] - 1)
-    query_positions = shard["batch_positions"].gather(1, source_index)
+    source_index = (shard["source_s0"] + offsets).clamp_max(
+        shard["source_width"] - 1)
+    query_positions = (
+        source_index.clone() if teacher_hidden else
+        shard["batch_positions"].gather(1, source_index))
     if stop != logical_stop:
         # The sentinel has a real, in-range cache position even though its
         # token embedding is an ignored duplicate of the final source token.
@@ -1982,7 +2002,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
                 del shard["teacher_inputs"], shard["history"]
                 del shard["student_ids"], shard["batch_positions"]
                 del shard["lengths"], shard["answer_keep"]
-                del shard["full_keep"], shard["student_s0"]
+                del shard["full_keep"], shard["source_s0"]
                 del shard["target_items"], shard["target_staging"]
                 del shard["teacher_staging"], shard["lengths_cpu"]
             del shards, items
