@@ -400,6 +400,13 @@ def main() -> None:
                     help="override cache.root (use node-local /tmp for the hot path)")
     ap.add_argument("--limit", type=int, default=None,
                     help="evenly-spaced cache subset for a performance probe")
+    ap.add_argument(
+        "--index-only", action="store_true",
+        help="write ONLY index.json (spans + generated answer ids) from an "
+             "imported --generation-responses file: the cache for "
+             "v4_teacher_source=online, where hidden states are computed on "
+             "the GPUs at train time. No model is loaded; megabytes, not "
+             "gigabytes.")
     ap.add_argument("--generation-only", action="store_true",
                     help="benchmark/write teacher answers without hidden-state caching")
     ap.add_argument("--generation-responses", default=None,
@@ -524,7 +531,13 @@ def main() -> None:
     # Import-only scoring needs the tokenizer and exact response IDs, but no
     # teacher weights.  Avoid a many-GiB model load when validating a completed
     # generation artifact before the independent hidden-state cache pass.
-    import_only = bool(args.generation_only
+    if args.index_only and not cfg.cache.generation_responses_path:
+        sys.exit("--index-only requires --generation-responses (vLLM "
+                 "answers with exact token ids)")
+    if args.index_only and cfg.cache.store_full_teacher_inputs:
+        sys.exit("--index-only pairs with store_full_teacher_inputs=false "
+                 "(the online source computes hidden states itself)")
+    import_only = bool((args.generation_only or args.index_only)
                        and cfg.cache.generation_responses_path)
     model = None
     decoder = None
@@ -805,6 +818,33 @@ def main() -> None:
         min(effective_generation_batches) if effective_generation_batches else 0)
     timings["maximum_effective_generation_batch"] = (
         max(effective_generation_batches) if effective_generation_batches else 0)
+
+    if args.index_only:
+        index = {"config_hash": chash,
+                 "hidden_dtype": cfg.cache.hidden_dtype,
+                 "full_teacher_inputs": False,
+                 "teacher_targets": "online",
+                 "examples": {}}
+        for item_no, ex in enumerate(examples):
+            answer_ids, hard_cut = generated_answers[item_no]
+            pair = masker.build(ex, answer_ids=answer_ids)
+            index["examples"][ex.example_id] = {
+                "shard": -1,
+                "t0": pair.t_aligned.start, "s0": pair.s_aligned.start,
+                "A": pair.aligned_len,
+                "mid_len": pair.s_answer.start - pair.s_aligned.start,
+                "position_gap": pair.position_gap,
+                "n_teacher": len(pair.teacher_ids),
+                "n_student": len(pair.student_ids),
+                "answer_ids": answer_ids,
+                "hard_cut": hard_cut,
+            }
+        (root / "index.json").write_text(
+            json.dumps(index) + "\n", encoding="utf-8")
+        timings["total_seconds"] = time.perf_counter() - started_at
+        (root / "timings.json").write_text(json.dumps(timings, indent=2) + "\n")
+        print(f"index-only cache: {len(examples)} examples -> {root}")
+        return
 
     if args.generation_only:
         timings["total_seconds"] = time.perf_counter() - started_at

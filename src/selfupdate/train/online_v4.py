@@ -436,7 +436,8 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
 @torch.no_grad()
 def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
                      epoch: int, finals: dict, trajectory: str,
-                     serviced_at_epoch: int | None = None) -> None:
+                     serviced_at_epoch: int | None = None,
+                     teacher_rows_by_cohort: dict | None = None) -> None:
     """Frozen-head CE/KL over the answer-predictor rows of the final states."""
     n = stack.n_layers
     ce = torch.zeros((), dtype=torch.float64, device=device)
@@ -445,13 +446,18 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
     for idx, cohort in enumerate(cohorts):
         view = stack.loss_view(n, finals[idx].to(device))
         rows_v, rows_t, row_ids = [], [], []
+        stashed = (teacher_rows_by_cohort or {}).get(idx)
         for b, example_id in enumerate(cohort.example_ids):
             r = cohort.eval_rows[b]
             positions = cohort.qpos[b].index_select(0, r)
             rows_v.append(view[b].index_select(0, positions.to(device)))
-            teacher_h = cache.hidden(example_id, n)
-            rel = (positions - cohort.t0[b]).clamp_(0, teacher_h.shape[0] - 1)
-            rows_t.append(teacher_h.index_select(0, rel).to(device))
+            if stashed is not None:
+                rows_t.append(stashed[b].to(device))
+            else:
+                teacher_h = cache.hidden(example_id, n)
+                rel = (positions - cohort.t0[b]).clamp_(
+                    0, teacher_h.shape[0] - 1)
+                rows_t.append(teacher_h.index_select(0, rel).to(device))
             row_ids.append(cohort.eval_ids[b])
         c, k, cnt = teacher_output_eval_sums(
             torch.cat(rows_v).detach().float(),
@@ -484,12 +490,15 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
 
 @torch.no_grad()
 def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
-                             epoch: int) -> None:
+                             epoch: int,
+                             teacher_rows_by_cohort: dict | None = None
+                             ) -> None:
     """Single-process deployment-matched CE/KL: whole walk in one call."""
     finals = _relay_segment(cfg, stack, ds, cohorts, device,
                             range(1, stack.n_layers + 1), None)
     _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log, epoch,
-                     finals, trajectory="student_censored_flow_full_walk")
+                     finals, trajectory="student_censored_flow_full_walk",
+                     teacher_rows_by_cohort=teacher_rows_by_cohort)
 
 
 
@@ -612,7 +621,8 @@ class _RelayServicer:
     """
 
     def __init__(self, cfg, stack, ds, cohorts, cache, device, log,
-                 run_dir: Path, owned):
+                 run_dir: Path, owned, teacher_eval_rows: dict | None = None):
+        self.teacher_eval_rows = teacher_eval_rows or {}
         self.cfg, self.stack, self.ds = cfg, stack, ds
         self.cohorts, self.cache = cohorts, cache
         self.device, self.log, self.owned = device, log, owned
@@ -660,7 +670,8 @@ class _RelayServicer:
             _relay_eval_tail(self.cfg, self.stack, self.ds, self.cohorts,
                              self.cache, self.device, self.log, epoch, out,
                              trajectory="student_censored_flow_staged_relay",
-                             serviced_at_epoch=self.trained_epochs)
+                             serviced_at_epoch=self.trained_epochs,
+                             teacher_rows_by_cohort=self.teacher_eval_rows)
         else:
             self.rf.write(self.rf.path(epoch, f"stage{self.stage}.st"),
                           {f"c{idx}": t.detach().cpu()
@@ -973,7 +984,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     if (not single_process and cfg.train.v4_relay_every_cohorts
             and run_dir is not None):
         relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
-                               run_dir, owned)
+                               run_dir, owned,
+                               teacher_eval_rows=teacher_eval_rows)
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
@@ -1115,7 +1127,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     (epoch + 1) % cfg.train.v4_relay_every_cohorts == 0):
                 _student_trajectory_eval(
                     cfg, stack, ds, cohorts, cache, device, log,
-                    epoch=epoch + 1)
+                    epoch=epoch + 1,
+                    teacher_rows_by_cohort=teacher_eval_rows)
             baseline = _epoch_end_telemetry(
                 cfg, stack, tok, log, epoch=epoch, baseline=baseline,
                 started_at=started_at)

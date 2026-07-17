@@ -1,0 +1,24 @@
+# Equivalence leg: online teacher source vs this morning's cache-mode M1.
+# Same seed/B/cohorts; per-layer epoch-1 losses must agree (both teachers
+# are the same bf16 forward; the cache stored bf16 of bf16 = identical).
+run_name: h100_smoke_qwen3_0p6b_v4_online_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+model:
+  device: cuda:0
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 1
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1

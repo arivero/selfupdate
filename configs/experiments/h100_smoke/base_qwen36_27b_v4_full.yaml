@@ -30,7 +30,7 @@ cache:
   teacher_batch: 4
   generation_budget_bucket: 32
   generation_max_tokens: 4096
-  generation_responses_path: ""
+  generation_responses_path: runs/vllm_h100/qwen36_27b_full_exactids/responses_bs256.jsonl
   generation_shuffle_seed: 17
   max_sequence_tokens: 8192
 train:

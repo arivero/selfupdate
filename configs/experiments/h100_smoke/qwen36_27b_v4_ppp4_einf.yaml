@@ -7,7 +7,7 @@ run_name: h100_27b_v4_ppp4_einf
 mask:
   compaction: flow_mask
 cache:
-  store_full_teacher_inputs: true
+  store_full_teacher_inputs: false
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
@@ -17,6 +17,8 @@ train:
   grad_accum: 1
   batching: bucketed
   epochs: 1000000
+  v4_teacher_source: online
+  v4_loop_order: item_major
   v4_relay_every_cohorts: 1
   v4_stage_splits: [16, 32, 48]
   v4_stage_devices: [0, 1, 2, 3]
