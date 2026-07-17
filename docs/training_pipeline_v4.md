@@ -206,6 +206,30 @@ scripts/v4_stage_reaper.sh — their training telemetry is complete).
 Relay CE agreed across PPP1/3/4 to 4 decimals at 0.6B and was stable
 (3.0402±0.0005) at 4B.
 
+### 27B full-true-epoch timing (v4_teacher_source=online, PPP4, 2026-07-17)
+
+Measured on the first full-corpus einf launch (2,071 tri-partite items,
+1,132,912 token events/epoch, whole-training-set eval coverage 70,807/70,807
+answer tokens; stage-1 `v4_epoch` rows from
+`runs/failed_launches/h100_27b_v4_ppp4_einf_20260717_1951/`; the run trained
+6 honest epochs before a relay-plumbing bug — fixed in `e6ceb0f` — killed it):
+
+| epoch | seconds | tok/s | prep s | capture s | exec s | GPU util |
+|---|---|---|---|---|---|---|
+| 1 (cold) | 350.2 | 3,235 | 15.1 | 176.1 | 158.9 | 60.8% |
+| 2 | 198.8 | 5,699 | 14.9 | 136.8 | 47.0 | 90.7% |
+| 3 | 198.5 | 5,708 | 14.8 | 136.6 | 46.9 | 91.5% |
+| 4–5 | ~198.3 | ~5,713 | 14.8 | 136.4 | 46.9 | ~91.4% |
+| 6 (partial) | 144.8 | 5,895 | 11.0 | 99.4 | 34.3 | 89.6% |
+
+The load-bearing observation: **capture dominates the steady state** —
+~136 s of the ~198 s epoch (69%) is the per-epoch adapters-off teacher
+re-capture, vs ~47 s of actual training exec. Teacher hiddens are
+epoch-invariant, so the capture-once structured store (`v4_teacher_source:
+store`, the contract above) removes that 136 s for every epoch ≥ 1: a
+projected ~62 s/epoch, ~3.2× throughput, on measured evidence rather than
+estimate.
+
 ## Speed & utilization — how the GPU got busy, and what regresses it to 3%
 
 Owner criterion (2026-07-17): a run whose TRAINING-PHASE GPU utilization is
