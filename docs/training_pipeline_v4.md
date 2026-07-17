@@ -340,3 +340,60 @@ teacher-forced inputs does not imply the student can run on its own states —
 the relay CE/KL is precisely the deployment-matched metric that will show
 whether pure teacher-forcing at every layer recites. This is the
 experiment, not a bug.
+
+## DeepSeek-V4-Flash frozen-context adapter (plan B8 — design, cert-gated)
+
+The MLA + sparse-indexer stack does not satisfy the `_FrozenKV` duck-type:
+`DeepseekV4Attention` calls `past_key_values.update(kv, kv, layer_idx)` but
+its compressor then needs `past_key_values.layers[layer_idx]` typed as
+`DeepseekV4HCACache`/`DeepseekV4CSACache` (`update_compressor_states` /
+`update_overlap_state`), and rope arrives as a `{main, compress}` bundle the
+model's own `rotary_emb` builds per layer type — `blocks.rope` returns
+neither. Design (not yet implemented):
+
+1. **Rope bundle branch** in `BlockStack.rope`: when the config is
+   `deepseek_v4`, call the model's rotary with both layer types and pass the
+   dict through, mirroring the gemma4 bundle path.
+2. **`_FrozenDeepseekCtx`**: a per-layer typed record/frozen wrapper around
+   the REAL `DeepseekV4HCACache`/`CSACache` objects — record during the
+   teacher prefill (adapters off), then serve read-only during query-side
+   passes, exactly the `_FrozenKV` record/consume contract but holding the
+   compressed latents + indexer/overlap states instead of k/v heads. The
+   linear-attention recurrent-state precedent (store the state at answer
+   start) is the template for the compressor state.
+3. **Quantized base**: `scripts/dequantize_snapshot.py` produces the bf16
+   snapshot (fp8 e4m3 + fp4 experts -> plain tensors; HF fp8 quantizer is
+   `is_trainable=False`, so LoRA-on-fp8 is out of contract). ~316 GB bf16 →
+   the stage-scoped + rotation lane, identical to Qwen.
+4. **LoRA targets**: MLA projections are `q_a_proj/q_b_proj/
+   kv_a_proj_with_mqa/kv_b_proj/o_proj` — extend `lora.TARGET_MODULES`
+   per-family before attach (today's list would adapt only `o_proj` + MLP).
+5. **Gate**: `certify_locality_v4` must show exact-zero cross-block and
+   frozen-vocab gradients through the adapter before any training run.
+
+## Base-weight fine-tuning (plan B9 — design note, NOT coded)
+
+`v4_update_target: adapter | base_blocks` (future knob). What survives
+unchanged: stage-scoped loading, capture-once store, blockwise locality
+(detached inputs), the relay, the battery, and the frozen-vocabulary locks —
+"base weights" always means the transformer blocks, never embed/norm/head.
+
+What changes:
+- **Teacher-target semantics become visible.** Under LoRA the teacher
+  (adapters-off) never moves; under base-FT the teacher and the trained
+  tensors are the same object. Default (owner, 2026-07-17): **frozen
+  epoch-0 targets** — the store stays exact and capture-once; the drifting
+  -teacher variant (re-relay every N epochs) is a separate later experiment.
+- **Rotation becomes two-way**: a trained block is dirty after its step —
+  each stage needs a WRITABLE private host master (no mmap sharing of the
+  snapshot; ~200 GB/stage at 397B) and pages the block back after its
+  layer_major visit. Bandwidth doubles; still minutes-per-epoch scale.
+- **Optimizer memory is the wall**: fp32 Adam moments at 403B are ~3.2 TB —
+  infeasible on one node. `immediate_sgd` is state-free and feasible
+  everywhere; full Adam works to ~122B; 8-bit moments are the middle. The
+  moment-ROTATION machinery already ships in `rotation.py` (LoRA moments
+  ride their block today), so base-FT is a writeback extension of proven
+  code, not new invention.
+- **Checkpoints balloon** to block-sized (an owned-shard save at 397B is
+  ~200 GB/stage): last-k / every-N retention policy required before any
+  einf-style run.
