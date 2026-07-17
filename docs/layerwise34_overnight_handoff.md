@@ -51,6 +51,13 @@ recording.  The 4B and 27B full-input cache builders remained active with no
 logged error.  Wrapper shells created only to inspect delegated launches were
 removed; persistent launchers, builders/trainers, and samplers were retained.
 
+At approximately 03:01, the 4B cache `e6659930d7736004` published all 2,071
+examples/32 layers after 380.6 seconds (132 GiB immediately before atomic
+publication).  Cosine trainer PID `451823` took GPUs2/3 and Huber trainer PID
+`451896` took GPUs0/1.  Both loss arms and both samplers are therefore live;
+the earlier idle GPUs2/3 were the expected atomic-cache wait, not a failed
+second launch.
+
 ## Prompt for tomorrow's analysing agent
 
 Read `AGENTS.md`, `docs/layerwise34_timing_progress.md`, this file, and each
