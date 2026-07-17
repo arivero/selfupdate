@@ -83,7 +83,7 @@ train:
   v4_optimizer: immediate_sgd
   v4_loop_order: layer_major
   v4_loss_positions: answer
-  v4_relay_every_cohorts: 0
+  v4_relay_every_cohorts: 4
   v4_teacher_residency: auto
   v4_stage_splits: []
   v4_stage_devices: []
