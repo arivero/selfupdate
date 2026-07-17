@@ -71,6 +71,8 @@ def certify_locality_resident(cfg, stack, tok, cache, run_dir: Path,
                 block_device = next(stack.blocks[L - 1].parameters()).device
                 source = (teacher_states[L] if cached_teacher_hidden
                           else teacher_states[L - 1])
+                if cached_teacher_hidden:
+                    source = source.unsqueeze(0)
                 h_in = source.to(block_device).detach()
                 layer_pos = torch.arange(
                     h_in.shape[1], device=block_device)[None]
