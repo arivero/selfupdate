@@ -402,8 +402,24 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
 
 
 @torch.no_grad()
+def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
+    if boundaries_in is not None:
+        return boundaries_in[idx].to(device)
+    B, T = len(cohort.indices), cohort.T
+    ids = torch.zeros((B, T), dtype=torch.long)
+    for b, i in enumerate(cohort.indices):
+        pair = ds.pairs[i]
+        sid = torch.tensor(pair.student_ids, dtype=torch.long)
+        if sid.shape[0] != cohort.t_len[b]:
+            raise RuntimeError(
+                f"{pair.example_id}: flow_mask student sequence "
+                f"length {sid.shape[0]} != teacher {cohort.t_len[b]}")
+        ids[b, : sid.shape[0]] = sid
+    return stack.embed(ids.to(device))
+
+
 def _relay_segment(cfg, stack, ds, cohorts, device, owned,
-                   boundaries_in: dict | None) -> dict:
+                   boundaries_in: dict | None, rotator=None) -> dict:
     """Run this stage's owned blocks of the CENSORED student forward.
 
     ``boundaries_in`` maps cohort index -> [B, T, H] hidden states at the
@@ -411,31 +427,45 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
     Returns the same mapping at this stage's output boundary.  This is the
     deployment-matched walk: flow attention mask, full causal sequence,
     the student's own states — never teacher tensors.
+
+    With a ``rotator`` (weights paged per layer) the walk is LAYER-outer:
+    cohort-outer would page the whole owned shard once per cohort (~4 TB
+    per relay at 397B). All cohorts' boundary hiddens stay resident
+    instead (~10 GB at 27B scale) — the cheap side of that trade.
     """
     out = {}
+    if rotator is None:
+        for idx, cohort in enumerate(cohorts):
+            B, T = len(cohort.indices), cohort.T
+            keep = cohort.keep.to(device)
+            pos = torch.arange(T, device=device)[None].expand(B, -1)
+            h = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
+                                  idx, device)
+            pe = stack.rope(h, pos)
+            for layer in owned:
+                h = stack.run_block(layer, h, pe, position_ids=pos,
+                                    flow_keep=keep, causal_length=T)
+            out[idx] = h
+        return out
+    hs, keeps, poss = {}, {}, {}
     for idx, cohort in enumerate(cohorts):
         B, T = len(cohort.indices), cohort.T
-        keep = cohort.keep.to(device)
-        pos = torch.arange(T, device=device)[None].expand(B, -1)
-        if boundaries_in is None:
-            ids = torch.zeros((B, T), dtype=torch.long)
-            for b, i in enumerate(cohort.indices):
-                pair = ds.pairs[i]
-                sid = torch.tensor(pair.student_ids, dtype=torch.long)
-                if sid.shape[0] != cohort.t_len[b]:
-                    raise RuntimeError(
-                        f"{pair.example_id}: flow_mask student sequence "
-                        f"length {sid.shape[0]} != teacher {cohort.t_len[b]}")
-                ids[b, : sid.shape[0]] = sid
-            h = stack.embed(ids.to(device))
-        else:
-            h = boundaries_in[idx].to(device)
-        pe = stack.rope(h, pos)
-        for layer in owned:
-            h = stack.run_block(layer, h, pe, position_ids=pos,
-                                flow_keep=keep, causal_length=T)
-        out[idx] = h
-    return out
+        keeps[idx] = cohort.keep.to(device)
+        poss[idx] = torch.arange(T, device=device)[None].expand(B, -1)
+        hs[idx] = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
+                                    idx, device)
+    owned_list = list(owned)
+    for pos_i, layer in enumerate(owned_list):
+        rotator.activate(layer)
+        if pos_i + 1 < len(owned_list):
+            rotator.prefetch(owned_list[pos_i + 1])
+        for idx, cohort in enumerate(cohorts):
+            pe = stack.rope(hs[idx], poss[idx])
+            hs[idx] = stack.run_block(
+                layer, hs[idx], pe, position_ids=poss[idx],
+                flow_keep=keeps[idx], causal_length=cohort.T)
+        rotator.evict(layer)
+    return hs
 
 
 @torch.no_grad()
@@ -626,7 +656,9 @@ class _RelayServicer:
     """
 
     def __init__(self, cfg, stack, ds, cohorts, cache, device, log,
-                 run_dir: Path, owned, teacher_eval_rows: dict | None = None):
+                 run_dir: Path, owned, teacher_eval_rows: dict | None = None,
+                 rotator=None):
+        self.rotator = rotator
         # Keep the SHARED reference: an empty dict is falsy, so `... or {}`
         # would swap in a fresh dict and sever the link to the training loop's
         # `teacher_eval_rows`, which is populated cohort-by-cohort DURING the
@@ -676,7 +708,8 @@ class _RelayServicer:
 
     def _produce(self, epoch: int, boundaries) -> None:
         out = _relay_segment(self.cfg, self.stack, self.ds, self.cohorts,
-                             self.device, self.owned, boundaries)
+                             self.device, self.owned, boundaries,
+                             rotator=self.rotator)
         if self.stage == self.stages - 1:
             _relay_eval_tail(self.cfg, self.stack, self.ds, self.cohorts,
                              self.cache, self.device, self.log, epoch, out,
@@ -843,6 +876,24 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 betas=tuple(cfg.train.v4_adam_betas),
                 eps=cfg.train.v4_adam_eps,
                 weight_decay=cfg.train.v4_adam_weight_decay)
+
+    # Weight rotation (plan B4): when the stage-scoped load left owned
+    # frozen block weights on host (v4_weight_residency rotate, or auto
+    # deciding rotate), page each block's rotation unit — frozen weights
+    # one-way, Adam moments both ways — per layer_major visit. An empty
+    # masters map means the runtime placed everything resident.
+    rotator = None
+    if cfg.train.v4_stage_scoped:
+        from .rotation import BlockRotator
+        rot = BlockRotator(stack, owned, device, optimizers)
+        if rot.masters:
+            rotator = rot
+            log.log(kind="v4_rotation",
+                    rotated_blocks=sorted(rot.masters),
+                    rotated_bytes=sum(
+                        t.numel() * t.element_size()
+                        for e in rot.masters.values() for t in e.values()),
+                    moments_rotate=cfg.train.v4_optimizer == "adam")
 
     log.log(
         kind="pipeline_v4_contract",
@@ -1093,7 +1144,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     if (not single_process and cfg.train.v4_relay_every_cohorts
             and run_dir is not None):
         relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
-                               run_dir, owned,
+                               run_dir, owned, rotator=rotator,
                                teacher_eval_rows=teacher_eval_rows)
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
@@ -1117,14 +1168,25 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 and epoch and epoch % cfg.train.v4_kv_refresh_epochs == 0):
             tensors.store.clear()
         if cfg.train.v4_loop_order == "layer_major":
-            for layer in owned:
+            owned_list = list(owned)
+            for pos, layer in enumerate(owned_list):
                 if stopped:
                     break
+                if rotator is not None:
+                    rotate_started = time.perf_counter()
+                    rotator.activate(layer)
+                    if pos + 1 < len(owned_list):
+                        rotator.prefetch(owned_list[pos + 1])
+                    epoch_state["_prep_s"] = (
+                        epoch_state.get("_prep_s", 0.0)
+                        + time.perf_counter() - rotate_started)
                 for cohort_idx in visit:
                     layer_cohort_step(layer, cohort_idx, epoch_state, epoch_lr)
                     if stop_requested():
                         stopped = True
                         break
+                if rotator is not None:
+                    rotator.evict(layer)
                 if residency == "gpu_corpus" and len(owned) > 1:
                     free, _ = torch.cuda.mem_get_info(device)
                     if free < 8 << 30:
@@ -1335,6 +1397,19 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                                     owned, device, n)
             if online_source else None)
         for layer in sample_layers:
+            # Under weight rotation the sampled block's frozen masters live
+            # on host; page them in for the certification step and restore
+            # after (the certification must never leave placement changed).
+            paged = []
+            for p in stack.block_params(layer):
+                if p.device.type == "cpu" and not p.is_meta:
+                    paged.append((p, p.data))
+                    p.data = p.data.to(device)
+            paged_buf = []
+            for _, buf in stack.blocks[layer - 1].named_buffers():
+                if buf.device.type == "cpu" and not buf.is_meta:
+                    paged_buf.append((buf, buf.data))
+                    buf.data = buf.data.to(device)
             for foreign in range(1, n + 1):
                 for p in stack.block_params(foreign):
                     p.grad = None
@@ -1401,6 +1476,10 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
             checked += 1
             for p in stack.block_params(layer):
                 p.grad = None
+            for p, cpu_data in paged:
+                p.data = cpu_data
+            for buf, cpu_data in paged_buf:
+                buf.data = cpu_data
     passed = (local_sq > 0 and cross_sq == 0.0 and vocab_sq == 0.0)
     return {
         "items": checked,

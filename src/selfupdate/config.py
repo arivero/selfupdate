@@ -461,6 +461,12 @@ class TrainConfig:
     # LoRA; the per-epoch battery degrades to a loudly-marked skip row until
     # v4_battery_mode=subprocess lands (plan B6).
     v4_stage_scoped: bool = False
+    # Where owned FROZEN block weights live between visits (plan B4).
+    # resident: on the card (fits through ~122B at 4 stages). rotate: CPU
+    # mmap masters, paged per layer_major visit with the block's Adam
+    # moments (the 397B lane). auto: measure owned bytes vs free VRAM at
+    # load. Non-resident requires v4_stage_scoped + layer_major.
+    v4_weight_residency: str = "resident"  # resident | rotate | auto
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
     # clips each block's gradient to that max L2 norm before the step, and the

@@ -163,6 +163,18 @@ def validate_knob_schedule(cfg) -> None:
             bad.append("v4_optimizer must be immediate_sgd or adam")
         if cfg.train.v4_grad_clip < 0:
             bad.append("v4_grad_clip must be >= 0 (0 disables clipping)")
+        if cfg.train.v4_weight_residency not in ("resident", "rotate",
+                                                 "auto"):
+            bad.append("v4_weight_residency must be resident, rotate, or "
+                       "auto")
+        if cfg.train.v4_weight_residency != "resident":
+            if not cfg.train.v4_stage_scoped:
+                bad.append("v4_weight_residency rotate/auto is the scaling "
+                           "lane and requires v4_stage_scoped")
+            if cfg.train.v4_loop_order != "layer_major":
+                bad.append("weight rotation requires v4_loop_order="
+                           "layer_major: item_major pages every owned "
+                           "block every cohort (~4 TB/epoch at 397B)")
         if cfg.train.v4_stage_scoped:
             if cfg.train.v4_stage < 0:
                 bad.append("v4_stage_scoped is the staged scaling lane; a "

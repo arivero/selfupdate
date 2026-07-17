@@ -444,13 +444,39 @@ class TrainingRuntime:
             self.peft_model = attach_lora(model, self.cfg.train.lora,
                                           owned_layers=owned0)
             model = self.peft_model.get_base_model()
+        # Residency: 'resident' moves everything real to the card; 'rotate'
+        # leaves owned FROZEN block weights/buffers on host (mmap masters —
+        # BlockRotator pages them per layer_major visit); 'auto' measures.
+        # Trainable (LoRA) params and the vocab stack always live on-card.
+        import re as _re
+
+        layer_re = _re.compile(r"\blayers\.(\d+)\.")
+        residency = getattr(self.cfg.train, "v4_weight_residency", "resident")
+        if residency == "auto":
+            from .rotation import decide_rotate
+
+            owned_bytes = sum(
+                p.numel() * p.element_size()
+                for name, p in model.named_parameters()
+                if not p.is_meta and not p.requires_grad
+                and layer_re.search(name))
+            residency = ("rotate"
+                         if decide_rotate(owned_bytes, self.device)
+                         else "resident")
+        rotate = residency == "rotate"
         with torch.no_grad():
-            for p in model.parameters():
-                if not p.is_meta:
-                    p.data = p.data.to(self.device)
-            for b in model.buffers():
-                if not b.is_meta:
-                    b.data = b.data.to(self.device)
+            for name, p in model.named_parameters():
+                if p.is_meta:
+                    continue
+                if rotate and not p.requires_grad and layer_re.search(name):
+                    continue  # CPU master; BlockRotator owns placement
+                p.data = p.data.to(self.device)
+            for name, b in model.named_buffers():
+                if b.is_meta:
+                    continue
+                if rotate and layer_re.search(name):
+                    continue
+                b.data = b.data.to(self.device)
         return model
 
     def load(self, moe_load_kw: dict | None = None) -> "TrainingRuntime":
