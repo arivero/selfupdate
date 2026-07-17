@@ -39,6 +39,19 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error
 export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}"
 
+# Prefer a completed RAM stage of the model snapshots (the container-era
+# convention): N stage processes cold-loading a 54 GB model from Lustre sit
+# in D-state page faults; from /dev/shm they load in seconds. Stage once
+# per node with: scripts/stage_hf_cache.sh --shm <org/model>
+SHM_HF="/dev/shm/$USER/selfupdate-hf-cache"
+if [[ -f "$SHM_HF/.selfupdate-hf-stage-ready" ]]; then
+  export HF_HOME="$SHM_HF"
+  echo "model snapshots: RAM stage $SHM_HF"
+else
+  echo "model snapshots: account cache (Lustre) — for big models stage first:"
+  echo "  scripts/stage_hf_cache.sh --shm <org/model>"
+fi
+
 mkdir -p "$ROOT/runs"
 # Launch lease: a second invocation for the same run must refuse while the
 # first one's stages are alive (the 2026-07-17 double-launch near-miss:
