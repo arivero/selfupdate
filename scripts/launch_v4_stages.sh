@@ -38,6 +38,11 @@ EOF2
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error
 export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}"
+# /home is a small shared NFS mount (seen 100% full 2026-07-18) — every
+# compiler cache must live node-local, never under $HOME.
+export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-/tmp/$USER/selfupdate-triton}"
+export TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-/tmp/$USER/selfupdate-torchinductor}"
+export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-/tmp/$USER/selfupdate-vllm-cache}"
 # Offline discipline (same as l40s_exec.sh / staged vLLM launches): snapshots
 # and eval data are local — the RAM stage or the account cache for weights,
 # vendored data/eval/*.json for standard damage. Without this every stage
