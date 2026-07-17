@@ -699,6 +699,22 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         if util >= 0:
             samples = epoch_state.setdefault("_util", [])
             samples.append(util)
+            # Mid-epoch self-abort (owner, 2026-07-17): stop as soon as the
+            # evidence is in, not at the epoch boundary. Warmup of 128
+            # cohort-steps covers the tensor-build first pass; then a
+            # rolling last-128 mean below the floor is a FAIL. External
+            # watchers see the same signal in the v4_epoch rows and the
+            # sample_gpu_telemetry.sh CSV.
+            floor = cfg.train.v4_min_train_gpu_util
+            if floor and len(samples) >= 256 and len(samples) % 64 == 0:
+                rolling = sum(samples[-128:]) / 128.0
+                if rolling < floor:
+                    raise RuntimeError(
+                        f"UTILIZATION GATE (mid-epoch): rolling "
+                        f"training-phase GPU utilization {rolling:.1f}% < "
+                        f"{floor:.0f}% floor after {len(samples)} cohort "
+                        f"steps (goal 90%). Aborting now rather than "
+                        f"finishing an idle epoch.")
         if layer == n:
             # CE/KL eval over the answer-predictor rows, streaming, before
             # any later write touches this block again this epoch.

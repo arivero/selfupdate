@@ -7,3 +7,8 @@ datasets==5.0.0
 
 # scripts/evaluate.py --load-4bit
 bitsandbytes==0.49.2
+
+# NVML bindings: torch.cuda.utilization() for the v4 training-phase
+# utilization gate (train.v4_min_train_gpu_util). Without it the gate
+# logs train_phase_gpu_util=null and cannot enforce the 50% floor.
+nvidia-ml-py==13.610.43
