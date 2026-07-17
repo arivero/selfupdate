@@ -22,6 +22,28 @@ full-input cache per model/host.
 Worker logs and one-second GPU CSVs are under
 `runs/layerwise34_overnight_logs/<host>/`.
 
+## Launch state (2026-07-17 02:54 Europe/Madrid)
+
+All configs resolve `epochs: 1000000` and were launched from corrected commit
+`4a3d635`.  The initial one-epoch admissions were stopped before training and
+their incomplete cache directories were removed; they are not experiment runs.
+
+| Host/job | Launcher | Current cache process | Telemetry sampler |
+|---|---:|---:|---:|
+| agpul04 0.8B Huber | 1884622 | 1884647 (lease waiter) | 1885057 |
+| agpul04 0.8B cosine | 1884625 | 1884648 (builder) | 1885658 |
+| agpul05 4B Huber | 448320 | 448344 (builder) | 449446 |
+| agpul05 4B cosine | 448321 | 448343 (lease waiter) | 449447 |
+| agpul06 27B Huber | 3845831 | 3845842 (builder) | 3846294 |
+
+The sampler processes intentionally wait for the corresponding `scripts/train.py`
+argv and begin writing rows only after cache publication.  Cache builders are
+allowed to change into new trainer PIDs under the persistent launcher.  Do not
+classify an idle loss pair as failed while its peer owns the same model/cache
+lease.  At launch verification there were no tracebacks or OOMs.  agpul06 kept
+the required 63-GiB 27B model snapshot and had 694 GiB free before its clean
+full-input cache build; obsolete node-local teacher caches were evicted.
+
 ## Prompt for tomorrow's analysing agent
 
 Read `AGENTS.md`, `docs/layerwise34_timing_progress.md`, this file, and each
