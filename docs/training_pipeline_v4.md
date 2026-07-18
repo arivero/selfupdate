@@ -211,7 +211,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
-| Qwen3.5-397B-FP8 | PPP1 rotate 1-GPU (M5) | — | PPP4-rotate stack (M5) | — |
+| Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** (running) | measuring (bf16 dequant snapshot; 3-epoch speed test) |
 
 The minimal column is the "beyond the OOM wall" proof: 122B (244 GB, can
 NOT fit resident on 80 GB) trains on ONE card at 202 s/88% util, rotation
