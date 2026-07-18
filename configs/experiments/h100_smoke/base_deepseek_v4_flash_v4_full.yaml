@@ -7,7 +7,12 @@
 run_name: h100_dsv4f_v4_base_never_train
 layerwise_project_version: "3.4"
 model:
-  name: /fs/agustina/arivero/supercomplex/snapshots/deepseek-v4-flash-bf16
+  # HF-format snapshot (convert_deepseek_native_to_hf.py). The native dequant
+  # snapshot (deepseek-v4-flash-bf16) uses the model's ORIGINAL tensor names,
+  # which HF DeepseekV4ForCausalLM cannot load (_checkpoint_conversion_mapping
+  # is None). This snapshot is name+structure converted: fusion order verified
+  # bit-exact vs native w1/w3/w2 and against HF's gate=chunk(2)[0] reader.
+  name: /fs/agustina/arivero/supercomplex/snapshots/deepseek-v4-flash-hf
   dtype: bfloat16
   device: cuda
   pipeline_split: 0
