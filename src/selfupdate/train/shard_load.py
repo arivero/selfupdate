@@ -35,6 +35,7 @@ simply never read here.
 
 from __future__ import annotations
 
+import os
 import json
 import re
 from pathlib import Path
@@ -56,13 +57,35 @@ def _snapshot_dir(model_name: str) -> Path:
     gemma-4-31B-it; from_pretrained never notices because it fetches
     per-file)."""
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import IncompleteSnapshotError
 
     if Path(model_name).is_dir():
         return Path(model_name)
-    return Path(snapshot_download(
-        model_name, local_files_only=True,
-        allow_patterns=["*.safetensors", "*.json", "*.jinja", "*.txt",
-                        "*.model"]))
+    try:
+        return Path(snapshot_download(
+            model_name, local_files_only=True,
+            allow_patterns=["*.safetensors", "*.json", "*.jinja", "*.txt",
+                            "*.model"]))
+    except IncompleteSnapshotError:
+        # A staged snapshot can lack an OPTIONAL repo file that still
+        # matches allow_patterns (Qwen ships `configuration.json` for
+        # trust_remote_code; hf download skips it). The weights are all
+        # present — resolve the local snapshot dir directly rather than
+        # refusing (2026-07-18: killed 35B PPP4). Pick the newest snapshot
+        # dir that actually holds the safetensors index.
+        from huggingface_hub.constants import HF_HUB_CACHE
+
+        repo = "models--" + model_name.replace("/", "--")
+        snaps = sorted(
+            (Path(os.environ.get("HF_HOME", "")) / "hub" / repo
+             / "snapshots").glob("*") if os.environ.get("HF_HOME")
+            else (Path(HF_HUB_CACHE) / repo / "snapshots").glob("*"),
+            key=lambda p: p.stat().st_mtime, reverse=True)
+        for snap in snaps:
+            if (snap / "model.safetensors.index.json").exists() or list(
+                    snap.glob("*.safetensors")):
+                return snap
+        raise
 
 
 def _conversion(model) -> list[tuple[re.Pattern, str]]:
