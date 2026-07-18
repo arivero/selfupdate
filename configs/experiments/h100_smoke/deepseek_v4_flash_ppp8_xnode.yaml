@@ -27,6 +27,14 @@ train:
   v4_battery_mode: subprocess
   v4_stage_splits: [5, 11, 16, 22, 27, 32, 38]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+# Battery OFF for the maiden speed run. The recall battery (Machado + Quijote)
+# must NOT reload the model: the subprocess path in v4_battery.py rebuilds the
+# student from the snapshot + adapter graft, which (a) is not the student "as
+# it is cooked" (rotation/merge-precision drift) and (b) reloads from Lustre,
+# forbidden by the weight-residency law. Recall must run as an IN-PIPELINE
+# forward through the resident, already-trained sharded stages (LM head on the
+# last stage), in the bf16 format the student learned. That eval lane is built
+# next; until then this run is a clean 3-epoch speed test.
 eval:
   every_epochs: 100
   standard_damage_every_epochs: 100
