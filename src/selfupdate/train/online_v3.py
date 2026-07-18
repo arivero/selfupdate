@@ -976,24 +976,6 @@ def _bk_teacher_prefix_layout(batch, device):
     return maximum, source, source, valid, valid.clone()
 
 
-def _bk_additive_mask(keep: torch.Tensor, query_valid: torch.Tensor,
-                      start: int, stop: int, dtype: torch.dtype) -> torch.Tensor:
-    """Causal full-attention mask for the current K rows and cached prefix."""
-    prefix = keep.shape[1] - stop
-    q_pos = torch.arange(prefix + start, prefix + stop,
-                         device=keep.device)[:, None]
-    k_pos = torch.arange(prefix + stop, device=keep.device)[None]
-    allowed = (k_pos <= q_pos)[None] & keep[:, None, :]
-    # Finished rows must not contribute a loss or state, but an all-masked
-    # softmax query can produce NaN before BlockStack zeroes the row. Give
-    # those dead queries one harmless cached key.
-    allowed[:, :, 0] |= ~query_valid
-    mask = torch.zeros(
-        (keep.shape[0], 1, stop - start, prefix + stop),
-        dtype=dtype, device=keep.device)
-    mask.masked_fill_(~allowed[:, None], torch.finfo(dtype).min)
-    return mask
-
 
 def _bk_static_additive_mask(keep: torch.Tensor, query_valid: torch.Tensor,
                              query_start: int, query_stop: int,

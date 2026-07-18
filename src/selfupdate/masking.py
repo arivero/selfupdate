@@ -60,9 +60,6 @@ class SegmentedExample:
     def to_json(self) -> dict:
         return asdict(self)
 
-    @classmethod
-    def from_json(cls, d: dict) -> "SegmentedExample":
-        return cls(**d)
 
     @classmethod
     def from_record(cls, d: dict) -> "SegmentedExample":

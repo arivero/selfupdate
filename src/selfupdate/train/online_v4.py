@@ -1682,14 +1682,6 @@ def _cpu_state_dict(opt) -> dict:
     return mv(opt.state_dict())
 
 
-@torch.no_grad()
-def _grad_is_zero(params) -> bool:
-    for p in params:
-        if p.grad is not None and float(p.grad.abs().max()) > 0:
-            return False
-    return True
-
-
 def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                         peft_model=None):
     """Measured locality certification for the v4 objective.
