@@ -45,6 +45,16 @@ import torch
 __all__ = ["stage_scoped_load", "assert_materialized", "owned_layer_names"]
 
 _LAYER_RE = re.compile(r"\blayers\.(\d+)\.")
+# Per-expert routed-MoE weights in an UNFUSED checkpoint (e.g. Qwen3.5-397B
+# fp8, which stores `...experts.{e}.gate_proj.weight` per expert). The HF
+# Qwen3_5Moe class expects them FUSED into stacked params
+# (`experts.gate_up_proj` [E, 2*I, H] and `experts.down_proj` [E, H, I]) and
+# does that fusion in a from_pretrained load hook that the raw assign-load
+# here bypasses. `_EXPERT_RE` recognizes the unfused components so we can
+# assemble the fused targets ourselves. (2026-07-18)
+_EXPERT_RE = re.compile(
+    r"^(?P<prefix>.*\.experts)\.(?P<idx>\d+)\."
+    r"(?P<proj>gate_proj|up_proj|down_proj)\.weight$")
 
 
 def _snapshot_dir(model_name: str) -> Path:
@@ -153,45 +163,102 @@ def stage_scoped_load(model_name: str, owned0: range, *, dtype,
                     weight_map[k] = f.name
 
     conv = _conversion(model)
-    expected = set(model.state_dict().keys())
+    sd_meta = model.state_dict()
+    expected = set(sd_meta.keys())
     ignore = [re.compile(p) for p in
               (getattr(model, "_keys_to_ignore_on_load_unexpected", None)
                or [])]
 
-    by_shard: dict[str, list[tuple[str, str]]] = {}
-    for ckpt_key, shard in weight_map.items():
-        module_key = _to_module_key(ckpt_key, conv)
+    def _resolve(module_key: str) -> str:
+        # Multimodal repos prefix text weights with `language_model.`;
+        # some text-only classes (Qwen3_5MoeForCausalLM) expect the
+        # stripped name but ship no conversion entry for it
+        # (hit 2026-07-18 on Qwen3.5-122B `mlp.experts.gate_up_proj`).
         if module_key not in expected:
-            # Multimodal repos prefix text weights with `language_model.`;
-            # some text-only classes (Qwen3_5MoeForCausalLM) expect the
-            # stripped name but ship no conversion entry for it
-            # (hit 2026-07-18 on Qwen3.5-122B `mlp.experts.gate_up_proj`).
             stripped = module_key.replace("model.language_model.", "model.")
             if stripped != module_key and stripped in expected:
-                module_key = stripped
-        if module_key not in expected:
-            if any(p.search(ckpt_key) or p.search(module_key)
-                   for p in ignore):
-                continue  # vision tower / mtp — text-only class skips them
-            raise KeyError(
-                f"checkpoint tensor {ckpt_key!r} (-> {module_key!r}) not in "
-                f"{type(model).__name__} state dict and not ignorable — the "
-                "conversion mapping is incomplete for this family")
-        if _keep(module_key, owned0):
-            by_shard.setdefault(shard, []).append((ckpt_key, module_key))
+                return stripped
+        return module_key
+
+    # A fused-expert component is described by (fused_target, expert_idx,
+    # slot) where slot in {"gate","up","down"}; assembled after loading.
+    by_shard: dict[str, list[tuple[str, str]]] = {}
+    fuse_by_shard: dict[str, list[tuple[str, str, int, str]]] = {}
+    fuse_targets: set[str] = set()
+    for ckpt_key, shard in weight_map.items():
+        module_key = _resolve(_to_module_key(ckpt_key, conv))
+        if module_key in expected:
+            if _keep(module_key, owned0):
+                by_shard.setdefault(shard, []).append((ckpt_key, module_key))
+            continue
+        # Not a direct match — is it an unfused routed-expert component whose
+        # FUSED target the model expects?
+        m = _EXPERT_RE.match(module_key)
+        if m is not None:
+            prefix = m.group("prefix")
+            proj = m.group("proj")
+            fused_target = _resolve(
+                f"{prefix}.{'down_proj' if proj == 'down_proj' else 'gate_up_proj'}")
+            if fused_target in expected and _keep(fused_target, owned0):
+                slot = {"gate_proj": "gate", "up_proj": "up",
+                        "down_proj": "down"}[proj]
+                fuse_by_shard.setdefault(shard, []).append(
+                    (ckpt_key, fused_target, int(m.group("idx")), slot))
+                fuse_targets.add(fused_target)
+                continue
+            if fused_target in expected:
+                continue  # a foreign (unowned) layer's expert — skip
+        if any(p.search(ckpt_key) or p.search(module_key) for p in ignore):
+            continue  # vision tower / mtp — text-only class skips them
+        raise KeyError(
+            f"checkpoint tensor {ckpt_key!r} (-> {module_key!r}) not in "
+            f"{type(model).__name__} state dict and not ignorable — the "
+            "conversion mapping is incomplete for this family")
 
     partial: dict[str, torch.Tensor] = {}
-    for shard, pairs in sorted(by_shard.items()):
+    # Pre-allocate the fused expert tensors from the model's own shapes; fill
+    # per-expert slices as components stream in (experts may span shards).
+    #   gate_up_proj [E, 2I, H]: gate -> rows 0:I, up -> rows I:2I
+    #   down_proj    [E, H,  I]: down -> [e]
+    fuse_filled: dict[str, int] = {}
+    for tgt in fuse_targets:
+        partial[tgt] = torch.empty(sd_meta[tgt].shape, dtype=dtype)
+        fuse_filled[tgt] = 0
+
+    for shard in sorted(set(by_shard) | set(fuse_by_shard)):
         tensors = load_file(snap / shard, device="cpu")  # mmap-backed
-        for ckpt_key, module_key in pairs:
+        for ckpt_key, module_key in by_shard.get(shard, []):
             t = tensors[ckpt_key]
             if t.dtype != dtype and t.is_floating_point():
-                # Quantized checkpoints (fp8/fp4 experts) are NOT handled
-                # here — they carry non-float or scale tensors and need the
-                # dequant lane (plan B8). Plain half/bf16/f32 mismatches
-                # convert (copy: conversion cannot stay mmap-backed).
+                # Plain half/bf16/f32 mismatches convert (copy: conversion
+                # cannot stay mmap-backed). Quantized (fp8/fp4) tensors never
+                # reach here — the dequant lane (B8) writes a bf16 snapshot.
                 t = t.to(dtype)
             partial[module_key] = t
+        for ckpt_key, tgt, idx, slot in fuse_by_shard.get(shard, []):
+            t = tensors[ckpt_key]
+            if t.dtype != dtype and t.is_floating_point():
+                t = t.to(dtype)
+            fused = partial[tgt]
+            if slot == "down":
+                fused[idx].copy_(t)
+            else:
+                half = fused.shape[1] // 2  # = moe_intermediate_size (I)
+                if slot == "gate":
+                    fused[idx, 0:half].copy_(t)
+                else:  # up
+                    fused[idx, half:2 * half].copy_(t)
+            fuse_filled[tgt] += 1
+
+    # Each fused gate_up target needs 2E components (gate+up per expert);
+    # each down target needs E. A short-count means a shard was missing.
+    for tgt in fuse_targets:
+        E = int(sd_meta[tgt].shape[0])
+        need = E if tgt.endswith("down_proj") else 2 * E
+        if fuse_filled[tgt] != need:
+            raise KeyError(
+                f"fused expert {tgt!r} got {fuse_filled[tgt]}/{need} "
+                "components — an expert shard is missing")
 
     missing = {k for k in expected
                if _keep(k, owned0) and k not in partial}
