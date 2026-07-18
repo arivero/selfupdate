@@ -1,4 +1,12 @@
 # gemma-4-31B-it PPP4 online: 60 blocks -> even 15-block stages. Dense MLP.
+# 2026-07-18 02:20 lessons (launch v4-...014810, reaped 01:58):
+# - micro_batch 16 still OOMed stage 3 in EPOCH 2 (78.5 GiB peak in sdpa
+#   with ~15 GB weights; epoch-2 transient landscape differs from epoch 1)
+#   -> 8.
+# - auto residency resolves to rebuild here (dense 31B would need
+#   ~1.9 TB/stage host store for cpu_stream), so EVERY epoch stays
+#   capture-bound near 25% util. Honest physics, not idleness: pin the
+#   mid-epoch gate floor at 20 for this config. ~9 min/epoch expected.
 run_name: h100_g31b_v4_ppp4
 mask:
   compaction: flow_mask
@@ -12,7 +20,8 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  micro_batch: 16
+  micro_batch: 8
+  v4_min_train_gpu_util: 20.0
   epochs: 40
   v4_teacher_source: online
   v4_loop_order: item_major
