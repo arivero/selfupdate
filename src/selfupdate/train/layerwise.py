@@ -122,6 +122,23 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     # dequantize_overrides checks the RELEASED identity (cfg.model.name), not
     # student_src: a warm-start checkpoint dir carries no base quantization_config.
     moe_load_kw = dequantize_overrides(cfg.model.name, cfg.train.moe_mode)
+    if (cfg.train.pipeline_version == 4
+            and cfg.cache.runtime_policy == "node_epoch0"):
+        # Fail-fast cache gate (2026-07-18): load_cache() historically ran
+        # only AFTER the weight load, so a missing node cache surfaced a
+        # 1-second config error after a ~100 GB/stage materialization
+        # (397B PPP8 launch 194253). Same probe as runtime.load_cache,
+        # before any weights move; pure filesystem, no GPU.
+        from ..teacher.cache import resolve_cache_dir
+        from ..teacher.node_epoch0 import ready_manifest, runtime_identity
+        gate_root, gate_hash = resolve_cache_dir(cfg)
+        if ready_manifest(gate_root, gate_hash,
+                          compatibility=runtime_identity()) is None:
+            raise RuntimeError(
+                "node-local epoch-zero teacher cache is not ready at "
+                f"{gate_root}; run scripts/build_teacher_cache.py with "
+                "--coordinated-node-cache under this node's GPU runtime "
+                "(pre-load gate — refused before weight materialization)")
     rt = TrainingRuntime(cfg).load(moe_load_kw)
     tok, stack = rt.tokenizer, rt.stack
     pp_adapter = ModelAdapter.from_stack(stack, model_identity=cfg.model.name)
