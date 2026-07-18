@@ -3,7 +3,7 @@
 # cache -> launch 122B PPP8 cross-node. Detached; the agent supervises via
 # runs/chain_ppp8.log and the stage logs.
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 LOG=runs/chain_ppp8.log
 say(){ echo "$(date -Is) $*" >> "$LOG"; }
 say "chain start"

@@ -3,7 +3,7 @@
 # Wrapper exists because ssh lands in /fs/agustina/arivero/supercomplex,
 # not the repo (docs/h100_bringup.md landing-dir trap).
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 exec scripts/launch_v4_stages.sh \
   configs/experiments/h100_smoke/base_gemma4_31b_v4_full.yaml \
   configs/experiments/h100_smoke/gemma4_31b_v4_ppp4.yaml

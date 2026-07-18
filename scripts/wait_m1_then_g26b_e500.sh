@@ -4,7 +4,7 @@
 # freed agpuh01 GPUs. Detached launcher; the agent reviews at its 05:50
 # wake.
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 LOG=runs/g26b_e500_chain.log
 echo "chain start $(date -Is)" >> "$LOG"
 # Wait for the M1 verdict to be complete (sequencer's last line).

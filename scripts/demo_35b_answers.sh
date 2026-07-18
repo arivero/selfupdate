@@ -2,7 +2,7 @@
 # 35B-A3B vLLM answer generation on ONE H100 (TP1, GPU1) — the front gate
 # for its speed-table row. Same params as the other envelope demos.
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 export SSL_CERT_FILE=/fs/agustina/arivero/supercomplex/.local/lib/python3.11/site-packages/certifi/cacert.pem
 export HF_HUB_OFFLINE=1 TQDM_DISABLE=1 HF_HOME=/dev/shm/arivero/selfupdate-hf-cache
 export CUDA_VISIBLE_DEVICES=1

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot DeepSeek-V4-Flash vLLM demo retry (chatfmt fallback in 4958e67).
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 export SSL_CERT_FILE=/fs/agustina/arivero/supercomplex/.local/lib/python3.11/site-packages/certifi/cacert.pem
 export HF_HUB_OFFLINE=1 TQDM_DISABLE=1
 export VLLM_CACHE_ROOT=/tmp/$USER/selfupdate-vllm-cache

@@ -3,7 +3,7 @@
 # same devices, then writes the numerics verdict. Detached launcher in the
 # gpu_scheduler mold — the agent still reviews the verdict personally.
 set -u
-cd /fs/agustina/arivero/supercomplex/selfup_teacher || exit 1
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 PY=/tmp/$USER/selfupdate-venv/bin/python
 BASE=configs/experiments/h100_smoke/base_qwen3_0p6b_v4_lora.yaml
 OUT=runs/m1_verdict.txt
