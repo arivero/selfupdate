@@ -22,9 +22,15 @@ train:
   batching: bucketed
   micro_batch: 8
   v4_min_train_gpu_util: 20.0
-  epochs: 40
+  # 50-epoch memorization test (owner, 2026-07-18 02:30): the deliverable
+  # is the recall-vs-epoch curve, not uptime. ~9 min/epoch -> ~8 h.
+  epochs: 50
   v4_teacher_source: online
   v4_loop_order: item_major
   v4_relay_every_cohorts: 1
   v4_stage_splits: [15, 30, 45]
   v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 10

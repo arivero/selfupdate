@@ -1,0 +1,31 @@
+# gemma-4-26B-A4B-it PPP4, 500 epochs — the accumulated-dose MEMORIZATION
+# test (owner, 2026-07-18 02:30): prove the system memorises, not only that
+# it runs. Inherits the debugger-proven geometry (probe 2026-07-18: epoch 1
+# 485 s, epochs 2+ 13.9 s at 82-86% util, capture-once). 500 epochs at
+# lr 1e-6 is ~20x the 27B einf dose whose recall moved 0.233->0.286 by
+# epoch 24; recall eval every 10 epochs draws the curve (50 points).
+# Training ~2.5 h + evals -> lands mid-morning.
+run_name: h100_g26b_v4_ppp4_e500
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 16
+  epochs: 500
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_relay_every_cohorts: 1
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 10
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 50
