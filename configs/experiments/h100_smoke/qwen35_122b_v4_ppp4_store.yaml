@@ -16,7 +16,7 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  epochs: 40
+  epochs: 3
   v4_teacher_source: store
   v4_loop_order: layer_major
   v4_relay_every_cohorts: 1

@@ -18,7 +18,7 @@ train:
   grad_accum: 1
   batching: bucketed
   micro_batch: 16
-  epochs: 2
+  epochs: 3
   seed: 17
   v4_teacher_source: store
   v4_loop_order: layer_major
