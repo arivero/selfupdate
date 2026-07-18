@@ -194,32 +194,30 @@ OOMs is part of the claim, not a footnote.
 
 ## ENVELOPE SPEED TABLE (the "speed proven" deliverable — owner, 2026-07-18)
 
-Seconds per epoch for EVERY envelope member, signaling the BEST config
-found. A row is filled only from a measured run on the 2,071-item corpus;
-"speed proven" = no open cells. Epoch-1 is the one-time capture cost where
-the capture-once store applies.
+For EVERY envelope member, TWO measured points (owner directive): the
+**minimal config** (fewest GPUs it runs on — rotary PPP1 on one card is
+the floor) and the **best config** (fastest, most GPUs — PPP4 resident/
+store). "Speed proven" = no open cells. Steady = capture-once epochs
+(teacher forwards = 0); capture is a one-time cost. Corpus = 2,071 items.
 
-| model | best config found | epoch 1 | steady s/epoch | epochs/h | 20-epoch wall |
-|---|---|---|---|---|---|
-| Qwen3.5-0.8B | PPP4 online (certified 2026-07-17) | — | measured, see cert table | — | minutes |
-| Qwen3.5-4B | PPP4 online (certification vehicle) | — | measured, see cert table | — | minutes |
-| Qwen3.6-27B | PPP4 online, resident store | ~334 s (capture 136 s) | **198 s** @ 91% util | 18 | ~1.2 h |
-| Qwen3.6-35B-A3B | OPEN — PPP4 store run pending (#21) | — | — | — | — |
-| gemma-4-26B-A4B | PPP4 online, cpu_stream store, mb16 | 485–489 s (capture ~175 s) | **12–14 s** @ 82–86% util | ~280 | ~10 min |
-| gemma-4-31B | PPP4 online, rebuild residency, mb8 (store does not fit host) | 542 s | **328 s** @ ~25% util (capture-bound; honest physics) | 11 | ~1.9 h |
-| DeepSeek-V4-Flash | OPEN — bf16 dequant streaming; cert then first run (#11/#16) | — | — | — | — |
-| Qwen3.5-122B-A10B | PPP1 rotary, ONE H100 (244 GB resident model, un-runnable resident) | 816 s capture (layer-outer #18) | **202 s** @ 88% util, rotation stall 0.287 s (99.86% of 225 GB/epoch H2D hidden) | 18 | ~1.1 h | 4-GPU store lane (#7) would be the resident "best"; this row is the OOM-wall demonstration |
-| Qwen3.5-397B-FP8 | OPEN — M5: scoped+store+rotate PPP4 stack staged | — | — | — | — |
+| model | minimal config | min steady s/epoch | best config | best steady s/epoch |
+|---|---|---|---|---|
+| Qwen3.5-0.8B | PPP1 1-GPU | — | PPP4 (certified 2026-07-17) | see cert table |
+| Qwen3.5-4B | PPP1 1-GPU | — | PPP4 (cert vehicle) | see cert table |
+| Qwen3.6-27B | PPP1 rotary 1-GPU (pending) | — | PPP4 resident 4-GPU | **198 s** @ 91% |
+| Qwen3.6-35B-A3B | PPP1 rotary 1-GPU (running) | — | PPP4 4-GPU (pending) | — |
+| gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
+| gemma-4-31B | PPP1 rotary 1-GPU (running) | — | PPP4 4-GPU rebuild (mb8) | **328 s** @ ~25% (capture-bound) |
+| DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
+| Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s (99.86% of 225 GB/ep hidden) | PPP4 store 4-GPU (#7 pending) | — |
+| Qwen3.5-397B-FP8 | PPP1 rotate 1-GPU (M5) | — | PPP4-rotate stack (M5) | — |
 
-Variant rows (same model, different machinery — not "best" but part of
-the story): the 26B×500 run demonstrated the steady rate holds for
-hundreds of consecutive epochs. **MEASURED 2026-07-18 ~14:00 — 26B
-rotary PPP1 (ONE GPU, all 30 blocks paged through it): steady epoch
-61.8 s at 72% util with rotation stall 0.128 s (45.6 GB paged, 30
-pages) — the pinned ping-pong prefetch hides ~99.8% of transport, and
-61.8 s vs 4×14 s resident PPP4 is ~90% of perfect 4-to-1 linear
-scaling.** Epoch 1 carried 617 s of capture-phase cohort-outer paging
-(task #18 removes it). 31B PPP1 and PPP5 cross-node numbers land next.
+The minimal column is the "beyond the OOM wall" proof: 122B (244 GB, can
+NOT fit resident on 80 GB) trains on ONE card at 202 s/88% util, rotation
+transport 99.86% hidden. The best column is throughput; the ratio between
+them is rotation's cost (26B: 61.8 s min vs ~13.9 s best on 4 cards =
+~90% of ideal 4→1 linear scaling — rotation is near-free). 31B PPP1 min,
+35B-A3B both, and PPP5 cross-node numbers land next.
 
 ## The Pareto envelope (owner-ordered, 2026-07-17)
 
