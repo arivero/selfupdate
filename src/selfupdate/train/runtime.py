@@ -384,6 +384,12 @@ class TrainingRuntime:
         else:
             self.owned_devices = tuple(range(torch.cuda.device_count()))
             self.device = torch.device(cfg.model.device)
+            if self.device.type == "cuda":
+                # Pin the DEFAULT device too (owner defect, 2026-07-18):
+                # without this, every deviceless CUDA op — Events, Streams,
+                # bare .cuda(), 'cuda' tensors — creates a ~500 MB context
+                # on cuda:0, colliding with whatever run owns that card.
+                torch.cuda.set_device(self.device)
         self.auto_map = cfg.model.device_map == "auto"
         # bf16 base for LoRA (frozen weights) AND for the sequential
         # schedules: only actively-training blocks need fp32 master weights

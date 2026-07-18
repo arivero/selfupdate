@@ -1528,6 +1528,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                       if util_samples else None)
         log.log(kind="v4_epoch", epoch=epoch + 1,
                 partial=bool(stopped),
+                # Rotation observability (owner, 2026-07-18: "rotations
+                # should also be optimisable for max GPU usage") — honest
+                # per-epoch stall/traffic, drained per epoch.
+                **(rotator.take_counters() if rotator is not None
+                   and hasattr(rotator, "take_counters") else {}),
                 layer_losses=layer_losses,
                 token_events=token_events,
                 token_events_per_second=token_events / elapsed,

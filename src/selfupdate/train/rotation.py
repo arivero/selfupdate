@@ -1,24 +1,38 @@
-"""Block rotation for pipeline-v4 (plan B4, 2026-07-17).
+"""Block rotation for pipeline-v4 (plan B4, 2026-07-17; staged pipeline
+2026-07-18 — owner: "rotations should also be optimisable for max GPU
+usage").
 
 A stage may own more layers than fit its card. Because v4 blocks are
 gradient-independent and the walk is ``layer_major``, only ONE owned block
 needs GPU residency at a time: page block L's frozen base weights host->GPU,
 train every cohort while resident, evict (drop — frozen weights are never
-written back), prefetch the next owned block on a side stream meanwhile.
+written back), prefetch the next owned block meanwhile.
 
-The rotation UNIT is {frozen base weights (one-way H2D, CPU masters stay
-mmap-backed on the /dev/shm snapshot) + Adam moments (paged BOTH ways with
-their block — the owner's demonstration target: trivial bytes under LoRA,
-but the exact machinery base-weight fine-tuning at 397B will need)}. LoRA
-adapter params are GPU-resident always — they are the trainable state and
-are tiny.
+Transport is a two-hop staged pipeline so the GPU never waits for the
+truck:
 
-Cost at 397B: ~200 GB/stage/epoch of H2D, hidden behind minutes of
-compute; ``item_major`` + rotate would page every block every cohort
-(~4 TB/epoch) and is rejected by validate.
+  mmap master --(background thread memcpy)--> pinned host buffer
+              --(async H2D on side stream)--> device buffer
+
+Both hops run while the CURRENT block computes: the thread copy releases
+the GIL, and the H2D is enqueued from that same thread onto the side
+stream, so a prefetched block is already device-resident when
+``activate`` swaps it in. Buffers are pooled by block signature
+(name/shape/dtype set) — heterogeneous stacks (hybrid linear/full
+attention, MoE vs dense blocks) each get their own ping-pong pair.
+``stall`` telemetry records the honest per-activate wait (thread join +
+transfer completion), so rotation's utilization cost is a measured number
+in the epoch rows, not a guess.
+
+The rotation UNIT is {frozen base weights (one-way) + Adam moments (BOTH
+ways — trivial bytes under LoRA, the exact machinery base-weight
+fine-tuning at 397B needs)}. LoRA adapters stay GPU-resident always.
 """
 
 from __future__ import annotations
+
+import threading
+import time
 
 import torch
 
@@ -28,22 +42,47 @@ __all__ = ["BlockRotator", "decide_rotate"]
 def decide_rotate(owned_bytes: int, device, *, headroom: float = 1.25,
                   reserve_bytes: int = 20 << 30) -> bool:
     """auto policy: rotate when resident owned weights would not leave the
-    activation/optimizer reserve free. ``reserve_bytes`` covers activations,
-    teacher tensors, and eval headroom — deliberately generous; rotation's
-    cost is near-zero under layer_major, so auto errs toward rotating."""
+    activation/optimizer reserve free."""
     free, _total = torch.cuda.mem_get_info(device)
     return owned_bytes * headroom + reserve_bytes > free
+
+
+class _BufferPool:
+    """Pinned-host + device buffer sets, pooled by block signature."""
+
+    def __init__(self, device):
+        self.device = device
+        self.free: dict[tuple, list[dict]] = {}
+
+    @staticmethod
+    def signature(tensors: dict[str, torch.Tensor]) -> tuple:
+        return tuple(sorted((n, tuple(t.shape), str(t.dtype))
+                            for n, t in tensors.items()))
+
+    def take(self, tensors: dict[str, torch.Tensor]) -> dict:
+        sig = self.signature(tensors)
+        pool = self.free.get(sig)
+        if pool:
+            return pool.pop()
+        host = {n: torch.empty_like(t, device="cpu", pin_memory=True)
+                for n, t in tensors.items()}
+        dev = {n: torch.empty_like(t, device=self.device)
+               for n, t in tensors.items()}
+        return {"host": host, "dev": dev, "sig": sig}
+
+    def give(self, buf: dict) -> None:
+        self.free.setdefault(buf["sig"], []).append(buf)
 
 
 class BlockRotator:
     """Pages one owned block's rotation unit at a time.
 
     Contract: ``activate(L)`` blocks until L's weights are on the device
-    and swaps them live; ``evict(L)`` restores the CPU masters (dropping
-    the GPU copies) and pages L's optimizer moments out; ``prefetch(L)``
-    starts L's H2D on the side stream without swapping. All swaps are
-    ``p.data`` replacement — module structure, autograd graphs, and
-    optimizer param identity are untouched.
+    and swaps them live; ``evict(L)`` restores the CPU masters and pages
+    L's optimizer moments out; ``prefetch(L)`` starts L's two-hop
+    transfer in the background. All swaps are ``p.data`` replacement —
+    module structure, autograd graphs, and optimizer param identity are
+    untouched.
     """
 
     def __init__(self, stack, owned, device, optimizers=None):
@@ -51,12 +90,14 @@ class BlockRotator:
         self.device = torch.device(device)
         self.optimizers = optimizers or {}
         self.stream = torch.cuda.Stream(self.device)
-        # CPU masters: the frozen base tensors of owned blocks that the
-        # stage-scoped load left on host (mmap-backed). Trainable params
-        # (LoRA) and anything already on the device are NOT rotated.
+        self.pool = _BufferPool(self.device)
         self.masters: dict[int, dict[str, torch.Tensor]] = {}
-        self._staged: dict[int, dict[str, torch.Tensor]] = {}
-        self._events: dict[int, torch.cuda.Event] = {}
+        self._inflight: dict[int, tuple] = {}   # L -> (thread, buf, event)
+        self._staged: dict[int, dict] = {}      # L -> buf (device-resident)
+        # telemetry (take_counters drains)
+        self.stall_seconds = 0.0
+        self.h2d_bytes = 0
+        self.pages = 0
         for L in owned:
             block = stack.blocks[L - 1]
             cpu = {}
@@ -72,24 +113,68 @@ class BlockRotator:
     @property
     def active_bytes(self) -> int:
         return sum(t.numel() * t.element_size()
-                   for entry in self._staged.values()
-                   for t in entry.values())
+                   for buf in self._staged.values()
+                   for t in buf["dev"].values())
 
     def prefetch(self, L: int) -> None:
-        if L not in self.masters or L in self._staged:
+        if (L not in self.masters or L in self._staged
+                or L in self._inflight):
             return
-        entry = {}
-        with torch.cuda.stream(self.stream):
-            for name, cpu_t in self.masters[L].items():
-                # mmap-backed tensors are not pinned; non_blocking still
-                # overlaps read-side page-in with compute on the default
-                # stream. A pinned double-buffer is the measured follow-up
-                # if H2D ever shows in prep_seconds.
-                entry[name] = cpu_t.to(self.device, non_blocking=True)
-        ev = torch.cuda.Event()
-        ev.record(self.stream)
-        self._staged[L] = entry
-        self._events[L] = ev
+        masters = self.masters[L]
+        buf = self.pool.take(masters)
+        event = torch.cuda.Event()
+        side = self.stream
+
+        def _pipeline():
+            # Hop 1: mmap -> pinned (memcpy releases the GIL, overlaps
+            # GPU compute). Hop 2: pinned -> device, async on the side
+            # stream, enqueued from this thread (same CUDA context).
+            for name, cpu_t in masters.items():
+                buf["host"][name].copy_(cpu_t)
+            with torch.cuda.stream(side):
+                for name in masters:
+                    buf["dev"][name].copy_(buf["host"][name],
+                                           non_blocking=True)
+                event.record(side)
+
+        thread = threading.Thread(target=_pipeline, daemon=True)
+        thread.start()
+        self._inflight[L] = (thread, buf, event)
+
+    def activate(self, L: int) -> None:
+        if L not in self.masters:
+            return  # fully resident (or foreign) block: nothing to do
+        started = time.perf_counter()
+        if L not in self._staged:
+            self.prefetch(L)
+            thread, buf, event = self._inflight.pop(L)
+            thread.join()
+            event.synchronize()
+            self._staged[L] = buf
+        self.stall_seconds += time.perf_counter() - started
+        self.pages += 1
+        self.h2d_bytes += sum(t.numel() * t.element_size()
+                              for t in self._staged[L]["dev"].values())
+        self._swap(L, self._staged[L]["dev"])
+        self._moments_to(L, self.device)
+
+    def evict(self, L: int) -> None:
+        if L not in self.masters:
+            return
+        self._swap(L, self.masters[L])
+        buf = self._staged.pop(L, None)
+        if buf is not None:
+            self.pool.give(buf)
+        self._moments_to(L, torch.device("cpu"))
+
+    def take_counters(self) -> dict:
+        out = {"rotation_stall_seconds": round(self.stall_seconds, 3),
+               "rotation_h2d_gb": round(self.h2d_bytes / 2**30, 2),
+               "rotation_pages": self.pages}
+        self.stall_seconds = 0.0
+        self.h2d_bytes = 0
+        self.pages = 0
+        return out
 
     def _swap(self, L: int, tensors: dict[str, torch.Tensor]) -> None:
         block = self.stack.blocks[L - 1]
@@ -101,27 +186,9 @@ class BlockRotator:
             else:
                 params[name].data = t
 
-    def activate(self, L: int) -> None:
-        if L not in self.masters:
-            return  # fully resident block (or foreign): nothing to do
-        self.prefetch(L)
-        torch.cuda.current_stream(self.device).wait_event(self._events[L])
-        self._swap(L, self._staged[L])
-        self._moments_to(L, self.device)
-
-    def evict(self, L: int) -> None:
-        if L not in self.masters:
-            return
-        self._swap(L, self.masters[L])
-        self._staged.pop(L, None)
-        self._events.pop(L, None)
-        self._moments_to(L, torch.device("cpu"))
-
     def _moments_to(self, L: int, device) -> None:
-        """Adam moments ride their block. LoRA moments are tiny; the point
-        is the mechanism (base-FT moments at 397B are 3.2 TB and MUST
-        page). State dicts are keyed by param object — identity survives
-        the .data swaps, so this is a plain tensor move."""
+        """Adam moments ride their block (state dicts are keyed by param
+        object — identity survives the .data swaps)."""
         opt = self.optimizers.get(L)
         if opt is None:
             return

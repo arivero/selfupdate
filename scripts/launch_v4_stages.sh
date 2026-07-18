@@ -37,6 +37,9 @@ EOF2
 
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error
+# Unbuffered stdout: fully-buffered stage logs read as 0 bytes for the
+# whole run and misled crash triage three times on 2026-07-18.
+export PYTHONUNBUFFERED=1
 export SELFUPDATE_CPU_THREADS="${SELFUPDATE_CPU_THREADS:-8}"
 # /home is a small shared NFS mount (seen 100% full 2026-07-18) — every
 # compiler cache must live node-local, never under $HOME.

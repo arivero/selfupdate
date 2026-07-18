@@ -139,6 +139,14 @@ def stage_scoped_load(model_name: str, owned0: range, *, dtype,
     for ckpt_key, shard in weight_map.items():
         module_key = _to_module_key(ckpt_key, conv)
         if module_key not in expected:
+            # Multimodal repos prefix text weights with `language_model.`;
+            # some text-only classes (Qwen3_5MoeForCausalLM) expect the
+            # stripped name but ship no conversion entry for it
+            # (hit 2026-07-18 on Qwen3.5-122B `mlp.experts.gate_up_proj`).
+            stripped = module_key.replace("model.language_model.", "model.")
+            if stripped != module_key and stripped in expected:
+                module_key = stripped
+        if module_key not in expected:
             if any(p.search(ckpt_key) or p.search(module_key)
                    for p in ignore):
                 continue  # vision tower / mtp — text-only class skips them
