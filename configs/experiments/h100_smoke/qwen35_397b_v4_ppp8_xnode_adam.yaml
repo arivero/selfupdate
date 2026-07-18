@@ -1,0 +1,41 @@
+# Qwen3.5-397B-A17B PPP8 CROSS-NODE, ADAM variant (owner N-sweep, 2026-07-18):
+# identical to qwen35_397b_v4_ppp8_xnode.yaml (8 stages 4+4, store+scoped+
+# ROTATE, 3-epoch speed test) EXCEPT the optimizer is per-block AdamW. Pairs
+# with the SGD run (h100_q397b_v4_ppp8x, ~36 s) for the Adam-vs-SGD cell at
+# N=8. Residency stays ROTATE: Adam moments are part of the rotation unit
+# (B4), so they page off-card with the block — this is exactly why 397B Adam
+# fits where 122B-RESIDENT Adam OOM'd the vocab-head stage. Optimizer pinned
+# explicitly (defaults-are-experiment-variables law).
+run_name: h100_q397b_v4_ppp8x_adam
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 16
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  v4_grad_clip: 0.0
+  v4_stage_splits: [8, 15, 22, 30, 38, 45, 52]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+  v4_nccl_timeout_s: 2400
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
