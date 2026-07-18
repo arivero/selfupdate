@@ -19,7 +19,9 @@ train:
   micro_batch: 32
   epochs: 3
   seed: 17
-  v4_teacher_source: store
+  # DeepSeek store lane not implemented (relay lacks compressor/indexer
+  # entries) — online = per-epoch teacher recompute, the sanctioned lane.
+  v4_teacher_source: online
   v4_loop_order: layer_major
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
