@@ -108,6 +108,17 @@ done
 # with it and stages refuse tensors from any other launch.
 export SELFUPDATE_V4_LAUNCH_ID="v4-$(date +%Y%m%d%H%M%S)-$$"
 if [[ "$MULTI_HOST" = "1" ]]; then
+  # Cross-node mail goes NATIVE InfiniBand (owner, 2026-07-18): the
+  # trainer resolves v4_relay_transport=auto -> nccl from this flag.
+  # Rendezvous over the Ethernet management net (IPoIB node-to-node is
+  # broken here); NCCL data path picks the HDR-200 HCAs itself.
+  export SELFUPDATE_V4_CROSS_NODE=1
+  export MASTER_ADDR="${MASTER_ADDR:-$(hostname -s)}"
+  export MASTER_PORT="${MASTER_PORT:-29517}"
+  export NCCL_IB_HCA="${NCCL_IB_HCA:-mlx5_0,mlx5_1}"
+  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-eno12419np2}"
+fi
+if [[ "$MULTI_HOST" = "1" ]]; then
   # The exchange must be VISIBLE FROM EVERY HOST: node-local /dev/shm
   # cannot carry cross-node mail. The shared filesystem (Lustre here,
   # GPFS at BSC) is the transport; the IB fabric is what makes the

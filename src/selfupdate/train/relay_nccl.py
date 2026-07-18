@@ -38,6 +38,18 @@ import os
 import torch
 
 
+def resolve_relay_transport(cfg) -> str:
+    """auto -> nccl whenever the stage set spans hosts (the launcher
+    exports SELFUPDATE_V4_CROSS_NODE=1 from its STAGE_HOSTS map), files
+    for a node-local stage set (/dev/shm exchange, RAM-speed). Cross-node
+    boundary mail NEVER rides Lustre (owner decision 2026-07-18)."""
+    choice = cfg.train.v4_relay_transport
+    if choice != "auto":
+        return choice
+    return ("nccl" if os.environ.get("SELFUPDATE_V4_CROSS_NODE") == "1"
+            else "files")
+
+
 class NcclBoundaryRelay:
     """Order-addressed boundary exchange between adjacent stage ranks."""
 

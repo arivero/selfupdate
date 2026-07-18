@@ -416,14 +416,16 @@ class TrainConfig:
     # files of one producer stage alive in the exchange (consumer deletion
     # is the ack).
     v4_capture_inflight: int = 2
-    # Boundary-tensor carrier between stage processes. "files" = the
-    # postal safetensors exchange (Lustre//dev/shm). "nccl" = native IB
-    # verbs via torch.distributed (owner decision 2026-07-18 after fabric
-    # measurements: dual HDR-200 at line rate vs 0.4-1.2 GB/s Lustre and
-    # a history of Lustre stalls); control-plane envelopes (adapters,
-    # battery acks, capture store) stay on files either way. See
-    # src/selfupdate/train/relay_nccl.py.
-    v4_relay_transport: str = "files"  # files | nccl
+    # Boundary-tensor carrier between stage processes — the "mail".
+    # Owner decision 2026-07-18: cross-node mail is NATIVE InfiniBand
+    # (NCCL over IB verbs; measured dual HDR-200 at line rate). Lustre is
+    # NOT a carrier for boundary mail — it serves only checkpoints, logs
+    # and the small control-plane envelopes. auto (default): stages on
+    # ONE node keep the /dev/shm file exchange (RAM-speed, zero deps);
+    # the moment the stage set spans hosts (launcher exports
+    # SELFUPDATE_V4_CROSS_NODE=1) the mail goes NCCL. "files"/"nccl"
+    # force a carrier for A/B or debug only.
+    v4_relay_transport: str = "auto"  # auto | files | nccl
     v4_nccl_timeout_s: int = 600
     v4_kv_refresh_epochs: int = 0
     # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
