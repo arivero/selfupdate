@@ -207,7 +207,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | Qwen3.6-27B | PPP1 rotary 1-GPU (pending) | — | PPP4 resident 4-GPU | **198 s** @ 91% |
 | Qwen3.6-35B-A3B | **PPP1 rotary 1-GPU** | **74.6 s** @ 96%, stall 0.086 s (99.9% hidden) | **PPP4 store 4-GPU** | **15.9 s** @ 97% (~4.7× 1→4) |
 | gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
-| gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | PPP4 4-GPU STORE (re-running) | pending (old 328 s was rebuild-residency, capture-bound @25% — NOT the best config; 1-GPU store beat 4-GPU rebuild) |
+| gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | **PPP4 4-GPU store** | **30.6 s** @ high (capture-once; e1 477 s folds capture). The old 328 s "best" was rebuild-residency (re-captured every epoch @25% util) — store is 10.7x faster. 1-GPU store (136 s) already beat 4-GPU rebuild (328 s). |
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
