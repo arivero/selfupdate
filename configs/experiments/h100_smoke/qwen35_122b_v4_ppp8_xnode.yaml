@@ -21,9 +21,12 @@ train:
   seed: 17
   v4_teacher_source: store
   v4_loop_order: layer_major
-  v4_relay_every_cohorts: 1
+  v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: auto
   v4_battery_mode: subprocess
   v4_stage_splits: [6, 12, 18, 24, 30, 36, 42]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100

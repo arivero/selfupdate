@@ -1710,9 +1710,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
                         == 0):
                     relay.submit(epoch + 1)
-                baseline = _staged_epoch_battery(
-                    cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
-                    started_at, rotator=rotator)
+                # Gate the per-epoch battery by eval cadence, mirroring the
+                # single-process path. It ran EVERY epoch unconditionally,
+                # which at 122B PPP8 spawned a device_map=auto load of the
+                # full 250 GB model on ONE node's 4 cards -> OOM -> reaper
+                # killed all local stages (2026-07-18). A speed run sets
+                # eval.every_epochs > epochs to skip it as declared debt.
+                every = max(int(cfg.eval.every_epochs), 1)
+                if (epoch + 1) % every == 0:
+                    baseline = _staged_epoch_battery(
+                        cfg, stack, tok, log, epoch + 1, run_dir, owned,
+                        baseline, started_at, rotator=rotator)
+                else:
+                    log.log(kind="epoch_battery_skipped", epoch=epoch + 1,
+                            reason="staged_battery_at_eval_cadence")
         except _RelayStopped:
             # A sibling stopped while this stage was blocked in a boundary
             # wait (battery ack / relay boundary). Convert to a clean stop
