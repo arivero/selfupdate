@@ -135,8 +135,19 @@ def stage_scoped_load(model_name: str, owned0: range, *, dtype,
     ``owned`` minus one).
     """
     from accelerate import init_empty_weights
-    from safetensors.torch import load_file
+    from safetensors.torch import load as _st_load
     from transformers import AutoConfig, AutoModelForCausalLM
+
+    def load_shard_seq(path: Path) -> dict:
+        # Read the whole shard SEQUENTIALLY (one bulk read) then deserialize
+        # from RAM. `safetensors` get_tensor/mmap reads each tensor at its own
+        # offset; on an UNFUSED-expert checkpoint that is 1536 tiny scattered
+        # reads per layer, which measured ~78 MB/s on Lustre vs 368 MB/s for a
+        # sequential shard read (2026-07-18, 397B). Scattered reads also make
+        # per-stage load times diverge, which times out the cross-node NCCL
+        # rendezvous. The bulk read costs deserializing a few unowned tensors
+        # (cheap memcpy) but keeps every stage's load fast and uniform.
+        return _st_load(path.read_bytes())
 
     config = AutoConfig.from_pretrained(
         model_name, trust_remote_code=trust_remote_code)
@@ -226,7 +237,7 @@ def stage_scoped_load(model_name: str, owned0: range, *, dtype,
         fuse_filled[tgt] = 0
 
     for shard in sorted(set(by_shard) | set(fuse_by_shard)):
-        tensors = load_file(snap / shard, device="cpu")  # mmap-backed
+        tensors = load_shard_seq(snap / shard)  # sequential bulk read
         for ckpt_key, module_key in by_shard.get(shard, []):
             t = tensors[ckpt_key]
             if t.dtype != dtype and t.is_floating_point():

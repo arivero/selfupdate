@@ -27,6 +27,7 @@ train:
   v4_battery_mode: subprocess
   v4_stage_splits: [8, 15, 22, 30, 38, 45, 52]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+  v4_nccl_timeout_s: 2400
 eval:
   every_epochs: 100
   standard_damage_every_epochs: 100
