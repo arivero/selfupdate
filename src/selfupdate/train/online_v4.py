@@ -830,7 +830,11 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     # spawns, and has no siblings to ack/notify.
     stage = max(cfg.train.v4_stage, 0)
     stages = len(cfg.train.v4_stage_splits or []) + 1
-    rf = _RelayFiles(run_dir.parent)
+    # Single-process (PPP1) run_dir IS the run root; staged run_dirs
+    # are runs/<name>/stage<k>. Using .parent unconditionally made
+    # every solo run share ONE exchange (collision, 2026-07-18).
+    rf = _RelayFiles(run_dir.parent if cfg.train.v4_stage >= 0
+                     else run_dir)
     rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
              _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
     if rotator is not None:
@@ -854,6 +858,10 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     script = Path(__file__).resolve().parents[3] / "scripts" / "v4_battery.py"
     logf = run_dir / f"battery_e{epoch:04d}.log"
     child_env = dict(os.environ)
+    # The child must speak THIS launch's identity: solo runs mint
+    # `solo-<pid>` lazily, and a child minting its own pid-flavored id was
+    # refused by the envelope check (2026-07-18 battery_e0000 mismatch).
+    child_env["SELFUPDATE_V4_LAUNCH_ID"] = rf.launch_id
     if cfg.train.v4_stage < 0:
         # Rotary PPP1: the battery child must stay on the rotor's OWN
         # card — device_map=auto over every GPU tramples concurrent runs
@@ -893,7 +901,11 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                                    owned, baseline, rotator=rotator)
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
-    rf = _RelayFiles(run_dir.parent)
+    # Single-process (PPP1) run_dir IS the run root; staged run_dirs
+    # are runs/<name>/stage<k>. Using .parent unconditionally made
+    # every solo run share ONE exchange (collision, 2026-07-18).
+    rf = _RelayFiles(run_dir.parent if cfg.train.v4_stage >= 0
+                     else run_dir)
     if cfg.train.v4_stage_scoped:
         # Graft mode requires stage 0 to hold the FULL model; under stage-
         # scoped loading foreign blocks are meta. validate steers scoped

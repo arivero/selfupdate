@@ -55,7 +55,9 @@ def main() -> None:
     stack = BlockStack(model)
     stack.freeze_non_blocks()
 
-    rf = _RelayFiles(run_dir.parent)
+    # Mirror the trainer: solo runs (stages == 1) use run_dir itself
+    # as the exchange root; staged run_dirs are one level deeper.
+    rf = _RelayFiles(run_dir.parent if args.stages > 1 else run_dir)
     grafted = 0
     with torch.no_grad():
         for k in range(args.stages):
