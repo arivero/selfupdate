@@ -773,7 +773,20 @@ class _RelayServicer:
             self.pending.pop(0)
 
     def drain(self) -> None:
-        self.service(block=True)
+        """Best-effort: a dead or stopped predecessor must never cost this
+        stage its trained adapters. The 2026-07-18 e500 finale lost the
+        500-epoch adapters of three stages exactly this way — stage 0
+        stopped gracefully at 311, its siblings trained to 500, then
+        blocked here for their pending relay evals and were killed by the
+        wait timeout BEFORE certification/checkpoint. Relay evals are
+        telemetry; checkpoints are the run. Abandon, log, proceed."""
+        try:
+            self.service(block=True)
+        except RuntimeError as err:
+            self.log.log(kind="relay_drain_abandoned",
+                         pending_epochs=list(self.pending),
+                         error=str(err)[:300])
+            self.pending.clear()
 
     def _produce(self, epoch: int, boundaries) -> None:
         out = _relay_segment(self.cfg, self.stack, self.ds, self.cohorts,
