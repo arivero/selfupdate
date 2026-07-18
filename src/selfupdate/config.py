@@ -417,6 +417,12 @@ class TrainConfig:
     # files of one producer stage alive in the exchange (consumer deletion
     # is the ack).
     v4_capture_inflight: int = 2
+    # Staged store-fill under rotation walks chunk-wise layer-outer: this
+    # many cohorts are ingested, walked through every owned block (one
+    # page-in per block per chunk), and shipped downstream together.
+    # Larger = fewer page-ins but a coarser relay pipeline and more resident
+    # chunk hiddens (~0.5 GB/cohort at 397B). Ignored without rotation.
+    v4_fill_chunk_cohorts: int = 8
     # Boundary-tensor carrier between stage processes — the "mail".
     # Owner decision 2026-07-18: cross-node mail is NATIVE InfiniBand
     # (NCCL over IB verbs; measured dual HDR-200 at line rate). Lustre is

@@ -19,8 +19,14 @@ loop, as a stage relay:
 
 Every epoch then runs with ZERO teacher forwards. MoE routing interventions
 record teacher top-k in the same pass (the controller's teacher_phase).
-Under weight rotation the staged store-fill pages blocks per (cohort, layer) — a
-one-time cost of minutes at 397B, accepted to preserve the pipeline.
+
+Under weight rotation the store-fill must NOT walk cohort-outer: paging every
+owned block once per cohort measured 619-884 s of rotation stall per stage at
+397B PPP8 (~13 TB of H2D per stage; e1 rows of h100_q397b_v4_ppp8x,
+2026-07-18). Rotary PPP1 walks fully layer-outer (task #18); staged stages
+walk chunk-wise layer-outer (``_staged_chunk_layer_outer``): chunks of
+``v4_fill_chunk_cohorts`` cohorts, one page-in per block per CHUNK, relay
+pipelined at chunk granularity.
 """
 
 from __future__ import annotations
@@ -66,6 +72,18 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                              moe_ctrl=moe_ctrl, moe_routing=moe_routing,
                              teacher_eval_rows=teacher_eval_rows,
                              rotator=rotator, started=started)
+        return
+
+    if stage >= 0 and rotator is not None:
+        # Staged store-fill under rotation: cohort-outer would page every
+        # owned block once per cohort (the measured 619-884 s e1 stalls at
+        # 397B PPP8). Walk chunk-wise layer-outer instead.
+        _staged_chunk_layer_outer(
+            cfg, stack, cohorts, tensors, adapters_off, device, rf, log,
+            stage=stage, stages=stages, owned=owned_list, n_layers=n,
+            moe_ctrl=moe_ctrl, moe_routing=moe_routing,
+            teacher_eval_rows=teacher_eval_rows, rotator=rotator,
+            inflight=inflight, started=started)
         return
 
     for idx, cohort in enumerate(cohorts):
@@ -139,6 +157,132 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
             seconds=round(time.perf_counter() - started, 3),
             cohorts=len(cohorts), layer_entries=entries,
             stage=stage, pipelined=stages > 1,
+            teacher_forwards_per_later_epoch=0)
+
+
+def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
+                              device, rf, log, *, stage, stages, owned,
+                              n_layers, moe_ctrl, moe_routing,
+                              teacher_eval_rows, rotator, inflight,
+                              started) -> None:
+    """Chunk-wise layer-outer store-fill for STAGED stages under rotation.
+
+    Cohort-outer pages every owned block once per COHORT: at 397B
+    (13 GB/block, ~130 cohorts, 7-8 owned blocks) that is ~13 TB of H2D per
+    stage — the measured 619-884 s e1 rotation stalls (2026-07-18). Here a
+    chunk of ``v4_fill_chunk_cohorts`` cohorts is ingested (embed on stage
+    0; upstream boundary files otherwise), the owned blocks are walked
+    LAYER-outer over the chunk (one page-in per block per chunk), and the
+    chunk's boundary hiddens ship downstream together. The relay stays
+    pipelined at chunk granularity; chunk hiddens+rope stay resident
+    (~0.5 GB/cohort at 397B, so K=8 fits comfortably beside the 43 GB
+    working set). Numerics are identical to cohort-outer — only the visit
+    order changes, and no store entry accumulates across entries."""
+    from .online_v4 import _FrozenKV, _bk_layer_type
+
+    n = n_layers
+    first = stage <= 0
+    last = stage == stages - 1
+    K = max(1, int(getattr(cfg.train, "v4_fill_chunk_cohorts", 8)))
+    entries = 0
+    written: list = []
+    idxs = list(range(len(cohorts)))
+    with torch.no_grad():
+        for c0 in range(0, len(idxs), K):
+            chunk = idxs[c0:c0 + K]
+            hs, poss, pes = {}, {}, {}
+            for idx in chunk:
+                cohort = cohorts[idx]
+                B, T = len(cohort.indices), cohort.T
+                poss[idx] = torch.arange(
+                    T, device=device)[None].expand(B, -1)
+                if first:
+                    hs[idx] = stack.embed(cohort.teacher_ids.to(device))
+                else:
+                    path = rf.wait(rf.path(
+                        0, f"capture_c{idx:04d}_stage{stage - 1}.st"))
+                    loaded = rf.read(path, expect_epoch=0, as_stage=stage)
+                    hs[idx] = loaded["h"].to(device)
+                    path.unlink(missing_ok=True)
+                pes[idx] = stack.rope(hs[idx], poss[idx])
+            for pos_i, layer in enumerate(owned):
+                rotator.activate(layer)
+                if pos_i + 1 < len(owned):
+                    rotator.prefetch(owned[pos_i + 1])
+                ltype = _bk_layer_type(stack, layer)
+                for idx in chunk:
+                    cohort = cohorts[idx]
+                    h = hs[idx]
+                    ctx_a = (adapters_off() if adapters_off is not None
+                             else contextlib.nullcontext())
+                    ctx_m = (moe_ctrl.teacher_phase()
+                             if moe_ctrl is not None
+                             else contextlib.nullcontext())
+                    with ctx_a, ctx_m:
+                        if ltype == "linear_attention":
+                            h_new = stack.run_block(
+                                layer, h, pes[idx], position_ids=poss[idx])
+                            view = (h_new if layer < n
+                                    else stack.final_norm(h_new))
+                            tensors.put_linear(
+                                layer, idx, h.clone(),
+                                cohort.gather_query_inputs(view).clone())
+                        else:
+                            kv = _FrozenKV()
+                            inputs_q = cohort.gather_query_inputs(h).clone()
+                            h_new = stack.run_block(
+                                layer, h, pes[idx], position_ids=poss[idx],
+                                past_key_values=kv, use_cache=True,
+                                causal_length=cohort.T)
+                            kv.recording = False
+                            view = (h_new if layer < n
+                                    else stack.final_norm(h_new))
+                            tensors.put(
+                                layer, idx, kv, inputs_q,
+                                cohort.gather_query_inputs(view).clone())
+                    entries += 1
+                    if moe_ctrl is not None and moe_routing is not None:
+                        r = moe_routing.setdefault(
+                            idx, {"idx": {}, "logp": {}})
+                        if layer in moe_ctrl.t_idx:
+                            r["idx"][layer] = moe_ctrl.t_idx[layer]
+                        if layer in moe_ctrl.t_logp:
+                            r["logp"][layer] = moe_ctrl.t_logp[layer]
+                    if layer == n and teacher_eval_rows is not None:
+                        rows = []
+                        for b in range(len(cohort.indices)):
+                            sel = cohort.eval_rows[b].to(device)
+                            positions = cohort.qpos_dev[b].index_select(
+                                0, sel)
+                            rows.append(view[b].index_select(
+                                0, positions).detach())
+                        teacher_eval_rows[idx] = rows
+                    hs[idx] = h_new
+                rotator.evict(layer)
+            if c0 + K < len(idxs):
+                # Overlap the next chunk's first page-in behind the
+                # boundary-file I/O below.
+                rotator.prefetch(owned[0])
+            if not last:
+                for idx in chunk:
+                    out_path = rf.path(
+                        0, f"capture_c{idx:04d}_stage{stage}.st")
+                    rf.write(out_path, {"h": hs[idx].detach().cpu()},
+                             stage=stage, epoch=0, to_stage=stage + 1)
+                    written.append(out_path)
+                    # A consumer ingests a whole chunk before computing, so
+                    # allow at least one full chunk in flight (inflight
+                    # below K would only throttle, never deadlock — the
+                    # consumer deletes as it ingests — but K is the natural
+                    # floor).
+                    while sum(1 for p in written
+                              if p.exists()) >= max(inflight, K):
+                        time.sleep(0.5)
+            del hs, pes, poss
+    log.log(kind="v4_store_capture",
+            seconds=round(time.perf_counter() - started, 3),
+            cohorts=len(cohorts), layer_entries=entries, stage=stage,
+            pipelined=stages > 1, layer_outer=True, chunk_cohorts=K,
             teacher_forwards_per_later_epoch=0)
 
 
