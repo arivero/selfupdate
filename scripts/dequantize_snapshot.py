@@ -48,8 +48,21 @@ def _e8m0_to_float(scale: torch.Tensor) -> torch.Tensor:
 
 def _dequant_fp8_block(weight: torch.Tensor, scale: torch.Tensor,
                        block: int = 128) -> torch.Tensor:
+    """DeepSeek form: F8_E4M3 weight + F8_E8M0 block scale (power-of-two)."""
     out_dim, in_dim = weight.shape
     s = _e8m0_to_float(scale)
+    s = s.repeat_interleave(block, 0)[:out_dim] \
+         .repeat_interleave(block, 1)[:, :in_dim]
+    return (weight.to(torch.float32) * s).to(torch.bfloat16)
+
+
+def _dequant_fp8_inv(weight: torch.Tensor, scale_inv: torch.Tensor,
+                     block: int = 128) -> torch.Tensor:
+    """Qwen/DeepSeek-V3 form: F8_E4M3 weight + BF16 `weight_scale_inv`
+    per-[128,128]-block multiplier (already the value to multiply, not a
+    power-of-two exponent). Layout [ceil(out/128), ceil(in/128)]."""
+    out_dim, in_dim = weight.shape
+    s = scale_inv.to(torch.float32)
     s = s.repeat_interleave(block, 0)[:out_dim] \
          .repeat_interleave(block, 1)[:, :in_dim]
     return (weight.to(torch.float32) * s).to(torch.bfloat16)
@@ -84,7 +97,8 @@ def main() -> None:
 
     index = json.loads((snap / "model.safetensors.index.json").read_text())
     weight_map: dict = index["weight_map"]
-    scales = {k for k in weight_map if k.endswith(".scale")}
+    scales = {k for k in weight_map
+              if k.endswith(".scale") or k.endswith(".weight_scale_inv")}
 
     by_shard: dict[str, list[str]] = {}
     for key, shard in weight_map.items():
@@ -122,10 +136,14 @@ def main() -> None:
             if key in scales:
                 continue
             t = read(key)
-            skey = (key[: -len(".weight")] + ".scale"
-                    if key.endswith(".weight") else None)
-            if skey in scales:
-                s = read(skey)
+            skey_dot = (key[: -len(".weight")] + ".scale"
+                        if key.endswith(".weight") else None)
+            skey_inv = (key + "_scale_inv"
+                        if key.endswith(".weight") else None)
+            if skey_inv in scales:  # Qwen/V3 fp8: BF16 per-block inv-scale
+                t = _dequant_fp8_inv(t, read(skey_inv))
+            elif skey_dot in scales:  # DeepSeek: E8M0 or mxfp4 scale
+                s = read(skey_dot)
                 if t.dtype == torch.int8:
                     t = _dequant_mxfp4(t, s)
                 elif "float8" in str(t.dtype):
