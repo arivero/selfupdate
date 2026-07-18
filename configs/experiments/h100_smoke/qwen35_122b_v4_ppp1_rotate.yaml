@@ -39,6 +39,9 @@ train:
   v4_stage_devices: []
   v4_stage: -1
 eval:
-  every_epochs: 2
+  # Timing smoke: batteries skipped (cadence > epochs = declared debt).
+  # A one-card 122B battery is hours of CPU-offload generation; 122B
+  # recall/damage belong to the 4-GPU store lane (#7).
+  every_epochs: 100
   recall_corpora: [machado, quijote_ch1, quijote_ch4]
-  standard_damage_every_epochs: 2
+  standard_damage_every_epochs: 100
