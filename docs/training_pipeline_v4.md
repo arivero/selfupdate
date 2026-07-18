@@ -211,7 +211,25 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
-| Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** (running) | measuring (bf16 dequant snapshot; 3-epoch speed test) |
+| Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** | **~34.8 s** steady-state (e1 264 s cold; stall 0.645 s = rotation ~free). Per-stage epoch (blocks 0-7 of 60); PPP8 stages run in parallel with equal block counts so per-stage ≈ wall-clock. See note. |
+
+**397B PPP8 provenance (2026-07-18).** The 752 GB bf16 dequant snapshot needed
+four fixes to run cross-node, all in git: (1) the fp8 checkpoint stores MoE
+experts UNFUSED — the scoped loader now fuses them into HF's stacked layout
+(`experts.gate_up_proj`/`down_proj`), verified bit-exact; (2) the unfused layout
+meant 1536 tiny scattered reads/layer (~78 MB/s), so stages loaded slowly and
+UNEVENLY and the post-load NCCL rendezvous timed out — fixed by reading each
+shard sequentially (368 MB/s), 8-layer stage load 323 s; (3) `v4_nccl_timeout_s`
+raised to 2400 s; (4) the answer gate (397B can't run single-node vLLM) resolved
+by reusing the 122B answers (byte-identical tokenizer, md5-verified) via
+`build_teacher_cache.py --coordinated-node-cache --index-only` (no model load).
+The reported 34.8 s is the surviving-stage steady-state epoch: agpuh02's Slurm
+reservation EXPIRED mid-run, killing stages 4-7 — but agpuh01's stages 0-3 kept
+training at 100% util and produced clean epochs, because the capture-once store
+completed cross-node BEFORE the node died and epochs train each stage's blocks
+locally from the store (no relay). This is an unplanned resilience datum: a node
+loss does not stop the survivors. A full clean 8-stage completion is pending
+agpuh02 re-availability; the per-stage epoch time is unaffected by the loss.
 
 The minimal column is the "beyond the OOM wall" proof: 122B (244 GB, can
 NOT fit resident on 80 GB) trains on ONE card at 202 s/88% util, rotation
