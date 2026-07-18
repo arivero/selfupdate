@@ -165,6 +165,33 @@ Each stage saves an ordinary PEFT checkpoint plus `v4_stage_manifest.json`
 adapter by taking each block's tensors from the one stage that owns it —
 no averaging; the merge is exact because ownership is disjoint.
 
+## Beyond the OOM wall (contribution statement, owner 2026-07-18)
+
+Part of the claimed contribution is negative-space: **where traditional
+fine-tuning OOMs, this system still trains — and where even the weights
+don't fit, it rotates.** The memory arithmetic, per 80 GB H100:
+
+- Traditional mixed-precision AdamW holds ~16 bytes/param (bf16 weights +
+  bf16 grads + fp32 moments + fp32 master) plus full-graph activations.
+  gemma-4-31B: ~500 GB of optimizer-side state — un-runnable even ZeRO-3
+  sharded across one 4-card node once activations join. Qwen3.5-397B:
+  ~6.4 TB — un-runnable on any single node, full stop.
+- Pipeline-v4 per stage holds: the owned shard's FROZEN bf16 weights
+  (no grads, no moments — teacher-forced blockwise training never
+  backpropagates through frozen weights), LoRA adapters + their optimizer
+  state (MBs), and ONE block's activations at micro-batch scale. 31B
+  trains on 4 cards with ~15 GB of weights per stage.
+- When even the owned frozen shard exceeds the card (397B: ~200 GB/stage),
+  `v4_weight_residency: rotate` pages block weights one-way from mmap
+  masters and pages the **Adam moments both ways with their block** — the
+  card only ever holds one block plus its transient. The M1 leg-D
+  certification (leg C vs leg D bit-identity, moments included) is the
+  proof that rotation is pure transport: the numbers a resident run would
+  have produced, on hardware where the resident run cannot exist.
+
+Report this arithmetic next to every big-model result: the baseline that
+OOMs is part of the claim, not a footnote.
+
 ## The Pareto envelope (owner-ordered, 2026-07-17)
 
 Speed-first certification order; every member trains under the utilization
