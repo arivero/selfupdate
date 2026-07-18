@@ -1,0 +1,29 @@
+# #17 stop-propagation repro: 0.6B PPP2, many short epochs so a mid-run
+# TERM reliably lands while BOTH stages are still looping. Success = both
+# stage0 and stage1 write a checkpoint with partial=True (not just stage0),
+# and neither hangs to the relay timeout.
+run_name: h100_stoprepro_0p6b_ppp2
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 60
+  seed: 17
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_optimizer: immediate_sgd
+  v4_weight_residency: resident
+  v4_relay_every_cohorts: 3
+  v4_stage_splits: [14]
+  v4_stage_devices: [0, 2]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
