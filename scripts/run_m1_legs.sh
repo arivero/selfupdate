@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# M1 sequencer (task #6): waits for leg A, runs legs B -> C -> D on the
+# M1 sequencer (task #6): waits for the resident leg (m1a), runs
+# store -> store+adam -> store+rotate (m1b/c/d) on the
 # same devices, then writes the numerics verdict. Detached launcher in the
 # gpu_scheduler mold — the agent still reviews the verdict personally.
 set -u
@@ -26,30 +27,30 @@ run_leg() {
 
 echo "M1 sequencer start $(date -Is)" > "$OUT"
 wait_leg m1a_0p6b
-echo "leg A done $(date -Is)" >> "$OUT"
+echo "resident leg (m1a) done $(date -Is)" >> "$OUT"
 for leg in m1b_0p6b_ppp2_store_e2 m1c_0p6b_ppp2_store_adam_e2 \
            m1d_0p6b_ppp2_store_adam_rotate_e2; do
   run_leg "$leg"
   echo "$leg done $(date -Is)" >> "$OUT"
 done
 
-echo "== A vs B (store relay; expect small bf16 boundary noise) ==" >> "$OUT"
+echo "== resident vs store (m1a vs m1b; store relay; expect small bf16 boundary noise) ==" >> "$OUT"
 "$PY" scripts/compare_v4_shard_numerics.py \
   runs/h100_m1a_0p6b_ppp2_resident_e2 runs/h100_m1b_0p6b_ppp2_store_e2 \
   --rtol 2e-3 >> "$OUT" 2>&1
-echo "== C vs D (rotation; must be BIT-identical) ==" >> "$OUT"
+echo "== store+adam vs store+rotate (m1c vs m1d; rotation; must be BIT-identical) ==" >> "$OUT"
 "$PY" scripts/compare_v4_shard_numerics.py \
   runs/h100_m1c_0p6b_ppp2_store_adam_e2 \
   runs/h100_m1d_0p6b_ppp2_store_adam_rotate_e2 >> "$OUT" 2>&1
 
-echo "== C vs D Adam moments (bitwise) ==" >> "$OUT"
+echo "== store+adam vs store+rotate Adam moments (m1c vs m1d; bitwise) ==" >> "$OUT"
 "$PY" - >> "$OUT" 2>&1 <<'PYEOF'
 import glob, torch
 ok = True
 c_files = sorted(glob.glob(
     "runs/h100_m1c_0p6b_ppp2_store_adam_e2/stage*/checkpoint/adam_moments.pt"))
 if not c_files:
-    print("NO adam_moments.pt found in leg C — persistence path did not fire")
+    print("NO adam_moments.pt found in the store+adam leg (m1c) — persistence path did not fire")
     ok = False
 for cf in c_files:
     df = cf.replace("m1c_0p6b_ppp2_store_adam_e2",

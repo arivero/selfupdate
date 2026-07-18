@@ -431,7 +431,7 @@ class TrainConfig:
     # ONE node keep the /dev/shm file exchange (RAM-speed, zero deps);
     # the moment the stage set spans hosts (launcher exports
     # SELFUPDATE_V4_CROSS_NODE=1) the mail goes NCCL. "files"/"nccl"
-    # force a carrier for A/B or debug only.
+    # force a carrier for a paired comparison or debug only.
     v4_relay_transport: str = "auto"  # auto | files | nccl
     v4_nccl_timeout_s: int = 600
     v4_kv_refresh_epochs: int = 0
@@ -590,7 +590,7 @@ def _merge_deep(base: dict, over: dict) -> dict:
     siblings of any dict nested two levels down (e.g. an experiment pinning
     train.lora.enabled dropped the base's lora.r/alpha back to dataclass
     defaults) — the silent-config-fork bug class. Landed 2026-07-11 after an
-    A/B audit of all 179 real (base, experiment) pairs showed zero semantic
+    paired-diff audit of all 179 real (base, experiment) pairs showed zero semantic
     diffs, so no existing config relied on the reset behavior."""
     merged = dict(base)
     for k, v in over.items():

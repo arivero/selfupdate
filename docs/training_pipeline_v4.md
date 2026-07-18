@@ -224,7 +224,7 @@ don't fit, it rotates.** The memory arithmetic, per 80 GB H100:
   `v4_weight_residency: rotate` pages block weights one-way from mmap
   masters and pages the **Adam moments both ways with their block** — the
   card only ever holds one block plus its transient. The M1 leg-D
-  certification (leg C vs leg D bit-identity, moments included) is the
+  certification (store+adam vs store+rotate, m1c vs m1d, bit-identity, moments included) is the
   proof that rotation is pure transport: the numbers a resident run would
   have produced, on hardware where the resident run cannot exist.
 
@@ -364,10 +364,10 @@ do not undo one "for cleanliness" without re-measuring):
    (whole-answer processing is exact, not stale).
 2. **Per-(layer, cohort) tensor caching across epochs.** Teacher-frozen
    K/V, inputs, and targets never change, so epoch 1 builds them and every
-   later epoch reuses: leg A measured epoch 1 at 7.3 s and epoch 2 at
+   later epoch reuses: the cached lane measured epoch 1 at 7.3 s and epoch 2 at
    **1.1 s (390,363 ev/s)** — 6.6×. Over 40 epochs the build cost
    amortizes to ~2%. `v4_kv_source: student_refresh` deliberately re-pays
-   it per refresh (leg B: epoch 2 at 95k ev/s — the designed price).
+   it per refresh (the student_refresh lane: epoch 2 at 95k ev/s — the designed price).
 3. **`gpu_corpus` residency** when the owned layers' corpus fits (auto):
    zero per-step host transfers. `cpu_stream` is the big-model fallback,
    pinned + async.

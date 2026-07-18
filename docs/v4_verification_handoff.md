@@ -87,7 +87,7 @@ command reports the echo's own status — this bit us once already).
   a relay timeout naming the missing file — inspect that stage's log first.
 - Stage 0's battery grafts foreign-block adapters onto its model per epoch;
   this is by design harmless to training (v4 never reads foreign blocks).
-- `student_trajectory_eval` (single-process form) has NOT run yet: leg A is
+- `student_trajectory_eval` (single-process form) has NOT run yet: the resident leg (m1a) is
   its first exercise. If it fails, the fault is likely in
   `_relay_segment`'s flow_keep walk (run_block builds the causal mask from
   `flow_keep.shape[1]` when q_len == kv_len — full-sequence calls are the
