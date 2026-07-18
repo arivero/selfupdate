@@ -33,7 +33,7 @@ compressed slots outright.
 
 The record pass reuses the REAL ``DeepseekV4HCACache``/``CSACache`` layer
 objects so buffers/overlap/entry-count semantics are the model's own, and
-captures the indexer's top-k via a forward hook.
+records the indexer's top-k via a forward hook.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ class _RecordShim:
 class DeepseekRecorder:
     """Record one block's frozen-context artifacts over one full-sequence
     chunk.  MUST be fresh per chunk: the typed cache treats successive
-    forward calls as time-continuation, while capture chunks are along the
+    forward calls as time-continuation, while teacher-forward chunks are along the
     batch axis."""
 
     def __init__(self, stack, layer: int):
@@ -118,7 +118,7 @@ class DeepseekRecorder:
         if self.layer_type == "compressed_sparse_attention" \
                 and self.topk is None:
             raise RuntimeError(
-                "CSA record pass captured no indexer top-k (hook missed)")
+                "CSA record pass recorded no indexer top-k (hook missed)")
         return self.shim.kv, entries, self.topk
 
 

@@ -202,7 +202,7 @@ time — and act on the FIRST discrepancy:
    matches the device plan exactly — right pids on right cards, nothing
    extra, nothing missing. This check catches what log-reading cannot
    (frozen spawn loops, pattern-missed zombies, stray contexts).
-4. t+capture-window: first capture/epoch rows per stage.
+4. t+store-fill-window: first store-fill/epoch rows per stage.
 
 When a discrepancy needs more signal, raise verbosity SELECTIVELY for
 the suspect section (TRANSFORMERS_VERBOSITY, NCCL_DEBUG=INFO for

@@ -214,7 +214,7 @@ def last_block_step_batch(stack, h_in, pos_emb, target, batch: Batch, kind,
 
 @contextlib.contextmanager
 def _capture_block_components(stack, L):
-    """Capture recombined attention and MLP writes, never probabilities."""
+    """Record recombined attention and MLP writes, never probabilities."""
     block = stack.blocks[L - 1]
     modules = (getattr(block, "self_attn", None), getattr(block, "mlp", None))
     if any(module is None for module in modules):

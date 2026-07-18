@@ -400,19 +400,19 @@ class TrainConfig:
     # Where teacher hidden states come from (owner contract: "where IF ANY
     # the teacher hidden are cached ... or just keep calculating it").
     #   cache  — read i{L}/h{L} from the store_full_teacher_inputs cache.
-    #   online — ONE adapters-off forward per cohort per epoch captures the
+    #   online — ONE adapters-off forward per cohort per epoch records the
     #            owned layers' inputs and targets on the GPU; the cache
     #            shrinks to an index of spans + generated answer ids
     #            (build_teacher_cache.py --index-only). Requires item_major
-    #            (layer_major would redo the capture once per layer).
-    #   store  — capture ONCE before the epoch loop via the stage relay
+    #            (layer_major would redo the teacher forward once per layer).
+    #   store  — fill ONCE before the epoch loop via the stage relay (store-fill)
     #            (v4_store.py): stage 0 embeds and walks its owned layers
     #            adapters-off, ships the boundary hidden downstream; every
     #            stage fills its per-(layer,cohort) store and later epochs
     #            run ZERO teacher forwards (the measured 3.2x lever at 27B;
     #            the 122B/397B scaling lane pairs it with v4_stage_scoped).
     v4_teacher_source: str = "cache"  # cache | online | store
-    # Backpressure for the store capture relay: at most this many boundary
+    # Backpressure for the store-fill relay: at most this many boundary
     # files of one producer stage alive in the exchange (consumer deletion
     # is the ack).
     v4_capture_inflight: int = 2
@@ -456,15 +456,15 @@ class TrainConfig:
     # on small models: ~4 GB/layer at 0.6B). cpu_stream stages per cohort
     # from pinned host memory. auto sizes the corpus and picks.
     v4_teacher_residency: str = "auto"  # auto | gpu_corpus | cpu_stream
-    # Batch-chunking for the online teacher capture forward (v4_teacher_source
-    # =online). The capture runs the FULL teacher-forced sequence (length T)
+    # Batch-chunking for the teacher forward (v4_teacher_source
+    # =online). It runs the FULL teacher-forced sequence (length T)
     # through every block to reach the owned range; a full-attention gemma4
     # block over a long cohort materializes O(B*heads*T*T) SDPA scores, which
     # OOMs at micro_batch=32 / T~4096 on 80 GB. Each item's forward is
     # independent (attention is within-sequence, causal), so splitting the
     # cohort's B items into chunks of this size and concatenating is
     # numerically exact. 0 = no chunking (whole cohort at once, historical
-    # behaviour). Only affects the no-grad capture, never the training step.
+    # behaviour). Only affects the no-grad teacher forward, never the training step.
     v4_capture_micro_batch: int = 0
     # Layer-ownership partition for multi-process v4. Deliberately SEPARATE
     # from model.pipeline_split(s): those drive the PP device_map loader,

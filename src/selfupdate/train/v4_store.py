@@ -1,8 +1,8 @@
-"""Capture-once teacher store for pipeline-v4 (plan B5, 2026-07-17).
+"""Fill-once teacher store (store-fill) for pipeline-v4 (plan B5, 2026-07-17).
 
 ``v4_teacher_source: store`` — teacher hidden states are EPOCH-INVARIANT
 (frozen teacher, frozen epoch-0 target semantics), so the per-epoch
-re-capture that dominated the measured 27B epoch (~136 s of ~198 s; see
+per-epoch teacher recompute that dominated the measured 27B epoch (~136 s of ~198 s; see
 docs/training_pipeline_v4.md timing table) is paid ONCE, before the epoch
 loop, as a stage relay:
 
@@ -18,8 +18,8 @@ loop, as a stage relay:
   at most ``v4_capture_inflight`` boundary files of a producer alive.
 
 Every epoch then runs with ZERO teacher forwards. MoE routing interventions
-capture teacher top-k in the same pass (the controller's teacher_phase).
-Under weight rotation the capture pages blocks per (cohort, layer) — a
+record teacher top-k in the same pass (the controller's teacher_phase).
+Under weight rotation the staged store-fill pages blocks per (cohort, layer) — a
 one-time cost of minutes at 397B, accepted to preserve the pipeline.
 """
 
@@ -45,7 +45,7 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
     last = stage < 0 or stage == stages - 1
     rf = _RelayFiles(run_dir.parent) if run_dir is not None else None
     if rf is None and stage >= 0 and stages > 1:
-        raise ValueError("staged capture relay needs run_dir for the "
+        raise ValueError("staged store-fill relay needs run_dir for the "
                          "boundary exchange")
     inflight = max(1, int(getattr(cfg.train, "v4_capture_inflight", 2)))
     written: list = []
@@ -55,7 +55,7 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
     owned_list = list(owned)
 
     if stage < 0 and rotator is not None:
-        # Rotary PPP1 (task #18): cohort-outer capture pages EVERY owned
+        # Rotary PPP1 (task #18): cohort-outer store-fill pages EVERY owned
         # block once per cohort — 130 cohorts x 30 blocks ≈ 6 TB of H2D
         # and 617 s of measured stall at 26B. A single process has no
         # pipelining reason to be cohort-outer: walk LAYER-outer instead
@@ -146,7 +146,7 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                          device, log, *, owned, n_layers, moe_ctrl,
                          moe_routing, teacher_eval_rows, rotator,
                          started) -> None:
-    """Layer-outer capture for rotary PPP1: activate each block ONCE and
+    """Layer-outer store-fill for rotary PPP1: activate each block ONCE and
     run every cohort through it before evicting. Boundary hiddens and the
     per-cohort rope bundles (which carry gemma's shared-KV side channel
     across the whole sweep) stay resident for the duration."""

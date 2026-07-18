@@ -137,12 +137,12 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.v4_teacher_source == "online":
             if cfg.train.v4_loop_order != "item_major":
                 bad.append("v4_teacher_source=online requires "
-                           "v4_loop_order=item_major (one capture per "
-                           "cohort; layer_major would recapture per layer)")
+                           "v4_loop_order=item_major (one teacher forward per "
+                           "cohort; layer_major would redo it per layer)")
         if cfg.train.v4_teacher_source in ("online", "store"):
             if cfg.train.v4_kv_source != "teacher_frozen":
                 bad.append("v4_teacher_source=online/store implements "
-                           "teacher_frozen only: the captured KV/store IS "
+                           "teacher_frozen only: the recorded KV/store IS "
                            "the frozen teacher; student_refresh would "
                            "rebuild it from weights that keep moving")
             if not cfg.train.lora.enabled:
@@ -151,16 +151,16 @@ def validate_knob_schedule(cfg) -> None:
                            "train.lora.enabled")
         if (cfg.train.v4_teacher_source == "store"
                 and cfg.train.v4_teacher_residency == "rebuild"):
-            bad.append("v4_teacher_source=store is capture-ONCE; "
-                       "residency=rebuild would drop the captured entries "
-                       "and there is no per-epoch recapture to rebuild from")
+            bad.append("v4_teacher_source=store is FILL-ONCE (store-fill); "
+                       "residency=rebuild would drop the stored entries "
+                       "and there is no per-epoch teacher recompute to rebuild from")
         if "deepseek" in (cfg.model.name or "").lower():
             # Plan B8 phase A: the frozen-context adapter (deepseek_ctx.py)
             # serves sliding K=V + compressed entries + teacher-forced
             # indexer routing from a per-(layer, cohort) online record.
             if cfg.train.v4_teacher_source == "store":
                 bad.append("deepseek-v4 store lane not yet implemented: the "
-                           "capture relay does not carry compressor entries "
+                           "store-fill relay does not carry compressor entries "
                            "or indexer top-k; use v4_teacher_source=online")
             if cfg.train.v4_kv_source == "student_refresh":
                 bad.append("deepseek-v4 requires v4_kv_source=teacher_frozen:"
@@ -227,9 +227,9 @@ def validate_knob_schedule(cfg) -> None:
                            "weights are not stage-assembled)")
             if cfg.train.v4_teacher_source == "online":
                 bad.append("v4_stage_scoped cannot use v4_teacher_source="
-                           "online: the per-cohort capture walks EVERY "
+                           "online: the per-cohort teacher forward walks EVERY "
                            "layer and foreign blocks are meta — use cache "
-                           "(or the capture-relay store when it lands)")
+                           "(or the store-fill relay when it lands)")
         betas = tuple(cfg.train.v4_adam_betas)
         if len(betas) != 2 or not all(0.0 <= b < 1.0 for b in betas):
             bad.append("v4_adam_betas must be two values in [0, 1)")
@@ -286,14 +286,14 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.window_dedup:
             bad.append("pipeline-v4 has no connected windows to deduplicate")
         if cfg.train.moe_mode != "dense_or_black_box":
-            # v4 routing interventions ride the online capture: the
+            # v4 routing interventions ride the online teacher forward: the
             # adapters-off per-cohort forward that produces the teacher
             # hiddens also records every wrapped router's top-k (and
             # log-probs for router_aligned). The cache stores no routing,
-            # and layer_major has no per-cohort capture to hook.
+            # and layer_major has no per-cohort teacher forward to hook.
             if cfg.train.v4_teacher_source != "online":
                 bad.append("pipeline-v4 MoE routing interventions "
-                           "(teacher_forced/router_aligned) capture teacher "
+                           "(teacher_forced/router_aligned) record teacher "
                            "routing during the online adapters-off forward; "
                            "set v4_teacher_source=online")
         if (cfg.train.hidden_loss.startswith("delta_")
@@ -686,11 +686,11 @@ def validate_knob_schedule(cfg) -> None:
                        "implemented for the summed schedule only)")
         if (not cfg.train.online_teacher
                 and cfg.train.pipeline_version != 4):
-            # pipeline-v4 forbids online_teacher and instead captures
+            # pipeline-v4 forbids online_teacher and instead records
             # routing during its own adapters-off online forward; its
             # branch above enforces v4_teacher_source=online.
             bad.append("moe_mode needs train.online_teacher (routing targets "
-                       "are per-step, captured adapters-off on the same "
+                       "are per-step, recorded adapters-off on the same "
                        "wrapped blocks — disk cache stores no routing)")
         if (cfg.train.moe_mode == "router_aligned"
                 and cfg.train.moe_router_weight <= 0):
@@ -743,7 +743,7 @@ def validate_knob_schedule(cfg) -> None:
                    "conn_window > 1, conn_stride == 1)")
     if (cfg.train.window_dedup
             and cfg.train.moe_mode == "router_aligned"):
-        bad.append("window_dedup with router_aligned (router capture keeps "
+        bad.append("window_dedup with router_aligned (router recording keeps "
                    "per-window graphs; known graph-leak path)")
     if cfg.train.offload_adam and sched != "summed":
         bad.append("offload_adam")

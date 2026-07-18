@@ -8,7 +8,7 @@ This module materializes ONLY:
 - the owned decoder blocks (``model.layers.{i}`` for i in the owned
   0-based range),
 - the vocabulary stack everywhere (embed_tokens, final norm, lm_head —
-  every stage embeds for capture/relay and the last stage evaluates
+  every stage embeds for the store-fill relay and the last stage evaluates
   CE/KL through the frozen head; cost is a few GB),
 - tied-weight aliases of the above.
 

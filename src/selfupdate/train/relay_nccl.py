@@ -6,7 +6,7 @@ and a history of Lustre metadata/page-fault stalls, the BULK relay
 payloads move over NCCL — which speaks IB verbs natively (the broken
 node-to-node IPoIB layer is irrelevant) and moves tensors GPU-to-GPU
 (NVLink within a node). Only the boundary tensors ride NCCL; the small
-control-plane envelopes (adapter publications, battery acks, capture
+control-plane envelopes (adapter publications, battery acks, store-fill
 store) stay on the file relay, whose on-disk audit trail the reaper and
 post-mortems depend on.
 

@@ -342,7 +342,7 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
     """
     B, T = len(cohort.indices), cohort.T
     ids_full = cohort.teacher_ids.to(device)
-    # Batch-chunk the capture forward: a full-attention block over a long
+    # Batch-chunk the teacher forward: a full-attention block over a long
     # cohort materializes O(chunk*heads*T*T) SDPA scores, which OOMs at the
     # whole cohort (B=32, T~4096) on 80 GB. Each item's forward is
     # independent (attention is within-sequence, causal), so a smaller chunk
@@ -386,14 +386,14 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
                             positions = cohort.qpos_dev[bb].index_select(0, r)
                             eval_parts.append(
                                 view[bb - b0].index_select(0, positions))
-    # When capture chunking is enabled (the memory-lean path), offload the
+    # When teacher-forward chunking is enabled (the memory-lean path), offload the
     # per-owned-layer full inputs to host: under item_major, block L's
     # training runs while blocks L+1..end of the owned range still hold their
-    # [B,T,H] capture inputs on the card. On gemma-4-26B the first owned
+    # [B,T,H] teacher-forward inputs on the card. On gemma-4-26B the first owned
     # block is a full_attention layer, so its training peak coincides with
     # all owned inputs resident (~6 GB) and OOMs an 80 GB card by a few
     # hundred MB. build_layer_cohort streams the one needed layer back per
-    # visit. Epoch 1 only (epochs 2+ read the cpu_stream store, capture=None).
+    # visit. Epoch 1 only (epochs 2+ read the cpu_stream store; no teacher forward runs, capture=None).
     offload = bool(cfg.train.v4_capture_micro_batch)
     inputs = {layer: (torch.cat(inputs_parts[layer], 0).to("cpu")
                       if offload else torch.cat(inputs_parts[layer], 0))
@@ -405,10 +405,10 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
 
 
 def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
-    # online source uses the SAME store and sizing: epoch-1 captures are
-    # retained per residency (cache-after-first-production) or re-captured
+    # online source uses the SAME store and sizing: epoch-1 teacher forwards are
+    # retained per residency (cache-after-first-production) or recomputed
     # each epoch under "rebuild" — the owner's calibration point. The
-    # measured capture seconds land in the v4_epoch prep split.
+    # measured teacher-forward seconds land in the v4_epoch prep split.
     if cfg.train.v4_teacher_residency != "auto":
         return cfg.train.v4_teacher_residency
     hidden = stack.text_config.hidden_size
@@ -660,7 +660,7 @@ class _RelayFiles:
 
     def request_stop(self) -> None:
         """Announce a cooperative stop to EVERY stage of this run. A stage
-        blocked in wait() (drain, capture relay, battery ack) for a
+        blocked in wait() (drain, store-fill relay, battery ack) for a
         sibling that has already stopped would otherwise hang until the
         3600 s timeout (the 2026-07-18 e500 finale lost three stages'
         adapters exactly this way)."""
@@ -1040,7 +1040,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         _V4Cohort(cfg, ds, indices, device) for indices in cohort_indices]
     residency = _resolve_residency(cfg, cohorts, ds, stack, owned)
     if store_source and residency == "rebuild":
-        # Capture-once data has no per-epoch recapture to rebuild from;
+        # Fill-once store data has no per-epoch teacher recompute to rebuild from;
         # validate already rejects an EXPLICIT rebuild — this guards the
         # auto policy resolving there under memory pressure.
         residency = "cpu_stream"
@@ -1056,7 +1056,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     adapters_off = peft_model.disable_adapter if peft_model is not None else None
 
     # MoE routing intervention (teacher_forced / router_aligned): the wrapped
-    # routers record teacher top-k during the SAME adapters-off capture that
+    # routers record teacher top-k during the SAME adapters-off teacher forward that
     # produces the teacher hiddens, and replay/align during the student pass.
     # dense_or_black_box needs nothing: the block runs whole with the
     # student's own routing (experts are nn.Parameter — LoRA never touches
@@ -1144,13 +1144,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             return entry
         if store_source:
             raise RuntimeError(
-                f"store mode: no captured entry for layer {layer} cohort "
-                f"{cohort_idx} — the capture relay must prefill every "
+                f"store mode: no stored entry for layer {layer} cohort "
+                f"{cohort_idx} — the store-fill relay must prefill every "
                 "(owned layer, cohort) pair; a dropped entry means the "
-                "residency policy evicted capture-once data")
+                "residency policy evicted fill-once store data")
         layer_type = _bk_layer_type(stack, layer)
         if capture is not None:
-            # Capture inputs may live on host (memory-lean offload path);
+            # Teacher-forward inputs may live on host (memory-lean offload path);
             # stream the one needed owned layer back to the card. .to(device)
             # is a no-op when already resident. Drop the host reference so
             # sibling owned layers' inputs are the only ones left staged.
@@ -1168,7 +1168,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         if getattr(stack, "needs_deepseek_masks", False):
             # DeepSeek-V4 record pass: real typed cache layers run the
             # compressor's genuine window arithmetic; the indexer's top-k is
-            # captured by hook.  Fresh recorder PER CHUNK — the typed cache
+            # recorded by hook.  Fresh recorder PER CHUNK — the typed cache
             # treats successive calls as time-continuation, chunks are batch
             # slices.  Mask-free is exact for everything recorded: sliding
             # K=V and compressed entries are projections of the input, and
@@ -1213,7 +1213,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             return tensors.put(layer, cohort_idx, frozen, inputs_q, targets)
         kv = _FrozenKV()
         Bc = len(cohort.indices)
-        # Batch-chunk the prefill for the same reason as the capture: the
+        # Batch-chunk the prefill for the same reason as the teacher forward: the
         # block still runs its full attention + MoE over the whole teacher
         # sequence (only the projected K/V survive; the output is discarded),
         # so a full-attention gemma4 block over the longest cohort (B=32,
@@ -1254,13 +1254,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
 
     def moe_student_ctx(layer: int, cohort_idx: int, row_map, row_mask):
         """Arm the controller for ONE owned MoE layer's student pass: load
-        this cohort's captured teacher routing, install the flat student->
+        this cohort's recorded teacher routing, install the flat student->
         teacher row map, and return the student_phase context."""
         routing = moe_routing.get(cohort_idx)
         if routing is None or layer not in routing["idx"]:
             raise RuntimeError(
-                f"no captured teacher routing for layer {layer}; the online "
-                "capture must precede every MoE student step")
+                f"no recorded teacher routing for layer {layer}; the online "
+                "teacher forward must precede every MoE student step")
         moe_ctrl.t_idx = {layer: routing["idx"][layer]}
         moe_ctrl.t_logp = ({layer: routing["logp"][layer]}
                            if layer in routing["logp"] else {})
@@ -1413,7 +1413,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             floor = cfg.train.v4_min_train_gpu_util
             # Epoch 1 (0-indexed 0) is exempt, mirroring the epoch-boundary
             # gate below: the first epoch's cache/prefill warm-up (v4
-            # online teacher recaptures per cohort) is capture-bound, not a
+            # online teacher recomputes per cohort) is recompute-bound, not a
             # steady-state utilization signal.
             if (floor and epoch_state.get("_epoch", 0) > 0
                     and len(samples) >= 256 and len(samples) % 64 == 0):
@@ -1463,7 +1463,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                                run_dir, owned, rotator=rotator,
                                teacher_eval_rows=teacher_eval_rows)
     if store_source:
-        # Capture ONCE, before any epoch: the relay fills this stage's
+        # Store-fill: ONE relayed teacher pass before any epoch fills this stage's
         # per-(layer, cohort) store; every epoch then runs with zero
         # teacher forwards (the measured 3.2x lever at 27B).
         from .v4_store import capture_relay_store
@@ -1781,10 +1781,10 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
     owned = _owned_range(cfg, n)
     # store regenerates exactly like online here: one adapters-off forward
     # per sampled item (teacher states are the same computation the relay
-    # captured; certification needs no store plumbing).
+    # recorded; certification needs no store plumbing).
     online_source = cfg.train.v4_teacher_source in ("online", "store")
     if cfg.train.v4_stage_scoped and cfg.train.v4_teacher_source != "cache":
-        # The certification capture walks EVERY layer; foreign blocks are
+        # The certification teacher forward walks EVERY layer; foreign blocks are
         # meta under stage-scoped loading. A cert relay is future work —
         # report the debt loudly instead of crashing the end of a run.
         return {

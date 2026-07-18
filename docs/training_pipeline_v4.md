@@ -60,11 +60,11 @@ another layer. Consequences, all implemented:
    store_full_teacher_inputs cache; `online` computes teacher states with
    ONE adapters-off forward per cohort (vLLM contributes only answer token
    ids via an index-only cache; hidden states always come from OUR stack).
-   Online capture feeds the SAME per-(layer,cohort) store, so residency
-   decides cache-after-first-production vs recompute-per-epoch
-   (`rebuild`). The placement triangle — GPU memory (`gpu_corpus`) vs
+   The online teacher forward feeds the SAME per-(layer,cohort) store, so
+   residency decides cache-after-first-production vs per-epoch teacher
+   recompute (`rebuild`). The placement triangle — GPU memory (`gpu_corpus`) vs
    pinned process CPU (`cpu_stream`) vs /dev/shm mmap (cache mode from the
-   node cache) vs recompute — is a MEASURED choice: `capture_seconds` and
+   node cache) vs recompute — is a MEASURED choice: `capture_seconds` (teacher-forward seconds) and
    the prep split in every v4_epoch row are the calibration data; do not
    hardcode a winner.
 4. **Teacher tensors are constant** (`v4_kv_source: teacher_frozen`), so
@@ -99,11 +99,50 @@ Position classes store different things (v4_loss_positions=answer):
 Measured trade at 27B/stage (1.2 M positions): naive full-input store
 166 GB vs structured ~70 GB (answers 41 + item KV 17 + linear states 12 +
 shared prefix ~MB); streaming ~2 s/epoch vs ~80 s recompute — the store
-wins ~40x once structured. Capture-per-epoch (`rebuild`) remains the
-zero-memory fallback and the epoch-1 producer. IMPLEMENTATION PENDING:
+wins ~40x once structured. Per-epoch teacher recompute (`rebuild`) remains
+the zero-memory fallback and the epoch-1 producer. IMPLEMENTATION PENDING:
 tonight's einf runs `rebuild`; the structured store is the next
-implementation item, with `capture_seconds`/prep splits as the calibration
+implementation item, with the `capture_seconds` (teacher-forward) / prep splits as the calibration
 evidence.
+
+## Terminology (owner, 2026-07-18): the three meanings formerly called "capture"
+
+The word "capture" was retired from prose and comments because it hid three
+distinct phenomena behind one term. The three real meanings:
+
+1. **Teacher forward** — the adapters-off forward of one cohort through a
+   block/stage, producing teacher hiddens + frozen KV (and recording router
+   top-k / MLA states where applicable). The primitive; cost scales with the
+   FULL sequence (prompt + RAG + answer), ~35x the answer-span tokens.
+   Legacy identifiers: `_online_teacher_capture`, `v4_capture_micro_batch`,
+   `capture_seconds` (teacher-forward seconds inside an epoch; 0 in the
+   store lane after the fill).
+2. **Store-fill** — the ONE-TIME relayed teacher pass over the whole dataset,
+   before the epoch loop, that fills each stage's local store
+   (`v4_teacher_source: store`). Architectural floor: ~one full-context
+   teacher epoch (~12x one training epoch's FLOPs). Legacy identifiers:
+   `capture_relay_store`, `_capture_layer_outer`, `v4_capture_inflight`,
+   relay files `capture_c*`, log kind `v4_store_capture`.
+3. **Per-epoch teacher recompute** — the rebuild/online lane: teacher
+   forwards redone EVERY epoch because nothing is stored. What old table
+   rows called "capture-bound" is recompute-bound.
+
+Identifiers, config knobs, metric fields, and relay filenames keep their
+legacy `capture` names for metrics/config compatibility; all prose and
+comments use the three terms above.
+
+## Weight-residency law (owner, 2026-07-18)
+
+Weights are read from Lustre exactly ONCE per process — the sequential bulk
+load (`load_shard_seq`, real RAM tensors, not Lustre-backed mmaps). Every
+re-read after that — rotation paging, store streaming — must be served from
+RAM (host masters, pinned buffers, /dev/shm) or node-local /tmp. If the
+working set cannot be cached in RAM and /tmp cannot hold it, the config must
+be REFUSED (surrender), never silently re-fault against Lustre. Note the
+cross-node dividend: PPP8 over two nodes has TWICE the aggregate RAM (2x2 TB)
+— each node holds only its half's masters + stores, so 397B PPP8 is the
+comfortable configuration (~390 GB/node of masters) while PPP4 single-node
+(~780 GB) is the tight one.
 
 ## Optimizer
 
@@ -197,17 +236,17 @@ OOMs is part of the claim, not a footnote.
 For EVERY envelope member, TWO measured points (owner directive): the
 **minimal config** (fewest GPUs it runs on — rotary PPP1 on one card is
 the floor) and the **best config** (fastest, most GPUs — PPP4 resident/
-store). "Speed proven" = no open cells. Steady = capture-once epochs
-(teacher forwards = 0); capture is a one-time cost. Corpus = 2,071 items.
+store). "Speed proven" = no open cells. Steady = fill-once store epochs
+(teacher forwards = 0); the store-fill is a one-time cost. Corpus = 2,071 items.
 
 | model | minimal config | min steady s/epoch | best config | best steady s/epoch |
 |---|---|---|---|---|
 | Qwen3.5-0.8B | PPP1 1-GPU | — | PPP4 (certified 2026-07-17) | see cert table |
 | Qwen3.5-4B | PPP1 1-GPU | — | PPP4 (cert vehicle) | see cert table |
-| Qwen3.6-27B | **PPP1 rotary 1-GPU, store** | **214 s** @ ~99%, stall 0.04-0.09 s (64 dense blocks, 1 GPU) | **PPP4 store 4-GPU** | **~55 s** (max stage 54.7 s; all 51.6-54.7 s, stall 0). Old 198 s was capture-bound (re-capture/epoch); store is 3.6x faster and restores the 4x parallel speedup vs 1-GPU. |
+| Qwen3.6-27B | **PPP1 rotary 1-GPU, store** | **214 s** @ ~99%, stall 0.04-0.09 s (64 dense blocks, 1 GPU) | **PPP4 store 4-GPU** | **~55 s** (max stage 54.7 s; all 51.6-54.7 s, stall 0). Old 198 s was recompute-bound (per-epoch teacher recompute); store is 3.6x faster and restores the 4x parallel speedup vs 1-GPU. |
 | Qwen3.6-35B-A3B | **PPP1 rotary 1-GPU** | **74.6 s** @ 96%, stall 0.086 s (99.9% hidden) | **PPP4 store 4-GPU** | **15.9 s** @ 97% (~4.7× 1→4) |
 | gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
-| gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | **PPP4 4-GPU store** | **30.6 s** @ high (capture-once; e1 477 s folds capture). The old 328 s "best" was rebuild-residency (re-captured every epoch @25% util) — store is 10.7x faster. 1-GPU store (136 s) already beat 4-GPU rebuild (328 s). |
+| gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | **PPP4 4-GPU store** | **30.6 s** @ high (fill-once store; e1 477 s folds the store-fill). The old 328 s "best" was rebuild-residency (per-epoch teacher recompute @25% util) — store is 10.7x faster. 1-GPU store (136 s) already beat 4-GPU rebuild (328 s). |
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
@@ -225,7 +264,7 @@ by reusing the 122B answers (byte-identical tokenizer, md5-verified) via
 `build_teacher_cache.py --coordinated-node-cache --index-only` (no model load).
 The reported 34.8 s is the surviving-stage steady-state epoch: agpuh02's Slurm
 reservation EXPIRED mid-run, killing stages 4-7 — but agpuh01's stages 0-3 kept
-training at 100% util and produced clean epochs, because the capture-once store
+training at 100% util and produced clean epochs, because the fill-once store
 completed cross-node BEFORE the node died and epochs train each stage's blocks
 locally from the store (no relay). This is an unplanned resilience datum: a node
 loss does not stop the survivors. A full clean 8-stage completion is pending
@@ -287,7 +326,7 @@ answer tokens; stage-1 `v4_epoch` rows from
 `runs/failed_launches/h100_27b_v4_ppp4_einf_20260717_1951/`; the run trained
 6 honest epochs before a relay-plumbing bug — fixed in `e6ceb0f` — killed it):
 
-| epoch | seconds | tok/s | prep s | capture s | exec s | GPU util |
+| epoch | seconds | tok/s | prep s | teacher-fwd s | exec s | GPU util |
 |---|---|---|---|---|---|---|
 | 1 (cold) | 350.2 | 3,235 | 15.1 | 176.1 | 158.9 | 60.8% |
 | 2 | 198.8 | 5,699 | 14.9 | 136.8 | 47.0 | 90.7% |
@@ -295,10 +334,10 @@ answer tokens; stage-1 `v4_epoch` rows from
 | 4–5 | ~198.3 | ~5,713 | 14.8 | 136.4 | 46.9 | ~91.4% |
 | 6 (partial) | 144.8 | 5,895 | 11.0 | 99.4 | 34.3 | 89.6% |
 
-The load-bearing observation: **capture dominates the steady state** —
-~136 s of the ~198 s epoch (69%) is the per-epoch adapters-off teacher
-re-capture, vs ~47 s of actual training exec. Teacher hiddens are
-epoch-invariant, so the capture-once structured store (`v4_teacher_source:
+The load-bearing observation: **the per-epoch teacher recompute dominates the
+steady state** — ~136 s of the ~198 s epoch (69%) is adapters-off teacher
+forwards redone every epoch, vs ~47 s of actual training exec. Teacher hiddens are
+epoch-invariant, so the fill-once structured store (`v4_teacher_source:
 store`, the contract above) removes that 136 s for every epoch ≥ 1: a
 projected ~62 s/epoch, ~3.2× throughput, on measured evidence rather than
 estimate.
@@ -447,7 +486,7 @@ neither. Design (not yet implemented):
 ## Base-weight fine-tuning (plan B9 — design note, NOT coded)
 
 `v4_update_target: adapter | base_blocks` (future knob). What survives
-unchanged: stage-scoped loading, capture-once store, blockwise locality
+unchanged: stage-scoped loading, fill-once store, blockwise locality
 (detached inputs), the relay, the battery, and the frozen-vocabulary locks —
 "base weights" always means the transformer blocks, never embed/norm/head.
 
@@ -455,7 +494,7 @@ What changes:
 - **Teacher-target semantics become visible.** Under LoRA the teacher
   (adapters-off) never moves; under base-FT the teacher and the trained
   tensors are the same object. Default (owner, 2026-07-17): **frozen
-  epoch-0 targets** — the store stays exact and capture-once; the drifting
+  epoch-0 targets** — the store stays exact and fill-once; the drifting
   -teacher variant (re-relay every N epochs) is a separate later experiment.
 - **Rotation becomes two-way**: a trained block is dirty after its step —
   each stage needs a WRITABLE private host master (no mmap sharing of the

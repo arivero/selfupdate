@@ -435,7 +435,7 @@ The `HiddenLoss` taxonomy is worth knowing:
 * Vocabulary metric: `vocab_mse`, sampled vocab cosine, `lens_kl`, `lens_js`.
 * Increment: `delta_*`, which compare a block's raw update at interior layers
   and deliberately fall back to absolute state at cache boundaries.
-* Component: `component_nmse`, whose hooks capture recombined attention and
+* Component: `component_nmse`, whose hooks record recombined attention and
   MLP writes rather than attention probabilities.
 
 The layer boundary treatment in `steps.py` makes the delta convention
