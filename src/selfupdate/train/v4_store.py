@@ -39,6 +39,36 @@ import torch
 __all__ = ["capture_relay_store"]
 
 
+def _fill_deepseek_layer(stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
+                         tensors):
+    """DeepSeek-V4 store-fill for ONE (layer, cohort): run the block with
+    the rope bundle's own sliding-causal mask (output h[L] causally exact —
+    unlike the online lane's mask-free record, whose output is discarded)
+    while the typed-cache recorder harvests sliding K=V, compressed entries,
+    and the indexer's top-k. The FrozenDeepseekCtx lands in the SAME store
+    slot the training step already serves (isinstance branch ->
+    extended_additive_mask). Nothing extra crosses the relay: the boundary
+    hidden is all downstream needs; typed entries stay stage-local."""
+    from .deepseek_ctx import (DeepseekRecorder, FrozenDeepseekCtx,
+                               gather_topk_at_qpos)
+
+    rec = DeepseekRecorder(stack, layer)
+    inputs_q = cohort.gather_query_inputs(h).clone()
+    try:
+        h_new = stack.run_block(layer, h, pe, position_ids=pos,
+                                past_key_values=rec.shim, use_cache=True,
+                                input_ids=ids_dev)
+    finally:
+        rec.close()
+    kv_t, entries, topk = rec.harvest()
+    frozen = FrozenDeepseekCtx(
+        kv_t, entries, gather_topk_at_qpos(topk, cohort.qpos_dev), layer - 1)
+    view = h_new if layer < n else stack.final_norm(h_new)
+    tensors.put(layer, idx, frozen, inputs_q,
+                cohort.gather_query_inputs(view).clone())
+    return h_new, view
+
+
 def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                         device, run_dir, log, *, owned, n_layers,
                         moe_ctrl=None, moe_routing=None,
@@ -103,10 +133,17 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                  else contextlib.nullcontext())
         with torch.no_grad(), ctx_a, ctx_m:
             pe = stack.rope(h, pos)
+            ids_dev = (cohort.teacher_ids.to(device)
+                       if getattr(stack, "needs_deepseek_masks", False)
+                       else None)
             for layer in owned_list:
                 if rotator is not None:
                     rotator.activate(layer)
-                if _bk_layer_type(stack, layer) == "linear_attention":
+                if ids_dev is not None:
+                    h, view = _fill_deepseek_layer(
+                        stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
+                        tensors)
+                elif _bk_layer_type(stack, layer) == "linear_attention":
                     h_in = h
                     h = stack.run_block(layer, h, pe, position_ids=pos)
                     view = h if layer < n else stack.final_norm(h)
@@ -219,7 +256,12 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                              if moe_ctrl is not None
                              else contextlib.nullcontext())
                     with ctx_a, ctx_m:
-                        if ltype == "linear_attention":
+                        if getattr(stack, "needs_deepseek_masks", False):
+                            h_new, view = _fill_deepseek_layer(
+                                stack, cohort, idx, layer, n, h, pes[idx],
+                                poss[idx], cohort.teacher_ids.to(device),
+                                tensors)
+                        elif ltype == "linear_attention":
                             h_new = stack.run_block(
                                 layer, h, pes[idx], position_ids=poss[idx])
                             view = (h_new if layer < n
@@ -317,7 +359,12 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                 ctx_m = (moe_ctrl.teacher_phase() if moe_ctrl is not None
                          else contextlib.nullcontext())
                 with ctx_a, ctx_m:
-                    if ltype == "linear_attention":
+                    if getattr(stack, "needs_deepseek_masks", False):
+                        h_new, view = _fill_deepseek_layer(
+                            stack, cohort, idx, layer, n, h, pes[idx],
+                            poss[idx], cohort.teacher_ids.to(device),
+                            tensors)
+                    elif ltype == "linear_attention":
                         h_new = stack.run_block(layer, h, pes[idx],
                                                 position_ids=poss[idx])
                         view = (h_new if layer < n

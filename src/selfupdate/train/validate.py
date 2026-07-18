@@ -158,10 +158,10 @@ def validate_knob_schedule(cfg) -> None:
             # Plan B8 phase A: the frozen-context adapter (deepseek_ctx.py)
             # serves sliding K=V + compressed entries + teacher-forced
             # indexer routing from a per-(layer, cohort) online record.
-            if cfg.train.v4_teacher_source == "store":
-                bad.append("deepseek-v4 store lane not yet implemented: the "
-                           "store-fill relay does not carry compressor entries "
-                           "or indexer top-k; use v4_teacher_source=online")
+            # store lane implemented 2026-07-18: _fill_deepseek_layer
+            # records typed-cache artifacts during the store-fill walk
+            # (entries stay stage-local; the relay still carries only
+            # boundary hiddens) and the step serves FrozenDeepseekCtx.
             if cfg.train.v4_kv_source == "student_refresh":
                 bad.append("deepseek-v4 requires v4_kv_source=teacher_frozen:"
                            " compressed entries and indexer selection are "
