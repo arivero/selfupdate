@@ -148,7 +148,20 @@ class BlockStack:
         self._accepts_input_ids = []
         for block in self.blocks:
             params = inspect.signature(block.forward).parameters
-            self._accepts_past_key_values.append("past_key_values" in params)
+            # A layer whose forward is (…, **kwargs) passes them straight to its
+            # attention (deepseek_v4: DeepseekV4DecoderLayer.forward ->
+            # self_attn(…, **kwargs)); it therefore accepts past_key_values iff
+            # its attention does. Checking only explicit params was a false
+            # negative that broke the deepseek store-fill recorder shim.
+            # Kept SPECIFIC to past_key_values: shared_kv_states/input_ids stay
+            # explicit-only — the deepseek attention rejects shared_kv_states.
+            has_var_kw = any(p.kind is inspect.Parameter.VAR_KEYWORD
+                             for p in params.values())
+            attn = getattr(block, "self_attn", None)
+            attn_pkv = attn is not None and "past_key_values" in \
+                inspect.signature(attn.forward).parameters
+            self._accepts_past_key_values.append(
+                "past_key_values" in params or (has_var_kw and attn_pkv))
             self._accepts_shared_kv_states.append("shared_kv_states" in params)
             self._accepts_input_ids.append("input_ids" in params)
         self.final_norm = inner.norm
