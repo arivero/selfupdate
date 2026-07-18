@@ -853,12 +853,20 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
             "exports it)")
     script = Path(__file__).resolve().parents[3] / "scripts" / "v4_battery.py"
     logf = run_dir / f"battery_e{epoch:04d}.log"
+    child_env = dict(os.environ)
+    if cfg.train.v4_stage < 0:
+        # Rotary PPP1: the battery child must stay on the rotor's OWN
+        # card — device_map=auto over every GPU tramples concurrent runs
+        # (three rotors + a PPP5 stage shared one node, 2026-07-18).
+        # Inside the child, auto-placement spills the remainder to CPU.
+        own = torch.device(cfg.model.device).index or 0
+        child_env["CUDA_VISIBLE_DEVICES"] = str(own)
     with open(logf, "ab") as fh:
         rc = subprocess.run(
             [_sys.executable, str(script), "--config", base_p,
              "--experiment", exp_p, "--run-dir", str(run_dir),
              "--epoch", str(epoch), "--stages", str(stages)],
-            stdout=fh, stderr=fh).returncode
+            stdout=fh, stderr=fh, env=child_env).returncode
     if rc != 0:
         raise RuntimeError(
             f"battery subprocess failed rc={rc}; see {logf} — the "
