@@ -86,7 +86,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import torch
-from safetensors import safe_open
 from safetensors.torch import save_file
 
 # ------------------------------------------------------------------ mapping
@@ -152,24 +151,36 @@ _DROP = ("mtp.",)
 
 
 class _ShardReader:
-    """Lazy, LRU-ish safe_open over the native shards (mmap; cheap to reopen)."""
+    """Whole-shard SEQUENTIAL bulk reads with an LRU of loaded shard dicts.
+
+    Scattered ``safe_open(...).get_tensor()`` over a Lustre-backed mmap page-
+    faults per tensor (measured ~78 MB/s and, on a cold Lustre file, minutes
+    per layer). Reading the ENTIRE shard's bytes once and decoding in RAM is
+    the repo's ``load_shard_seq`` idiom (~368 MB/s). A layer touches only ~3
+    shards and consecutive layers share them, so an LRU of a few loaded shards
+    (~5 GB each) reads each native shard about once."""
+
+    _CACHE = 4  # loaded shards kept resident (~20 GB)
 
     def __init__(self, src: Path, weight_map: dict):
         self.src = src
         self.weight_map = weight_map
-        self._open: dict[str, object] = {}
+        self._loaded: dict[str, dict] = {}
+        self._order: list[str] = []
 
-    def _handle(self, shard: str):
-        h = self._open.get(shard)
-        if h is None:
-            if len(self._open) > 8:
-                self._open.clear()
-            h = safe_open(self.src / shard, framework="pt", device="cpu")
-            self._open[shard] = h
-        return h
+    def _shard(self, shard: str) -> dict:
+        d = self._loaded.get(shard)
+        if d is None:
+            from safetensors.torch import load as _st_load
+            d = _st_load((self.src / shard).read_bytes())  # one sequential read
+            self._loaded[shard] = d
+            self._order.append(shard)
+            if len(self._order) > self._CACHE:
+                self._loaded.pop(self._order.pop(0), None)
+        return d
 
     def get(self, key: str) -> torch.Tensor:
-        return self._handle(self.weight_map[key]).get_tensor(key)
+        return self._shard(self.weight_map[key])[key]
 
 
 def _layer_keys(weight_map: dict) -> dict[int, list[str]]:
