@@ -162,11 +162,17 @@ for ((k = 0; k < STAGES; k++)); do
     # Remote stage: same tree over the shared filesystem, that node's own
     # /tmp venv (build it there first: scripts/venv_setup.sh). HF_HOME is
     # NOT forwarded — each node resolves its own stage or account cache.
+    # < /dev/null is LOAD-BEARING: without it the surviving remote stage
+    # inherits the ssh channel's stdin and sshd holds the session open, so
+    # this command substitution hangs forever after the FIRST healthy
+    # stage (2026-07-18: PPP5 spawned stage 1 then froze; earlier
+    # cross-node spawns only "worked" because their stages died in
+    # seconds, closing the channel).
     rpid=$(ssh -o BatchMode=yes "$host" \
       "cd '$ROOT' && nohup setsid env $STAGE_ENV \
        /tmp/\$USER/selfupdate-venv/bin/python scripts/train.py \
        --config '$BASE' --experiment '$EXP' --v4-stage $k \
-       >> '$logfile' 2>&1 & echo \$!")
+       < /dev/null >> '$logfile' 2>&1 & echo \$!")
     pids+=("$host:$rpid")
     echo "  stage $k -> $host pid $rpid  log $logfile"
   fi
