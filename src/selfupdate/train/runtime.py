@@ -507,7 +507,48 @@ class TrainingRuntime:
             _replicate_frozen_output_head_for_pp(self.stack)
         self.stack.freeze_non_blocks()
         self._vocab_sig0 = vocab_signature(self.stack)
+        self.assert_own_gpu_only("post_load")
         return self
+
+    def assert_own_gpu_only(self, phase: str) -> None:
+        """Owner defect-hunt 2026-07-18 ("catch it definitely"): raise if
+        THIS process holds memory on any CUDA device other than its
+        assigned one. Uses nvidia-smi because a bare ~518 MB CUDA context
+        is invisible to torch's allocator counters. Skipped for
+        deliberately multi-GPU placements (device_map=auto, PPn maps)."""
+        import os
+        import subprocess
+
+        if (self.device.type != "cuda" or self.auto_map
+                or self.pp_map is not None):
+            return
+        try:
+            apps = subprocess.run(
+                ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10).stdout
+            gpus = subprocess.run(
+                ["nvidia-smi", "--query-gpu=index,uuid",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=10).stdout
+        except Exception:
+            return  # no NVML — the tripwire is best-effort
+        index_of = {}
+        for line in gpus.strip().splitlines():
+            idx, uuid = (part.strip() for part in line.split(","))
+            index_of[uuid] = int(idx)
+        me = os.getpid()
+        foreign = sorted({
+            index_of[uuid] for uuid, pid in
+            (tuple(part.strip() for part in line.split(","))
+             for line in apps.strip().splitlines() if line.strip())
+            if pid.isdigit() and int(pid) == me
+            and index_of.get(uuid) not in (None, self.device.index)})
+        if foreign:
+            raise RuntimeError(
+                f"stray CUDA context: pid {me} holds memory on "
+                f"cuda:{foreign} while pinned to {self.device} "
+                f"(phase={phase}) — a deviceless CUDA call ran off-card")
 
     def load_teacher(self, moe_load_kw: dict | None = None):
         """Online teacher (adapters-off LoRA base, or a resident frozen bf16

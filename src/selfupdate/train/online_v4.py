@@ -1419,10 +1419,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
-    if not single_process and cfg.train.v4_battery_mode == "subprocess":
-        # Epoch-zero baseline under the subprocess battery: EVERY stage
+    if cfg.train.v4_battery_mode == "subprocess":
+        # Epoch-zero baseline under the subprocess battery: every stage
         # participates (publish zero-init adapters, release VRAM, ack);
-        # the subprocess evaluates the base model on all cards.
+        # the subprocess evaluates the base model. This INCLUDES rotary
+        # PPP1 (single_process + scoped): an in-process epoch-0 probe
+        # would run a full model.forward against CPU-mastered rotated
+        # blocks — the 2026-07-18 g31b PPP1 crash ("cuda:0 and cpu").
         baseline = _subprocess_battery(cfg, stack, log, 0, run_dir,
                                        owned, baseline, rotator=rotator)
     elif single_process or cfg.train.v4_stage == 0:

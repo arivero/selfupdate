@@ -126,6 +126,10 @@ class BlockRotator:
         side = self.stream
 
         def _pipeline():
+            # Threads get their own current-device defaulting to cuda:0
+            # (the stray-context defect, owner 2026-07-18): pin it FIRST
+            # or the stream/copy calls below build a foreign context.
+            torch.cuda.set_device(self.device)
             # Hop 1: mmap -> pinned (memcpy releases the GIL, overlaps
             # GPU compute). Hop 2: pinned -> device, async on the side
             # stream, enqueued from this thread (same CUDA context).
