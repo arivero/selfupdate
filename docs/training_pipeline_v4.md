@@ -209,7 +209,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
 | gemma-4-31B | PPP1 rotary 1-GPU (running) | — | PPP4 4-GPU rebuild (mb8) | **328 s** @ ~25% (capture-bound) |
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
-| Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s (99.86% of 225 GB/ep hidden) | PPP4 store 4-GPU (#7 pending) | — |
+| Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s (99.86% of 225 GB/ep hidden) | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (capture 208 s once; cross-node relay NOT the bottleneck) |
 | Qwen3.5-397B-FP8 | PPP1 rotate 1-GPU (M5) | — | PPP4-rotate stack (M5) | — |
 
 The minimal column is the "beyond the OOM wall" proof: 122B (244 GB, can
