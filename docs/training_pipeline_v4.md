@@ -245,7 +245,7 @@ store). "Speed proven" = no open cells. Steady = fill-once store epochs
 | Qwen3.5-4B | PPP1 1-GPU | — | PPP4 (cert vehicle) | see cert table |
 | Qwen3.6-27B | **PPP1 rotary 1-GPU, store** | **214 s** @ ~99%, stall 0.04-0.09 s (64 dense blocks, 1 GPU) | **PPP4 store 4-GPU** | **~55 s** (max stage 54.7 s; all 51.6-54.7 s, stall 0). Old 198 s was recompute-bound (per-epoch teacher recompute); store is 3.6x faster and restores the 4x parallel speedup vs 1-GPU. |
 | Qwen3.6-35B-A3B | **PPP1 rotary 1-GPU** | **74.6 s** @ 96%, stall 0.086 s (99.9% hidden) | **PPP4 store 4-GPU** | **15.9 s** @ 97% (~4.7× 1→4) |
-| gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
+| gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **UNMEASURED** (rotary run `h100_g26b_v4_ppp1_rotate` died after store-fill, before epoch 1 — 5 metric rows, no `v4_epoch`; re-queued) | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% (real 2071-item epochs, `h100_g26b_v4_ppp4_e500`) |
 | gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | **PPP4 4-GPU store** | **30.6 s** @ high (fill-once store; e1 477 s folds the store-fill). The old 328 s "best" was rebuild-residency (per-epoch teacher recompute @25% util) — store is 10.7x faster. 1-GPU store (136 s) already beat 4-GPU rebuild (328 s). |
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
@@ -273,9 +273,15 @@ agpuh02 re-availability; the per-stage epoch time is unaffected by the loss.
 The minimal column is the "beyond the OOM wall" proof: 122B (244 GB, can
 NOT fit resident on 80 GB) trains on ONE card at 202 s/88% util, rotation
 transport 99.86% hidden. The best column is throughput; the ratio between
-them is rotation's cost (26B: 61.8 s min vs ~13.9 s best on 4 cards =
-~90% of ideal 4→1 linear scaling — rotation is near-free). 31B PPP1 min,
-35B-A3B both, and PPP5 cross-node numbers land next.
+them is rotation's cost, which is near-free on the evidence that survives
+audit: the measured `rotation_stall` is 0.04–0.29 s across ALL completed
+rotary runs (27B 214 s, 31B 136 s, 35B 74.6 s, 122B 202 s — transport
+~99.9% hidden by the pinned ping-pong prefetch), and the M1 store+rotate
+certification proved the rotated numbers bit-identical incl. Adam moments.
+(The earlier 26B "61.8 s rotary" was a contaminated datum — a 27B 100-item
+PP4 throughput of 61.84 tok-ev/s mis-transcribed as 26B 1-GPU s/epoch; the
+26B rotary run never completed an epoch. Re-queued.) 26B rotary, and PPP5
+cross-node numbers land next.
 
 ## The Pareto envelope (owner-ordered, 2026-07-17)
 
