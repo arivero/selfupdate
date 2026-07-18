@@ -1,0 +1,29 @@
+# Qwen3.5-397B-A17B PPP8 CROSS-NODE (owner, 2026-07-18): 60 blocks over
+# 8 H100s (4+4), MoE 17B active. Trains from the bf16 dequant snapshot
+# (fp8 weight_scale_inv form; dequantize_snapshot.py). Store + scoped +
+# rotate (at ~13 GB/block owned, 7-8 blocks/stage ~100 GB > 80 GB card ->
+# rotation is mandatory). 3-epoch SPEED test.
+run_name: h100_q397b_v4_ppp8x
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 16
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 1
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [8, 15, 22, 30, 38, 45, 52]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
