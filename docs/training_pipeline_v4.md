@@ -205,7 +205,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | Qwen3.5-0.8B | PPP1 1-GPU | — | PPP4 (certified 2026-07-17) | see cert table |
 | Qwen3.5-4B | PPP1 1-GPU | — | PPP4 (cert vehicle) | see cert table |
 | Qwen3.6-27B | PPP1 rotary 1-GPU (pending) | — | PPP4 resident 4-GPU | **198 s** @ 91% |
-| Qwen3.6-35B-A3B | PPP1 rotary 1-GPU (pending) | — | **PPP4 store 4-GPU** | **15.9 s** @ 97% (capture 117 s once) |
+| Qwen3.6-35B-A3B | **PPP1 rotary 1-GPU** | **74.6 s** @ 96%, stall 0.086 s (99.9% hidden) | **PPP4 store 4-GPU** | **15.9 s** @ 97% (~4.7× 1→4) |
 | gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
 | gemma-4-31B | PPP1 rotary 1-GPU (running) | — | PPP4 4-GPU rebuild (mb8) | **328 s** @ ~25% (capture-bound) |
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
