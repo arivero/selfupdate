@@ -54,6 +54,20 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
     entries = 0
     owned_list = list(owned)
 
+    if stage < 0 and rotator is not None:
+        # Rotary PPP1 (task #18): cohort-outer capture pages EVERY owned
+        # block once per cohort — 130 cohorts x 30 blocks ≈ 6 TB of H2D
+        # and 617 s of measured stall at 26B. A single process has no
+        # pipelining reason to be cohort-outer: walk LAYER-outer instead
+        # (one page-in per block, amortized over all cohorts; boundary
+        # hiddens for every cohort stay resident, ~7-12 GB at 31B/122B).
+        _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
+                             device, log, owned=owned_list, n_layers=n,
+                             moe_ctrl=moe_ctrl, moe_routing=moe_routing,
+                             teacher_eval_rows=teacher_eval_rows,
+                             rotator=rotator, started=started)
+        return
+
     for idx, cohort in enumerate(cohorts):
         B, T = len(cohort.indices), cohort.T
         pos = torch.arange(T, device=device)[None].expand(B, -1)
@@ -125,4 +139,79 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
             seconds=round(time.perf_counter() - started, 3),
             cohorts=len(cohorts), layer_entries=entries,
             stage=stage, pipelined=stages > 1,
+            teacher_forwards_per_later_epoch=0)
+
+
+def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
+                         device, log, *, owned, n_layers, moe_ctrl,
+                         moe_routing, teacher_eval_rows, rotator,
+                         started) -> None:
+    """Layer-outer capture for rotary PPP1: activate each block ONCE and
+    run every cohort through it before evicting. Boundary hiddens and the
+    per-cohort rope bundles (which carry gemma's shared-KV side channel
+    across the whole sweep) stay resident for the duration."""
+    from .online_v4 import _FrozenKV, _bk_layer_type
+
+    n = n_layers
+    entries = 0
+    hs, poss, pes = {}, {}, {}
+    with torch.no_grad():
+        for idx, cohort in enumerate(cohorts):
+            B, T = len(cohort.indices), cohort.T
+            poss[idx] = torch.arange(T, device=device)[None].expand(B, -1)
+            hs[idx] = stack.embed(cohort.teacher_ids.to(device))
+            pes[idx] = stack.rope(hs[idx], poss[idx])
+        for pos_i, layer in enumerate(owned):
+            rotator.activate(layer)
+            if pos_i + 1 < len(owned):
+                rotator.prefetch(owned[pos_i + 1])
+            ltype = _bk_layer_type(stack, layer)
+            for idx, cohort in enumerate(cohorts):
+                h = hs[idx]
+                ctx_a = (adapters_off() if adapters_off is not None
+                         else contextlib.nullcontext())
+                ctx_m = (moe_ctrl.teacher_phase() if moe_ctrl is not None
+                         else contextlib.nullcontext())
+                with ctx_a, ctx_m:
+                    if ltype == "linear_attention":
+                        h_new = stack.run_block(layer, h, pes[idx],
+                                                position_ids=poss[idx])
+                        view = (h_new if layer < n
+                                else stack.loss_view(n, h_new))
+                        tensors.put_linear(
+                            layer, idx, h.clone(),
+                            cohort.gather_query_inputs(view).clone())
+                    else:
+                        kv = _FrozenKV()
+                        inputs_q = cohort.gather_query_inputs(h).clone()
+                        h_new = stack.run_block(
+                            layer, h, pes[idx], position_ids=poss[idx],
+                            past_key_values=kv, use_cache=True,
+                            causal_length=cohort.T)
+                        kv.recording = False
+                        view = (h_new if layer < n
+                                else stack.loss_view(n, h_new))
+                        tensors.put(layer, idx, kv, inputs_q,
+                                    cohort.gather_query_inputs(view).clone())
+                entries += 1
+                if moe_ctrl is not None and moe_routing is not None:
+                    r = moe_routing.setdefault(idx, {"idx": {}, "logp": {}})
+                    if layer in moe_ctrl.t_idx:
+                        r["idx"][layer] = moe_ctrl.t_idx[layer]
+                    if layer in moe_ctrl.t_logp:
+                        r["logp"][layer] = moe_ctrl.t_logp[layer]
+                if layer == n and teacher_eval_rows is not None:
+                    rows = []
+                    for b in range(len(cohort.indices)):
+                        sel = cohort.eval_rows[b].to(device)
+                        positions = cohort.qpos_dev[b].index_select(0, sel)
+                        rows.append(
+                            view[b].index_select(0, positions).detach())
+                    teacher_eval_rows[idx] = rows
+                hs[idx] = h_new
+            rotator.evict(layer)
+    log.log(kind="v4_store_capture",
+            seconds=round(time.perf_counter() - started, 3),
+            cohorts=len(cohorts), layer_entries=entries,
+            stage=-1, pipelined=False, layer_outer=True,
             teacher_forwards_per_later_epoch=0)
