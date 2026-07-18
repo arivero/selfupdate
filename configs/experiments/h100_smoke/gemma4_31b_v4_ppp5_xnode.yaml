@@ -1,0 +1,33 @@
+# PPP5 CROSS-NODE (owner, 2026-07-18 "that will be funny"): gemma-4-31B
+# over FIVE stages on TWO hosts — stage 0 on agpuh01 GPU 3, stages 1-4 on
+# agpuh02 GPUs 0-3. 60 layers -> five exact 12-block stages; ONE boundary
+# (stage0->1) crosses nodes via the Lustre relay (launcher multi-host
+# branch). Completes the same-model matrix: PPP4 (done, epochs ~330 s),
+# PPP1 rotary (running), PPP5 cross-node (this). Same knobs as the PPP4
+# test where applicable; devices are PHYSICAL per host.
+run_name: h100_g31b_v4_ppp5x
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 8
+  v4_min_train_gpu_util: 20.0
+  epochs: 25
+  seed: 17
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_relay_every_cohorts: 5
+  v4_stage_splits: [12, 24, 36, 48]
+  v4_stage_devices: [3, 0, 1, 2, 3]
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 10
