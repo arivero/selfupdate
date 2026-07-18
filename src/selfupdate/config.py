@@ -416,6 +416,15 @@ class TrainConfig:
     # files of one producer stage alive in the exchange (consumer deletion
     # is the ack).
     v4_capture_inflight: int = 2
+    # Boundary-tensor carrier between stage processes. "files" = the
+    # postal safetensors exchange (Lustre//dev/shm). "nccl" = native IB
+    # verbs via torch.distributed (owner decision 2026-07-18 after fabric
+    # measurements: dual HDR-200 at line rate vs 0.4-1.2 GB/s Lustre and
+    # a history of Lustre stalls); control-plane envelopes (adapters,
+    # battery acks, capture store) stay on files either way. See
+    # src/selfupdate/train/relay_nccl.py.
+    v4_relay_transport: str = "files"  # files | nccl
+    v4_nccl_timeout_s: int = 600
     v4_kv_refresh_epochs: int = 0
     # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
     # law. adam gives each owned block its own AdamW (more memory; pairs
