@@ -202,18 +202,26 @@ def validate_knob_schedule(cfg) -> None:
         if cfg.train.v4_battery_mode not in ("graft", "subprocess"):
             bad.append("v4_battery_mode must be graft or subprocess")
         if (cfg.train.v4_battery_mode == "subprocess"
-                and cfg.train.v4_stage < 0):
+                and cfg.train.v4_stage < 0
+                and not cfg.train.v4_stage_scoped):
             bad.append("v4_battery_mode=subprocess coordinates a staged "
-                       "launch; single-process runs probe directly")
+                       "launch; a single-process RESIDENT run probes "
+                       "directly (scoped single-process — rotary PPP1 — "
+                       "requires it)")
         if cfg.train.v4_stage_scoped:
             if cfg.train.v4_battery_mode != "subprocess":
                 bad.append("v4_stage_scoped cannot graft (stage 0 lacks "
                            "the full model): set v4_battery_mode="
                            "subprocess")
-            if cfg.train.v4_stage < 0:
-                bad.append("v4_stage_scoped is the staged scaling lane; a "
-                           "single process owning every block should load "
-                           "the full model (unset v4_stage_scoped)")
+            if (cfg.train.v4_stage < 0
+                    and cfg.train.v4_weight_residency not in
+                    ("rotate", "auto")):
+                bad.append("single-process v4_stage_scoped is the rotary "
+                           "PPP1 lane (owner demo, 2026-07-18): every "
+                           "block CPU-mastered and paged through ONE "
+                           "device — requires v4_weight_residency rotate "
+                           "(or auto); a resident single process should "
+                           "load the full model instead")
             if not cfg.train.lora.enabled:
                 bad.append("v4_stage_scoped requires lora (full-FT master "
                            "weights are not stage-assembled)")

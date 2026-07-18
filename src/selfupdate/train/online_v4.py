@@ -592,11 +592,14 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
 @torch.no_grad()
 def _student_trajectory_eval(cfg, stack, ds, cohorts, cache, device, log,
                              epoch: int,
-                             teacher_rows_by_cohort: dict | None = None
-                             ) -> None:
-    """Single-process deployment-matched CE/KL: whole walk in one call."""
+                             teacher_rows_by_cohort: dict | None = None,
+                             rotator=None) -> None:
+    """Single-process deployment-matched CE/KL: whole walk in one call.
+    Under rotary PPP1 the rotator pages each block in for its layer-outer
+    pass — without it the walk would touch CPU-resident masters."""
     finals = _relay_segment(cfg, stack, ds, cohorts, device,
-                            range(1, stack.n_layers + 1), None)
+                            range(1, stack.n_layers + 1), None,
+                            rotator=rotator)
     _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log, epoch,
                      finals, trajectory="student_censored_flow_full_walk",
                      teacher_rows_by_cohort=teacher_rows_by_cohort)
@@ -810,7 +813,9 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     import subprocess
     import sys as _sys
 
-    stage = cfg.train.v4_stage
+    # Single-process (rotary PPP1) normalizes to stage 0: it publishes,
+    # spawns, and has no siblings to ack/notify.
+    stage = max(cfg.train.v4_stage, 0)
     stages = len(cfg.train.v4_stage_splits or []) + 1
     rf = _RelayFiles(run_dir.parent)
     rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
@@ -1582,10 +1587,26 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 _student_trajectory_eval(
                     cfg, stack, ds, cohorts, cache, device, log,
                     epoch=epoch + 1,
-                    teacher_rows_by_cohort=teacher_eval_rows)
-            baseline = _epoch_end_telemetry(
-                cfg, stack, tok, log, epoch=epoch, baseline=baseline,
-                started_at=started_at)
+                    teacher_rows_by_cohort=teacher_eval_rows,
+                    rotator=rotator)
+            if cfg.train.v4_stage_scoped:
+                # Rotary PPP1: the model is never resident, so the direct
+                # telemetry probes cannot run in-process. Spawn the
+                # subprocess battery at the eval cadence; mark the
+                # off-cadence epochs loudly (the per-epoch battery law is
+                # visible debt here, not silence).
+                every = max(int(cfg.eval.every_epochs), 1)
+                if (epoch + 1) % every == 0:
+                    baseline = _subprocess_battery(
+                        cfg, stack, log, epoch + 1, run_dir, owned,
+                        baseline, rotator=rotator)
+                else:
+                    log.log(kind="epoch_battery_skipped", epoch=epoch + 1,
+                            reason="ppp1_rotate_battery_at_eval_cadence")
+            else:
+                baseline = _epoch_end_telemetry(
+                    cfg, stack, tok, log, epoch=epoch, baseline=baseline,
+                    started_at=started_at)
         elif not stopped:
             if run_dir is None:
                 raise ValueError("staged pipeline-v4 needs run_dir for the "
