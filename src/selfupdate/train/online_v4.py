@@ -619,6 +619,12 @@ def _launch_identity() -> str:
     return os.environ.get("SELFUPDATE_V4_LAUNCH_ID", f"solo-{os.getpid()}")
 
 
+class _RelayStopped(Exception):
+    """A blocking relay wait was abandoned because a cooperative stop was
+    requested (own signal or the shared run sentinel). Callers treat it as
+    'drain is over, proceed to certification + checkpoint'."""
+
+
 class _RelayFiles:
     """Atomic tensor-file exchange between v4 stage processes.
 
@@ -646,6 +652,26 @@ class _RelayFiles:
 
     def path(self, epoch: int, name: str) -> Path:
         return self.dir / f"e{epoch:04d}" / name
+
+    def _stop_path(self) -> Path:
+        # Run-scoped stop sentinel: a sibling of the per-epoch dirs, so the
+        # launcher's `rm -rf <root>/<run>` clears it with the exchange.
+        return self.dir / "STOP"
+
+    def request_stop(self) -> None:
+        """Announce a cooperative stop to EVERY stage of this run. A stage
+        blocked in wait() (drain, capture relay, battery ack) for a
+        sibling that has already stopped would otherwise hang until the
+        3600 s timeout (the 2026-07-18 e500 finale lost three stages'
+        adapters exactly this way)."""
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            self._stop_path().write_text(f"{socket.gethostname()}\n")
+        except OSError:
+            pass  # best-effort: the process's own stop_requested still holds
+
+    def stop_seen(self) -> bool:
+        return self._stop_path().exists()
 
     def write(self, path: Path, tensors: dict, *, stage: int, epoch: int,
               to_stage: int | None = None) -> None:
@@ -699,6 +725,13 @@ class _RelayFiles:
              poll_s: float = 2.0) -> Path:
         deadline = time.time() + timeout_s
         while not path.exists():
+            # Abandon the wait the instant this stage — or any sibling of
+            # this run — has been asked to stop. stop_requested() covers
+            # this process's own SIGTERM; the shared STOP sentinel covers
+            # a sibling that stopped and will never produce this boundary
+            # (cross-process, cross-node visible).
+            if stop_requested() or self.stop_seen():
+                raise _RelayStopped(path)
             if time.time() > deadline:
                 raise RuntimeError(
                     f"relay timeout after {timeout_s:.0f}s waiting for "
@@ -782,9 +815,12 @@ class _RelayServicer:
         telemetry; checkpoints are the run. Abandon, log, proceed."""
         try:
             self.service(block=True)
-        except RuntimeError as err:
+        except (RuntimeError, _RelayStopped) as err:
             self.log.log(kind="relay_drain_abandoned",
                          pending_epochs=list(self.pending),
+                         reason=("cooperative_stop"
+                                 if isinstance(err, _RelayStopped)
+                                 else "timeout"),
                          error=str(err)[:300])
             self.pending.clear()
 
@@ -1543,6 +1579,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                                       epoch_lr, capture)
                 if stop_requested():
                     stopped = True
+        if stopped and relay is not None:
+            # Propagate to siblings the instant we stop: a faster stage
+            # already parked in drain() waiting for this (now-stopping)
+            # stage's boundaries must abandon its wait and checkpoint,
+            # rather than hang to the relay timeout (#17).
+            relay.rf.request_stop()
         # One host sync per epoch: flush per-layer telemetry.
         layer_losses = {}
         grad_norms = {}
@@ -1632,43 +1674,53 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         tracker.log(log, epoch=epoch + 1,
                     phase=f"after_epoch_{epoch + 1}", started_at=started_at)
         boundary_started = time.perf_counter()
-        if single_process and not stopped:
-            if cfg.train.v4_relay_every_cohorts and (
-                    (epoch + 1) % cfg.train.v4_relay_every_cohorts == 0):
-                _student_trajectory_eval(
-                    cfg, stack, ds, cohorts, cache, device, log,
-                    epoch=epoch + 1,
-                    teacher_rows_by_cohort=teacher_eval_rows,
-                    rotator=rotator)
-            if cfg.train.v4_stage_scoped:
-                # Rotary PPP1: the model is never resident, so the direct
-                # telemetry probes cannot run in-process. Spawn the
-                # subprocess battery at the eval cadence; mark the
-                # off-cadence epochs loudly (the per-epoch battery law is
-                # visible debt here, not silence).
-                every = max(int(cfg.eval.every_epochs), 1)
-                if (epoch + 1) % every == 0:
-                    baseline = _subprocess_battery(
-                        cfg, stack, log, epoch + 1, run_dir, owned,
-                        baseline, rotator=rotator)
+        try:
+            if single_process and not stopped:
+                if cfg.train.v4_relay_every_cohorts and (
+                        (epoch + 1) % cfg.train.v4_relay_every_cohorts == 0):
+                    _student_trajectory_eval(
+                        cfg, stack, ds, cohorts, cache, device, log,
+                        epoch=epoch + 1,
+                        teacher_rows_by_cohort=teacher_eval_rows,
+                        rotator=rotator)
+                if cfg.train.v4_stage_scoped:
+                    # Rotary PPP1: the model is never resident, so the
+                    # direct telemetry probes cannot run in-process. Spawn
+                    # the subprocess battery at the eval cadence; mark the
+                    # off-cadence epochs loudly (the per-epoch battery law
+                    # is visible debt here, not silence).
+                    every = max(int(cfg.eval.every_epochs), 1)
+                    if (epoch + 1) % every == 0:
+                        baseline = _subprocess_battery(
+                            cfg, stack, log, epoch + 1, run_dir, owned,
+                            baseline, rotator=rotator)
+                    else:
+                        log.log(kind="epoch_battery_skipped",
+                                epoch=epoch + 1,
+                                reason="ppp1_rotate_battery_at_eval_cadence")
                 else:
-                    log.log(kind="epoch_battery_skipped", epoch=epoch + 1,
-                            reason="ppp1_rotate_battery_at_eval_cadence")
-            else:
-                baseline = _epoch_end_telemetry(
-                    cfg, stack, tok, log, epoch=epoch, baseline=baseline,
-                    started_at=started_at)
-        elif not stopped:
-            if run_dir is None:
-                raise ValueError("staged pipeline-v4 needs run_dir for the "
-                                 "relay/battery exchange")
-            if relay is not None and (
-                    (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
-                    == 0):
-                relay.submit(epoch + 1)
-            baseline = _staged_epoch_battery(
-                cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
-                started_at, rotator=rotator)
+                    baseline = _epoch_end_telemetry(
+                        cfg, stack, tok, log, epoch=epoch, baseline=baseline,
+                        started_at=started_at)
+            elif not stopped:
+                if run_dir is None:
+                    raise ValueError("staged pipeline-v4 needs run_dir for "
+                                     "the relay/battery exchange")
+                if relay is not None and (
+                        (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
+                        == 0):
+                    relay.submit(epoch + 1)
+                baseline = _staged_epoch_battery(
+                    cfg, stack, tok, log, epoch + 1, run_dir, owned, baseline,
+                    started_at, rotator=rotator)
+        except _RelayStopped:
+            # A sibling stopped while this stage was blocked in a boundary
+            # wait (battery ack / relay boundary). Convert to a clean stop
+            # so the run still certifies + checkpoints (#17).
+            stopped = True
+            if relay is not None:
+                relay.rf.request_stop()
+            log.log(kind="v4_epoch_boundary_stopped", epoch=epoch + 1)
         if not stopped:
             log.log(kind="v4_epoch_boundary", epoch=epoch + 1,
                     boundary_seconds=round(
