@@ -1,0 +1,30 @@
+# gemma-4-31B PPP4 STORE lane (true best config): 60 blocks -> 15-block
+# stages, scoped + capture-once store (the online-rebuild variant at 328s
+# was capture-bound; the 1-GPU rotary store beat it). 3-epoch speed test.
+run_name: h100_g31b_v4_ppp4_store
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 8
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
