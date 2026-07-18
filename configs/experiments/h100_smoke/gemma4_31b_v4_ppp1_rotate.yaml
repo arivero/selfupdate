@@ -39,6 +39,6 @@ train:
   v4_stage_devices: []
   v4_stage: -1
 eval:
-  every_epochs: 2
+  every_epochs: 100
   recall_corpora: [machado, quijote_ch1, quijote_ch4]
-  standard_damage_every_epochs: 2
+  standard_damage_every_epochs: 100
