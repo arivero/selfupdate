@@ -1,0 +1,41 @@
+# MINIMAL config for Qwen3.6-27B: rotary PPP1, ONE GPU (cuda:0), store lane,
+# Adam moments riding the blocks. 3-epoch timing for the envelope table's
+# minimal-config column (best is PPP4 resident 198s).
+run_name: h100_q27b_v4_ppp1_rotate
+model:
+  device: cuda:0
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 16
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  v4_grad_clip: 0.0
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_battery_mode: subprocess
+  v4_weight_residency: rotate
+  v4_relay_every_cohorts: 2
+  v4_min_train_gpu_util: 0.0
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+eval:
+  every_epochs: 100
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 100
