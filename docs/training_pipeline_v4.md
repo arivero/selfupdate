@@ -211,7 +211,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 | DeepSeek-V4-Flash | (bf16 dequant streaming #16→#11) | — | — | — |
 | Qwen3.5-122B-A10B | **PPP1 rotary 1-GPU** (244 GB model, un-runnable resident!) | **202 s** @ 88%, stall 0.287 s | **PPP8 store 8-GPU / 2 nodes** | **20.3 s** @ 98% (cross-node relay NOT the bottleneck) |
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
-| Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** | **~34.8 s** steady-state (e1 264 s cold; stall 0.645 s = rotation ~free). Per-stage epoch (blocks 0-7 of 60); PPP8 stages run in parallel with equal block counts so per-stage ≈ wall-clock. See note. |
+| Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** | **~35 s** wall-clock (max stage 35.2 s; all 4 surviving stages 30-35 s, e2/e3 consistent). e1 ~260 s cold; stall 0.6-0.9 s = rotation ~free. 3 epochs, checkpoints written. See note. |
 
 **397B PPP8 provenance (2026-07-18).** The 752 GB bf16 dequant snapshot needed
 four fixes to run cross-node, all in git: (1) the fp8 checkpoint stores MoE
