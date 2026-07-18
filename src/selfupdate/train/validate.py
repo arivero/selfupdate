@@ -265,8 +265,19 @@ def validate_knob_schedule(cfg) -> None:
         devices = list(cfg.train.v4_stage_devices or [])
         if devices and len(devices) != stages:
             bad.append("v4_stage_devices must name one physical id per stage")
-        if len(set(devices)) != len(devices):
-            bad.append("v4_stage_devices must be unique physical ids")
+        # Device uniqueness is HOST-scoped (Multi-Node Conventions): a
+        # cross-node stage map (SELFUPDATE_V4_STAGE_HOSTS) may legally
+        # reuse a physical id on different hosts (PPP5 2026-07-18:
+        # agpuh01 GPU 3 + agpuh02 GPUs 0-3).
+        import os as _os
+        hosts = (_os.environ.get("SELFUPDATE_V4_STAGE_HOSTS", "").split()
+                 or ["local"] * len(devices))
+        if len(hosts) != len(devices):
+            hosts = ["local"] * len(devices)
+        pairs = list(zip(hosts, devices))
+        if len(set(pairs)) != len(pairs):
+            bad.append("v4_stage_devices must be unique physical ids per "
+                       "host (host, device) pairs collide")
         if not -1 <= cfg.train.v4_stage < stages:
             bad.append(
                 f"v4_stage {cfg.train.v4_stage} outside -1..{stages - 1}")
