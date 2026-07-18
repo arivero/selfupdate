@@ -185,3 +185,27 @@ LANDING directory (here /fs/.../supercomplex, not the repo) and dies with
 "No such file" — three demo launches and two warmer attempts failed this
 way in one night. Remote invocations must use wrapper scripts with
 absolute paths (see scripts/demo_deepseek_retry.sh) or an explicit cd.
+
+## Launch-expectation recipe (owner, 2026-07-18)
+
+A launch is a prediction. Before every launch, state the expected
+observable timeline — which line appears in which log at roughly what
+time — and act on the FIRST discrepancy:
+
+1. t+0: launcher prints one `stage k -> pid` line per stage. A missing
+   line is itself the failure; do not wait for later milestones.
+2. t+seconds: each stage log opens with this launch's separator
+   (`==== launch <id> stage <k> <timestamp> ====`) followed by the runlog
+   header row in its metrics.jsonl. Anything ABOVE the separator is a
+   previous attempt — never triage from it.
+3. t+1-10 min: the GPU-occupancy map (nvidia-smi compute-apps, per host)
+   matches the device plan exactly — right pids on right cards, nothing
+   extra, nothing missing. This check catches what log-reading cannot
+   (frozen spawn loops, pattern-missed zombies, stray contexts).
+4. t+capture-window: first capture/epoch rows per stage.
+
+When a discrepancy needs more signal, raise verbosity SELECTIVELY for
+the suspect section (TRANSFORMERS_VERBOSITY, NCCL_DEBUG=INFO for
+transport bring-up, per-script --debug flags) instead of relaunching
+blind. Every 2026-07-18 mis-triage was visible at the first broken
+expectation; the cost was incurred by waiting for the next one.
