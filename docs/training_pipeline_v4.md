@@ -212,9 +212,14 @@ the capture-once store applies.
 | Qwen3.5-397B-FP8 | OPEN — M5: scoped+store+rotate PPP4 stack staged | — | — | — | — |
 
 Variant rows (same model, different machinery — not "best" but part of
-the story): 31B PPP1-rotate and PPP5 cross-node numbers land in their
-run reports; the 26B×500 run demonstrated the steady rate holds for
-hundreds of consecutive epochs.
+the story): the 26B×500 run demonstrated the steady rate holds for
+hundreds of consecutive epochs. **MEASURED 2026-07-18 ~14:00 — 26B
+rotary PPP1 (ONE GPU, all 30 blocks paged through it): steady epoch
+61.8 s at 72% util with rotation stall 0.128 s (45.6 GB paged, 30
+pages) — the pinned ping-pong prefetch hides ~99.8% of transport, and
+61.8 s vs 4×14 s resident PPP4 is ~90% of perfect 4-to-1 linear
+scaling.** Epoch 1 carried 617 s of capture-phase cohort-outer paging
+(task #18 removes it). 31B PPP1 and PPP5 cross-node numbers land next.
 
 ## The Pareto envelope (owner-ordered, 2026-07-17)
 
