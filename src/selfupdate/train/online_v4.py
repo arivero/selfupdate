@@ -469,6 +469,7 @@ def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
     return stack.embed(_student_ids(ds, cohort).to(device))
 
 
+@torch.no_grad()
 def _relay_segment(cfg, stack, ds, cohorts, device, owned,
                    boundaries_in: dict | None, rotator=None) -> dict:
     """Run this stage's owned blocks of the CENSORED student forward.
@@ -501,7 +502,13 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
                 h = stack.run_block(layer, h, pe, position_ids=pos,
                                     flow_keep=keep, causal_length=T,
                                     input_ids=ids)
-            out[idx] = h
+            # Stream each cohort's boundary to host immediately: holding all
+            # cohorts' finals on the card (~30-50 GB at 26B/31B) is what
+            # pushed stage 0 over the edge on 2026-07-18 (with the missing
+            # no_grad compounding it). Consumers (.to(device) in the eval
+            # tail, .cpu() in the envelope write) already accept host
+            # tensors.
+            out[idx] = h.cpu()
         return out
     hs, keeps, poss, idss = {}, {}, {}, {}
     for idx, cohort in enumerate(cohorts):

@@ -22,7 +22,10 @@ train:
   epochs: 500
   v4_teacher_source: online
   v4_loop_order: item_major
-  v4_relay_every_cohorts: 1
+  # Relay (deployment CE) every 10 epochs, aligned with the recall cadence:
+  # at 14-20 s training epochs a per-epoch relay walk would dominate the
+  # 500-epoch wall clock.
+  v4_relay_every_cohorts: 10
   v4_stage_splits: [8, 16, 23]
   v4_stage_devices: [0, 1, 2, 3]
 eval:
