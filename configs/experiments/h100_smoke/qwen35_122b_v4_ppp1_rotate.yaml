@@ -1,0 +1,44 @@
+# ROTARY PPP1 at 122B (owner, 2026-07-18): Qwen3.5-122B-A10B — 237 GB of
+# weights — training through ONE H100 via rotation. THE "beyond the OOM
+# wall" headline demo. cpu_stream residency pinned: auto's 0.3x rule
+# would refuse as sibling PPP1 stores shrink MemAvailable, and store
+# forbids rebuild. Capture is cohort-outer under rotation (slow, once;
+# task #18 makes it layer-outer later). 2-epoch smoke.
+run_name: h100_q122b_v4_ppp1_rotate
+model:
+  device: cuda:1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 8
+  epochs: 2
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  v4_grad_clip: 0.0
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_battery_mode: subprocess
+  v4_weight_residency: rotate
+  v4_relay_every_cohorts: 2
+  v4_min_train_gpu_util: 0.0
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+eval:
+  every_epochs: 2
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 2
