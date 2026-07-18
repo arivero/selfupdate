@@ -204,7 +204,7 @@ store). "Speed proven" = no open cells. Steady = capture-once epochs
 |---|---|---|---|---|
 | Qwen3.5-0.8B | PPP1 1-GPU | — | PPP4 (certified 2026-07-17) | see cert table |
 | Qwen3.5-4B | PPP1 1-GPU | — | PPP4 (cert vehicle) | see cert table |
-| Qwen3.6-27B | **PPP1 rotary 1-GPU, store** | **214 s** @ ~99%, stall 0.04-0.09 s (64 dense blocks, 1 GPU) | PPP4 store 4-GPU (re-running) | old **198 s** was capture-bound (1-GPU rotary ≈ 4-GPU → no parallel speedup = re-capture/epoch, like 31B); true store best pending |
+| Qwen3.6-27B | **PPP1 rotary 1-GPU, store** | **214 s** @ ~99%, stall 0.04-0.09 s (64 dense blocks, 1 GPU) | **PPP4 store 4-GPU** | **~55 s** (max stage 54.7 s; all 51.6-54.7 s, stall 0). Old 198 s was capture-bound (re-capture/epoch); store is 3.6x faster and restores the 4x parallel speedup vs 1-GPU. |
 | Qwen3.6-35B-A3B | **PPP1 rotary 1-GPU** | **74.6 s** @ 96%, stall 0.086 s (99.9% hidden) | **PPP4 store 4-GPU** | **15.9 s** @ 97% (~4.7× 1→4) |
 | gemma-4-26B-A4B | **PPP1 rotary 1-GPU** | **61.8 s** @ 72%, stall 0.128 s | PPP4 4-GPU cpu_stream | **12–14 s** @ 82–86% |
 | gemma-4-31B | **PPP1 rotary 1-GPU, store** | **136 s** @ high, stall 0.05-0.1 s | **PPP4 4-GPU store** | **30.6 s** @ high (capture-once; e1 477 s folds capture). The old 328 s "best" was rebuild-residency (re-captured every epoch @25% util) — store is 10.7x faster. 1-GPU store (136 s) already beat 4-GPU rebuild (328 s). |
