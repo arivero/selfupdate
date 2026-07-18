@@ -194,13 +194,20 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
                 run_dir=run_dir)
             locality = certify_locality_v4(
                 cfg, stack, tok, cache, run_dir, peft_model=rt.peft_model)
-            log.log(kind="locality_certification", **{
-                key: locality[key] for key in (
-                    "items", "gradient_contract", "final_logit_training",
-                    "local_grad_norm", "cross_block_leak_grad_norm",
-                    "frozen_vocab_grad_norm",
-                    "local_signal_present_in_every_block", "passed")})
-            if not locality["passed"]:
+            # Scoped/rotary runs return a skip dict ({"skipped": ...,
+            # "passed": False, "owner_note": "...debt, not evidence"})
+            # that lacks the full-certification keys: log whatever is
+            # present rather than KeyError'ing after a completed run
+            # (2026-07-18: the 26B rotor trained clean, then crashed here
+            # on 'gradient_contract').
+            cert_keys = ("items", "gradient_contract", "final_logit_training",
+                         "local_grad_norm", "cross_block_leak_grad_norm",
+                         "frozen_vocab_grad_norm",
+                         "local_signal_present_in_every_block", "passed",
+                         "skipped", "owner_note")
+            log.log(kind="locality_certification",
+                    **{k: locality[k] for k in cert_keys if k in locality})
+            if not locality["passed"] and not locality.get("skipped"):
                 raise RuntimeError(
                     "pipeline-v4 locality certification failed; checkpoint "
                     f"withheld: {locality}")
