@@ -237,6 +237,15 @@ class BlockStack:
                 name[: -len("_inv_freq")]
                 for name in dir(self.rotary_emb)
                 if name.endswith("_inv_freq") and not name.startswith("_"))
+            # A yarn/scaled rope keeps auxiliary "*_original" inv_freq buffers
+            # (deepseek_v4: compress_original, main_original) that are NOT valid
+            # layer_type dispatch keys — self.rotary_emb.rope_type is only
+            # {main, compress}. Calling rotary_emb(layer_type="compress_original")
+            # raises KeyError (modeling_rope_utils indexes rope_type[layer_type]).
+            # Restrict to the real dispatch keys the model itself uses.
+            _valid = getattr(self.rotary_emb, "rope_type", None)
+            if isinstance(_valid, dict):
+                rope_types = [t for t in rope_types if t in _valid]
             if (rope_types
                     and getattr(self.text_config, "model_type", "")
                     .startswith("deepseek")):
