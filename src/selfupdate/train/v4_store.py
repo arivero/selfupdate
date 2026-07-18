@@ -57,7 +57,7 @@ def _fill_deepseek_layer(stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
     try:
         h_new = stack.run_block(layer, h, pe, position_ids=pos,
                                 past_key_values=rec.shim, use_cache=True,
-                                input_ids=ids_dev)
+                                causal_length=cohort.T, input_ids=ids_dev)
     finally:
         rec.close()
     kv_t, entries, topk = rec.harvest()
