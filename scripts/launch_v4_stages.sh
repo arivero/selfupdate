@@ -150,6 +150,10 @@ pids=()
 local_pids=()
 for ((k = 0; k < STAGES; k++)); do
   logfile="$ROOT/runs/${RUN_NAME}_stage${k}.log"
+  # Logs append across launches; without a separator, stale tracebacks
+  # from a previous attempt masquerade as fresh failures (three
+  # mis-triages on 2026-07-18).
+  echo "==== launch $SELFUPDATE_V4_LAUNCH_ID stage $k $(date -Is) ====" >> "$logfile"
   host="${STAGE_HOSTS[$k]:-local}"
   if [[ -z "$host" || "$host" == "local" || "$host" == "$(hostname -s)" ]]; then
     nohup setsid "$PY" "$ROOT/scripts/train.py" \
