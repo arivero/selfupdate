@@ -208,7 +208,7 @@ the capture-once store applies.
 | gemma-4-26B-A4B | PPP4 online, cpu_stream store, mb16 | 485–489 s (capture ~175 s) | **12–14 s** @ 82–86% util | ~280 | ~10 min |
 | gemma-4-31B | PPP4 online, rebuild residency, mb8 (store does not fit host) | 542 s | **328 s** @ ~25% util (capture-bound; honest physics) | 11 | ~1.9 h |
 | DeepSeek-V4-Flash | OPEN — bf16 dequant streaming; cert then first run (#11/#16) | — | — | — | — |
-| Qwen3.5-122B-A10B | OPEN — PPP1-rotate smoke in flight; 4-GPU store lane (#7) is the candidate best | — | — | — | — |
+| Qwen3.5-122B-A10B | PPP1 rotary, ONE H100 (244 GB resident model, un-runnable resident) | 816 s capture (layer-outer #18) | **202 s** @ 88% util, rotation stall 0.287 s (99.86% of 225 GB/epoch H2D hidden) | 18 | ~1.1 h | 4-GPU store lane (#7) would be the resident "best"; this row is the OOM-wall demonstration |
 | Qwen3.5-397B-FP8 | OPEN — M5: scoped+store+rotate PPP4 stack staged | — | — | — | — |
 
 Variant rows (same model, different machinery — not "best" but part of
