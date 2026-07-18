@@ -47,10 +47,22 @@ _LAYER_RE = re.compile(r"\blayers\.(\d+)\.")
 
 
 def _snapshot_dir(model_name: str) -> Path:
-    """Resolve the local snapshot directory (offline; no Hub traffic)."""
+    """Resolve the local snapshot directory (offline; no Hub traffic).
+
+    allow_patterns limits the hub's snapshot-completeness check to the
+    files this loader actually reads: `hf download` snapshots routinely
+    lack README/.gitattributes/eval yamls, and the strict whole-repo check
+    would refuse an otherwise complete weights cache (hit 2026-07-18 on
+    gemma-4-31B-it; from_pretrained never notices because it fetches
+    per-file)."""
     from huggingface_hub import snapshot_download
 
-    return Path(snapshot_download(model_name, local_files_only=True))
+    if Path(model_name).is_dir():
+        return Path(model_name)
+    return Path(snapshot_download(
+        model_name, local_files_only=True,
+        allow_patterns=["*.safetensors", "*.json", "*.jinja", "*.txt",
+                        "*.model"]))
 
 
 def _conversion(model) -> list[tuple[re.Pattern, str]]:
