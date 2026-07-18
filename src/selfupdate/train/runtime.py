@@ -648,9 +648,20 @@ class TrainingRuntime:
         """
         self.check_vocab_frozen()
         target = run_dir / "checkpoint"
+        fold_in = None
         if target.exists():
-            raise FileExistsError(
-                f"refusing to replace existing checkpoint publication: {target}")
+            # The v4 trainer writes Adam moments to checkpoint/ before this
+            # publish runs (they pair with the adapter for warm-start). A
+            # checkpoint dir holding ONLY that sibling artifact is our own
+            # in-progress save, not a prior publication — fold it in rather
+            # than refuse (2026-07-18: crashed every completed rotary run).
+            contents = list(target.iterdir())
+            if contents and all(p.name == "adam_moments.pt" for p in contents):
+                fold_in = target / "adam_moments.pt"
+            else:
+                raise FileExistsError(
+                    "refusing to replace existing checkpoint publication: "
+                    f"{target}")
         staging = Path(tempfile.mkdtemp(prefix=".checkpoint.incomplete-", dir=run_dir))
         try:
             if self.peft_model is not None:
@@ -681,6 +692,9 @@ class TrainingRuntime:
                     "stage_shard_publication": "not_applicable_single_process_runtime",
                     "tied_weight_aliases": adapter.tied_weight_aliases(),
                 }, indent=2) + "\n")
+            if fold_in is not None:
+                shutil.move(str(fold_in), str(staging / "adam_moments.pt"))
+                target.rmdir()  # now empty; rename can claim the name
             staging.rename(target)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
