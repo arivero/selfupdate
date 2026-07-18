@@ -157,7 +157,8 @@ class CacheConfig:
     generation_compile: bool = False
     generation_cache_implementation: str = ""
     # Graph-shape controls. Dynamic is the safe default; dense-model probes
-    # can pin cache and physical batch shapes to amortize one capture.
+    # can pin cache and physical batch shapes to amortize one CUDA-graph
+    # capture (the CUDA term, unrelated to v4 teacher forwards).
     generation_compile_dynamic: bool = True
     generation_cache_max_tokens: int = 0
     generation_fixed_batch: bool = False
