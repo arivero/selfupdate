@@ -192,6 +192,30 @@ don't fit, it rotates.** The memory arithmetic, per 80 GB H100:
 Report this arithmetic next to every big-model result: the baseline that
 OOMs is part of the claim, not a footnote.
 
+## ENVELOPE SPEED TABLE (the "speed proven" deliverable — owner, 2026-07-18)
+
+Seconds per epoch for EVERY envelope member, signaling the BEST config
+found. A row is filled only from a measured run on the 2,071-item corpus;
+"speed proven" = no open cells. Epoch-1 is the one-time capture cost where
+the capture-once store applies.
+
+| model | best config found | epoch 1 | steady s/epoch | epochs/h | 20-epoch wall |
+|---|---|---|---|---|---|
+| Qwen3.5-0.8B | PPP4 online (certified 2026-07-17) | — | measured, see cert table | — | minutes |
+| Qwen3.5-4B | PPP4 online (certification vehicle) | — | measured, see cert table | — | minutes |
+| Qwen3.6-27B | PPP4 online, resident store | ~334 s (capture 136 s) | **198 s** @ 91% util | 18 | ~1.2 h |
+| Qwen3.6-35B-A3B | OPEN — PPP4 store run pending (#21) | — | — | — | — |
+| gemma-4-26B-A4B | PPP4 online, cpu_stream store, mb16 | 485–489 s (capture ~175 s) | **12–14 s** @ 82–86% util | ~280 | ~10 min |
+| gemma-4-31B | PPP4 online, rebuild residency, mb8 (store does not fit host) | 542 s | **328 s** @ ~25% util (capture-bound; honest physics) | 11 | ~1.9 h |
+| DeepSeek-V4-Flash | OPEN — bf16 dequant streaming; cert then first run (#11/#16) | — | — | — | — |
+| Qwen3.5-122B-A10B | OPEN — PPP1-rotate smoke in flight; 4-GPU store lane (#7) is the candidate best | — | — | — | — |
+| Qwen3.5-397B-FP8 | OPEN — M5: scoped+store+rotate PPP4 stack staged | — | — | — | — |
+
+Variant rows (same model, different machinery — not "best" but part of
+the story): 31B PPP1-rotate and PPP5 cross-node numbers land in their
+run reports; the 26B×500 run demonstrated the steady rate holds for
+hundreds of consecutive epochs.
+
 ## The Pareto envelope (owner-ordered, 2026-07-17)
 
 Speed-first certification order; every member trains under the utilization
