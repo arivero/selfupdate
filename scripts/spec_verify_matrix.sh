@@ -67,20 +67,24 @@ if [[ "$KEY" != 0p8b ]]; then
   # historical h100 responses were generated with a FLAT 4096 budget
   # (generation_budget: 4096 per row); the 0.8B template derives per-record
   # budgets (generation_max_tokens: 0) — batch 420477 failed on this mismatch.
+  # PHYSICAL device id in the config, never CUDA_VISIBLE_DEVICES renumbering
+  # (CLAUDE.md multi-node law; the trainer's NVML stray-context guard reads
+  # physical indices and aborts under a CVD remap — measured 2026-07-19).
   sed -e "s|spec_qwen35_0p8b_v4_ppp1_e1|spec_${KEY}_v4_ppp1_e1|" \
+      -e "s|device: cuda:0|device: cuda:${GPU}|" \
       configs/experiments/spec_verify/qwen35_0p8b_v4_spec_ppp1.yaml > "$EXP"
 fi
 
 # 3. index-only cache (no model load) + PPP1 trainer run on one GPU.
 $PY scripts/build_teacher_cache.py --config "$BASE" --experiment "$EXP" \
   --index-only --coordinated-node-cache
-CUDA_VISIBLE_DEVICES="$GPU" $PY scripts/train.py --config "$BASE" --experiment "$EXP"
+$PY scripts/train.py --config "$BASE" --experiment "$EXP"
 
 # 4. extract the goal metric.
 RUN="runs/spec_${KEY}_v4_ppp1_e1"
 [[ "$KEY" == 0p8b ]] && RUN="runs/spec_qwen35_0p8b_v4_ppp1_e1"
 echo "==== GOAL ROW ${SHORT} ===="
-rg '"teacher_output_eval"' "$RUN/metrics.jsonl" | $PY -c "
+grep -o '"teacher_output_eval"' "$RUN/metrics.jsonl" | $PY -c "
 import sys, json
 for l in sys.stdin:
     d = json.loads(l)
