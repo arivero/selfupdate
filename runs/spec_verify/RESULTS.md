@@ -224,3 +224,31 @@ acceptance numbers against vLLM.
 
 Not apples-to-apples (different work: training vs verify-only prefill), but
 both numbers are now real, measured, full-2071-item wall-clock times.
+
+## Qwen3.5-122B-A10B — VLLM4 (TP4) prefill-verify, FULL 2071-item epoch (2026-07-19 20:32)
+
+**self_consistency_match_rate = 0.9845** (2071/2071 items).
+load_seconds 121.52, generate seconds 30.713, items_per_s 67.43.
+
+## SPEED SCOREBOARD — vLLM's timing is the GOAL/target for our training stack
+
+Owner framing (2026-07-19): vLLM's numbers are what our training stack is
+measured AGAINST — the reference speed a genuinely independent, mature
+serving engine achieves on the same full 2071-item set, same weights.
+
+| model | PPP4 trainer epoch (s) | vLLM4 generate (s) | vLLM4 load (s) | vLLM4 total (s) |
+|---|---:|---:|---:|---:|
+| gemma-4-26B | 71.2 | 27.8 | 140.7 | 168.5 |
+| Qwen3.5-122B-A10B | 109.2 | 30.7 | 121.5 | 152.2 |
+| Qwen3.6-27B | 109.2 | *pending* | *pending* | |
+| gemma-4-31B | 143.1 | *pending (retry after crash)* | | |
+| Qwen3.6-35B-A3B | 71.7 | *pending (retry after crash)* | | |
+
+Reading so far: our PPP4 TRAINING epoch (full backward + optimizer write,
+all layers) is in the SAME ORDER OF MAGNITUDE as vLLM's pure verify-only
+generate() call (71-109s vs 28-31s) — training does strictly more work per
+item (a full block-local write, not just a max_tokens=1 prefill) and is
+roughly 3-4x vLLM's bare generate() time, but far below vLLM's one-time
+engine-load cost (121-141s). Not yet a fair single-number comparison (see
+the standing caveats on regime differences), but this is the first REAL
+matched-workload timing data against the stated goal.
