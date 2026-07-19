@@ -1,6 +1,6 @@
 # gemma-4-31B PPP2 — rotation demo (owner, 2026-07-19). 2 stages, each owns HALF
 # the 60 blocks (split = middle of PPP4 [15,30,45] -> [30]), rotate. Dense 31B.
-# devices [2,3] so it runs in PARALLEL with 27B PPP2 (GPU0+1) on agpuh01. Store
+# devices [0,1] (parallel-on-[2,3] hit a cuda:0-default stray-context bug, 2026-07-19). Store
 # lane, 3-epoch. Full 31B on this node's shm (~63 GB bf16 -> fits).
 run_name: h100_g31b_v4_ppp2
 mask:
@@ -26,7 +26,7 @@ train:
   v4_weight_residency: rotate
   v4_battery_mode: subprocess
   v4_stage_splits: [30]
-  v4_stage_devices: [2, 3]
+  v4_stage_devices: [0, 1]
 eval:
   every_epochs: 100
   standard_damage_every_epochs: 100

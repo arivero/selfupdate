@@ -1,0 +1,33 @@
+# Qwen3.5-122B-A10B PPP2 — rotation demo (owner, 2026-07-19). 2 stages, each
+# owns HALF the 48 blocks (split = middle of PPP4 [12,24,36] -> [24]), rotate.
+# MoE 10B active. The biggest single-node PPP2: full 122B (~250 GB bf16, already
+# shm-staged) + a 24-owned-layer rotating store per stage. ENSURE shm/host-RAM
+# headroom before launch (shm-is-a-consumable). Store lane, 3-epoch, devices [0,1].
+run_name: h100_q122b_v4_ppp2
+mask:
+  compaction: flow_mask
+cache:
+  # Match the 122B PPP4 cache (store_full_teacher_inputs: false) that built the
+  # staged node_epoch0 cache; the base sets true -> different hash otherwise.
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [24]
+  v4_stage_devices: [0, 1]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
