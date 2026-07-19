@@ -551,6 +551,8 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
     n = stack.n_layers
     ce = torch.zeros((), dtype=torch.float64, device=device)
     kl = torch.zeros((), dtype=torch.float64, device=device)
+    s_match = torch.zeros((), dtype=torch.float64, device=device)
+    t_match = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
     for idx, cohort in enumerate(cohorts):
         view = stack.loss_view(n, finals[idx].to(device))
@@ -568,17 +570,24 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
                     0, teacher_h.shape[0] - 1)
                 rows_t.append(teacher_h.index_select(0, rel).to(device))
             row_ids.append(cohort.eval_ids[b])
-        c, k, cnt = teacher_output_eval_sums(
+        c, k, cnt, sm, tm = teacher_output_eval_sums(
             torch.cat(rows_v).detach().float(),
             torch.cat(rows_t).detach().float(),
             torch.cat(row_ids).to(device), stack.lm_head)
         ce += c.double()
         kl += k.double()
+        s_match += sm.double()
+        t_match += tm.double()
         count += cnt
     log.log(
         kind="student_trajectory_eval", epoch=epoch,
         CE_eval_loss=float(ce.item() / max(count, 1)),
         KL_eval_loss=float(kl.item() / max(count, 1)),
+        # Acceptance vs the vLLM answer ids — NOTE this walk is the CENSORED
+        # student trajectory, so it measures the deployed (censored) student's
+        # reproduction of the uncensored vLLM draft, not pipeline fidelity.
+        student_argmax_acceptance=float(s_match.item() / max(count, 1)),
+        teacher_argmax_acceptance=float(t_match.item() / max(count, 1)),
         answer_token_count=count,
         dataset_item_count=len(ds.pairs),
         dataset_coverage="whole_training_set_once_per_call",
@@ -1462,16 +1471,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     rows_v.append(view[b].index_select(0, r))
                     rows_t.append(target[b].index_select(0, r))
                     ids.append(cohort.eval_ids[b])
-                ce, kl, count = teacher_output_eval_sums(
+                ce, kl, count, s_match, t_match = teacher_output_eval_sums(
                     torch.cat(rows_v).detach().float(),
                     torch.cat(rows_t).detach().float(),
                     torch.cat(ids).to(device), stack.lm_head)
             ev = epoch_state.setdefault("_eval", {
                 "ce": torch.zeros((), dtype=torch.float64, device=device),
                 "kl": torch.zeros((), dtype=torch.float64, device=device),
+                "s_match": torch.zeros((), dtype=torch.float64, device=device),
+                "t_match": torch.zeros((), dtype=torch.float64, device=device),
                 "count": 0})
             ev["ce"] += ce.double()
             ev["kl"] += kl.double()
+            ev["s_match"] += s_match.double()
+            ev["t_match"] += t_match.double()
             ev["count"] += count
         del out, view, target
 
@@ -1695,6 +1708,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 kind="teacher_output_eval", epoch=epoch + 1,
                 CE_eval_loss=float(ev["ce"].item() / count),
                 KL_eval_loss=float(ev["kl"].item() / count),
+                # vLLM-reproduction metric (owner 2026-07-19): answer ids are
+                # the vLLM draft; acceptance = argmax(frozen head) == id.
+                # teacher-side is adapter-free (pipeline vs vLLM at any epoch);
+                # student-side equals it at zero-init/lr-0.
+                student_argmax_acceptance=float(ev["s_match"].item() / count),
+                teacher_argmax_acceptance=float(ev["t_match"].item() / count),
                 answer_token_count=ev["count"],
                 expected_answer_token_count=expected_eval,
                 dataset_item_count=len(ds.pairs),

@@ -30,14 +30,22 @@ def teacher_output_eval_sums(
     lm_head,
     *,
     chunk_rows: int = 64,
-) -> tuple[torch.Tensor, torch.Tensor, int]:
-    """Return token-summed CE and teacher-to-student KL plus token count.
+) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor]:
+    """Return token-summed CE, teacher-to-student KL, token count, and the
+    argmax-acceptance sums (student and teacher) against the answer ids.
 
     ``student_hidden[i]`` and ``teacher_hidden[i]`` are final, post-norm
     states at the position predicting ``teacher_answer_ids[i]``.  Chunking
     bounds vocabulary-logit memory; it does not change the token-weighted
     aggregation.  Returned scalars are detached GPU tensors so callers can
     aggregate an epoch without introducing hot-loop host synchronizations.
+
+    The acceptance sums are the vLLM-reproduction metric (owner 2026-07-19):
+    ``teacher_answer_ids`` are the vLLM-generated tokens, so
+    ``argmax(frozen_head(h)) == id`` counts positions where this trainer's
+    OWN forward — cache/store/relay machinery included — greedily reproduces
+    the vLLM draft.  Teacher-side acceptance is adapter-free (valid at any
+    epoch); student-side equals it at zero-init/lr-0.  Evaluation-only.
     """
     if chunk_rows <= 0:
         raise ValueError("chunk_rows must be positive")
@@ -60,6 +68,8 @@ def teacher_output_eval_sums(
         teacher_answer_ids = teacher_answer_ids.to(device)
     ce_sum = torch.zeros((), dtype=torch.float32, device=device)
     kl_sum = torch.zeros((), dtype=torch.float32, device=device)
+    student_match_sum = torch.zeros((), dtype=torch.float32, device=device)
+    teacher_match_sum = torch.zeros((), dtype=torch.float32, device=device)
     count = int(student_hidden.shape[0])
     for first in range(0, count, chunk_rows):
         stop = min(first + chunk_rows, count)
@@ -70,14 +80,18 @@ def teacher_output_eval_sums(
             teacher_logits = lm_head(teacher_hidden[first:stop])
         student_logp = F.log_softmax(student_logits.float(), dim=-1)
         teacher_logp = F.log_softmax(teacher_logits.float(), dim=-1)
-        ce_sum.add_(F.nll_loss(
-            student_logp, teacher_answer_ids[first:stop], reduction="sum"))
+        ids = teacher_answer_ids[first:stop]
+        ce_sum.add_(F.nll_loss(student_logp, ids, reduction="sum"))
         # torch KL uses input=student log-probability and target=teacher
         # log-probability, hence this is KL(teacher || student).
         kl_sum.add_(F.kl_div(
             student_logp, teacher_logp, reduction="sum", log_target=True))
+        student_match_sum.add_(
+            (student_logp.argmax(-1) == ids).sum().float())
+        teacher_match_sum.add_(
+            (teacher_logp.argmax(-1) == ids).sum().float())
         del student_logits, teacher_logits, student_logp, teacher_logp
 
     if ce_sum.requires_grad or kl_sum.requires_grad:
         raise RuntimeError("evaluation-only output metrics acquired a graph")
-    return ce_sum, kl_sum, count
+    return ce_sum, kl_sum, count, student_match_sum, teacher_match_sum

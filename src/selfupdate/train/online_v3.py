@@ -1615,7 +1615,7 @@ def _bk_process_ppn_stage(cfg, stack, loss_fn, tile: Tile, states,
             del h_in, h_out, flat_view, valid_view, target_all
             del flat_target, target, summed_loss, mean_loss
         if eval_id_parts:
-            ce_sum, kl_sum, eval_tokens = teacher_output_eval_sums(
+            ce_sum, kl_sum, eval_tokens, _sm_unused, _tm_unused = teacher_output_eval_sums(
                 torch.cat(eval_student_parts),
                 torch.cat(eval_teacher_parts),
                 torch.cat(eval_id_parts),
@@ -2064,7 +2064,7 @@ def train_bk_v32(cfg, stack, tok, log, cache, teacher=None) -> bool:
                         del h_in, h_out, flat_view, view, target_all
                         del flat_target, target, summed_loss, mean_loss
                     if eval_id_parts:
-                        ce_sum, kl_sum, eval_tokens = teacher_output_eval_sums(
+                        ce_sum, kl_sum, eval_tokens, _sm_unused, _tm_unused = teacher_output_eval_sums(
                             torch.cat(eval_student_parts),
                             torch.cat(eval_teacher_parts),
                             torch.cat(eval_id_parts),
