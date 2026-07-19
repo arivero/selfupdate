@@ -93,3 +93,22 @@ owner instruction: run the batch, note errors, patch once, re-run fails)
    cross-node battery bug since this run never left one node).
 4. vLLM max_num_seqs=256 exceeds 27B's Mamba cache capacity (236 blocks) —
    needs a per-model-safe default or a lower fixed value.
+
+## ROOT CAUSE FOUND (19:35): the 26B "stall" was a MASTER_ADDR bug, not a stall
+
+`scripts/launch_v4_stages.sh:134`: `export MASTER_ADDR="${MASTER_ADDR:-$(hostname -s)}"`
+— evaluates on whatever host RUNS the launch command, not on the host of
+stage 0. Launching an ALL-REMOTE job (every stage on agpuh02) from an agpuh01
+shell sets MASTER_ADDR=agpuh01, so the NCCL/TCPStore rendezvous tries to
+reach agpuh01:29517 where nothing listens. The processes do NOT hang
+immediately — they run for ~9-10 min (weight load, cache checks) before the
+store-fill relay's rendezvous attempt fails with
+`[c10d] TCP client failed to connect/validate to host agpuh01:29517`, at
+which point all 4 stages exit (not deadlock — this looked like a stall only
+because I killed them mid-crash before checking the actual log content).
+FIX: pass `MASTER_ADDR=<actual-stage0-host>` explicitly whenever the launch
+command's own host differs from the stages' host. 26B relaunched correctly
+with MASTER_ADDR=agpuh02; 31B (which had the identical latent bug, killed
+pre-emptively before it could crash the same way) queued for the same fix.
+This was NOT the cross-node battery deadlock (that requires stages split
+ACROSS hosts; this run was single-host with a launch-side mismatch only).
