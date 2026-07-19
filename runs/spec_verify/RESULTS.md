@@ -404,3 +404,57 @@ Speed (fully valid, no caveat): epoch_seconds ranged 249.6-265.1s across the
 reconciles exactly as an integrity check — 8-layer stages (0,3,4,7) report
 808728, 7-layer stages (1,2,5,6) report 707637, both dividing exactly to the
 101091 answer-token count.
+
+## PHASE 3 — PPP2 (2-stage, one node's 2 cards), gemma-4-26B-A4B and
+Qwen3.6-35B-A3B (2026-07-20, recovered from disk — not previously written here)
+
+These runs completed before this section was written; they are logged now
+because a later exact-seq validation pass (below) went looking for the PPP2
+comparator and found it was never recorded. Both predate commit `609d9d1`
+(the exact-seq/`teacher_exact_seq_rate` instrumentation), so neither has
+that field — only the pre-existing `teacher_argmax_acceptance` comparison.
+
+Command (both models): `scripts/launch_v4_stages.sh
+configs/experiments/spec_verify/base_<model>_v4_spec.yaml
+configs/experiments/spec_verify/<model>_v4_spec_ppp2.yaml`
+(`v4_stage_splits: [16]` for 26B, `[20]` for 35B — each model's proven PPP4
+middle stage-cut; `v4_stage_devices: [0, 1]`).
+
+| model | teacher_argmax_acceptance (PPP2) | vs PPP4 (Phase 1) | answer_token_count | epoch_seconds (PPP2) | epoch_seconds (PPP4) |
+|---|---:|---|---:|---:|---:|
+| gemma-4-26B-A4B | 0.9952869328553885 | bit-identical | 90387 | 83.73 | 71.16 |
+| Qwen3.6-35B-A3B | 0.997829486626402 | bit-identical | 74176 | — | — |
+
+26B: source `runs/spec_26b_v4_ppp2_e1/stage1/metrics.jsonl` (completed
+2026-07-20 01:03, stage1 owns the vocab head), compared against
+`runs/spec_26b_v4_ppp4_e1/stage3/metrics.jsonl` — `teacher_argmax_acceptance`
+matches to every digit (Python `==` on the parsed floats, not rounded).
+CE_eval_loss 0.02272467034655475, KL_eval_loss 0.007522710656592728.
+35B: source `runs/spec_35b_v4_ppp2_e1/stage1/metrics.jsonl`, same bit-exact
+match against its PPP4 entry above; epoch_seconds not yet extracted.
+
+This extends the 0.8B-scale bit-identity finding (PPP1=PPP2=PPP4) to real
+scale for `teacher_argmax_acceptance`, independently of the two-route
+DeepSeek-repair/exact-seq work below.
+
+## PHASE 3 — exact-seq (per-answer 100%-match) backfill, in progress
+(2026-07-20)
+
+Gap identified (owner): `teacher_argmax_acceptance` is a token-weighted
+mean; it was never joined by the per-answer "did EVERY token match"
+rate anywhere except a one-off standalone-script check for 27B early in
+the campaign — and that script does not exercise the PPPn tool's own
+cache/store/relay/cohort machinery, so it cannot stand in for the other
+models. Fixed at the source: `teacher_output_eval_sums()`
+(`src/selfupdate/eval/teacher_output.py`) now accepts per-answer row
+boundaries and the real `teacher_output_eval` record (populated from
+`online_v4.py`, the same code path every number in this file comes from)
+reports `teacher_exact_seq_rate` / `exact_seq_match_answers` /
+`exact_seq_answer_count` alongside the existing per-token acceptance.
+Commit `609d9d1`; purely additive, sanity-checked on synthetic data before
+touching any GPU. Since exact-seq is a pure function of the same per-token
+match booleans already shown bit-identical across parallelism degrees
+(table above), only one fresh re-run per model is needed to backfill it —
+not a full campaign repeat. Validation (bit-exact reproduction of the
+already-recorded `teacher_argmax_acceptance` on a real GPU run, PPP4 and
+PPP2 both, for 26B) is in flight; results to follow in this section.
