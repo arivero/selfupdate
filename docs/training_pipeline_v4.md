@@ -252,6 +252,23 @@ store). "Speed proven" = no open cells. Steady = fill-once store epochs
 | — 122B scaling (same store lane) | — | 1-GPU 202 s → **4-GPU 40.0 s** @ 98% → 8-GPU 20.3 s | — | ~10× 1→8, near-linear |
 | Qwen3.5-397B-A17B | PPP1 rotate 1-GPU (M5) | — | **PPP8 store+rotate 8-GPU / 2 nodes** | **~36 s** wall-clock (max stage 36.3 s; ALL 8 stages 28.5-36.3 s, e2/e3 consistent — clean cross-node run). e1 ~260 s cold (store-fill stall 642-1005 s = cohort-outer paging, fixed by staged layer-outer). 3 epochs. See note. |
 
+**Adam vs SGD N-sweep (2026-07-19).** Per-block AdamW (moments rotate with the
+block, B4) vs `immediate_sgd`, steady s/epoch, full 2071-item epochs:
+
+| model | config | SGD | Adam |
+|---|---|---:|---:|
+| Qwen3.5-397B-A17B | PPP8 store+rotate | 36 | **35** |
+| Qwen3.5-122B-A10B | PPP8 store | 20.3 | **20.2** (resident-Adam OOMs the vocab-head last stage; fits under rotate) |
+| Qwen3.6-35B-A3B | PPP4 store | 15.9 | **16.0** |
+| gemma-4-31B | PPP4 store | 30.6 | **25.1** |
+
+Headline: **Adam is free in wall-clock** at every scale measured — the per-block
+moment update (including rotating moments off-card at 397B) is hidden behind the
+forward/relay. The one caveat is memory, not time: resident-Adam adds fp32 LoRA
+moment buffers that tip the vocabulary-head stage over 80 GB at 122B (PPP8), so
+that stage must rotate. DeepSeek-V4-Flash PPP8 lands next (node-local shm stage
+of the per-node half, to avoid an 8-stage Lustre load).
+
 **397B PPP8 provenance (2026-07-18).** The 752 GB bf16 dequant snapshot needed
 four fixes to run cross-node, all in git: (1) the fp8 checkpoint stores MoE
 experts UNFUSED — the scoped loader now fuses them into HF's stacked layout
