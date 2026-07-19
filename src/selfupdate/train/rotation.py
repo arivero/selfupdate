@@ -48,11 +48,23 @@ def decide_rotate(owned_bytes: int, device, *, headroom: float = 1.25,
 
 
 class _BufferPool:
-    """Pinned-host + device buffer sets, pooled by block signature."""
+    """Pinned-host + device buffer sets, pooled by block signature.
 
-    def __init__(self, device):
+    CAPPED at ``max_pooled`` total device buffers. A homogeneous model (Qwen —
+    every layer shares one signature) only ever needs ~2 buffers cycling, so the
+    cap is free. A HETEROGENEOUS model (deepseek_v4: sliding / HCA / CSA layers
+    have distinct param sets -> distinct signatures) would otherwise pool one
+    ~12 GB device buffer PER layer type and accumulate them forever (measured:
+    stage-0 GPU grew 29->75 GB over the store-fill until OOM). Above the cap,
+    ``give`` drops the buffer so it is freed rather than hoarded; the rotor
+    re-allocates on demand (a cheap price vs OOM on a heterogeneous stack).
+    """
+
+    def __init__(self, device, max_pooled: int = 2):
         self.device = device
         self.free: dict[tuple, list[dict]] = {}
+        self.max_pooled = max_pooled
+        self._pooled = 0
 
     @staticmethod
     def signature(tensors: dict[str, torch.Tensor]) -> tuple:
@@ -63,6 +75,7 @@ class _BufferPool:
         sig = self.signature(tensors)
         pool = self.free.get(sig)
         if pool:
+            self._pooled -= 1
             return pool.pop()
         host = {n: torch.empty_like(t, device="cpu", pin_memory=True)
                 for n, t in tensors.items()}
@@ -71,7 +84,10 @@ class _BufferPool:
         return {"host": host, "dev": dev, "sig": sig}
 
     def give(self, buf: dict) -> None:
+        if self._pooled >= self.max_pooled:
+            return  # over cap: drop (freed) instead of accumulating per-sig
         self.free.setdefault(buf["sig"], []).append(buf)
+        self._pooled += 1
 
 
 class BlockRotator:
