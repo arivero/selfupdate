@@ -59,3 +59,15 @@ Decisive test queued: vLLM dtype=float32 regen of the 0.8B answers + our
 fp32 teacher-force; convergence => precision policy (pin dtype to get
 "exact"); non-convergence => structural scan order. Also read vLLM's
 qwen3_5 linear-attn kernel for its state dtype (code inspection, no GPU).
+
+## 7. Root-cause narrowed (code inspection, 2026-07-19 17:53)
+transformers qwen3_5 linear attention = CHUNKED TORCH implementation,
+upcasts q/k/v/beta/g to float32 (modeling_qwen3_5.py:263) and runs the
+recurrence in fp32. vLLM = fused Triton FLA kernels (vllm/model_executor/
+layers/fla/ops/, v1 GDN backend) — a different algorithm implementation
+with its own precision policy. The 0.8B confident divergences are the
+accumulated difference between these two implementations over long answers.
+Also check: with kernels==0.12.0 installed, does transformers swap in a hub
+GDN kernel instead of the torch path? (would change which impl our trainer
+actually ran). The fp32-both-sides test (item 6) remains decisive for
+whether pinning precision closes it.
