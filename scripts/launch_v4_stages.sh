@@ -131,7 +131,15 @@ if [[ "$MULTI_HOST" = "1" ]]; then
   # Rendezvous over the Ethernet management net (IPoIB node-to-node is
   # broken here); NCCL data path picks the HDR-200 HCAs itself.
   export SELFUPDATE_V4_CROSS_NODE=1
-  export MASTER_ADDR="${MASTER_ADDR:-$(hostname -s)}"
+  # Stage 0's host is the rendezvous leader, NOT the launching shell's own
+  # host — those differ whenever the orchestrator issues the launch from a
+  # host that isn't itself one of the stages (measured 2026-07-19: launching
+  # an all-agpuh02 run from an agpuh01 shell defaulted MASTER_ADDR=agpuh01,
+  # a host with nothing listening; every stage ran ~9-10 min of real work
+  # before the store-fill relay's TCPStore rendezvous failed cleanly —
+  # looked like a stall from the outside, was actually a clean crash on a
+  # dead address).
+  export MASTER_ADDR="${MASTER_ADDR:-${STAGE_HOSTS_RESOLVED[0]}}"
   export MASTER_PORT="${MASTER_PORT:-29517}"
   export NCCL_IB_HCA="${NCCL_IB_HCA:-mlx5_0,mlx5_1}"
   export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-eno12419np2}"
