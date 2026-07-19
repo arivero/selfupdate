@@ -876,14 +876,37 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                      else run_dir)
     rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
              _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
+    evicted_blocks = []
     if rotator is not None:
         for L in list(rotator._staged):
             rotator.evict(L)
+    else:
+        # Resident stages keep their block weights on-card. Offload them to CPU
+        # for the battery so the eval subprocess's SINGLE-CARD load fits: a 70GB
+        # 35B does not fit alongside ~20GB resident, which forces the slow
+        # device_map=auto spread (~15-20 min/battery vs ~5 min single-card).
+        # nn.Module.to moves params in place, so optimizer references stay valid;
+        # restored before training resumes.
+        for L in owned:
+            blk = stack.blocks[L - 1]
+            try:
+                dev = next(blk.parameters()).device
+            except StopIteration:
+                continue
+            if dev.type == "cuda":
+                blk.to("cpu")
+                evicted_blocks.append((L, dev))
     torch.cuda.empty_cache()
+
+    def _restore_evicted():
+        for L, dev in evicted_blocks:
+            stack.blocks[L - 1].to(dev)
+
     rf.write(rf.path(epoch, f"battery_ack_stage{stage}.st"),
              {"ack": torch.zeros(1)}, stage=stage, epoch=epoch)
     if stage != 0:
         rf.wait(rf.path(epoch, "battery_done.st"))
+        _restore_evicted()
         return baseline
     for k in range(1, stages):
         rf.wait(rf.path(epoch, f"battery_ack_stage{k}.st"))
@@ -921,6 +944,7 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
             "must not continue silently")
     rf.write(rf.path(epoch, "battery_done.st"), {"done": torch.zeros(1)},
              stage=0, epoch=epoch)
+    _restore_evicted()
     return baseline
 
 
@@ -1546,6 +1570,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # PPP1 crash ("cuda:0 and cpu").
             baseline = _subprocess_battery(cfg, stack, log, 0, run_dir,
                                            owned, baseline, rotator=rotator)
+    elif cfg.train.v4_battery_mode == "inpipeline":
+        # Epoch-zero baseline for in-pipeline recall: COLLECTIVE across every
+        # stage (sharded_recall is a pipeline forward), NOT stage 0 only. The
+        # _epoch_zero_telemetry path below runs model.generate on the FULL
+        # model, which is meta-held under stage-scoped loading -> "cuda:0 not
+        # on meta" crash (measured 2026-07-19). LoRA is zero-init here so this
+        # is the base student's recall.
+        if int(cfg.eval.every_epochs) > int(cfg.train.epochs):
+            if cfg.train.v4_stage <= 0:
+                log.log(kind="epoch_battery_skipped", epoch=0,
+                        reason="eval_cadence_beyond_run_epochs")
+        else:
+            baseline = _inpipeline_recall_battery(
+                cfg, stack, tok, log, 0, run_dir, owned, baseline)
     elif single_process or cfg.train.v4_stage == 0:
         # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
         # so its full resident model IS the base model at this point.
