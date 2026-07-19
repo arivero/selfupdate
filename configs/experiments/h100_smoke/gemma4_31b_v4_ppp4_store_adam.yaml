@@ -1,0 +1,35 @@
+# gemma-4-31B (dense) PPP4 store, ADAM variant (owner N-sweep, 2026-07-19):
+# identical to gemma4_31b_v4_ppp4_store.yaml (4 stages, store lane, 3-epoch)
+# EXCEPT per-block AdamW. Pairs with the SGD run (h100_g31b_v4_ppp4_store,
+# 30.6 s) for the Adam-vs-SGD cell at 31B/N=4. Optimizer pinned explicitly.
+run_name: h100_g31b_v4_ppp4_store_adam
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  v4_grad_clip: 0.0
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
