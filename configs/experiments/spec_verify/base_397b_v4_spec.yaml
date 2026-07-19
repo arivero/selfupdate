@@ -1,0 +1,106 @@
+# Trainer-native vLLM-reproduction check (owner 2026-07-19, Phase 2): 397B,
+# the FULL 2071-item vLLM-answered dataset — one whole epoch, same pattern as
+# the Phase 1 spec_verify configs ("2071 is the comparison goal").
+# FP8-origin vLLM reference accepted (owner decision, "for 397B I accept
+# FP8"): vLLM's responses were generated from the FP8 checkpoint
+# (runs/vllm_h100/qwen35_397b_a17b_fp8/), while our trainer computes from the
+# dequantized bf16 snapshot — a bf16-forward-vs-FP8-origin gap is an accepted,
+# expected small divergence source, not a bug.
+# 403B params, 60 blocks, hybrid 3 linear : 1 full, MoE 512/top-10. Needs
+# PPP8 cross-node (2x4 H100, agpuh01+agpuh02); mirrors the proven production
+# xnode config (h100_smoke/qwen35_397b_v4_ppp8_xnode.yaml) — that run's lease
+# file shows genuine 2-node placement and every one of its 8 stage logs shows
+# "run complete" on the final attempt (verified 2026-07-19, after an earlier
+# MoE expert-weight conversion-mapping KeyError that later attempts got past).
+# teacher_argmax_acceptance in teacher_output_eval is the goal metric.
+run_name: spec_397b_v4_base_never_train
+layerwise_project_version: "3.4"
+model:
+  name: /fs/agustina/arivero/supercomplex/snapshots/qwen35-397b-a17b-bf16
+  dtype: bfloat16
+  device: cuda
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [0]
+  pipeline_world_size: 1
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: caches/spec_397b_v4
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-spec397b
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  store_full_teacher_inputs: false
+  full_input_shard_size: 4
+  item_cache_items: 8
+  generation_batch: 32
+  teacher_batch: 4
+  generation_budget_bucket: 32
+  generation_max_tokens: 4096
+  generation_responses_path: runs/vllm_h100/qwen35_397b_a17b_fp8/responses_bs256.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+# NOTE: every "N" below (generation_batch/teacher_batch/micro_batch) is a
+# BATCHING/COHORT-SIZE knob, unrelated to EPOCH SIZE. Epoch size is controlled
+# only by data.examples_path (the full 2071-item file).
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  trajectory_source: teacher_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: open
+  schedule: summed
+  epochs: 1
+  max_steps: 0
+  seed: 17
+  lr: 1.0e-6
+  online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_bk
+  micro_batch: 16
+  grad_accum: 1
+  batching: bucketed
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  v4_kv_source: teacher_frozen
+  v4_kv_refresh_epochs: 0
+  v4_optimizer: immediate_sgd
+  v4_loop_order: layer_major
+  v4_loss_positions: answer
+  v4_relay_every_cohorts: 3
+  v4_nccl_timeout_s: 2400
+  v4_teacher_source: store
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 100
+  recall_corpora: []
+  standard_damage_every_epochs: 0
+  standard_damage_limit: 16
+  standard_damage_batch_size: 4
+  generation_batch: 4

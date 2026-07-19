@@ -1,0 +1,32 @@
+# GPU-PLACEMENT VARIANT of 26b_v4_spec_ppp2.yaml (owner note, Phase 3
+# packing, 2026-07-20): identical experiment, only v4_stage_devices changes
+# from [0, 1] to [2, 3] so this job can run CONCURRENTLY with another
+# model's PPP2 job on the SAME node's GPUs 0/1, enabling true 4-way parallel
+# packing (2 models/node x 2 nodes) now that agpuh02's 26b/31b/35b index-only
+# caches were already confirmed present and hash-matching, and 27b/122b were
+# freshly rsynced from agpuh01's verified-good cache dirs. Same run_name as
+# the committed config (this is a placement choice, not a different
+# experiment) — metrics.jsonl records physical_gpu_mapping per stage anyway.
+run_name: spec_26b_v4_ppp2_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [16]
+  v4_stage_devices: [2, 3]
+eval:
+  every_epochs: 100

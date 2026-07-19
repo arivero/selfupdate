@@ -1,11 +1,27 @@
-# PPP1: single process, all 48 blocks, one H100 (trainer-native vLLM check).
-# base_122b_v4_spec.yaml sets v4_stage_scoped=true + v4_teacher_source=store
-# for its PPP4/PPP8 overlays; both are explicitly overridden back here since
-# v4_stage_scoped forbids v4_teacher_source=online (validate.py) and PPP1
-# needs no separate cache-build step at all.
+# PPP1: single process, ALL 48 blocks, ONE H100, via v4_stage_scoped=true +
+# v4_stage_splits=[] (one stage owning the whole model) + v4_weight_residency
+# =rotate (237GB bf16 cannot be resident on one 80GB card) + v4_teacher_source
+# =store (reads the index-only cache already staged/hash-verified on both
+# nodes, no separate cache-build step needed).
+#
+# CORRECTED 2026-07-20 (Phase 3 subagent + owner): the first version of this
+# file overrode the base's working store+stage_scoped recipe back to
+# online/false, reasoning "PPP1 needs no cache" — but with v4_stage_scoped=
+# false, runtime.py's load() takes the plain _load_placed path (model.to
+# (cuda:0)), which never consults v4_weight_residency at all. Confirmed via
+# scripts/memory_plan.py: ~246-270GB/device required at 1 device/80GB budget,
+# fits=False everywhere — a guaranteed OOM, not attempted.
+#
+# v4_teacher_residency pinned to cpu_stream (not left at auto), matching the
+# proven h100_smoke/qwen35_122b_v4_ppp1_rotate.yaml precedent's own warning:
+# "auto's 0.3x rule would refuse as sibling PPP1 stores shrink MemAvailable"
+# — directly relevant here since Phase 3 runs all 5 models' PPP1 jobs
+# simultaneously, each competing for the same host RAM headroom.
 run_name: spec_122b_v4_ppp1_e1
 mask:
   compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
 model:
   device: cuda:0
 train:
@@ -16,8 +32,13 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  v4_teacher_source: online
-  v4_stage_scoped: false
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
   v4_stage_splits: []
   v4_stage_devices: []
   v4_stage: -1

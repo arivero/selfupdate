@@ -1,0 +1,26 @@
+# PPP8 CROSS-NODE trainer-native vLLM check for 397B (60 blocks, cuts
+# 8/15/22/30/38/45/52, 2x4 H100 cross-node, agpuh01+agpuh02). Mirrors the
+# proven production xnode config (h100_smoke/qwen35_397b_v4_ppp8_xnode.yaml)
+# knob-for-knob (rotate residency, not auto: ~13GB/block owned, 7-8
+# blocks/stage exceeds one 80GB card).
+run_name: spec_397b_v4_ppp8x_e1
+mask:
+  compaction: flow_mask
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 16
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_nccl_timeout_s: 2400
+  v4_stage_splits: [8, 15, 22, 30, 38, 45, 52]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
