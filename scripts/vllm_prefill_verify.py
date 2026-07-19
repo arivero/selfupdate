@@ -68,9 +68,19 @@ def main() -> None:
 
     from vllm import LLM, SamplingParams
     t_load = time.perf_counter()
+    # enforce_eager=True (owner, 2026-07-19): skips torch.compile/CUDA-graph
+    # capture entirely. Measured cause of multi-minute-plus hangs on TP4 for
+    # 26B/31B (MoE + dense) — one case hit vLLM's OWN internal cancellation
+    # at ~356s, another ran 1150s+ with a single thread pegged at ~100% CPU
+    # (real Triton/Inductor codegen, not a stuck loop, but never converged in
+    # reasonable time). A completed eager-mode measurement is more valuable
+    # than a compiled-mode attempt that may never finish; eager will report
+    # slower per-token throughput than compiled mode would — label results
+    # accordingly, this is a real methodology difference, not a bug.
     llm_kw = dict(model=args.model, max_model_len=args.max_model_len,
                  gpu_memory_utilization=args.gpu_memory_utilization,
-                 tensor_parallel_size=args.tensor_parallel_size)
+                 tensor_parallel_size=args.tensor_parallel_size,
+                 enforce_eager=True)
     if args.max_num_seqs:
         llm_kw["max_num_seqs"] = args.max_num_seqs
     llm = LLM(**llm_kw)
@@ -101,6 +111,7 @@ def main() -> None:
     summary = {
         "model": args.model,
         "responses": args.responses,
+        "enforce_eager": True,
         "items": n,
         "self_consistency_match_rate": round(match / max(n, 1), 4),
         "seconds": round(dt, 3),
