@@ -109,3 +109,24 @@ must be TWO half-model processes with a mid-model boundary hand-off — i.e. a
 cohort-from-responses builder). This doubles as the "verify through the
 literal staged relay transport" test. Blocked this session on lease time
 (~750 GB load alone exceeded the remaining window).
+
+## Speed report (owner request): whole-answer-set times, 0.8B, same 64 items
+
+| path | what it does | wall s | note |
+|---|---|---:|---|
+| v4 trainer epoch (PPP1) | ALL 24 layers x all answer positions, teacher fwd + training writes + eval | **6.4** | 177,792 token-events; teacher-fwd 2.2 s of it |
+| v4 trainer epoch (PPP2/PPP4, per stage) | owned layers only, concurrent stages | 5.6 / 5.2 | wall ≈ slowest stage |
+| vLLM greedy GENERATION of the set | autoregressive, ~115 tok/item | 10.7 | 695 tok/s in-engine (+52 s load) |
+| standalone verify loop, bf16 B=1 | one full-seq fwd/item, unbatched | 49.6 | naive instrument; NOT the trainer |
+| standalone verify loop, fp32 B=1 | same | 6.6 | bf16 B=1 kernel anomaly (7x) |
+
+Reading: the TRAINER traverses the whole answer set — including per-layer
+training math vLLM doesn't do — faster than vLLM generates it once (6.4 s vs
+10.7 s), because cohort batching + teacher-forcing removes autoregression.
+The naive B=1 verify loop is 8x slower than the trainer doing MORE work —
+batching, not model math, dominates at this scale.
+
+QUEUED (needs GPU): vLLM-side VERIFICATION timing — feed vLLM
+prompt+answer[:-1] with SamplingParams(max_tokens=1, prompt_logprobs=1) and
+read per-position argmax from the prefill; that is vLLM's native
+teacher-forced mode and the symmetric comparator to our trainer epoch.
