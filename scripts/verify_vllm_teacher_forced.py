@@ -130,6 +130,8 @@ def main() -> None:
     div_top5 = 0
     margins = []           # top1-top2 logit margin at EVERY answer position:
                            # the "how hard is this token to flip" distribution
+    depth_hits = [0, 0, 0, 0]   # acceptance by within-answer depth quartile
+    depth_tot = [0, 0, 0, 0]    # (flat => margin story; decaying => accumulation)
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
@@ -154,6 +156,10 @@ def main() -> None:
         gold = torch.tensor(a_ids, device=alog.device)   # vLLM draft
         match = (pred == gold)
         n_acc = int(match.sum().item())
+        for i in range(A):
+            q = min(3, (4 * i) // A)
+            depth_tot[q] += 1
+            depth_hits[q] += int(match[i].item())
         gap = rank = None
         # accepted prefix = tokens before the first rejection
         if bool(match.all()):
@@ -208,6 +214,9 @@ def main() -> None:
         "mean_first_div_logit_gap": round(sum(div_gaps) / max(len(div_gaps), 1), 4),
         "frac_div_vllm_in_top2": round(div_top2 / max(len(div_gaps), 1), 4),
         "frac_div_vllm_in_top5": round(div_top5 / max(len(div_gaps), 1), 4),
+        "acceptance_by_depth_quartile": [
+            round(h / t, 4) if t else None
+            for h, t in zip(depth_hits, depth_tot)],
         # top1-top2 margin distribution over ALL answer positions — the
         # measured "flip resistance" (tests the margin hypothesis directly).
         "margin_quantiles": (lambda m: {
