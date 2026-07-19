@@ -130,3 +130,16 @@ QUEUED (needs GPU): vLLM-side VERIFICATION timing — feed vLLM
 prompt+answer[:-1] with SamplingParams(max_tokens=1, prompt_logprobs=1) and
 read per-position argmax from the prefill; that is vLLM's native
 teacher-forced mode and the symmetric comparator to our trainer epoch.
+
+## OWNER DECISION (2026-07-19 ~18:20): 0.8B DISCARDED from the envelope
+
+Qwen3.5-0.8B is removed from the vLLM-reproduction goal (and the model
+envelope for this claim). Basis: the margin measurement — 27B has ZERO
+answer positions within 2 logits of a flip (0/541; p05 4.125, median 10.5)
+while 0.8B keeps 15.7% of positions within 0.5 logits (p05 0.125, median
+3.375), so the transformers<->vLLM linear-attention noise flips ~1.5% of
+0.8B tokens and nothing at campaign scale. 0.8B remains a MECHANICS vehicle
+only (bit-identity certs PPP1=PPP2=PPP4, which never involve vLLM).
+The goal set is now: 27B (trainer-native EXACT, acceptance 1.0), 35B, 26B,
+31B, 122B, 397B (genuine reference pending 2-node vLLM), DeepSeek (blocked
+on driver-565 fp4).
