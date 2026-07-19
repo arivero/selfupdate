@@ -28,7 +28,7 @@ Usage (training venv, one card):
     scripts/verify_vllm_teacher_forced.py \
       --model Qwen/Qwen3.5-0.8B \
       --responses runs/vllm_h100/qwen35_0p8b/responses_bs256.jsonl \
-      --limit 64 --out runs/spec_verify/qwen35_0p8b.json
+      --out runs/spec_verify/qwen35_0p8b.json   # no --limit = full 2071-item epoch
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def main() -> None:
     ap.add_argument("--model", required=True)
     ap.add_argument("--responses", required=True,
                     help="vLLM responses jsonl (prompt_token_ids + token_ids)")
-    ap.add_argument("--limit", type=int, default=64)
+    ap.add_argument("--limit", type=int, default=0, help="0 = whole file (2071 items = one full epoch)")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--device-map", default=None,
                     help="e.g. 'auto' to shard a large model across all visible "

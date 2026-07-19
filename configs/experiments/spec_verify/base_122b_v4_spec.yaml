@@ -1,5 +1,6 @@
-# Trainer-native vLLM-reproduction check (owner 2026-07-19): 122B, the 64
-# vLLM-answered items, index-only cache (answer ids = the vLLM draft).
+# Trainer-native vLLM-reproduction check (owner 2026-07-19): 122B, the FULL
+# 2071-item vLLM-answered dataset — one whole epoch ("2071 is the comparison
+# goal"; the earlier 64-item version was DELETED, invalid, do not resurrect).
 # 244 GB bf16 EXCEEDS one card: mirrors the proven production PPP8 knobs
 # (configs/experiments/h100_smoke/qwen35_122b_v4_ppp8_xnode.yaml) —
 # v4_stage_scoped requires v4_teacher_source=store (online is forbidden:
@@ -20,7 +21,7 @@ model:
   pipeline_devices: [0]
   pipeline_world_size: 1
 data:
-  examples_path: data/combined/examples_v5rs_window_spec64_122b.jsonl
+  examples_path: data/combined/examples_v5rs_window.jsonl
 mask:
   mode: rag_system
   compaction: flow_mask
@@ -37,7 +38,7 @@ cache:
   teacher_batch: 64
   generation_budget_bucket: 32
   generation_max_tokens: 4096
-  generation_responses_path: runs/spec_verify/122b_responses64.jsonl
+  generation_responses_path: runs/vllm_h100/qwen35_122b_a10b/responses_bs256.jsonl
   generation_shuffle_seed: 17
   max_sequence_tokens: 8192
 train:

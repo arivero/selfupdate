@@ -1,3 +1,9 @@
+# TEMPLATE ONLY — 0.8B is OUT OF SCOPE (owner decision 2026-07-19: discarded
+# from the vLLM-reproduction envelope; margin measurement showed the gap is
+# real but confined to small-model/long-answer regimes). This file is the
+# sed-substitution SOURCE for other models' configs in spec_verify_matrix.sh
+# — never run directly. All prior 64-item results from this file were
+# DELETED (owner: "2071 is the comparison goal", one whole epoch).
 # Trainer-native vLLM-reproduction check (owner 2026-07-19): 0.8B, the 64
 # vLLM-answered items, index-only cache (answer ids = the vLLM draft),
 # v4_teacher_source=online (hidden states computed by THIS trainer).

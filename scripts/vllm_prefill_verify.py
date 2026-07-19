@@ -12,7 +12,7 @@ answer position from one such forward, at no extra wall-clock cost in our
 architecture — a batched forward doesn't get cheaper by wanting fewer output
 rows, so "last token only" and "every position" cost the same on our side).
 
-Reports: wall time for the whole 64-item batch, and whether vLLM's own
+Reports: wall time for the whole batch (2071 items = one full epoch), and whether vLLM's own
 prefill prediction matches its OWN earlier greedy answer (a self-consistency
 sanity check: it must, since greedy decoding IS iterated argmax).
 
@@ -20,7 +20,7 @@ Run in the vLLM env:
   CUDA_VISIBLE_DEVICES=0 ../venvs/vllm025/bin/python scripts/vllm_prefill_verify.py \
     --model Qwen/Qwen3.6-27B \
     --responses runs/vllm_h100/qwen36_27b_full_exactids/responses_bs256.jsonl \
-    --limit 64 --out runs/spec_verify/27b_vllm_prefill_verify.json
+    --out runs/spec_verify/27b_vllm_prefill_verify.json   # no --limit = full 2071-item epoch
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def main() -> None:
     ap.add_argument("--model", required=True)
     ap.add_argument("--responses", required=True,
                     help="vLLM responses jsonl (prompt_token_ids + token_ids)")
-    ap.add_argument("--limit", type=int, default=64)
+    ap.add_argument("--limit", type=int, default=0, help="0 = whole file (2071 items = one full epoch)")
     ap.add_argument("--max-model-len", type=int, default=8192)
     ap.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     ap.add_argument("--tensor-parallel-size", type=int, default=1)
