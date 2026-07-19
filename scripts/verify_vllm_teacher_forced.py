@@ -128,6 +128,8 @@ def main() -> None:
     div_gaps = []          # our_argmax_logit - vllm_token_logit at first divergence
     div_top2 = 0           # vLLM token was in our top-2 (near-tie)
     div_top5 = 0
+    margins = []           # top1-top2 logit margin at EVERY answer position:
+                           # the "how hard is this token to flip" distribution
     if device.type == "cuda":
         torch.cuda.synchronize(device)
     t0 = time.perf_counter()
@@ -144,6 +146,8 @@ def main() -> None:
         logits = teacher_forced_logits(stack, full)     # [1, P+A, V]
         # predicted answer token i comes from position P+i-1
         alog = logits[0, P - 1:P + A - 1].float()        # [A, V] answer-slot logits
+        top2 = alog.topk(2, dim=-1).values                # [A, 2]
+        margins.append((top2[:, 0] - top2[:, 1]).cpu())
         pred = alog.argmax(-1)                            # [A]
         # Under device_map=auto the lm_head (and thus logits) lives on the LAST
         # card while `device` is the embed card — compare on the logits' device.
@@ -204,6 +208,16 @@ def main() -> None:
         "mean_first_div_logit_gap": round(sum(div_gaps) / max(len(div_gaps), 1), 4),
         "frac_div_vllm_in_top2": round(div_top2 / max(len(div_gaps), 1), 4),
         "frac_div_vllm_in_top5": round(div_top5 / max(len(div_gaps), 1), 4),
+        # top1-top2 margin distribution over ALL answer positions — the
+        # measured "flip resistance" (tests the margin hypothesis directly).
+        "margin_quantiles": (lambda m: {
+            "p05": round(m.quantile(0.05).item(), 3),
+            "p25": round(m.quantile(0.25).item(), 3),
+            "p50": round(m.quantile(0.50).item(), 3),
+            "p75": round(m.quantile(0.75).item(), 3),
+            "frac_below_0p5": round((m < 0.5).float().mean().item(), 4),
+            "frac_below_2": round((m < 2.0).float().mean().item(), 4),
+        })(torch.cat(margins)) if margins else None,
         # Speed (teacher-forced, one full-sequence forward per item; NOT
         # autoregressive — compare to vLLM generation with this asymmetry in
         # mind: vLLM does A sequential decode steps, this does ONE forward).
