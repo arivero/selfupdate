@@ -77,10 +77,19 @@ def main() -> None:
     # than a compiled-mode attempt that may never finish; eager will report
     # slower per-token throughput than compiled mode would — label results
     # accordingly, this is a real methodology difference, not a bug.
+    # disable_custom_all_reduce (owner, 2026-07-19): 35B DIED outright with
+    # "CUDA error: an illegal memory access" inside determine_available_memory
+    # (KV-cache profiling) — a FATAL instance of the same CUDASymmetricMemory
+    # exception that appeared (survivably) in 26B's log earlier. Forces the
+    # standard NCCL allreduce instead of vLLM's custom symmetric-memory path,
+    # which is the implicated code (compilation_config showed
+    # disable_custom_all_reduce=False as vLLM's own default, i.e. the fragile
+    # path is opt-out, not opt-in).
     llm_kw = dict(model=args.model, max_model_len=args.max_model_len,
                  gpu_memory_utilization=args.gpu_memory_utilization,
                  tensor_parallel_size=args.tensor_parallel_size,
-                 enforce_eager=True)
+                 enforce_eager=True,
+                 disable_custom_all_reduce=True)
     if args.max_num_seqs:
         llm_kw["max_num_seqs"] = args.max_num_seqs
     llm = LLM(**llm_kw)
