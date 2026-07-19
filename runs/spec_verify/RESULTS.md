@@ -143,3 +143,19 @@ only (bit-identity certs PPP1=PPP2=PPP4, which never involve vLLM).
 The goal set is now: 27B (trainer-native EXACT, acceptance 1.0), 35B, 26B,
 31B, 122B, 397B (genuine reference pending 2-node vLLM), DeepSeek (blocked
 on driver-565 fp4).
+
+## TRAINER-NATIVE rows: 35B / 26B / 31B (2026-07-19 18:30, PPP1, 64 items)
+
+| model | trainer teacher_argmax_acceptance | torch baseline | note |
+|---|---|---|---|
+| gemma-4-26B-A4B | **0.9960159362549801** | 0.9960159362549801 | IDENTICAL to 16 digits |
+| gemma-4-31B | **0.998371335504886** | 0.9983713355 | identical |
+| Qwen3.6-35B-A3B | **0.99618** | 0.99809 | DIFFERENT 64-item subset (baseline = first-64 usable responses; matrix = dataset-order match) — re-run at matched subset before reading a delta |
+| Qwen3.6-27B | **1.0** | 1.0 | exact |
+
+Machinery-exactness generalizes beyond 0.8B: where the item subset matches
+(26B/31B/27B), the trainer's own acceptance equals the standalone walk
+bit-for-bit. Lesson recorded: the two agpuh0x "wedges" of the depth probe
+were the LUSTRE IMPORT CRAWL amplified by concurrent model loads (SIGINT
+stack: charset_normalizer _path_stat) — never launch a cold vllm import
+while bulk Lustre reads are in flight.
