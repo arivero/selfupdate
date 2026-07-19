@@ -95,6 +95,17 @@ class StudentKVCache:
             self.keys[k] = self.keys[k][:, :, :max_length].contiguous()
             self.values[k] = self.values[k][:, :, :max_length].contiguous()
 
+    def has_previous_state(self, layer_idx=None) -> bool:
+        # qwen3_5_moe's LINEAR-attention layers call this to choose prefill vs
+        # recurrent-step. StudentKVCache holds only plain KV, not the linear
+        # recurrent state, so it always reports False = "prefill mode". That is
+        # CORRECT for a single prefill forward (in-pipeline standard-damage), but
+        # means in-pipeline autoregressive RECALL is NOT valid for qwen3_5_moe
+        # (35B/122B/397B) — the linear-attn state would re-init every token.
+        # Those hybrid-MoE models must eval through the full-model subprocess
+        # battery, not the sharded decode. Prevents the AttributeError crash.
+        return False
+
 
 def _prefill_mask(pad_keep: torch.Tensor | None, T: int, dtype, device):
     """[B,1,T,T] additive mask: causal AND (if given) pad-column masked.
