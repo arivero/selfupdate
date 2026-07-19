@@ -1,0 +1,32 @@
+# gemma-4-31B PPP8 CROSS-NODE (owner 2026-07-19: PPP8 for ALL models). 60 blocks
+# over 8 H100 (4 agpuh01 + 4 agpuh02), store lane, 3-epoch. Fills the smaller-model
+# PPP8 gap (big-3 were done; 27B/26B/35B/31B were not). 8 owned blocks/stage x
+# ~1 GB dense -> resident (auto). store_full_teacher_inputs:false matches the
+# staged g31b node_epoch0 cache. Cross-node boundary rides the NCCL relay.
+run_name: h100_g31b_v4_ppp8x
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_relay_transport: auto
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [7, 15, 22, 30, 37, 45, 52]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
