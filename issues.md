@@ -822,3 +822,113 @@ The clean-source full-v5 PP2 admission then completed all nine B256 cohorts,
 `done`.  Peak reserved VRAM was 13.65/25.39 GiB instead of the prior
 43.44-GiB OOM.  Do not silently fall back between `gpu_cache` and `cpu_cache`:
 source mode remains an experimental variable and belongs in telemetry.
+
+## OPEN — DeepSeek-V4-Flash PPP8 cross-node NCCL hang (spec_verify Phase 2, 2026-07-19)
+
+**Owner decision 2026-07-19: ship DeepSeek's vLLM TP8 leg (independent of
+training), defer this fix. Do not relaunch DeepSeek PPP8 training until this
+is addressed.**
+
+Three attempts of `configs/experiments/h100_smoke/deepseek_v4_flash_ppp8_xnode.yaml`
+(2x4 H100 cross-node, agpuh01+agpuh02) all failed before ever completing an
+epoch. Diagnosed via a delegated static-analysis pass (no GPU touched) reading
+BOTH sides of every stage boundary, not just the failing rank's own log.
+
+**Root cause, high confidence:** store-fill traffic (`send_fill_one`/
+`recv_fill_one`) and epoch-boundary relay traffic (`send_forward`/
+`recv_forward`) share ONE NCCL process group by explicit design
+(`online_v4.py:1499-1503`, "there is exactly one process group"). Stage3
+(agpuh01, owns layers 17-22, skews toward the heaviest forced-eager
+CSA/HCA attention types) was still genuinely mid store-fill after 70+ minutes
+— not deadlocked, just slow (`stage3/metrics.jsonl` for the failing launch has
+only 4 lines, no `v4_store_capture`; its own NCCL counter reads a clean
+`last enqueued: 708, last completed: 708`, i.e. no backlog, just behind).
+Stage4 (agpuh02, layers 23-27) meanwhile finished store-fill AND all 3
+configured epochs (`v4_store_capture: seconds=3481.9`, three `v4_epoch_boundary`
+rows) and its final relay `submit()` — designed to be non-blocking
+(`_RelayServicer` docstring, `online_v4.py:760-775`, "SUBMITS the relay and
+immediately returns to training") — hung inside `post_recv`'s `irecv` loop
+(`relay_nccl.py:146-154`) waiting on a peer (stage3) that had never reached its
+own epoch loop and so never had a matching `isend` to offer. Under NCCL's
+"eager initialization" P2P mode (see the recurring PyTorch warning in every
+stage's log about unbatched P2P ops serializing), posting an `irecv` can block
+waiting for the peer's `isend` — defeating the `block=False` contract. This is
+the exact mechanism behind the op-count asymmetry observed directly in the
+crash logs: rank3's flight-recorder dump reports `last enqueued: 708, last
+completed: 708` (clean, just behind) while rank4 reports
+`last enqueued: 2072, last completed: 1405`, stuck on op #1406 — the two
+sides were never going to reach matching counts because stage3 hadn't started
+issuing its half of the epoch-relay traffic at all.
+
+An existing fix already on HEAD (`cf5e461`, "v4 relay #24: finalize barrier +
+longer NCCL timeout", raises `v4_nccl_timeout_s` 600->1800s) targets a
+DIFFERENT race per its own commit message (a fast stage tearing down NCCL
+while a slow sibling's eval tail still relays) and was verified only on a
+Qwen 0.6B smoke bench, never against DeepSeek. It does not fix the mechanism
+above, and would make a repeat failure take 3x longer (1800s, not 600s)
+before the cascade becomes visible.
+
+Two further, INDEPENDENT live issues surfaced in the same logs, not caused by
+the above: stage6 self-aborted via the `v4_min_train_gpu_util` gate
+(`online_v4.py:1443-1463`, `RuntimeError: UTILIZATION GATE`) partway through
+its final epoch; stage7 (last stage, holds the LM head) hit a genuine
+`OutOfMemoryError` in `summed.backward()` (`online_v4.py:1404`) during epoch 0
+— distinct from the three store-fill OOMs below, which are already fixed.
+
+Separately, `scripts/launch_v4_stages.sh:236-239` documents by design that the
+local reaper does not watch remote-node pids — a remote-side stall is
+invisible until NCCL's own timeout fires, which is exactly what happened here.
+
+**Proposed fixes, not yet attempted:** (a) stop sharing one NCCL process group
+between store-fill and epoch-relay traffic — a dedicated sub-group per
+adjacent stage pair, or route epoch-relay telemetry through the existing
+file/shm control plane instead of raw NCCL; (b) gate `post_recv()` behind a
+cheap out-of-band "upstream has entered its epoch loop" signal so a
+not-yet-ready peer can't turn a `block=False` call into a real block;
+(c) deploy `v4_stage_reaper.sh` on remote hosts too; (d) separately size
+stage7's backward memory and re-examine stage6's utilization-gate trip.
+
+### RESOLVED (already on HEAD) — DeepSeek store-fill OOM, three separate causes
+
+Three genuinely independent OOM causes in DeepSeek's PPP8 store-fill pass,
+each fixed in its own commit, confirmed via `runs/h100_dsv4f_v4_ppp8x/stage4/
+metrics.jsonl` (the 05:52 launch: `v4_store_capture {seconds: 3481.894,
+cohorts: 1036}` then three full `v4_epoch_boundary` rows) to actually get past
+store-fill once all three were in place:
+
+1. Rotation buffer-pool hoarding: `BlockRotator`'s device pool used a
+   count-based cap (`max_pooled=2`); DeepSeek's heterogeneous ~13-15GB
+   per-layer-type buffers let `staged+inflight+pooled` coexist at ~60GB.
+   Fixed in `a0362650` (byte-capped pool, `rotation.py:81`,
+   `max_pooled_dev_bytes: 8 << 30` — pools zero buffers at this size,
+   lets the allocator recycle instead of hoard).
+2. Forced-eager CSA attention transient: DeepSeek's sparse lightning indexer
+   can't use flash/SDPA, so `eager_attention_forward` materializes
+   `combined_logits` plus a same-size softmax-stabilization copy at T~5000.
+   Mitigated via `micro_batch` 32->8->2 (commit `8735ca7`).
+3. Teacher-store on-device accumulation: `_resolve_residency`
+   (`online_v4.py:407-450`) underestimated `FrozenDeepseekCtx`'s real size
+   (sliding K/V + compressed entries + int64 top-k, ~650MB/cohort for top-k
+   alone) and picked `gpu_corpus`, accumulating unboundedly across all 1036
+   cohorts. Fixed in `65f6a33` (special-cases DeepSeek to `cpu_stream`
+   residency, `online_v4.py:420-421`).
+
+### Systemic finding (not DeepSeek-specific) — `certify_locality_v4` is a no-op for every stage-scoped+store PPP8 run
+
+`certify_locality_v4` (`online_v4.py:1836`) only runs AFTER `train_online_v4`
+completes (`layerwise.py:208-213`), so it has never been reached for DeepSeek
+(every attempt has crashed inside `train_online_v4`). But even when reached,
+`v4_stage_scoped: true` + `v4_teacher_source: store` (the combination every
+PPP8 campaign on this branch uses) trips a guard at `online_v4.py:1852-1861`
+that returns early: `{"passed": false, "skipped":
+"stage_scoped_store_certification_pending_relay", "owner_note": "locality
+certification debt, not evidence"}` — a placeholder, not real gradient-
+isolation evidence. Confirmed identical in 397B's, Gemma-31B's, and
+Qwen-122B's own "successful" PPP8 runs (`h100_q397b_v4_ppp8x`,
+`h100_g31b_v4_ppp8x`, all log the same skip string). Real, non-skip
+certification passes exist only for non-stage-scoped PPP4/PPP2 runs. The
+"GATE: certify_locality_v4 must pass" language in PPP8 config comments is
+presently unsatisfiable, as coded, for ANY stage-scoped+store PPP8 campaign —
+including the 397B spec_verify run in progress as of this writing. The real
+cross-node "cert relay" is explicitly deferred future work
+(`online_v4.py:1855`), not a DeepSeek-specific gap.
