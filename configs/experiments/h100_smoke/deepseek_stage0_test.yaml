@@ -24,6 +24,11 @@ train:
   seed: 17
   v4_teacher_source: store
   v4_loop_order: layer_major
+  # ISOLATED-TEST ONLY: buffer ALL relay files so stage 0 (running without a
+  # stage 1 to consume them) completes its full store-fill instead of blocking
+  # on backpressure at 2 in-flight. Lets the store_capture row land as the
+  # SUCCESS signal. Never use this value in a real multi-stage run.
+  v4_capture_inflight: 200
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: auto
