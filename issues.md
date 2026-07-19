@@ -932,3 +932,50 @@ presently unsatisfiable, as coded, for ANY stage-scoped+store PPP8 campaign —
 including the 397B spec_verify run in progress as of this writing. The real
 cross-node "cert relay" is explicitly deferred future work
 (`online_v4.py:1855`), not a DeepSeek-specific gap.
+
+## OPEN -> ROOT-CAUSED: DeepSeek-V4-Flash vLLM TP8 crash — NVCC missing from PATH breaks DeepGEMM JIT (spec_verify Phase 2, 2026-07-20)
+
+Separate from the training-side PPP8 NCCL hang above, DeepSeek's *inference*
+(vLLM TP8, cross-node via torchrun external_launcher, TP4xPP2=world_size 8)
+crashed identically on all of agpuh02's local ranks (4-7) during
+`profile_run` -> `_dummy_run` -> the NVIDIA-optimized `deepseek_v4` model's
+`mhc_pre_tilelang` -> `tf32_hc_prenorm_gemm` -> DeepGEMM JIT path:
+
+```
+RuntimeError: Assertion error (.../jit_kernels/impls/../../jit/compiler.hpp:234):
+false and "NVCC compilation failed"
+```
+
+Root cause: `nvcc` is not on `PATH` on either node by default (already noted
+generically elsewhere in this repo's docs — "No nvcc on PATH by default").
+DeepGEMM needs to JIT-compile a CUDA kernel at runtime for this model's
+custom MHC/tilelang op and has no fallback. A working `nvcc` DOES exist on
+both nodes at `/usr/local/cuda-12.6/bin/nvcc` (confirmed: `nvcc --version`
+reports release 12.6, V12.6.85 on both agpuh01 and agpuh02) — it is simply
+not exported. Fix for the retry: export `CUDA_HOME=/usr/local/cuda-12.6` and
+prepend `/usr/local/cuda-12.6/bin` to `PATH` (and, if DeepGEMM's JIT also
+needs headers/libs at link time, `LD_LIBRARY_PATH` +=
+`/usr/local/cuda-12.6/lib64`) before launching the vLLM TP8 job. agpuh01's
+ranks (0-3) never reached this code path themselves before the whole
+`torchrun` group was torn down by the other node's failure (SIGTERM,
+`Process ... got signal: 15`) — the crash is agpuh02-side but PATH is
+identically absent on both nodes, so both would hit it once the surviving
+ranks reached the same op.
+
+Separately, the SAME cross-node vLLM TP8 window also had a 397B
+(Qwen3.5-397B-A17B, pure TP8, no PP split) attempt die silently: rank0
+(agpuh01) logs nothing past `vLLM is using nccl==2.28.9` (00:50:20), then
+agpuh02's ranks 4-7 lose their TCPStore connection to it with `Broken
+pipe`/`TCPStore server has shut down too early` at 00:55:24 — a ~5-minute
+gap with zero log output on rank0's side, then silent death. Checked
+`dmesg -T` on agpuh01 for the OOM-killer around that window: nothing (last
+OOM entry predates this run by many hours) — so this is NOT the OOM
+hypothesis one might reach for by default; the actual cause is still
+unknown (segfault with no Python traceback? killed by something outside the
+process? needs the process's own exit code / a core dump / re-run with
+`NCCL_DEBUG=INFO` and closer log capture around the silent window to
+diagnose, rather than guessing). Also worth checking independently: bf16
+Qwen3.5-397B-A17B is ~794GB of weights; pure `tensor_parallel_size=8` across
+8x80GB=640GB total leaves no room for activations/KV-cache even before this
+silent-death question — a capacity issue distinct from the connectivity bug,
+and possibly the real explanation once diagnosed properly.
