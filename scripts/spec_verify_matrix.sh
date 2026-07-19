@@ -78,6 +78,9 @@ fi
 # 3. index-only cache (no model load) + PPP1 trainer run on one GPU.
 $PY scripts/build_teacher_cache.py --config "$BASE" --experiment "$EXP" \
   --index-only --coordinated-node-cache
+# PREP_ONLY=1: subset+configs+cache only (e.g. 122b, whose trainer row runs
+# staged PPP4 via launch_v4_stages — resident PPP1 can't hold 244 GB).
+[[ "${PREP_ONLY:-}" == "1" ]] && { echo "PREP_ONLY done for ${KEY}"; exit 0; }
 $PY scripts/train.py --config "$BASE" --experiment "$EXP"
 
 # 4. extract the goal metric.
