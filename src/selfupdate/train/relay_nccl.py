@@ -252,6 +252,18 @@ class BoundaryTransport:
         if self.nccl is not None:
             self.nccl.set_hidden_dims(dims, dtype)
 
+    def barrier(self) -> None:
+        """Synchronize ALL ranks before run teardown. Without this a fast
+        stage (few owned layers, no eval tail) finishes its epochs and exits,
+        destroying its NCCL rank while a slow sibling (e.g. the last stage's
+        eval tail) is still mid-relay — the surviving ranks then time out on a
+        collective and the whole set dumps + dies (DeepSeek PPP8 finalize crash,
+        task #24, 2026-07-19). The barrier holds every rank until the slowest
+        finishes, so the group is torn down symmetrically. No-op single-node."""
+        if self.nccl is not None:
+            self.nccl.reap_sent(block=True)   # flush any parked isends first
+            self.nccl.dist.barrier()
+
     # -- forward pipe: epoch relay (all cohorts per epoch) ---------------
     def send_forward(self, epoch: int, out: dict) -> None:
         """out: {idx: boundary tensor on device}. Cross-node -> NCCL, else

@@ -433,7 +433,11 @@ class TrainConfig:
     # SELFUPDATE_V4_CROSS_NODE=1) the mail goes NCCL. "files"/"nccl"
     # force a carrier for a paired comparison or debug only.
     v4_relay_transport: str = "auto"  # auto | files | nccl
-    v4_nccl_timeout_s: int = 600
+    # 1800 not 600: the epoch relay is async and stages finish at very
+    # different times (a fast stage with few owned layers + no eval tail can be
+    # 3 epochs ahead of the last stage's eval tail). The finalize barrier (#24)
+    # must tolerate that lag; DeepSeek PPP8 hit the old 600 s exactly.
+    v4_nccl_timeout_s: int = 1800
     v4_kv_refresh_epochs: int = 0
     # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
     # law. adam gives each owned block its own AdamW (more memory; pairs

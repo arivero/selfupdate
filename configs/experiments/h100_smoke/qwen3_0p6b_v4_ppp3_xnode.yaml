@@ -1,0 +1,32 @@
+# Qwen3-0.6B PPP3 CROSS-NODE, 4-epoch — the RELAY DRAIN/FINALIZE bench (#24).
+# stage 0,1 on agpuh01, stage 2 on agpuh02 (SELFUPDATE_V4_STAGE_HOSTS=
+# "local local agpuh02"). This exercises what the 2-stage/2-epoch bench did NOT:
+# (a) >2 stages, (b) >2 epochs, (c) a stage (2, last) that does the eval tail and
+# lags the fast stages (0,1) — the exact condition that crashed DeepSeek PPP8 at
+# finalize. PASS = all 3 stages log 4 v4_epoch rows + a clean exit, NO NCCL
+# collective timeout, runs/v4_relay NEVER created. Split [9,19] over 28 blocks.
+run_name: h100_q0p6b_v4_ppp3_xnode
+mask:
+  compaction: flow_mask
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 4
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_relay_transport: auto
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [9, 19]
+  v4_stage_devices: [0, 0, 0]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100

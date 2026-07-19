@@ -1756,6 +1756,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         time.perf_counter() - boundary_started, 3))
     if relay is not None and not stopped:
         relay.drain()
+    if boundary_transport is not None:
+        # Cross-node: hold ALL ranks here until every stage has finished its
+        # relay, so no fast stage tears down the NCCL group under a slow
+        # sibling still mid-relay (task #24). No-op for single-node (files).
+        boundary_transport.barrier()
     if optimizers and run_dir is not None:
         # Warm starts keep momentum (plan B0): per-block AdamW state,
         # CPU-serialized, outside the epoch loop (no hot-loop syncs).
