@@ -57,6 +57,25 @@ Auxiliary findings (0.8B, same instrument):
   matched precision, not more. (fp32 forward also ran 7× faster than bf16 at
   0.8B B=1 — kernel selection worth a look.)
 
+## TRAINER-NATIVE rows (the goal instrument; 0.8B, 64 items, epoch 1)
+
+`teacher_argmax_acceptance` from the v4 trainer's own `teacher_output_eval`
+(index-only cache from the vLLM responses; online teacher; evals off):
+
+| level | stages/GPUs | teacher_argmax_acceptance | student (lr 1e-6 live) |
+|---|---|---|---|
+| torch baseline | standalone walk | 0.9854211663066955 | — |
+| **PPP1** | 1 proc, 1 GPU | **0.9854211663066955** | 0.9750269978401728 |
+| **PPP2** | 2 procs, GPUs 0-1 | **0.9854211663066955** | 0.9750269978401728 |
+| **PPP4** | 4 procs, GPUs 0-3 | **0.9854211663066955** | 0.9750269978401728 |
+
+**Bit-identical to 16 digits across every level** (7,408 answer tokens).
+The v4 machinery — cohorts, index-only cache, online teacher capture, staged
+processes, relay — contributes EXACTLY ZERO divergence: the entire residual
+gap to vLLM (1.46% at 0.8B) is the transformers↔vLLM kernel difference
+characterized above, not our pipeline. PPP8 (cross-node) + the other models'
+trainer-native rows: next lease (configs in configs/experiments/spec_verify/).
+
 ## Reading
 
 1. **It is NOT the linear attention.** 27B and 35B are linear-hybrid and match
