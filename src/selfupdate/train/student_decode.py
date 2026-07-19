@@ -150,7 +150,13 @@ def sharded_generate(stack, relay, *, stage: int, n_stages: int, owned,
                     stage=stage, epoch=epoch, to_stage=to)
 
     def recv(name, as_stage):
-        p = relay.wait(relay.path(epoch, f"{tag}_{name}"))
+        # Per-token decode: the default 2 s training poll would make each of the
+        # ~max_new_tokens x n_batches x n_corpora file round-trips wait up to 2 s
+        # (measured: a 0.6B same-node recall crawled ~40 min). A 5 ms poll makes
+        # the same-node /dev/shm handshake latency-bound instead. Cross-node
+        # decode does NOT use this path — it routes through BoundaryTransport
+        # (NCCL, no poll); see sharded_recall's transport wiring.
+        p = relay.wait(relay.path(epoch, f"{tag}_{name}"), poll_s=0.005)
         env = relay.read(p, expect_epoch=epoch, as_stage=as_stage)
         p.unlink(missing_ok=True)                      # consumed; keep exchange lean
         return {k: v.to(device) for k, v in env.items()}
