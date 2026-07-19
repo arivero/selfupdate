@@ -47,24 +47,43 @@ def decide_rotate(owned_bytes: int, device, *, headroom: float = 1.25,
     return owned_bytes * headroom + reserve_bytes > free
 
 
+def _dict_bytes(tensors: dict[str, torch.Tensor]) -> int:
+    return sum(t.numel() * t.element_size() for t in tensors.values())
+
+
 class _BufferPool:
     """Pinned-host + device buffer sets, pooled by block signature.
 
-    CAPPED at ``max_pooled`` total device buffers. A homogeneous model (Qwen —
-    every layer shares one signature) only ever needs ~2 buffers cycling, so the
-    cap is free. A HETEROGENEOUS model (deepseek_v4: sliding / HCA / CSA layers
-    have distinct param sets -> distinct signatures) would otherwise pool one
-    ~12 GB device buffer PER layer type and accumulate them forever (measured:
-    stage-0 GPU grew 29->75 GB over the store-fill until OOM). Above the cap,
-    ``give`` drops the buffer so it is freed rather than hoarded; the rotor
-    re-allocates on demand (a cheap price vs OOM on a heterogeneous stack).
+    TWO pools with OPPOSITE scarcity models, split because one shared count cap
+    cannot serve both:
+
+    * HOST (pinned) buffers pool WITHOUT a size cap. ``cudaHostAlloc`` of a
+      multi-GB pinned buffer is expensive (~1-2 s at 15 GB) and host RAM is
+      abundant (2 TB), so a re-pin per rotation — 2500+ activations over a
+      DeepSeek store-fill — would dominate wall time. Reuse them freely.
+    * DEVICE buffers pool UNDER A BYTE CAP (``max_pooled_dev_bytes``). Device
+      memory is the scarce resource. A homogeneous model (Qwen: one ~2-13 GB
+      signature) reuses ~2 cheaply. A HETEROGENEOUS model (deepseek_v4:
+      sliding / HCA / CSA layers, each a distinct ~15 GB signature) would
+      otherwise pool one giant device buffer PER layer type. Measured: with a
+      count-only cap of 2, stage 0 still held staged(1)+inflight(1)+pooled(2)
+      = 4 x ~15 GB = 60 GB of frozen weights, leaving no room for DeepSeek's
+      EAGER content-sparse attention spike (the O(B*heads*T^2) ``combined_logits``
+      at T~5000) -> OOM at the ``-.max()`` copy. Above the byte cap ``give``
+      FREES the device tensor (PyTorch's caching allocator recycles that freed
+      block on the next same-size ``take``, so homogeneous reuse is preserved)
+      while still returning the pinned HOST buffer to its pool. The default cap
+      (8 GiB) admits ~2 Qwen/122B layers but zero DeepSeek/397B (~13-15 GB)
+      layers, which is exactly right: those big-layer stacks rely on the
+      caching allocator, whose recycling is as cheap as an explicit pool.
     """
 
-    def __init__(self, device, max_pooled: int = 2):
+    def __init__(self, device, max_pooled_dev_bytes: int = 8 << 30):
         self.device = device
-        self.free: dict[tuple, list[dict]] = {}
-        self.max_pooled = max_pooled
-        self._pooled = 0
+        self.host_free: dict[tuple, list[dict]] = {}
+        self.dev_free: dict[tuple, list[dict]] = {}
+        self.max_pooled_dev_bytes = max_pooled_dev_bytes
+        self._dev_pooled_bytes = 0
 
     @staticmethod
     def signature(tensors: dict[str, torch.Tensor]) -> tuple:
@@ -73,21 +92,31 @@ class _BufferPool:
 
     def take(self, tensors: dict[str, torch.Tensor]) -> dict:
         sig = self.signature(tensors)
-        pool = self.free.get(sig)
-        if pool:
-            self._pooled -= 1
-            return pool.pop()
-        host = {n: torch.empty_like(t, device="cpu", pin_memory=True)
-                for n, t in tensors.items()}
-        dev = {n: torch.empty_like(t, device=self.device)
-               for n, t in tensors.items()}
+        host_pool = self.host_free.get(sig)
+        if host_pool:
+            host = host_pool.pop()
+        else:
+            host = {n: torch.empty_like(t, device="cpu", pin_memory=True)
+                    for n, t in tensors.items()}
+        dev_pool = self.dev_free.get(sig)
+        if dev_pool:
+            dev = dev_pool.pop()
+            self._dev_pooled_bytes -= _dict_bytes(dev)
+        else:
+            dev = {n: torch.empty_like(t, device=self.device)
+                   for n, t in tensors.items()}
         return {"host": host, "dev": dev, "sig": sig}
 
     def give(self, buf: dict) -> None:
-        if self._pooled >= self.max_pooled:
-            return  # over cap: drop (freed) instead of accumulating per-sig
-        self.free.setdefault(buf["sig"], []).append(buf)
-        self._pooled += 1
+        # Host pinned buffer: always reuse (host RAM abundant, pinning slow).
+        self.host_free.setdefault(buf["sig"], []).append(buf["host"])
+        # Device buffer: pool only under the byte cap, else drop (freed) so the
+        # caching allocator recycles it instead of the pool hoarding it.
+        dev = buf["dev"]
+        b = _dict_bytes(dev)
+        if self._dev_pooled_bytes + b <= self.max_pooled_dev_bytes:
+            self.dev_free.setdefault(buf["sig"], []).append(dev)
+            self._dev_pooled_bytes += b
 
 
 class BlockRotator:
