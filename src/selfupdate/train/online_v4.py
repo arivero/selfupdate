@@ -960,7 +960,7 @@ def _inpipeline_recall_battery(cfg, stack, tok, log, epoch, run_dir, owned,
     threaded in (task #26) — Qwen single-node first. sharded_generate guards
     non-plain rope, so gemma-4/DeepSeek are skipped (logged) until their rope
     bundle is wired into the decode path."""
-    from .student_decode import sharded_recall
+    from .student_decode import sharded_recall, sharded_standard_damage
     from ..eval.tasks import RECALL_CORPUS_PATHS
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
@@ -971,6 +971,15 @@ def _inpipeline_recall_battery(cfg, stack, tok, log, epoch, run_dir, owned,
         sharded_recall(stack, rf, corpus_paths, stage=stage, n_stages=stages,
                        owned=owned, tok=tok, device=cfg.model.device,
                        epoch=epoch, log=log)
+        # "destruction" — standard-damage over the same resident student. Gated
+        # on its own cadence (0 % N == 0 fires at epoch 0 baseline and every N).
+        if (cfg.eval.standard_damage_every_epochs
+                and epoch % cfg.eval.standard_damage_every_epochs == 0):
+            sharded_standard_damage(
+                stack, rf, stage=stage, n_stages=stages, owned=owned,
+                tok=tok, device=cfg.model.device, epoch=epoch, log=log,
+                limit=cfg.eval.standard_damage_limit,
+                batch_size=cfg.eval.standard_damage_batch_size)
     except NotImplementedError as err:
         if stage == 0:
             log.log(kind="epoch_battery_skipped", epoch=epoch,
