@@ -924,6 +924,37 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     return baseline
 
 
+def _inpipeline_recall_battery(cfg, stack, tok, log, epoch, run_dir, owned,
+                               baseline):
+    """In-pipeline Machado/Quijote recall over the RESIDENT cooked student
+    (owner: NO reload; the student stays base+LoRA on-card/in-rotation, bf16,
+    the exact weights that trained). COLLECTIVE across stages via
+    student_decode.sharded_recall: stage 0 tokenizes + feeds prompt ids,
+    downstream stages relay the prefill/decode hiddens, the last stage decodes
+    autoregressively (StudentKVCache) + scores word-accuracy. Single-node uses
+    the /dev/shm file relay; cross-node still needs the NCCL BoundaryTransport
+    threaded in (task #26) — Qwen single-node first. sharded_generate guards
+    non-plain rope, so gemma-4/DeepSeek are skipped (logged) until their rope
+    bundle is wired into the decode path."""
+    from .student_decode import sharded_recall
+    from ..eval.tasks import RECALL_CORPUS_PATHS
+    stage = cfg.train.v4_stage
+    stages = len(cfg.train.v4_stage_splits or []) + 1
+    rf = _RelayFiles(run_dir.parent if stage >= 0 else run_dir)
+    corpus_paths = [(n, RECALL_CORPUS_PATHS[n]) for n in cfg.eval.recall_corpora
+                    if n in RECALL_CORPUS_PATHS]
+    try:
+        sharded_recall(stack, rf, corpus_paths, stage=stage, n_stages=stages,
+                       owned=owned, tok=tok, device=cfg.model.device,
+                       epoch=epoch, log=log)
+    except NotImplementedError as err:
+        if stage == 0:
+            log.log(kind="epoch_battery_skipped", epoch=epoch,
+                    reason="inpipeline_recall_rope_unsupported",
+                    detail=str(err)[:200])
+    return baseline
+
+
 def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                           owned, baseline, started_at: float,
                           rotator=None):
@@ -935,6 +966,9 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     the SAME recall/standard-damage probes as v3.  Other stages return
     immediately and keep training.
     """
+    if cfg.train.v4_battery_mode == "inpipeline":
+        return _inpipeline_recall_battery(cfg, stack, tok, log, epoch,
+                                          run_dir, owned, baseline)
     if cfg.train.v4_battery_mode == "subprocess":
         return _subprocess_battery(cfg, stack, log, epoch, run_dir,
                                    owned, baseline, rotator=rotator)
