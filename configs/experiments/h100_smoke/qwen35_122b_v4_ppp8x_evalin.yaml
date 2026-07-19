@@ -1,0 +1,34 @@
+# Qwen3.5-122B-A10B PPP8 CROSS-NODE EVAL-IN (owner goal 2026-07-19). 8 stages
+# over both nodes' 8 H100 (agpuh01 0-3 + agpuh02 0-3), 48 blocks -> 6-block
+# stages, store lane, NCCL relay. Subprocess battery every epoch: all 8 stages
+# evict (resident-offload fix frees agpuh01's cards), stage0 spawns the eval;
+# 122B (237GB) exceeds one card so it falls back to device_map=auto over
+# agpuh01's 4 freed cards (fits 320GB, slower cross-card gen than single-card).
+# CE/KL val-loss every boundary. 3-epoch. Cache matches staged q122b.
+run_name: h100_q122b_v4_ppp8x_evalin
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [6, 12, 18, 24, 30, 36, 42]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
