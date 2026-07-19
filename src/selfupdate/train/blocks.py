@@ -448,7 +448,19 @@ class BlockStack:
                 if self._shared_kv_states is None:
                     self._shared_kv_states = {}
                 kwargs["shared_kv_states"] = self._shared_kv_states
-        out = self._block_calls[L - 1](hidden, **kwargs)
+        if self.needs_deepseek_masks:
+            # DeepSeek-V4 runs its HCA/FFN compressors in fp32 (Sinkhorn
+            # stability) and hands fp32 `collapsed` to the bf16 attention/MLP
+            # linears — the model is designed to run under autocast, which
+            # casts the fp32 activation for the bf16 matmul. Our raw-bf16 walk
+            # is not, so scope autocast around EVERY deepseek block forward:
+            # store-fill, training, teacher capture, and eval alike (the single
+            # choke point, so no call site can forget it).
+            with torch.autocast(device_type=hidden.device.type,
+                                dtype=torch.bfloat16):
+                out = self._block_calls[L - 1](hidden, **kwargs)
+        else:
+            out = self._block_calls[L - 1](hidden, **kwargs)
         if keep_bcast is not None:
             out = out * keep_bcast
         return out

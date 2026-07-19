@@ -55,16 +55,11 @@ def _fill_deepseek_layer(stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
     rec = DeepseekRecorder(stack, layer)
     inputs_q = cohort.gather_query_inputs(h).clone()
     try:
-        # DeepSeek-V4 runs its HCA/FFN compressors in fp32 (Sinkhorn stability)
-        # and casts post/comb back to bf16, but hands `collapsed` to the
-        # attention still in fp32 — so q_a_proj/kv_proj (bf16 weights) receive
-        # an fp32 activation. The model is designed to run under autocast, which
-        # casts the fp32 activation for the bf16 matmul; our raw-bf16 walk is
-        # not, so we scope autocast around the deepseek block forward.
-        with torch.autocast(device_type=h.device.type, dtype=torch.bfloat16):
-            h_new = stack.run_block(layer, h, pe, position_ids=pos,
-                                    past_key_values=rec.shim, use_cache=True,
-                                    causal_length=cohort.T, input_ids=ids_dev)
+        # run_block scopes bf16 autocast for deepseek blocks (fp32 compressors
+        # feed bf16 linears) at the single choke point — no wrapper needed here.
+        h_new = stack.run_block(layer, h, pe, position_ids=pos,
+                                past_key_values=rec.shim, use_cache=True,
+                                causal_length=cohort.T, input_ids=ids_dev)
     finally:
         rec.close()
     kv_t, entries, topk = rec.harvest()
