@@ -1,0 +1,24 @@
+# PPP8 cross-node trainer-native vLLM check for 122B (owner: "run it as PPP6
+# or PPP8"). Mirrors the proven production cross-node layout exactly
+# (qwen35_122b_v4_ppp8_xnode.yaml): 48 layers -> even 6-block stages,
+# devices [0,1,2,3,0,1,2,3]. Launch with:
+#   SELFUPDATE_V4_STAGE_HOSTS="agpuh01 agpuh01 agpuh01 agpuh01 agpuh02 agpuh02 agpuh02 agpuh02" \
+#   scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_122b_v4_spec.yaml \
+#                               configs/experiments/spec_verify/122b_v4_spec_ppp8x.yaml
+# Prereqs on BOTH nodes: venv, shm HF stage of Qwen3.5-122B-A10B, and the
+# index-only cache (build_teacher_cache --index-only --coordinated-node-cache
+# with this exact base+experiment pair, so the cache identity hash matches).
+# Goal row appears on the LAST stage (stage7, agpuh02).
+run_name: spec_122b_v4_ppp8x_e1
+mask:
+  compaction: flow_mask
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_stage_splits: [6, 12, 18, 24, 30, 36, 42]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]

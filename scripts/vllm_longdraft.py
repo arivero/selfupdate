@@ -42,6 +42,10 @@ def main() -> None:
     ap.add_argument("--max-model-len", type=int, default=8192)
     ap.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     ap.add_argument("--tensor-parallel-size", type=int, default=1)
+    ap.add_argument("--max-num-seqs", type=int, default=None,
+                    help="cap concurrent sequences; hybrid/linear-attn "
+                         "models size their Mamba cache to this (default "
+                         "1024 can exceed available blocks on small runs)")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
@@ -60,9 +64,12 @@ def main() -> None:
 
     from vllm import LLM, SamplingParams
     t0 = time.perf_counter()
-    llm = LLM(model=args.model, max_model_len=args.max_model_len,
-              gpu_memory_utilization=args.gpu_memory_utilization,
-              tensor_parallel_size=args.tensor_parallel_size)
+    llm_kw = dict(model=args.model, max_model_len=args.max_model_len,
+                 gpu_memory_utilization=args.gpu_memory_utilization,
+                 tensor_parallel_size=args.tensor_parallel_size)
+    if args.max_num_seqs:
+        llm_kw["max_num_seqs"] = args.max_num_seqs
+    llm = LLM(**llm_kw)
     print(f"loaded in {time.perf_counter()-t0:.1f}s", flush=True)
     sp = SamplingParams(temperature=0.0, top_p=1.0,
                         max_tokens=args.max_tokens, ignore_eos=True)

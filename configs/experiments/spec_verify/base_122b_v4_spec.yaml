@@ -1,0 +1,103 @@
+# Trainer-native vLLM-reproduction check (owner 2026-07-19): 122B, the 64
+# vLLM-answered items, index-only cache (answer ids = the vLLM draft).
+# 244 GB bf16 EXCEEDS one card: mirrors the proven production PPP8 knobs
+# (configs/experiments/h100_smoke/qwen35_122b_v4_ppp8_xnode.yaml) —
+# v4_stage_scoped requires v4_teacher_source=store (online is forbidden:
+# "the per-cohort teacher forward walks EVERY layer and foreign blocks are
+# meta"), v4_weight_residency=auto, v4_battery_mode=subprocess,
+# v4_loop_order=layer_major (rotation requirement). The first bare-clone of
+# the 0.8B template (online/no-scoping/no-residency) OOM'd stage3 at 77/79
+# GB loading the FULL model per-stage — this is the fix, not more stages.
+# teacher_argmax_acceptance in teacher_output_eval is the goal metric.
+run_name: spec_122b_v4_base_never_train
+layerwise_project_version: "3.4"
+model:
+  name: Qwen/Qwen3.5-122B-A10B
+  dtype: bfloat16
+  device: cuda
+  pipeline_split: 0
+  pipeline_splits: []
+  pipeline_devices: [0]
+  pipeline_world_size: 1
+data:
+  examples_path: data/combined/examples_v5rs_window_spec64_122b.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  root: caches/spec_122b_v4
+  runtime_policy: node_epoch0
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-spec122b
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  store_full_teacher_inputs: false
+  full_input_shard_size: 8
+  item_cache_items: 16
+  generation_batch: 64
+  teacher_batch: 64
+  generation_budget_bucket: 32
+  generation_max_tokens: 4096
+  generation_responses_path: runs/spec_verify/122b_responses64.jsonl
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  pp_execution: serial
+  partition_profile_id: ""
+  partition_profile_path: ""
+  update_granularity: online
+  answers_per_update: 0
+  tokens_per_answer_update: 0
+  update_reduction: ""
+  trajectory_source: teacher_hidden
+  attention_source: student_attention
+  expert_routing_source: black_box
+  method: layerwise
+  run_class: open
+  schedule: summed
+  epochs: 1
+  max_steps: 0
+  seed: 17
+  lr: 1.0e-6
+  online_optimizer: immediate_sgd
+  online_write_dispatch: after_backward
+  stale_gradient_window: 1
+  lr_rule: fixed
+  backward_dispatch: per_block
+  history_policy: causal_bk
+  micro_batch: 64
+  grad_accum: 1
+  batching: bucketed
+  hidden_loss: huber
+  conn_window: 1
+  conn_stride: 0
+  window_dedup: false
+  window_hidden_weight: 1.0
+  moe_mode: dense_or_black_box
+  offload_adam: false
+  v4_kv_source: teacher_frozen
+  v4_kv_refresh_epochs: 0
+  v4_optimizer: immediate_sgd
+  v4_loop_order: layer_major
+  v4_loss_positions: answer
+  v4_relay_every_cohorts: 4
+  v4_teacher_source: store
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+eval:
+  every_epochs: 1
+  recall_corpora: []
+  standard_damage_every_epochs: 0
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8
