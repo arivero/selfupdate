@@ -1,0 +1,35 @@
+# Qwen3.6-27B PPP2 — rotation-in-action demo (owner, 2026-07-19). 2 stages on
+# ONE node's 2 cards; each stage owns HALF the 64 blocks (split = middle of the
+# PPP4 split [16,32,48] -> [32]), which does NOT fit a card resident, so
+# v4_weight_residency: rotate pages one owned block onto the card at a time.
+# This is the cell that makes rotation_stall_seconds visible. Store lane
+# (capture-once), 3-epoch speed test. Stage-scoped loading needs the full 27B
+# on this node's shm (~54 GB bf16 -> fits).
+run_name: h100_q27b_v4_ppp2_evalin
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [32]
+  v4_stage_devices: [0, 1]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
