@@ -199,3 +199,61 @@ def sharded_generate(stack, relay, *, stage: int, n_stages: int, owned,
         cur += 1
 
     return torch.stack(generated, dim=1) if is_last else None
+
+
+@torch.no_grad()
+def sharded_recall(stack, relay, corpus_paths, *, stage: int, n_stages: int,
+                   owned, tok, device, epoch: int, log,
+                   n_per_task: int = 8, max_new_tokens: int = 48,
+                   gen_batch: int = 8) -> dict | None:
+    """No-reload recall (Machado/Quijote) over the RESIDENT sharded student.
+
+    Collective across all stages. ``build_tasks`` is deterministic (seed 17,
+    same corpus), so every stage computes the SAME prompts/references and
+    iterates the SAME batches — stage 0 tokenizes and feeds prompt_ids, the
+    downstream stages receive the prefill hidden over the relay, and the LAST
+    stage decodes + scores word-accuracy. Nothing is reloaded; the eval runs on
+    the exact weights (+ LoRA) that trained, in bf16, via ``sharded_generate``.
+
+    Returns per-corpus overall word_acc on the last stage; None elsewhere.
+    """
+    from ..eval.tasks import build_tasks, QUESTIONS, score
+    is_last = stage == n_stages - 1
+    results: dict[str, float] = {}
+    for name, path in corpus_paths:
+        items = build_tasks(path, seed=17, n_per_task=n_per_task)
+        prompts = [tok.apply_chat_template(
+            [{"role": "user",
+              "content": QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])}],
+            tokenize=False, add_generation_prompt=True, enable_thinking=False)
+            for it in items]
+        refs = [it["reference"] for it in items]
+        gen_texts: list[str] = []
+        for b0 in range(0, len(prompts), gen_batch):
+            batch = prompts[b0:b0 + gen_batch]
+            if stage == 0:
+                enc = tok(batch, return_tensors="pt", padding=True,
+                          padding_side="left")
+                prompt_ids = enc["input_ids"].to(device)
+                keep = enc["attention_mask"].to(device)
+            else:
+                prompt_ids = keep = None
+            out = sharded_generate(
+                stack, relay, stage=stage, n_stages=n_stages, owned=owned,
+                prompt_ids=prompt_ids, prompt_keep=keep,
+                max_new_tokens=max_new_tokens, device=device, epoch=epoch,
+                tag=f"recall_{name}_{b0}")
+            if is_last and out is not None:
+                gen_texts.extend(tok.decode(row, skip_special_tokens=True)
+                                 for row in out)
+        if is_last:
+            accs = [score(r, a)["word_acc"] for r, a in zip(refs, gen_texts)]
+            results[name] = sum(accs) / max(len(accs), 1)
+    if is_last:
+        log.log(kind="eval", epoch=epoch, phase="inpipeline_recall",
+                recall={k: {"overall_word_acc": v} for k, v in results.items()},
+                overall_word_acc=sum(results.values()) / max(len(results), 1),
+                recall_items_per_task=n_per_task, no_reload=True,
+                resident_student=True)
+        return results
+    return None
