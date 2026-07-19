@@ -62,7 +62,11 @@ if [[ "$KEY" != 0p8b ]]; then
       -e "s|spec_qwen35_0p8b_v4_base_never_train|spec_${KEY}_v4_base_never_train|" \
       -e "s|selfupdate-teacher-cache-v4-spec0p8b|selfupdate-teacher-cache-v4-spec${KEY}|" \
       -e "s|caches/spec_0p8b_v4|caches/spec_${KEY}_v4|" \
+      -e "s|generation_max_tokens: 0|generation_max_tokens: 4096|" \
       configs/experiments/spec_verify/base_qwen35_0p8b_v4_spec.yaml > "$BASE"
+  # historical h100 responses were generated with a FLAT 4096 budget
+  # (generation_budget: 4096 per row); the 0.8B template derives per-record
+  # budgets (generation_max_tokens: 0) — batch 420477 failed on this mismatch.
   sed -e "s|spec_qwen35_0p8b_v4_ppp1_e1|spec_${KEY}_v4_ppp1_e1|" \
       configs/experiments/spec_verify/qwen35_0p8b_v4_spec_ppp1.yaml > "$EXP"
 fi
