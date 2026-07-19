@@ -23,7 +23,11 @@ train:
   v4_loop_order: layer_major
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
-  v4_weight_residency: auto
+  # ROTATE, not auto: DeepSeek layers are ~12 GB each (256 experts) and the MLA
+  # store (sliding K/V + compressed entries + indexer top-k) is heavier than
+  # Qwen's, so `auto` (which weighs only owned-weight bytes) picks resident and
+  # OOMs stage 0's vocab-head card. Rotate keeps one layer on-card at a time.
+  v4_weight_residency: rotate
   v4_battery_mode: subprocess
   v4_stage_splits: [5, 11, 16, 22, 27, 32, 38]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
