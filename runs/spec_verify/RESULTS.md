@@ -157,3 +157,24 @@ whole-training-set coverage). student_argmax_acceptance 0.99507.
 All four measured models are >=99.5% at real full-epoch scale (70-90K tokens
 each) — the goal ("training stack reproduces vLLM") reads as MET for the
 single-node envelope, pending 122B and the 8-card escalations (397B, DeepSeek).
+
+## SPEED: one whole 2071-item epoch, trainer-native PPP4 (real measurement)
+
+`epoch_seconds` = the entire epoch (store-fill capture + training write for
+all 2071 items), `capture_seconds: 0.0` on every row = the teacher-forward
+work is folded into this single epoch measurement (single-epoch runs, no
+separate warmup epoch):
+
+| model | epoch_seconds | token_events | train-phase GPU util |
+|---|---:|---:|---:|
+| Qwen3.6-27B | 109.2 | 1,132,912 | 92.6% |
+| gemma-4-31B | 143.1 | 1,182,150 | 89.7% |
+| Qwen3.6-35B-A3B | 71.7 | 741,760 | 85.4% |
+| gemma-4-26B | 71.2 | 632,709 | 78.4% |
+
+Note: 27B/26B also ran an unwanted post-epoch battery this run (every_epochs
+was left at 1, not yet patched to 100 for these two — see the earlier "known
+error" entry); that battery cost is OUTSIDE epoch_seconds (separate
+subprocess), so these epoch_seconds numbers are clean training-only times.
+vLLM4 (TP4) prefill-verify timing for the SAME 2071-item set: in flight
+(27B first), to give the direct wall-clock comparator requested.
