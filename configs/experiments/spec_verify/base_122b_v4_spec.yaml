@@ -95,7 +95,7 @@ train:
     alpha: 32
     dropout: 0.0
 eval:
-  every_epochs: 1
+  every_epochs: 100
   recall_corpora: []
   standard_damage_every_epochs: 0
   standard_damage_limit: 16
