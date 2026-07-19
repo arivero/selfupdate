@@ -8,10 +8,10 @@
 # vLLM-answered items, index-only cache (answer ids = the vLLM draft),
 # v4_teacher_source=online (hidden states computed by THIS trainer).
 # teacher_argmax_acceptance in teacher_output_eval is the goal metric.
-run_name: spec_qwen35_0p8b_v4_base_never_train
+run_name: spec_31b_v4_base_never_train
 layerwise_project_version: "3.4"
 model:
-  name: Qwen/Qwen3.5-0.8B
+  name: google/gemma-4-31B-it
   dtype: bfloat16
   device: cuda
   pipeline_split: 0
@@ -19,14 +19,14 @@ model:
   pipeline_devices: [0]
   pipeline_world_size: 1
 data:
-  examples_path: data/combined/examples_v5rs_window_spec64.jsonl
+  examples_path: data/combined/examples_v5rs_window.jsonl
 mask:
   mode: rag_system
   compaction: flow_mask
 cache:
-  root: caches/spec_0p8b_v4
+  root: caches/spec_31b_v4
   runtime_policy: node_epoch0
-  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-spec0p8b
+  node_root: /dev/shm/$USER/selfupdate-teacher-cache-v4-spec31b
   source_compaction: remove
   hidden_dtype: bfloat16
   store_full_teacher_inputs: false
@@ -35,8 +35,8 @@ cache:
   generation_batch: 64
   teacher_batch: 64
   generation_budget_bucket: 32
-  generation_max_tokens: 0
-  generation_responses_path: runs/spec_verify/qwen35_0p8b_vllm/responses_bs64.jsonl
+  generation_max_tokens: 4096
+  generation_responses_path: runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl
   generation_shuffle_seed: 17
   max_sequence_tokens: 8192
 # NOTE: every "64" below (generation_batch/teacher_batch/micro_batch) is a
