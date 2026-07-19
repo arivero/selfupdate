@@ -100,12 +100,27 @@ fi
 # same launch id; the postal envelopes already carry from_host, so
 # mis-routed cross-host mail is refused by construction.
 read -r -a STAGE_HOSTS <<< "${SELFUPDATE_V4_STAGE_HOSTS:-}"
+SELF_HOST="$(hostname -s)"
 MULTI_HOST=0
 for h in "${STAGE_HOSTS[@]:-}"; do
-  if [[ -n "$h" && "$h" != "local" && "$h" != "$(hostname -s)" ]]; then
+  if [[ -n "$h" && "$h" != "local" && "$h" != "$SELF_HOST" ]]; then
     MULTI_HOST=1
   fi
 done
+# Resolve empty/"local" -> this launcher's short hostname so EVERY node reads
+# the SAME stage->host map and routes boundary mail by CO-LOCATION: a
+# same-node stage pair exchanges through /dev/shm (RAM), a cross-node pair
+# over NCCL/IB. No comms path ever touches a disk filesystem (ssd/lustre/nfs)
+# — owner 2026-07-19. The trainer's resolve_relay_transport reads this map.
+STAGE_HOSTS_RESOLVED=()
+for h in "${STAGE_HOSTS[@]:-}"; do
+  if [[ -z "$h" || "$h" == "local" ]]; then
+    STAGE_HOSTS_RESOLVED+=("$SELF_HOST")
+  else
+    STAGE_HOSTS_RESOLVED+=("$h")
+  fi
+done
+export SELFUPDATE_V4_STAGE_HOSTS="${STAGE_HOSTS_RESOLVED[*]}"
 
 # One identity per coordinated launch: every relay/adapter file is stamped
 # with it and stages refuse tensors from any other launch.
@@ -120,16 +135,23 @@ if [[ "$MULTI_HOST" = "1" ]]; then
   export MASTER_PORT="${MASTER_PORT:-29517}"
   export NCCL_IB_HCA="${NCCL_IB_HCA:-mlx5_0,mlx5_1}"
   export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-eno12419np2}"
+  # gloo (the NcclBoundaryRelay launch-id all_gather subgroup) needs its OWN
+  # interface hint or it auto-picks a non-routable NIC and spins forever in a
+  # connect-retry sleep AFTER nccl init already succeeded (measured hang,
+  # 2026-07-19). Pin it to the same management-net interface as NCCL's bootstrap.
+  export GLOO_SOCKET_IFNAME="${GLOO_SOCKET_IFNAME:-$NCCL_SOCKET_IFNAME}"
 fi
-if [[ "$MULTI_HOST" = "1" ]]; then
-  # The exchange must be VISIBLE FROM EVERY HOST: node-local /dev/shm
-  # cannot carry cross-node mail. The shared filesystem (Lustre here,
-  # GPFS at BSC) is the transport; the IB fabric is what makes the
-  # boundary files fast. Single-host launches keep the /dev/shm default.
-  export SELFUPDATE_V4_RELAY_ROOT="${SELFUPDATE_V4_RELAY_ROOT:-$ROOT/runs/v4_relay}"
-else
-  export SELFUPDATE_V4_RELAY_ROOT="${SELFUPDATE_V4_RELAY_ROOT:-/dev/shm/$USER/selfupdate-v4-relay}"
-fi
+# The file relay is ALWAYS node-local /dev/shm (RAM tmpfs) — NEVER a disk
+# filesystem (owner 2026-07-19: "standard file system ... decays to ssd/
+# lustre/nfs, all bad options ... completely out of the code"). Cross-node
+# mail does not travel through a shared mount at all: same-node stage pairs
+# use this shm exchange, cross-node pairs go NCCL/IB (relay_nccl.py). Each
+# node materializes its OWN shm root under the identical path.
+export SELFUPDATE_V4_RELAY_ROOT="${SELFUPDATE_V4_RELAY_ROOT:-/dev/shm/$USER/selfupdate-v4-relay}"
+case "$SELFUPDATE_V4_RELAY_ROOT" in
+  /dev/shm/*) : ;;
+  *) echo "REFUSED: relay root '$SELFUPDATE_V4_RELAY_ROOT' is not under /dev/shm; comms must be RAM-backed (owner 2026-07-19)" >&2; exit 3 ;;
+esac
 mkdir -p "$SELFUPDATE_V4_RELAY_ROOT"
 # Wipe this run's relay exchange: we hold the lease, so no live stage of this
 # run exists, and any files there are dead mail from a previous launch. The
@@ -145,6 +167,10 @@ HF_HUB_OFFLINE=$HF_HUB_OFFLINE HF_DATASETS_OFFLINE=$HF_DATASETS_OFFLINE \
 SELFUPDATE_V4_LAUNCH_ID=$SELFUPDATE_V4_LAUNCH_ID \
 SELFUPDATE_V4_RELAY_ROOT=$SELFUPDATE_V4_RELAY_ROOT \
 SELFUPDATE_V4_CROSS_NODE=${SELFUPDATE_V4_CROSS_NODE:-0} \
+MASTER_ADDR=${MASTER_ADDR:-} MASTER_PORT=${MASTER_PORT:-} \
+NCCL_IB_HCA=${NCCL_IB_HCA:-} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-} \
+GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-} \
+NCCL_DEBUG=${NCCL_DEBUG:-} NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-} \
 SELFUPDATE_V4_STAGE_HOSTS='${SELFUPDATE_V4_STAGE_HOSTS:-}'"
 pids=()
 local_pids=()

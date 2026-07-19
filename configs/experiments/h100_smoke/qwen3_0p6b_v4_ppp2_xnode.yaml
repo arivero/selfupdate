@@ -1,0 +1,36 @@
+# Qwen3-0.6B PPP2 CROSS-NODE relay test bench (owner, 2026-07-19). 2 stages,
+# stage 0 on agpuh01 GPU0, stage 1 on agpuh02 GPU0 (SELFUPDATE_V4_STAGE_HOSTS=
+# "local agpuh02"). The single forward boundary (stage 0 -> stage 1) crosses
+# nodes, so it MUST ride NCCL/IB — this run exists to prove the boundary
+# transport carries the epoch + store-fill hiddens over InfiniBand with ZERO
+# files on any disk filesystem (assert: runs/v4_relay never created; only
+# /dev/shm holds same-node control mail). Tiny + fast: 2 epochs, 28 blocks
+# split at 14, LoRA, resident (0.6B fits a card).
+run_name: h100_q0p6b_v4_ppp2_xnode
+# Inherit the base 0.6B cache block verbatim (store_full_teacher_inputs: true,
+# node_root v4-smoke) so the semantic cache identity matches the already-built
+# 16b7ed cache — this run tests the RELAY, not the data pipeline.
+mask:
+  compaction: flow_mask
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  epochs: 2
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_relay_transport: auto      # -> nccl (cross-node), the path under test
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [14]
+  v4_stage_devices: [0, 0]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100

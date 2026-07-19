@@ -74,7 +74,8 @@ def _fill_deepseek_layer(stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
 def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                         device, run_dir, log, *, owned, n_layers,
                         moe_ctrl=None, moe_routing=None,
-                        teacher_eval_rows=None, rotator=None) -> None:
+                        teacher_eval_rows=None, rotator=None,
+                        transport=None) -> None:
     from .online_v4 import _FrozenKV, _RelayFiles, _bk_layer_type
 
     stage = cfg.train.v4_stage
@@ -115,7 +116,7 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
             stage=stage, stages=stages, owned=owned_list, n_layers=n,
             moe_ctrl=moe_ctrl, moe_routing=moe_routing,
             teacher_eval_rows=teacher_eval_rows, rotator=rotator,
-            inflight=inflight, started=started)
+            inflight=inflight, started=started, transport=transport)
         return
 
     for idx, cohort in enumerate(cohorts):
@@ -124,11 +125,11 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
         if first:
             h = stack.embed(cohort.teacher_ids.to(device))
         else:
-            path = rf.wait(
-                rf.path(0, f"capture_c{idx:04d}_stage{stage - 1}.st"))
-            loaded = rf.read(path, expect_epoch=0, as_stage=stage)
-            h = loaded["h"].to(device)
-            path.unlink(missing_ok=True)
+            # Co-location routed (same-node /dev/shm file / cross-node NCCL).
+            # This cohort-outer fallback runs whenever the stage is RESIDENT
+            # (rotator is None) — e.g. 122B PPP8 — so it MUST route cross-node
+            # boundaries over NCCL, never node-local files.
+            h = transport.recv_fill_one(idx, cohort).to(device)
         ctx_a = (adapters_off() if adapters_off is not None
                  else contextlib.nullcontext())
         ctx_m = (moe_ctrl.teacher_phase() if moe_ctrl is not None
@@ -185,12 +186,15 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                          if L in owned},
             }
         if not last:
-            out_path = rf.path(0, f"capture_c{idx:04d}_stage{stage}.st")
-            rf.write(out_path, {"h": h.detach().cpu()},
-                     stage=stage, epoch=0, to_stage=stage + 1)
-            written.append(out_path)
-            while sum(1 for p in written if p.exists()) >= inflight:
-                time.sleep(0.5)
+            remote = transport.fwd_remote()
+            transport.send_fill_one(idx, h)
+            if remote:
+                transport.throttle_sends(inflight)
+            else:
+                written.append(
+                    rf.path(0, f"capture_c{idx:04d}_stage{stage}.st"))
+                while sum(1 for p in written if p.exists()) >= inflight:
+                    time.sleep(0.5)
         del h
     log.log(kind="v4_store_capture",
             seconds=round(time.perf_counter() - started, 3),
@@ -203,7 +207,7 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                               device, rf, log, *, stage, stages, owned,
                               n_layers, moe_ctrl, moe_routing,
                               teacher_eval_rows, rotator, inflight,
-                              started) -> None:
+                              started, transport=None) -> None:
     """Chunk-wise layer-outer store-fill for STAGED stages under rotation.
 
     Cohort-outer pages every owned block once per COHORT: at 397B
@@ -238,11 +242,9 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                 if first:
                     hs[idx] = stack.embed(cohort.teacher_ids.to(device))
                 else:
-                    path = rf.wait(rf.path(
-                        0, f"capture_c{idx:04d}_stage{stage - 1}.st"))
-                    loaded = rf.read(path, expect_epoch=0, as_stage=stage)
-                    hs[idx] = loaded["h"].to(device)
-                    path.unlink(missing_ok=True)
+                    # Co-location routed: same-node predecessor -> /dev/shm
+                    # file, cross-node -> NCCL/IB recv. Never a disk FS.
+                    hs[idx] = transport.recv_fill_one(idx, cohort).to(device)
                 pes[idx] = stack.rope(hs[idx], poss[idx])
             for pos_i, layer in enumerate(owned):
                 rotator.activate(layer)
@@ -308,17 +310,20 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                 # boundary-file I/O below.
                 rotator.prefetch(owned[0])
             if not last:
+                remote = transport.fwd_remote()
                 for idx in chunk:
-                    out_path = rf.path(
-                        0, f"capture_c{idx:04d}_stage{stage}.st")
-                    rf.write(out_path, {"h": hs[idx].detach().cpu()},
-                             stage=stage, epoch=0, to_stage=stage + 1)
-                    written.append(out_path)
-                    # A consumer ingests a whole chunk before computing, so
-                    # allow at least one full chunk in flight (inflight
-                    # below K would only throttle, never deadlock — the
-                    # consumer deletes as it ingests — but K is the natural
-                    # floor).
+                    # send_fill_one routes by co-location (same-node /dev/shm
+                    # file / cross-node NCCL isend). Never a disk FS.
+                    transport.send_fill_one(idx, hs[idx])
+                    if not remote:
+                        written.append(rf.path(
+                            0, f"capture_c{idx:04d}_stage{stage}.st"))
+                # A consumer ingests a whole chunk before computing, so allow
+                # ~one full chunk in flight. Files -> wait until the consumer
+                # deletes; NCCL -> bound the parked isend hiddens.
+                if remote:
+                    transport.throttle_sends(max(inflight, K))
+                else:
                     while sum(1 for p in written
                               if p.exists()) >= max(inflight, K):
                         time.sleep(0.5)

@@ -759,7 +759,7 @@ class _RelayServicer:
 
     def __init__(self, cfg, stack, ds, cohorts, cache, device, log,
                  run_dir: Path, owned, teacher_eval_rows: dict | None = None,
-                 rotator=None):
+                 rotator=None, transport=None):
         self.rotator = rotator
         # Keep the SHARED reference: an empty dict is falsy, so `... or {}`
         # would swap in a fresh dict and sever the link to the training loop's
@@ -774,6 +774,9 @@ class _RelayServicer:
         self.stage = cfg.train.v4_stage
         self.stages = len(cfg.train.v4_stage_splits or []) + 1
         self.rf = _RelayFiles(run_dir.parent)
+        # Co-location transport (shm same-node / NCCL cross-node) carries the
+        # boundary hiddens; the file relay stays for control mail only.
+        self.transport = transport
         self.pending: list[int] = []
         self.trained_epochs = 0
 
@@ -789,20 +792,13 @@ class _RelayServicer:
     def service(self, block: bool = False) -> None:
         while self.pending:
             epoch = self.pending[0]
-            path = self.rf.path(epoch, f"stage{self.stage - 1}.st")
-            if not path.exists():
-                if not block:
-                    return
-                self.rf.wait(path)
-            loaded = self.rf.read(path, expect_epoch=epoch,
-                                  as_stage=self.stage)
-            boundaries = {int(k[1:]): v for k, v in loaded.items()}
+            # recv_forward routes by co-location: a same-node predecessor is a
+            # /dev/shm file (waited/read/unlinked internally), a cross-node one
+            # an NCCL/IB recv. Returns None when non-blocking and not yet ready.
+            boundaries = self.transport.recv_forward(epoch, block=block)
+            if boundaries is None:
+                return
             self._produce(epoch, boundaries)
-            # Consumed: delete our input so an infinite run's relay/ stays
-            # bounded (every file has exactly one addressee).
-            path.unlink(missing_ok=True)
-            with contextlib.suppress(OSError):
-                path.parent.rmdir()
             self.pending.pop(0)
 
     def drain(self) -> None:
@@ -835,11 +831,10 @@ class _RelayServicer:
                              serviced_at_epoch=self.trained_epochs,
                              teacher_rows_by_cohort=self.teacher_eval_rows)
         else:
-            self.rf.write(self.rf.path(epoch, f"stage{self.stage}.st"),
-                          {f"c{idx}": t.detach().cpu()
-                           for idx, t in out.items()},
-                          stage=self.stage, epoch=epoch,
-                          to_stage=self.stage + 1)
+            # send_forward routes by co-location (same-node shm file /
+            # cross-node NCCL isend); reap keeps the parked isend tensors bounded.
+            self.transport.send_forward(epoch, out)
+            self.transport.reap_forward(block=False)
 
 
 def _owned_adapter_tensors(stack, owned) -> dict:
@@ -1456,12 +1451,27 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     # multi-process runs defer them to the merged-adapter pass (M3); the
     # single-process mode runs them exactly as v3 does.
     single_process = cfg.train.v4_stage == -1
+    # ONE boundary transport per staged run, created (and — cross-node — the
+    # NCCL group init'd COLLECTIVELY) before any boundary moves. It routes each
+    # stage hop by co-location: same-node -> /dev/shm file (RAM), cross-node ->
+    # NCCL/IB verbs. NEVER a disk filesystem (owner 2026-07-19). The store-fill
+    # and the epoch servicer share it so there is exactly one process group.
+    boundary_transport = None
+    if not single_process and run_dir is not None:
+        from .relay_nccl import BoundaryTransport
+        _rf_shared = _RelayFiles(run_dir.parent)
+        boundary_transport = BoundaryTransport(
+            cfg, _rf_shared, cohorts, device, _launch_identity())
+        _H = int(stack.text_config.hidden_size)
+        _dims = (stack.hc_mult, _H) if stack.hc_mult > 1 else (_H,)
+        boundary_transport.set_hidden_dims(_dims, torch.bfloat16)
     relay = None
     if (not single_process and cfg.train.v4_relay_every_cohorts
             and run_dir is not None):
         relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
                                run_dir, owned, rotator=rotator,
-                               teacher_eval_rows=teacher_eval_rows)
+                               teacher_eval_rows=teacher_eval_rows,
+                               transport=boundary_transport)
     if store_source:
         # Store-fill: ONE relayed teacher pass before any epoch fills this stage's
         # per-(layer, cohort) store; every epoch then runs with zero
@@ -1471,7 +1481,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             cfg, stack, ds, cohorts, tensors, adapters_off, device,
             run_dir, log, owned=owned, n_layers=n, moe_ctrl=moe_ctrl,
             moe_routing=moe_routing, teacher_eval_rows=teacher_eval_rows,
-            rotator=rotator)
+            rotator=rotator, transport=boundary_transport)
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
