@@ -84,7 +84,7 @@ $PY scripts/train.py --config "$BASE" --experiment "$EXP"
 RUN="runs/spec_${KEY}_v4_ppp1_e1"
 [[ "$KEY" == 0p8b ]] && RUN="runs/spec_qwen35_0p8b_v4_ppp1_e1"
 echo "==== GOAL ROW ${SHORT} ===="
-grep '"teacher_output_eval"' "$RUN/metrics.jsonl" | $PY -c "
+grep '"kind": "teacher_output_eval"' "$RUN/metrics.jsonl" | $PY -c "
 import sys, json
 for l in sys.stdin:
     d = json.loads(l)
