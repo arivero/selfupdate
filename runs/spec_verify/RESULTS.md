@@ -51,11 +51,16 @@ discarded from this envelope; it keeps its mechanics-vehicle role (PPP
 bit-identity certs) which never touches vLLM. Not re-measured at 2071 (no
 full-scale 0.8B vLLM generation exists, and it is out of scope).
 
-## Campaign plan (owner, 2026-07-19 ~19:15): PPP4+VLLM4 -> PPP8+VLLM8 -> PPP2/PPP1
+## Campaign plan (owner, 2026-07-19 ~19:15): PPP4+vLLM TP4 -> PPP8+vLLM TP8 -> PPP2/PPP1
 
-1. PPP4 (single-node, 4 cards) + VLLM4 (TP4) trainer-native + vLLM timing,
+(naming corrected 2026-07-19 ~21:10: "VLLM4"/"VLLM8" renamed to "vLLM TP4"/
+"vLLM TP8" — see CORRECTION note below; vLLM's side is tensor parallelism
+via its own `tensor_parallel_size` argument, run from a standalone script,
+not our PPPn pipeline architecture)
+
+1. PPP4 (single-node, 4 cards) + vLLM TP4 trainer-native + vLLM timing,
    for every model that fits: 27B, 35B, 26B, 31B, 122B.
-2. Escalate to PPP8+VLLM8 ONLY for models that don't fit at 4 cards: 397B
+2. Escalate to PPP8+vLLM TP8 ONLY for models that don't fit at 4 cards: 397B
    (FP8 reference accepted, owner decision), DeepSeek-V4-Flash bf16 (543GB,
    confirmed OOM at TP4 single-node; needs the native mp-backend 2-node vLLM
    path, kv-cache-dtype=fp8 fixes the fp8_ds_mla assertion).
@@ -195,10 +200,59 @@ whole-training-set coverage). student_argmax_acceptance 0.96652.
 | gemma-4-26B | 0.99529 | 90,387 |
 
 Every model >=99.5% at real full-epoch statistical power (70K-101K tokens
-each). Goal MET for the single-node envelope. Next: VLLM4 timing comparators
+each). Goal MET for the single-node envelope. Next: vLLM TP4 timing comparators
 (in progress via a queue subagent), then the 8-card escalation for 397B/DeepSeek.
 
-## gemma-4-26B-A4B — VLLM4 (TP4) prefill-verify, FULL 2071-item epoch (2026-07-19 20:31)
+## CORRECTION (2026-07-19 ~21:10, owner-prompted code inspection)
+
+Two mislabelings in this section, both caught by direct code/data inspection
+rather than assumption — fixed below, not just patched over:
+
+1. **"VLLM4" renamed to "vLLM TP4" throughout.** `scripts/vllm_prefill_verify.py`
+   (`grep -n selfupdate scripts/vllm_prefill_verify.py` → zero code hits, only
+   cache-dir path strings; `grep -n '^import\|^from'` → argparse/json/os/time/
+   pathlib, then `from vllm import LLM, SamplingParams` — no import of `train.py`
+   or any `src/selfupdate` module) calls vLLM's own `tensor_parallel_size=4`.
+   That is **tensor parallelism** — every layer's weight matrices sharded
+   across 4 GPUs with an NCCL all-reduce per layer — the opposite
+   communication pattern from our own PPP4 (contiguous block ranges per
+   stage-owned process, no cross-stage traffic during the per-cohort training
+   step). "PPP4" and "VLLM4" sharing a "4" implied an architectural parallel
+   that isn't there: two different parallelism strategies that both happen to
+   use 4 GPUs, run from two entirely separate entry points (there was never a
+   shared one on the table — vLLM's `LLM()` is a self-contained serving engine
+   with its own weight loading/KV-cache/CUDA-graph capture; it cannot run
+   inside `train.py`'s process).
+2. **Three of the five "PPP4 trainer epoch" seconds below were wrong**, not
+   just mislabeled — 122B and 27B had the SAME value (109.2), a copy-paste
+   duplicate, and 31B's 143.1 was never real either. Re-pulled directly from
+   each run's `stage0/metrics.jsonl`, the `v4_epoch` record's
+   `epoch_seconds` field (= `prep_seconds + exec_seconds`, i.e. cohort setup
+   + the full forward+backward+optimizer-write walk, excluding one-time model
+   load): 26B 68.95, 122B **96.64** (was 109.2), 27B **106.31** (was a
+   109.2 duplicate), 31B **83.04** (was 143.1), 35B 71.07. Table below uses
+   these verified numbers.
+
+Related clarification on "no cross-stage communication" (owner question):
+precise for the **training** step only — `online_v4.py`'s per-cohort update
+reads pre-cached teacher hidden states as both input and target (already
+staged in `/dev/shm`, no live neighbor needed), so no stage waits on another
+during training. Actual student-forward boundary hidden states DO relay
+across stage boundaries via `_RelayServicer`/`_relay_segment`
+(`v4_relay_every_cohorts`, same-node shm or cross-node NCCL) — but that path
+is explicitly evaluation-only (docstring: "The skew is bounded by pipeline
+depth, evaluation-only"), asynchronous, and not on the training critical path.
+Both statements are true; they describe different code paths.
+
+Also noted, not fixed now (real gap): **the trainer has no forward-only
+("skip backward, skip write") mode.** `teacher_output_eval`'s acceptance
+metric is a side effect of the full training step; there is no isolated
+verify-only path to time against vLLM's inference-only prefill on equal
+footing. The seconds below are reported as what they are — a full training
+epoch vs. vLLM's inference-only prefill pass — not as a matched-workload
+ratio.
+
+## gemma-4-26B-A4B — vLLM TP4 prefill-verify, FULL 2071-item epoch (2026-07-19 20:31)
 
 **self_consistency_match_rate = 0.9889** (2071/2071 items processed).
 load_seconds 140.66 (LLM() construction, eager mode, disable_custom_all_reduce),
@@ -206,49 +260,64 @@ seconds 27.797 (the actual generate() call over all 2071 prompts),
 items_per_s 74.5, context_tok_per_s 25,787.
 
 This is vLLM verifying ITS OWN earlier greedy answers via one eager-mode
-prefill pass (max_tokens=1) per item — the symmetric counterpart to our
-trainer's teacher-forced acceptance check. 98.89% self-consistency (not
-100%) is itself informative: even vLLM checking its own prior output
-disagrees ~1.1% of the time under eager mode (vs whatever mode/settings
-produced the original greedy answers) — a real numerical-precision/kernel-
-path sensitivity baseline, useful context for reading our own 99.5%+
-acceptance numbers against vLLM.
+prefill pass (max_tokens=1) per item. `self_consistency` is vLLM-vs-itself
+(sanity check, should read ~1.0); it is NOT the same quantity as our
+trainer's `teacher_argmax_acceptance` (our-stack-vs-vLLM), and the two must
+not be read as one comparison column. 98.89% self-consistency (not 100%) is
+itself informative: even vLLM checking its own prior output disagrees ~1.1%
+of the time under eager mode (vs whatever mode/settings produced the
+original greedy answers) — a real numerical-precision/kernel-path
+sensitivity baseline, useful context for reading our own 99.5%+ acceptance
+numbers.
 
-## PPP4 vs VLLM4 speed comparison, 26B, same 2071-item set
-
-| leg | seconds | note |
-|---|---:|---|
-| our PPP4 trainer epoch | 71.2 | training math, all layers, full backward+write |
-| vLLM4 generate() call | 27.8 | eager mode, prefill-only (max_tokens=1), no autoregression |
-| vLLM4 total incl. engine load | 168.5 (140.7+27.8) | one-time LLM() construction dominates |
-
-Not apples-to-apples (different work: training vs verify-only prefill), but
-both numbers are now real, measured, full-2071-item wall-clock times.
-
-## Qwen3.5-122B-A10B — VLLM4 (TP4) prefill-verify, FULL 2071-item epoch (2026-07-19 20:32)
+## Qwen3.5-122B-A10B — vLLM TP4 prefill-verify, FULL 2071-item epoch (2026-07-19 20:32)
 
 **self_consistency_match_rate = 0.9845** (2071/2071 items).
 load_seconds 121.52, generate seconds 30.713, items_per_s 67.43.
 
-## SPEED SCOREBOARD — vLLM's timing is the GOAL/target for our training stack
+## vLLM TP4 — full 5-model completion (2026-07-19, queue-managed on agpuh01/agpuh02)
+
+All 5 models complete, full 2071-item coverage, post enforce_eager +
+disable_custom_all_reduce fix (see below):
+
+| model | self_consistency | seconds | items_per_s | load_seconds |
+|---|---:|---:|---:|---:|
+| Qwen3.6-27B | 0.9986 | 30.723 | 67.41 | 140.54 |
+| gemma-4-26B-A4B | 0.9889 | 27.797 | 74.5 | 140.66 |
+| gemma-4-31B | 0.9990 | 14.956 | 138.47 | 101.67 |
+| Qwen3.6-35B-A3B | 0.9850 | 18.432 | 112.36 | 131.4 |
+| Qwen3.5-122B-A10B | 0.9845 | 30.713 | 67.43 | 121.52 |
+
+Operational note: every one of the 5 models crashed at least once pre-fix
+with `CUDA error: an illegal memory access` sourced in vLLM's
+`CUDASymmetricMemory`/custom-all-reduce path (during CUDA-graph capture or
+KV-cache memory profiling) — not model-specific, hit on both TP4 nodes.
+Fixed by `enforce_eager=True` + `disable_custom_all_reduce=True`
+(`scripts/vllm_prefill_verify.py`, commits `11fc186`/`91b44ac`); every retry
+after both fixes succeeded on the first attempt.
+
+## SPEED SCOREBOARD — vLLM's timing is the reference point, NOT a same-workload ratio
 
 Owner framing (2026-07-19): vLLM's numbers are what our training stack is
 measured AGAINST — the reference speed a genuinely independent, mature
 serving engine achieves on the same full 2071-item set, same weights.
+**Read this table as two different workloads side by side, not a speedup
+ratio** — see the CORRECTION note above: our column is a full training
+epoch (forward + backward + optimizer write, all layers); vLLM's is one
+inference-only prefill pass (no backward, no write). No forward-only mode
+exists on our side yet to produce a true matched-workload number.
 
-| model | PPP4 trainer epoch (s) | vLLM4 generate (s) | vLLM4 load (s) | vLLM4 total (s) |
-|---|---:|---:|---:|---:|
-| gemma-4-26B | 71.2 | 27.8 | 140.7 | 168.5 |
-| Qwen3.5-122B-A10B | 109.2 | 30.7 | 121.5 | 152.2 |
-| Qwen3.6-27B | 109.2 | *pending* | *pending* | |
-| gemma-4-31B | 143.1 | *pending (retry after crash)* | | |
-| Qwen3.6-35B-A3B | 71.7 | *pending (retry after crash)* | | |
+| model | PPP4 trainer epoch, full train (s) | vLLM TP4 generate, prefill-only (s) | vLLM TP4 load (s) |
+|---|---:|---:|---:|
+| gemma-4-26B-A4B | 68.95 | 27.797 | 140.66 |
+| Qwen3.5-122B-A10B | 96.64 | 30.713 | 121.52 |
+| Qwen3.6-27B | 106.31 | 30.723 | 140.54 |
+| gemma-4-31B | 83.04 | 14.956 | 101.67 |
+| Qwen3.6-35B-A3B | 71.07 | 18.432 | 131.4 |
 
-Reading so far: our PPP4 TRAINING epoch (full backward + optimizer write,
-all layers) is in the SAME ORDER OF MAGNITUDE as vLLM's pure verify-only
-generate() call (71-109s vs 28-31s) — training does strictly more work per
-item (a full block-local write, not just a max_tokens=1 prefill) and is
-roughly 3-4x vLLM's bare generate() time, but far below vLLM's one-time
-engine-load cost (121-141s). Not yet a fair single-number comparison (see
-the standing caveats on regime differences), but this is the first REAL
-matched-workload timing data against the stated goal.
+Both legs now complete for all 5 models, full 2071-item coverage. Our full
+training epoch runs at roughly 2-6x vLLM's bare inference-only prefill time
+depending on model, and well under vLLM's one-time engine-load cost in every
+case — reported as observed wall-clock only, since the two columns are not
+the same task (see correction note). A genuine speed-vs-speed claim needs a
+forward-only path on our side; that does not exist today.
