@@ -1,9 +1,12 @@
-# PPP4 trainer-native vLLM check for 122B (48 layers, cuts 12/24/36, 4 GPUs).
+# PPP4 trainer-native vLLM check for 122B (48 layers, cuts 12/24/36, 4 GPUs,
+# one node). Mirrors the proven production stage-scoped knobs (same as the
+# PPP8 overlay) — the original version of this file used
+# v4_teacher_source=online with NO stage_scoped/residency/battery-mode
+# fields, which would repeat the exact "every stage loads the FULL 244GB
+# model" OOM already diagnosed for the PPP4 attempt earlier this session.
 run_name: spec_122b_v4_ppp4_e1
 mask:
   compaction: flow_mask
-model:
-  device: cuda
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
@@ -12,6 +15,10 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  v4_teacher_source: online
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
   v4_stage_splits: [12, 24, 36]
   v4_stage_devices: [0, 1, 2, 3]
