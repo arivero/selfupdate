@@ -263,3 +263,114 @@ def sharded_recall(stack, relay, corpus_paths, *, stage: int, n_stages: int,
                 resident_student=True)
         return results
     return None
+
+
+@torch.no_grad()
+def sharded_standard_damage(stack, relay, *, stage: int, n_stages: int, owned,
+                            tok, device, epoch: int, log,
+                            tasks=("arc_easy", "arc_challenge", "hellaswag"),
+                            limit: int = 16, batch_size: int = 8) -> dict | None:
+    """No-reload standard-damage (ARC/hellaswag) over the RESIDENT sharded
+    student — the "destruction" half of the in-pipeline battery.
+
+    Collective across all stages: a sharded PREFILL forward yields per-position
+    logits on the LAST stage, which applies the SAME length-normalized
+    choice-likelihood scoring as ``eval.standard._score_pairs``. Deterministic
+    examples (``task_examples``) mean every stage iterates identical batches;
+    only the last stage scores. Prefill-only (no autoregressive loop) so it is
+    far cheaper than recall generation. Each stage re-tokenizes the same batch
+    (deterministic) — stage 0 embeds it, the last stage indexes choice spans.
+    Returns ``{"macro_accuracy", "per_task"}`` on the last stage, None else.
+    """
+    import math
+    import torch.nn.functional as F
+    from ..eval.standard import task_examples
+    if getattr(stack, "hc_mult", 1) > 1 or stack.rotary_emb is None \
+            or getattr(stack, "rotary_needs_layer_type", False):
+        raise NotImplementedError(
+            "sharded_standard_damage supports plain-rope decoders only "
+            "(Qwen3.x/3.5); gemma-4 bundle and deepseek MLA rope need wiring")
+    is_first = stage == 0
+    is_last = stage == n_stages - 1
+
+    def send(name, tens, to):
+        relay.write(relay.path(epoch, name),
+                    {k: v.cpu() for k, v in tens.items()},
+                    stage=stage, epoch=epoch, to_stage=to)
+
+    def recv(name, as_stage):
+        p = relay.wait(relay.path(epoch, name), poll_s=0.005)
+        env = relay.read(p, expect_epoch=epoch, as_stage=as_stage)
+        p.unlink(missing_ok=True)
+        return {k: v.to(device) for k, v in env.items()}
+
+    def prefill_logits(input_ids, attention_mask, tag):
+        cache = StudentKVCache()
+        if is_first:
+            B, T = input_ids.shape
+            h = stack.embed(input_ids)
+        else:
+            env = recv(f"{tag}_pf_to{stage}", stage)
+            h = env["h"]
+            B, T = h.shape[0], h.shape[1]
+        pos = torch.arange(T, device=device)[None].expand(B, -1)
+        keep = attention_mask if (is_first and attention_mask is not None) else None
+        mask = _prefill_mask(keep, T, h.dtype, device)
+        for L in owned:
+            h = stack.run_block(L, h, stack.rope(h, pos), position_ids=pos,
+                                past_key_values=cache, use_cache=True,
+                                prepared_attention_mask=mask)
+        if is_last:
+            return stack.lm_head(stack.loss_view(stack.n_layers, h))  # [B,T,V]
+        send(f"{tag}_pf_to{stage + 1}", {"h": h}, to=stage + 1)
+        return None
+
+    per_task: dict[str, float] = {}
+    for task in tasks:
+        examples = task_examples(task, limit)
+        flat, owners = [], []
+        for ex_i, ex in enumerate(examples):
+            for ci, choice in enumerate(ex["choices"]):
+                flat.append((ex["prompt"], choice))
+                owners.append((ex_i, ci))
+        scores_by_ex = [[-math.inf] * len(ex["choices"]) for ex in examples]
+        for b0 in range(0, len(flat), batch_size):
+            batch = flat[b0:b0 + batch_size]
+            owner_b = owners[b0:b0 + batch_size]
+            texts = [p + c for p, c in batch]
+            enc = tok(texts, return_tensors="pt", padding=True,
+                      padding_side="right", add_special_tokens=False)
+            input_ids = enc["input_ids"].to(device)
+            attn = enc["attention_mask"].to(device)
+            logits = prefill_logits(input_ids if is_first else None,
+                                    attn if is_first else None,
+                                    f"dmg_{task}_{b0}")
+            if not (is_last and logits is not None):
+                continue
+            for i, (prompt, choice) in enumerate(batch):
+                p_ids = tok.encode(prompt, add_special_tokens=False)
+                c_ids = tok.encode(choice, add_special_tokens=False)
+                start = len(p_ids)
+                end = start + len(c_ids)
+                if not c_ids or end > int(attn[i].sum().item()):
+                    sc = -math.inf
+                else:
+                    row = logits[i, start - 1:end - 1].float()
+                    tgt = input_ids[i, start:end]
+                    nll = F.cross_entropy(row, tgt, reduction="sum").item()
+                    sc = -nll / max(1, len(c_ids))
+                ex_i, ci = owner_b[i]
+                scores_by_ex[ex_i][ci] = sc
+        if is_last:
+            correct = sum(
+                int(max(range(len(s)), key=lambda j: s[j]) == ex["target"])
+                for ex, s in zip(examples, scores_by_ex))
+            per_task[task] = correct / max(1, len(examples))
+    if is_last:
+        macro = sum(per_task.values()) / max(1, len(per_task))
+        log.log(kind="standard_eval", epoch=epoch, phase="inpipeline_damage",
+                standard_macro_accuracy=macro, standard_tasks=list(tasks),
+                per_task=per_task, standard_limit=limit, no_reload=True,
+                resident_student=True)
+        return {"macro_accuracy": macro, "per_task": per_task}
+    return None
