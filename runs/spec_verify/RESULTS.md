@@ -321,3 +321,26 @@ depending on model, and well under vLLM's one-time engine-load cost in every
 case — reported as observed wall-clock only, since the two columns are not
 the same task (see correction note). A genuine speed-vs-speed claim needs a
 forward-only path on our side; that does not exist today.
+
+## Command provenance for the speed scoreboard (2026-07-19, owner-requested)
+
+Caveat first: neither script prints its own invocation to its log, and no
+launcher wrapper survived from the subagent that ran the vLLM TP4 leg. The
+commands below are RECONSTRUCTED — verified against the script's real
+`argparse` flags, each model's identity in its PPP4 base config, and the
+exact response-file paths on disk — not a literally recovered shell history.
+`CUDA_VISIBLE_DEVICES=0,1,2,3` is inferred from TP4 needing 4 physical GPUs,
+not read from a surviving log. `--limit` is omitted (default `0` = whole
+file); each output JSON's `items: 2071` confirms that was what actually ran.
+`epoch_seconds` (PPP4 column) and `load_seconds`/`seconds` (vLLM TP4 columns)
+both come from files the code itself wrote (`stage0/metrics.jsonl`'s
+`v4_epoch` record; the script's own `--out` JSON) — not a wall-clock timed
+by hand.
+
+| model | PPP4 command | vLLM TP4 command |
+|---|---|---|
+| gemma-4-26B-A4B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_26b_v4_spec.yaml configs/experiments/spec_verify/26b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model google/gemma-4-26B-A4B-it --responses runs/vllm_h100/gemma4_26b_a4b_it/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/26b_vllm4_prefill_full2071.json` |
+| Qwen3.5-122B-A10B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_122b_v4_spec.yaml configs/experiments/spec_verify/122b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model Qwen/Qwen3.5-122B-A10B --responses runs/vllm_h100/qwen35_122b_a10b/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/122b_vllm4_prefill_full2071.json` |
+| Qwen3.6-27B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_27b_v4_spec.yaml configs/experiments/spec_verify/27b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model Qwen/Qwen3.6-27B --responses runs/vllm_h100/qwen36_27b_full_exactids/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/27b_vllm4_prefill_full2071.json` |
+| gemma-4-31B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_31b_v4_spec.yaml configs/experiments/spec_verify/31b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model google/gemma-4-31B-it --responses runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/31b_vllm4_prefill_full2071.json` |
+| Qwen3.6-35B-A3B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_35b_v4_spec.yaml configs/experiments/spec_verify/35b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model Qwen/Qwen3.6-35B-A3B --responses runs/vllm_h100/qwen36_35b_a3b/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/35b_vllm4_prefill_full2071.json` |
