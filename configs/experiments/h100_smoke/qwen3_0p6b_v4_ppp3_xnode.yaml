@@ -25,8 +25,10 @@ train:
   v4_stage_scoped: true
   v4_weight_residency: auto
   v4_battery_mode: subprocess
+  # stage 0,1 on agpuh01 (DISTINCT devices — same host, no (host,device)
+  # collision), stage 2 on agpuh02 GPU0. Boundary 1->2 crosses nodes (NCCL).
   v4_stage_splits: [9, 19]
-  v4_stage_devices: [0, 0, 0]
+  v4_stage_devices: [0, 1, 0]
 eval:
   every_epochs: 100
   standard_damage_every_epochs: 100
