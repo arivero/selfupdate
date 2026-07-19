@@ -1,0 +1,27 @@
+# PPP2 trainer-native vLLM check for 122B (2 stages, ONE node's 2 cards, split
+# at the middle cut of the proven PPP4 [12,24,36] -> [24]). Mirrors the proven
+# production config (h100_smoke/qwen35_122b_v4_ppp2.yaml) knob-for-knob, single
+# epoch instead of its 3-epoch speed-test variant.
+run_name: spec_122b_v4_ppp2_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: [24]
+  v4_stage_devices: [0, 1]
+eval:
+  every_epochs: 100
