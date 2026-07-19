@@ -56,11 +56,33 @@ def main() -> None:
     # (26B/31B/35B/27B all do at ~52-70GB bf16), pin the WHOLE model there so
     # generation is single-card fast; only genuinely-too-big models (122B+) fall
     # back to auto. The training stages have evicted, so the free card is real.
+    # Find the emptiest card WITHOUT initializing a CUDA context on each one.
+    # torch.cuda.mem_get_info(i) creates a context on card i just to query it,
+    # which littered ~518 MiB stray contexts on every non-eval card (bug: the
+    # single-card fix pinned the MODEL correctly but still probed all cards).
+    # NVML reads free memory context-free; fall back to torch only if NVML is
+    # unavailable. Physical index == torch index here (CUDA_VISIBLE_DEVICES is
+    # unset for staged battery children — physical ids passed verbatim).
+    n_dev = torch.cuda.device_count()
     best_card, best_free = 0, 0
-    for i in range(torch.cuda.device_count()):
-        free, _ = torch.cuda.mem_get_info(i)
-        if free > best_free:
-            best_free, best_card = free, i
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        for i in range(n_dev):
+            free = pynvml.nvmlDeviceGetMemoryInfo(
+                pynvml.nvmlDeviceGetHandleByIndex(i)).free
+            if free > best_free:
+                best_free, best_card = free, i
+        pynvml.nvmlShutdown()
+    except Exception:
+        import subprocess as _sp
+        out = _sp.run(["nvidia-smi", "--query-gpu=memory.free",
+                       "--format=csv,noheader,nounits"],
+                      capture_output=True, text=True).stdout
+        frees = [int(x) for x in out.split() if x.strip().isdigit()]
+        if frees:
+            best_card = max(range(len(frees)), key=lambda i: frees[i])
+            best_free = frees[best_card] * 2**20
     placement = "auto"
     model = None
     try:
