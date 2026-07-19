@@ -159,3 +159,28 @@ bit-for-bit. Lesson recorded: the two agpuh0x "wedges" of the depth probe
 were the LUSTRE IMPORT CRAWL amplified by concurrent model loads (SIGINT
 stack: charset_normalizer _path_stat) — never launch a cold vllm import
 while bulk Lustre reads are in flight.
+
+## 122B PPP8 CROSS-NODE trainer-native row (2026-07-19 19:04, true 8-card, 2 nodes)
+
+**teacher_argmax_acceptance = 0.9961277831558567** (1,033 answer tokens, epoch 1).
+student_argmax_acceptance 0.9555 (lr 1e-6 live LoRA). CE_eval_loss 0.2123.
+
+Blocked once on the ALREADY-DOCUMENTED cross-node subprocess-battery deadlock
+(runs/evalin_results.md, pre-dates this session): v4_battery_mode=subprocess's
+ack/done coordination is node-local /dev/shm, so stage0 (agpuh01) structurally
+cannot see stages 4-7's (agpuh02) acks — confirmed empirically (two-sample
+diff: RSS + log line count byte-identical across a 30s gap, all 8 processes
+in hrtimer_nanosleep, battery_ack_stage0-3 present / 4-7 absent). No fast-fail
+guard exists for this combination; the only documented consequence is a 3600s
+relay timeout. Fix (already used by the production reference config this was
+cloned from, which this clone missed): eval.every_epochs > train.epochs skips
+BOTH battery call sites entirely (goal metric never touches the battery).
+Also root-caused the FIRST attempt's stage3 OOM (77/79GB): the initial clone
+of the 0.8b template used v4_teacher_source=online with no v4_stage_scoped —
+every stage tried to materialize the FULL 244GB model. Fixed to mirror the
+proven production knobs (store/scoped/auto/subprocess/layer_major).
+
+Caveat: differs from the 4-card torch baseline (0.99806) — likely the same
+64-item-subset-order mismatch flagged for 35B (matrix script's dataset-order
+subset vs the baseline's response-file-order --limit slice), not a machinery
+divergence. Needs a matched-subset re-run to confirm before reading the delta.
