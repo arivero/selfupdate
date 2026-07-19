@@ -1,0 +1,35 @@
+# DeepSeek-V4-Flash ISOLATED STORE-FILL TEST (2026-07-19): single-node, 2
+# stages, unique devices, stage 0 owns layers 1-5 (sliding 0-1 + compressor
+# 2-4). Run ONLY `--v4-stage 0`: it loads ~5 layers (gentle single-stream, NO
+# 8-stage Lustre load), runs the MLA store-fill (_fill_deepseek_layer ->
+# DeepseekRecorder -> harvest -> FrozenDeepseekCtx) for those layers, then
+# waits at the epoch barrier for stage 1 (which we never launch). This catches
+# the next MLA bug in ~2-3 min instead of a full 529GB 8-stage load. Kill after
+# the store_capture row (or the crash) lands. Pairs with base_deepseek config.
+run_name: h100_dsv4f_stage0_test
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  micro_batch: 32
+  epochs: 1
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [5]
+  v4_stage_devices: [0, 1]
+eval:
+  every_epochs: 100
+  standard_damage_every_epochs: 100
