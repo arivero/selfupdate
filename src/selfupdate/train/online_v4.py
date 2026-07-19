@@ -411,6 +411,14 @@ def _resolve_residency(cfg, cohorts, ds, stack, owned) -> str:
     # measured teacher-forward seconds land in the v4_epoch prep split.
     if cfg.train.v4_teacher_residency != "auto":
         return cfg.train.v4_teacher_residency
+    # DeepSeek's FrozenDeepseekCtx (sliding K/V + COMPRESSED latent entries +
+    # int64 lightning-indexer top-k over T) is far heavier than the plain-KV
+    # sizing below models. The gpu_corpus estimate therefore UNDERESTIMATES it,
+    # picks device residency, and the real ctx accumulates on-card across
+    # cohorts until OOM (measured GPU0 33->80 GB over the store-fill,
+    # 2026-07-19). Stream it to host; the pinned store fits the 2 TB nodes.
+    if getattr(stack, "needs_deepseek_masks", False):
+        return "cpu_stream"
     hidden = stack.text_config.hidden_size
     n_kv = getattr(stack.text_config, "num_key_value_heads", None) or \
         stack.text_config.num_attention_heads
