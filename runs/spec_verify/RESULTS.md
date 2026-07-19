@@ -197,3 +197,30 @@ whole-training-set coverage). student_argmax_acceptance 0.96652.
 Every model >=99.5% at real full-epoch statistical power (70K-101K tokens
 each). Goal MET for the single-node envelope. Next: VLLM4 timing comparators
 (in progress via a queue subagent), then the 8-card escalation for 397B/DeepSeek.
+
+## gemma-4-26B-A4B — VLLM4 (TP4) prefill-verify, FULL 2071-item epoch (2026-07-19 20:31)
+
+**self_consistency_match_rate = 0.9889** (2071/2071 items processed).
+load_seconds 140.66 (LLM() construction, eager mode, disable_custom_all_reduce),
+seconds 27.797 (the actual generate() call over all 2071 prompts),
+items_per_s 74.5, context_tok_per_s 25,787.
+
+This is vLLM verifying ITS OWN earlier greedy answers via one eager-mode
+prefill pass (max_tokens=1) per item — the symmetric counterpart to our
+trainer's teacher-forced acceptance check. 98.89% self-consistency (not
+100%) is itself informative: even vLLM checking its own prior output
+disagrees ~1.1% of the time under eager mode (vs whatever mode/settings
+produced the original greedy answers) — a real numerical-precision/kernel-
+path sensitivity baseline, useful context for reading our own 99.5%+
+acceptance numbers against vLLM.
+
+## PPP4 vs VLLM4 speed comparison, 26B, same 2071-item set
+
+| leg | seconds | note |
+|---|---:|---|
+| our PPP4 trainer epoch | 71.2 | training math, all layers, full backward+write |
+| vLLM4 generate() call | 27.8 | eager mode, prefill-only (max_tokens=1), no autoregression |
+| vLLM4 total incl. engine load | 168.5 (140.7+27.8) | one-time LLM() construction dominates |
+
+Not apples-to-apples (different work: training vs verify-only prefill), but
+both numbers are now real, measured, full-2071-item wall-clock times.
