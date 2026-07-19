@@ -178,3 +178,22 @@ error" entry); that battery cost is OUTSIDE epoch_seconds (separate
 subprocess), so these epoch_seconds numbers are clean training-only times.
 vLLM4 (TP4) prefill-verify timing for the SAME 2071-item set: in flight
 (27B first), to give the direct wall-clock comparator requested.
+
+## Qwen3.5-122B-A10B — PPP4 trainer-native, FULL 2071-item epoch (2026-07-19 19:56)
+
+**teacher_argmax_acceptance = 0.9966268015946029** (101,091 answer tokens,
+whole-training-set coverage). student_argmax_acceptance 0.96652.
+
+## PHASE 1 COMPLETE: PPP4 trainer-native, all 5 models, full 2071-item epoch
+
+| model | teacher_argmax_acceptance | answer tokens |
+|---|---:|---:|
+| Qwen3.6-27B | 0.99951 | 70,807 |
+| gemma-4-31B | 0.99928 | 78,810 |
+| Qwen3.5-122B-A10B | 0.99663 | 101,091 |
+| Qwen3.6-35B-A3B | 0.99783 | 74,176 |
+| gemma-4-26B | 0.99529 | 90,387 |
+
+Every model >=99.5% at real full-epoch statistical power (70K-101K tokens
+each). Goal MET for the single-node envelope. Next: VLLM4 timing comparators
+(in progress via a queue subagent), then the 8-card escalation for 397B/DeepSeek.
