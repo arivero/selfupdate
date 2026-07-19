@@ -127,3 +127,9 @@ scale, consistent with the earlier bit-identity finding at 0.8B (PPP1=PPP2=PPP4)
 27B PPP4: goal met — the training stack reproduces vLLM to ~99.95% at real
 statistical power, with the residual entirely bf16 ties (per the torch
 baseline's margin/depth analysis above).
+
+## gemma-4-26B-A4B — PPP4 trainer-native, FULL 2071-item epoch (2026-07-19 19:41)
+
+**teacher_argmax_acceptance = 0.9952869328553885** (90,387 answer tokens,
+whole-training-set coverage). student_argmax_acceptance 0.99368 (lr 1e-6
+live). Full stage-scoped/store/subprocess-battery run, single node, 4 cards.
