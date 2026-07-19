@@ -16,7 +16,12 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  micro_batch: 32
+  # micro_batch 8 (not 32): with rotate + cpu_stream store, the GPU OOM was
+  # pure ACTIVATIONS — DeepSeek's forward (MLA q_a/q_b/kv + fp32 HCA/CSA
+  # compressors under autocast + 256-expert MoE) at B=32, T~5000 needed ~63 GB.
+  # 8 fits the store-fill on an 80 GB card. (Qwen 397B used 16; DeepSeek's
+  # per-token compute is heavier.)
+  micro_batch: 8
   epochs: 3
   seed: 17
   v4_teacher_source: store
