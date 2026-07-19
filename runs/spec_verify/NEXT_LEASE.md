@@ -48,3 +48,14 @@ vLLM, wrong reference).
 0.8B is the only long-answer row (~115 tok vs ~8-16). Re-run 27b/35b/122b
 with vLLM budgets forced to ~115 tokens to separate "small model" from
 "long answer" in the divergence-depth effect.
+
+## 6. 0.8B divergence — owner hypothesis tested (2026-07-19 17:50)
+"Wrong weights/fine-tune" RULED OUT: single snapshot 2fc06364..., refs/main
+-> it, Lustre cache and shm stage symlink the SAME blob 04b1c301... — vLLM
+and our stack loaded identical bytes. Refined suspect: linear-attention
+RUNTIME POLICY (state dtype fp32-vs-bf16 / chunked-scan order) — consistent
+with confident depth-growing flips and with fp32 halving the gap (5.09->2.14).
+Decisive test queued: vLLM dtype=float32 regen of the 0.8B answers + our
+fp32 teacher-force; convergence => precision policy (pin dtype to get
+"exact"); non-convergence => structural scan order. Also read vLLM's
+qwen3_5 linear-attn kernel for its state dtype (code inspection, no GPU).
