@@ -112,3 +112,18 @@ with MASTER_ADDR=agpuh02; 31B (which had the identical latent bug, killed
 pre-emptively before it could crash the same way) queued for the same fix.
 This was NOT the cross-node battery deadlock (that requires stages split
 ACROSS hosts; this run was single-host with a launch-side mismatch only).
+
+## Qwen3.6-27B — PPP4 trainer-native, FULL 2071-item epoch (2026-07-19 19:43)
+
+**teacher_argmax_acceptance = 0.9995056985891225** (70,807 answer tokens,
+whole-training-set coverage — `dataset_coverage:
+whole_training_set_once_per_completed_epoch`, confirming this is the real
+full epoch). student_argmax_acceptance 0.99907 (lr 1e-6 live). CE_eval_loss
+0.01366, KL_eval_loss 0.00046.
+
+Matches the torch baseline (0.99948) almost exactly — the trainer's cohort-
+batched walk reproduces the standalone sequential walk's fidelity at full
+scale, consistent with the earlier bit-identity finding at 0.8B (PPP1=PPP2=PPP4).
+27B PPP4: goal met — the training stack reproduces vLLM to ~99.95% at real
+statistical power, with the residual entirely bf16 ties (per the torch
+baseline's margin/depth analysis above).
