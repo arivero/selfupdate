@@ -48,8 +48,36 @@ def main() -> None:
     cfg = load_config(args.config, args.experiment)
     run_dir = Path(args.run_dir)
     log = RunLog(run_dir, defaults={"battery_subprocess": True})
-    model = load_causal_lm(cfg.model.name, dtype=torch.bfloat16,
-                           device_map="auto")
+
+    # device_map="auto" BALANCES the model across every visible card even when
+    # it fits one — and battery generation over that split shuttles activations
+    # across cards through accelerate hooks EVERY token, which made a 26B eval
+    # take ~15-20 min (measured 2026-07-19). If the model fits the emptiest card
+    # (26B/31B/35B/27B all do at ~52-70GB bf16), pin the WHOLE model there so
+    # generation is single-card fast; only genuinely-too-big models (122B+) fall
+    # back to auto. The training stages have evicted, so the free card is real.
+    best_card, best_free = 0, 0
+    for i in range(torch.cuda.device_count()):
+        free, _ = torch.cuda.mem_get_info(i)
+        if free > best_free:
+            best_free, best_card = free, i
+    placement = "auto"
+    model = None
+    try:
+        model = load_causal_lm(cfg.model.name, dtype=torch.bfloat16,
+                               device_map={"": best_card})
+        placement = f"single:cuda{best_card}"
+    except (torch.cuda.OutOfMemoryError, RuntimeError) as exc:
+        if "out of memory" not in str(exc).lower():
+            raise
+        del model
+        model = None
+        torch.cuda.empty_cache()
+        model = load_causal_lm(cfg.model.name, dtype=torch.bfloat16,
+                               device_map="auto")
+    log.log(kind="v4_battery_placement", epoch=args.epoch,
+            placement=placement, best_card=best_card,
+            best_free_gb=round(best_free / 2**30, 1))
     peft_model = attach_lora(model, cfg.train.lora)
     model = peft_model.get_base_model()
     stack = BlockStack(model)
