@@ -41,6 +41,11 @@ cache:
   generation_responses_path: runs/vllm_h100/qwen35_122b_a10b/responses_bs256.jsonl
   generation_shuffle_seed: 17
   max_sequence_tokens: 8192
+# NOTE: every "64" below (generation_batch/teacher_batch/micro_batch) is a
+# BATCHING/COHORT-SIZE knob (items grouped per forward pass for efficiency)
+# — completely unrelated to EPOCH SIZE (total dataset items). Epoch size is
+# controlled ONLY by data.examples_path, which is the FULL file (2071 items,
+# the comparison goal). Do NOT infer or set an item-count limit from these.
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
