@@ -26,6 +26,11 @@ train:
   seed: 17
   v4_teacher_source: store
   v4_loop_order: layer_major
+  # chunk depth 2 (not the default 8): the chunk-layer-outer fill buffers this
+  # many cohorts' FrozenDeepseekCtx (sliding K/V + compressed entries + int64
+  # top-k over T~5000) on-card before flushing — far heavier per cohort than
+  # Qwen's plain K/V, so 8 buffered ctxs OOM'd stage 0. 2 keeps some pipelining.
+  v4_fill_chunk_cohorts: 2
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   # ROTATE, not auto: DeepSeek layers are ~12 GB each (256 experts) and the MLA
