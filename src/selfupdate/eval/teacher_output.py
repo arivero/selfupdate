@@ -30,9 +30,12 @@ def teacher_output_eval_sums(
     lm_head,
     *,
     chunk_rows: int = 64,
-) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor]:
-    """Return token-summed CE, teacher-to-student KL, token count, and the
-    argmax-acceptance sums (student and teacher) against the answer ids.
+    answer_lengths: list[int] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor,
+           torch.Tensor | None]:
+    """Return token-summed CE, teacher-to-student KL, token count, the
+    argmax-acceptance sums (student and teacher) against the answer ids, and
+    (when ``answer_lengths`` is given) the per-answer exact-match sum.
 
     ``student_hidden[i]`` and ``teacher_hidden[i]`` are final, post-norm
     states at the position predicting ``teacher_answer_ids[i]``.  Chunking
@@ -46,6 +49,14 @@ def teacher_output_eval_sums(
     OWN forward — cache/store/relay machinery included — greedily reproduces
     the vLLM draft.  Teacher-side acceptance is adapter-free (valid at any
     epoch); student-side equals it at zero-init/lr-0.  Evaluation-only.
+
+    ``answer_lengths`` (owner 2026-07-20), if given, is the per-answer row
+    count in this call's row order (one entry per answer, summing to the
+    total row count).  The extra return value is then the count of answers
+    where EVERY teacher-argmax token matched its vLLM id — the same
+    reproduction check as ``teacher_argmax_acceptance``, at per-answer
+    ("exact-seq") instead of per-token granularity.  ``None`` when
+    ``answer_lengths`` is omitted, so existing callers are unaffected.
     """
     if chunk_rows <= 0:
         raise ValueError("chunk_rows must be positive")
@@ -63,6 +74,10 @@ def teacher_output_eval_sums(
         raise RuntimeError(
             "CE-eval-loss/KL-eval-loss require a frozen vocabulary head")
 
+    if answer_lengths is not None and sum(answer_lengths) != int(
+            student_hidden.shape[0]):
+        raise ValueError("answer_lengths must sum to the row count")
+
     device = student_hidden.device
     if teacher_answer_ids.device != device:
         teacher_answer_ids = teacher_answer_ids.to(device)
@@ -70,6 +85,7 @@ def teacher_output_eval_sums(
     kl_sum = torch.zeros((), dtype=torch.float32, device=device)
     student_match_sum = torch.zeros((), dtype=torch.float32, device=device)
     teacher_match_sum = torch.zeros((), dtype=torch.float32, device=device)
+    teacher_match_bits = [] if answer_lengths is not None else None
     count = int(student_hidden.shape[0])
     for first in range(0, count, chunk_rows):
         stop = min(first + chunk_rows, count)
@@ -88,10 +104,26 @@ def teacher_output_eval_sums(
             student_logp, teacher_logp, reduction="sum", log_target=True))
         student_match_sum.add_(
             (student_logp.argmax(-1) == ids).sum().float())
-        teacher_match_sum.add_(
-            (teacher_logp.argmax(-1) == ids).sum().float())
+        teacher_bits = teacher_logp.argmax(-1) == ids
+        teacher_match_sum.add_(teacher_bits.sum().float())
+        if teacher_match_bits is not None:
+            teacher_match_bits.append(teacher_bits)
         del student_logits, teacher_logits, student_logp, teacher_logp
 
     if ce_sum.requires_grad or kl_sum.requires_grad:
         raise RuntimeError("evaluation-only output metrics acquired a graph")
-    return ce_sum, kl_sum, count, student_match_sum, teacher_match_sum
+
+    teacher_exact_match_sum = None
+    if answer_lengths is not None:
+        full_bits = torch.cat(teacher_match_bits)
+        teacher_exact_match_sum = torch.zeros((), dtype=torch.float32,
+                                              device=device)
+        pos = 0
+        for length in answer_lengths:
+            if length > 0:
+                teacher_exact_match_sum += full_bits[
+                    pos:pos + length].all().float()
+            pos += length
+
+    return (ce_sum, kl_sum, count, student_match_sum, teacher_match_sum,
+            teacher_exact_match_sum)

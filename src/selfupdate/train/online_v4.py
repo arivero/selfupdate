@@ -570,7 +570,7 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
                     0, teacher_h.shape[0] - 1)
                 rows_t.append(teacher_h.index_select(0, rel).to(device))
             row_ids.append(cohort.eval_ids[b])
-        c, k, cnt, sm, tm = teacher_output_eval_sums(
+        c, k, cnt, sm, tm, _ex_unused = teacher_output_eval_sums(
             torch.cat(rows_v).detach().float(),
             torch.cat(rows_t).detach().float(),
             torch.cat(row_ids).to(device), stack.lm_head)
@@ -1465,26 +1465,33 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # CE/KL eval over the answer-predictor rows, streaming, before
             # any later write touches this block again this epoch.
             with torch.no_grad():
-                rows_v, rows_t, ids = [], [], []
+                rows_v, rows_t, ids, answer_lengths = [], [], [], []
                 for b in range(len(cohort.indices)):
                     r = cohort.eval_rows[b].to(device)
                     rows_v.append(view[b].index_select(0, r))
                     rows_t.append(target[b].index_select(0, r))
                     ids.append(cohort.eval_ids[b])
-                ce, kl, count, s_match, t_match = teacher_output_eval_sums(
-                    torch.cat(rows_v).detach().float(),
-                    torch.cat(rows_t).detach().float(),
-                    torch.cat(ids).to(device), stack.lm_head)
+                    answer_lengths.append(int(r.shape[0]))
+                ce, kl, count, s_match, t_match, t_exact = (
+                    teacher_output_eval_sums(
+                        torch.cat(rows_v).detach().float(),
+                        torch.cat(rows_t).detach().float(),
+                        torch.cat(ids).to(device), stack.lm_head,
+                        answer_lengths=answer_lengths))
             ev = epoch_state.setdefault("_eval", {
                 "ce": torch.zeros((), dtype=torch.float64, device=device),
                 "kl": torch.zeros((), dtype=torch.float64, device=device),
                 "s_match": torch.zeros((), dtype=torch.float64, device=device),
                 "t_match": torch.zeros((), dtype=torch.float64, device=device),
+                "t_exact": torch.zeros((), dtype=torch.float64, device=device),
+                "answers": 0,
                 "count": 0})
             ev["ce"] += ce.double()
             ev["kl"] += kl.double()
             ev["s_match"] += s_match.double()
             ev["t_match"] += t_match.double()
+            ev["t_exact"] += t_exact.double()
+            ev["answers"] += len(cohort.indices)
             ev["count"] += count
         del out, view, target
 
@@ -1714,6 +1721,14 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 # student-side equals it at zero-init/lr-0.
                 student_argmax_acceptance=float(ev["s_match"].item() / count),
                 teacher_argmax_acceptance=float(ev["t_match"].item() / count),
+                # Per-answer granularity of the same reproduction check (owner
+                # 2026-07-20): exact-seq = fraction of answers where EVERY
+                # teacher-argmax token matched its vLLM id, not just the
+                # token-weighted mean above.
+                teacher_exact_seq_rate=float(
+                    ev["t_exact"].item() / max(ev["answers"], 1)),
+                exact_seq_match_answers=int(ev["t_exact"].item()),
+                exact_seq_answer_count=ev["answers"],
                 answer_token_count=ev["count"],
                 expected_answer_token_count=expected_eval,
                 dataset_item_count=len(ds.pairs),
