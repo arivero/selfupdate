@@ -344,3 +344,63 @@ by hand.
 | Qwen3.6-27B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_27b_v4_spec.yaml configs/experiments/spec_verify/27b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model Qwen/Qwen3.6-27B --responses runs/vllm_h100/qwen36_27b_full_exactids/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/27b_vllm4_prefill_full2071.json` |
 | gemma-4-31B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_31b_v4_spec.yaml configs/experiments/spec_verify/31b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model google/gemma-4-31B-it --responses runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/31b_vllm4_prefill_full2071.json` |
 | Qwen3.6-35B-A3B | `scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_35b_v4_spec.yaml configs/experiments/spec_verify/35b_v4_spec_ppp4.yaml` | `CUDA_VISIBLE_DEVICES=0,1,2,3 /fs/agustina/arivero/supercomplex/venvs/vllm025/bin/python scripts/vllm_prefill_verify.py --model Qwen/Qwen3.6-35B-A3B --responses runs/vllm_h100/qwen36_35b_a3b/responses_bs256.jsonl --tensor-parallel-size 4 --out runs/spec_verify/35b_vllm4_prefill_full2071.json` |
+
+# PHASE 2 — 8-card cross-node escalation (397B, DeepSeek-V4-Flash)
+
+## CAVEAT THAT APPLIES TO EVERY PHASE 2 NUMBER BELOW — read before citing anything here
+
+Neither Phase 2 model could run its own vLLM generation: 397B exceeds one
+80GB H100 at TP4 even in fp8 (~100GB/card) or bf16 (~200GB/card); DeepSeek's
+fp4-expert kernels fail on driver 565 and its 543GB bf16 dequant exceeds
+single-node TP4. Both models' `responses_bs256.jsonl` therefore borrow answer
+TOKEN SPANS from Qwen3.5-122B-A10B (397B: byte-copy, tokenizers verified
+byte-identical md5; DeepSeek: text re-encoded through its own tokenizer) —
+confirmed via `runs/vllm_h100/qwen35_397b_a17b_fp8/PROVENANCE.md` and
+`runs/vllm_h100/deepseek_v4_flash/PROVENANCE.md`, both explicit: "This is a
+SPEED test... NOT answer quality... do not cite recall/damage from this run."
+
+Consequence: `teacher_argmax_acceptance`/`student_argmax_acceptance` (training
+side) and `self_consistency_match_rate` (vLLM side) for 397B and DeepSeek
+measure CROSS-MODEL AGREEMENT with 122B's word choices — NOT a genuine
+vLLM-reproduction check the way the identically-named fields measured for
+Phase 1's five models. They are NOT comparable to Phase 1's numbers and must
+not be presented side by side with them as equivalent evidence. Teacher
+hiddens during training DO come from each model's own real weights (only the
+answer token spans are borrowed), so epoch timing and token-event-integrity
+numbers remain fully valid with no caveat.
+
+## Qwen3.5-397B-A17B — PPP8 cross-node trainer-native, FULL 2071-item epoch (2026-07-19 23:24-23:48)
+
+Command:
+```
+cd /fs/agustina/arivero/supercomplex/selfup_teacher
+SELFUPDATE_V4_STAGE_HOSTS="local local local local agpuh02 agpuh02 agpuh02 agpuh02" \
+  scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_397b_v4_spec.yaml configs/experiments/spec_verify/397b_v4_spec_ppp8.yaml
+```
+Launched 1784496289 (2026-07-19 23:24:49 CEST). Real cross-node placement:
+agpuh01 pids 2750007/2750049/2750103/2750206 (stages 0-3), agpuh02 workers
+4024718/4024800/4024886/4024960 (stages 4-7). A first attempt failed
+instantly on all 8 stages (`RuntimeError: node-local epoch-zero teacher cache
+is not ready` — the fresh `spec_verify` cache identity had never been built
+on either node); fixed by running `scripts/build_teacher_cache.py --index-only
+--coordinated-node-cache` on both nodes (confirmed matching hash
+`914d4ffd7d93d0a1`, 2071 examples) before this relaunch.
+
+All 8 stages reported `run complete` within 1 second of each other
+(23:48:02-23:48:03 CEST). Wall-clock launch-to-completion: 1394s (23m14s,
+includes cache-gate + full `rotate`-residency weight materialization, not
+just compute).
+
+**teacher_argmax_acceptance = 0.97159** (cross-model agreement with borrowed
+122B answers — see caveat above, NOT comparable to Phase 1).
+student_argmax_acceptance 0.97010, CE_eval_loss 0.10933, KL_eval_loss 0.00516,
+answer_token_count 101091, dataset_item_count **2071**, dataset_coverage
+`whole_training_set_once_per_completed_epoch` — confirming a genuine full
+single-epoch traversal (source: `runs/spec_397b_v4_ppp8x_e1/stage7/metrics.jsonl`,
+last `teacher_output_eval` record — stage7 owns the vocab head).
+
+Speed (fully valid, no caveat): epoch_seconds ranged 249.6-265.1s across the
+8 stages (stage7: 258.06 = 4.36 prep + 252.45 exec; stage0: 259.34); token_events
+reconciles exactly as an integrity check — 8-layer stages (0,3,4,7) report
+808728, 7-layer stages (1,2,5,6) report 707637, both dividing exactly to the
+101091 answer-token count.
