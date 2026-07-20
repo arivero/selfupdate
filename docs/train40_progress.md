@@ -178,6 +178,21 @@ completed and the expected epoch-zero battery is active.  The loss screen
 remains gated on exact reference-metric agreement and four passing inline
 locality certificates from this run.
 
+The 35B admission gate completed at 12:58 CEST.  Epochs 1, 2, and 3 matched
+the pinned pre-cleanup CE/KL pairs bit-for-bit.  All four stages passed the
+live-store certificate with exact ownership coverage L1--L40, positive finite
+local gradients at every layer, zero cross-block and frozen-vocabulary
+gradients, and byte-exact unchanged adapters/optimizer/rotation state during
+certification; four checkpoints and done rows followed.  This admits the
+current runtime for the 35B full arm and for the loss screen.
+
+At 13:00 CEST the first loss-screen arm, absolute hidden-state cosine, launched
+on agpuh02 as `v4-20260720130000-4153872` (PIDs 4153925, 4154007, 4154056,
+4154096).  All four contracts report clean source `cb71d9b`, `loss_kind:
+cosine`, and expected ownership `[1,8]`, `[9,16]`, `[17,23]`, `[24,30]`.
+The primary 35B 40-epoch arm is the next successor on that host if cosine
+completes and certifies cleanly.
+
 ### Provisional scientific read (not an endpoint claim)
 
 At epoch 30, Gemma-26B Adam (`3e-7`, betas 0.9/0.999) has reduced whole-set
