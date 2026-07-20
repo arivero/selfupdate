@@ -91,6 +91,18 @@ carried into the final coverage record.
 
 ## Deferred objective ideas (do not widen the first screen)
 
+Owner addition, 2026-07-20: after the censorship/context probe, add a
+separately named frozen vocabulary round-trip arm.  This is not the existing
+`vocab_mse`: that objective measures with `W_out.T @ W_out` and coincides with
+an embedding/unembedding product only for tied weights.  The requested map is
+`C = W_in.T @ W_out` (vocabulary logits decoded back through the frozen input
+embedding), with a normalized MSE between `C h_student` and `C h_teacher` at
+every layer.  Keep both matrices frozen, apply the final norm with the same
+depth-uniform convention as the other vocabulary metrics, and give the loss
+and run an explicit `vocab_cycle_*` name.  Audit matrix orientation and tied
+versus untied weights before implementation; report its gradient scale rather
+than treating the raw coefficient as matched to `vocab_mse` or `lens_kl`.
+
 The first screen is intentionally factorial enough to identify whether the
 useful signal lives in absolute hidden geometry, the residual update, or the
 frozen vocabulary measurement.  Two follow-ups are scientifically stronger
