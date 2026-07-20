@@ -681,6 +681,58 @@ repeat the first-token-agree measurement on 35B/122B (MoE, should show the
 same degradation) and 31B (dense, should not) to confirm the mechanism
 holds across the whole model set, not just this one MoE/dense pair.
 
+### 31B divergence diagnostic: confirms and REFINES the 26B story — a shared bf16-tie floor, amplified ~6x by MoE routing, not a dense/MoE binary (2026-07-20)
+
+Method: identical to the 26B diagnostic above (real production code —
+`TrainingRuntime`, `DistillDataset`, `_V4Cohort`, `_online_teacher_capture`,
+`stack.lm_head` — B=1/item, `v4_teacher_source: online`, no forward-pass
+reimplementation), full 2071-item traversal, script
+`scripts/spec_verify_position_diag.py`, raw data
+`runs/spec_verify/31b_position_diag_full2071.json`. Anchor check (recomputed
+metric vs the published bit-exact PPP1 number) passed: exact-seq 0.97634
+(2022/2071) vs published 0.97441 (2018/2071), +0.19pp gap — actually
+tighter than 26B's own recompute gap (+0.8pp), confirming the
+instrumentation measures the right path.
+
+| | 31B (dense) | 27B (dense, reference) | 26B (MoE, reference) |
+|---|---:|---:|---:|
+| first-token-agree | 0.99179 | 0.99421 | 0.94978 |
+| overall token-accept | 0.99937 | 0.99948 | 0.99477 |
+| gap = overall − first-token | **0.76pp** | 0.53pp | 4.5pp |
+| absolute pos-0 miss rate | 0.82% (17/2071) | — | ~5% |
+| divergent answers, sole fault = pos 0 | 17/49 (34.7%) | — | 74/319 (23.2%) |
+| terminal-position vLLM id | 106 (4/4) | — | 106 (28/28) |
+| terminal-position predicted id | 107 (4/4) | — | 107 (22/28) |
+| terminal divergence at length >=4096 | 0/4 (median 27 tok) | — | 1/28 (median 11.5 tok) |
+
+(31B has ~10x fewer divergent tokens than 26B's 473 — the headline numbers
+above are solid over the full 2071-item traversal, but sub-fractions like
+the depth-quartile histogram are lower-power and not repeated here.)
+
+**Refined mechanism, per an independent advisor read of this exact data:**
+the original 26B write-up framed the prediction as a hard binary ("dense
+should show zero first-token degradation"). The honest reading of both
+dense datapoints (27B: 0.53pp, 31B: 0.76pp) is that dense is NOT zero — both
+show a small, real "floor" at position 0, roughly 6x below MoE's 4.5pp gap.
+Position 0 is the least-constrained position for every architecture (no
+prior generated context to pin the forward computation), so it carries the
+highest irreducible bf16-kernel-order tie sensitivity regardless of MoE —
+what MoE adds is not a new mechanism, it's amplifying that same shared
+floor roughly 6x via expert-routing sensitivity to the same small
+differences. This is if anything a STRONGER "not a bug" case than the
+original framing: a shared masking/alignment/off-by-one bug would be
+expected to hit both dense models at 26B's magnitude, and it doesn't — both
+land in the same small-gap band, an order of magnitude below MoE. The
+terminal-token 106->107 cluster replicates exactly across both models (4/4
+here vs 28/28 for 26B, same ids both times, neither truncation-dominated),
+reinforcing it as a separate, architecture-independent end-of-turn
+calibration effect. Pos-0 divergence margins (0.25-2.75, mostly <1) further
+support near-tie noise over a confident, reproducible disagreement.
+
+**Updated bottom line:** not a dense=0/MoE=large binary, but a shared bf16
+floor that MoE routing amplifies ~6x. No evidence of a trainer-code bug in
+either framing.
+
 ### 397B PPP8x exact-seq re-run: complete (2026-07-20)
 
 Re-ran `SELFUPDATE_V4_STAGE_HOSTS="local local local local agpuh02 agpuh02
