@@ -224,7 +224,8 @@ class TrainConfig:
     # nmse | l2mse | cosine | huber (absolute-state geometric)
     # | delta_cosine (block-local update direction around detached teacher
     #   input; explicit absolute-cosine fallback at the post-norm final block)
-    # | vocab_mse
+    # | vocab_mse | vocab_cycle_mse (frozen output-logit/input-embedding
+    #   round trip; distinct from vocab_mse even when weights are tied)
     # | lens_kl | lens_js | tuned_lens_kl | vocab_fisher
     #   (absolute-state frozen-vocabulary; lens_js is the bounded symmetric
     #   Jensen-Shannon control)

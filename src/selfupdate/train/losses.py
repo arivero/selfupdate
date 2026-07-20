@@ -14,7 +14,7 @@ Four families of hidden-match kinds:
   update ``student_h - teacher_input`` with the same teacher block's update
   ``teacher_h - teacher_input``.  The input is the detached teacher anchor,
   never a previous student block's output.
-- vocabulary-metric (``vocab_mse``, ``vocab_cosine_sampled``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
+- vocabulary-metric (``vocab_mse``, ``vocab_cycle_mse``, ``vocab_cosine_sampled``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
   the FROZEN vocabulary sees them (docs/hidden_loss.md, Frozen-Vocabulary
   Principle). ``vocab_mse`` is MSE in logit space, computed cheaply through
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
@@ -43,7 +43,7 @@ from ..eval.teacher_output import EVALUATION_ONLY_OUTPUT_NAMES
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
                    "clipped_nmse", "contrastive", "relational_state", "zero")
 LOCAL_INCREMENT_KINDS = ("delta_cosine",)
-VOCAB_KINDS = ("vocab_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
+VOCAB_KINDS = ("vocab_mse", "vocab_cycle_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
                "tuned_lens_kl", "vocab_fisher")
 SPECIAL_KINDS = ("embedding_mse", "mahalanobis")
 JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_cosine",
@@ -161,6 +161,9 @@ class HiddenLoss:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
+        if kind == "vocab_cycle_mse" and input_embedding is None:
+            raise ValueError(
+                "hidden loss 'vocab_cycle_mse' needs the frozen input embedding")
         if kind == "jacobian_nmse" and lm_head is None:
             raise ValueError("hidden loss 'jacobian_nmse' needs lm_head for width validation")
         if kind == "tuned_lens_kl" and not tuned_lens_path:
@@ -178,6 +181,14 @@ class HiddenLoss:
         self._precision_cpu: dict[int, torch.Tensor] = {}
         self._precision_cache: dict[tuple[int, torch.device], torch.Tensor] = {}
         self._gram: torch.Tensor | None = None
+        self._vocab_cycle: torch.Tensor | None = None
+        if kind == "vocab_cycle_mse":
+            e_shape = tuple(input_embedding.weight.shape)
+            w_shape = tuple(lm_head.weight.shape)
+            if e_shape != w_shape:
+                raise ValueError(
+                    "vocab_cycle_mse needs aligned input/output vocabulary "
+                    f"matrices; embedding={e_shape}, lm_head={w_shape}")
         self.vocab_cosine_samples = int(vocab_cosine_samples)
         self.vocab_cosine_seed = int(vocab_cosine_seed)
         self._sampled_vocab: torch.Tensor | None = None
@@ -285,6 +296,37 @@ class HiddenLoss:
                 ).contiguous()
         return self._sampled_vocab
 
+    def _vocab_cycle_matrix(self) -> torch.Tensor:
+        """C = W_in^T W_out for the frozen vocabulary round trip.
+
+        For row-vector hidden states the measured representation is
+        ``h @ W_out.T @ W_in = h @ C.T``.  Tied weights reuse the existing
+        unembedding Gram matrix; the resulting loss still uses C^T C and is
+        therefore distinct from ``vocab_mse``, which uses C only once as its
+        quadratic metric.
+        """
+        if self._vocab_cycle is None:
+            Wout = self.lm_head.weight.detach()
+            Win = self.input_embedding.weight.detach()
+            tied = (Wout is Win or (
+                Wout.device == Win.device
+                and Wout.data_ptr() == Win.data_ptr()))
+            if tied:
+                self._vocab_cycle = self._gram_matrix()
+            else:
+                H = Wout.shape[1]
+                C = torch.zeros(
+                    H, H, dtype=torch.float32, device=Wout.device)
+                for i in range(0, Wout.shape[0], 4096):
+                    e = Win[i:i + 4096].to(Wout.device).float()
+                    w = Wout[i:i + 4096].float()
+                    C += e.T @ w
+                if not torch.isfinite(C).all():
+                    raise FloatingPointError(
+                        "vocab_cycle_mse produced a non-finite frozen map")
+                self._vocab_cycle = C
+        return self._vocab_cycle
+
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
                  normed: bool = False, layer: int | None = None,
                  aligned_input: torch.Tensor | None = None) -> torch.Tensor:
@@ -360,6 +402,14 @@ class HiddenLoss:
                 t = teacher_h.float()
                 denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
+        if kind == "vocab_cycle_mse":
+            with torch.autocast(student_h.device.type, enabled=False):
+                C = self._vocab_cycle_matrix()
+                student_cycle = student_h.float() @ C.T
+                with torch.no_grad():
+                    teacher_cycle = teacher_h.float() @ C.T
+                    denom = teacher_cycle.pow(2).sum(-1).mean().clamp_min(1e-8)
+                return (student_cycle - teacher_cycle).pow(2).sum(-1).mean() / denom
         if kind == "vocab_cosine_sampled":
             with torch.autocast(student_h.device.type, enabled=False):
                 sampled = self._sampled_vocab_matrix()

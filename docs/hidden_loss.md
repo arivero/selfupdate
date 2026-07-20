@@ -1,6 +1,6 @@
 # Hidden losses in pipeline v4
 
-For block `L`, let `x = stopgrad(teacher h[L-1])`,
+For block `L`, let `x = stopgrad(context teacher h[L-1])`,
 `s = student_block_L(x)`, and `t = teacher h[L]`.  The optimizer minimizes a
 local distance `D(s, t)`.  Gradients flow through the student block that
 produces `s`; they do not flow into `x`, `t`, another block, or the teacher.
@@ -34,6 +34,22 @@ and frozen-artifact Mahalanobis/Jacobian variants.  Vocabulary-coordinate
 metrics pass `s` and `t` through the frozen final norm/head (or a frozen
 sample/sketch) as a measurement device.  `lens_kl`/`lens_js` likewise compare
 local distributions while leaving the vocabulary stack unchanged.
+
+`vocab_cycle_mse` measures the complete frozen vocabulary round trip.  With
+input embedding rows `W_in`, output-head rows `W_out`, and final norm `N`,
+
+```text
+C    = W_in^T W_out
+z(h) = N(h) W_out^T W_in = N(h) C^T
+loss = mean ||z(s)-z(t)||^2 / stopgrad(mean ||z(t)||^2)
+```
+
+The output-head bias, if present, cancels from the difference.  When weights
+are tied, `C = W^T W`, but the induced cycle metric is `C^T C = C^2`; it is
+therefore still distinct from `vocab_mse`, whose metric is only `W^T W`, and
+from `embedding_mse`.  The squared singular spectrum can strongly amplify a
+small set of vocabulary directions, so this arm requires initial gradient-
+scale attribution before its raw learning rate is treated as comparable.
 
 ## Teacher-anchored local increment cosine
 
