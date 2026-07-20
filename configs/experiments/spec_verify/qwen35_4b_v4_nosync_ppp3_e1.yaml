@@ -1,0 +1,11 @@
+# Fresh disposable PPP3 half of the b35058b hot-loop sync-removal numerics
+# comparison. Physical GPUs 0-2 own contiguous 11/11/10-block partitions.
+run_name: spec_qwen35_4b_v4_nosync_ppp3_e1
+train:
+  epochs: 1
+  v4_stage_splits: [11, 22]
+  v4_stage_devices: [0, 1, 2]
+  v4_min_train_gpu_util: 0.0
+eval:
+  every_epochs: 1
+  standard_damage_every_epochs: 1

@@ -1,0 +1,14 @@
+# Fresh disposable single-process half of the b35058b hot-loop sync-removal
+# numerics comparison. Pair with qwen35_4b_v4_nosync_ppp3_e1.yaml.
+run_name: spec_qwen35_4b_v4_nosync_single_e1
+model:
+  device: cuda:3
+train:
+  epochs: 1
+  v4_stage: -1
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_min_train_gpu_util: 0.0
+eval:
+  every_epochs: 1
+  standard_damage_every_epochs: 1
