@@ -214,6 +214,19 @@ first cross-architecture conclusion should be that one global LR is not a
 matched-update comparison: calibrate future loss/model arms by early LoRA
 delta or gradient scale, not the nominal optimizer LR alone.
 
+The Qwen-27B endpoint confirms that contrast.  From epoch 1 to 40, mean local
+Huber loss falls 29.9% and 61 of 64 layers improve, driven especially by a few
+large-loss layers (for example L28 -76.5%, L48 -52.5%, L32 -50.3%).  Yet the
+whole-set teacher-forced output distances become slightly worse: CE +0.18%
+and KL +0.37%.  Three-corpus mean recall is essentially unchanged from epoch
+zero (0.15939 to 0.15893, -0.29%), but that mean hides Machado down
+0.09481->0.08081, Quijote chapter 1 up 0.23283->0.24674, and chapter 4 nearly
+flat.  The 16-item standard macro also ends unchanged.  This is direct
+evidence that reducing absolute block-local hidden error—especially a few
+dominant layers—does not guarantee improvement of the composed student
+trajectory.  Residual-update geometry and scale calibration are therefore
+more valuable next tests than simply extending Qwen's Huber duration.
+
 Gemma-26B Adam completed at 12:28 CEST.  Relative to its epoch-1 whole-set
 measurement, its epoch-40 CE improved 2.23% and KL 6.65%, versus 1.75% and
 4.27% for SGD.  That modest incremental output-distance gain required a much
