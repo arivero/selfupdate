@@ -236,6 +236,19 @@ dominant layers—does not guarantee improvement of the composed student
 trajectory.  Residual-update geometry and scale calibration are therefore
 more valuable next tests than simply extending Qwen's Huber duration.
 
+The effective-LoRA profile makes the mechanism visible: Qwen's module-relative
+median delta is only `4.56e-6` (versus `8.05e-5` for Gemma SGD), while its RMS
+is `3.65e-4` (versus `2.83e-4`).  Movement is therefore far more concentrated,
+with roughly every fourth layer forming the spikes; the largest layer RMS
+deltas are L48/L52 about 0.0011 and L32 about 0.0009.  Those same periodic
+layers dominate the Huber loss and its apparent mean improvement.  This is
+not a depth-uniform effective intervention even though the objective weight
+is depth-uniform.  Future scale matching should examine per-layer gradient
+share and cap/normalize architectural outliers, not just choose one global LR.
+The merged Qwen report/PDF and refreshed three-run coverage-only group layer
+figures were generated and visually inspected; locality attribution and the
+100-item endpoint remain explicitly missing for this historical-runtime run.
+
 Gemma-26B Adam completed at 12:28 CEST.  Relative to its epoch-1 whole-set
 measurement, its epoch-40 CE improved 2.23% and KL 6.65%, versus 1.75% and
 4.27% for SGD.  That modest incremental output-distance gain required a much
