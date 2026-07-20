@@ -296,9 +296,10 @@ about 5.0%, but the median is essentially unchanged (`0.00366453` to
 `0.00366331`), so the gain is dominated by a few outlier layers.  Whole-set
 output distance does not benefit: cross-entropy is effectively flat (-0.034%)
 and KL is slightly worse (+0.014%).  At the matched `3e-6` immediate-SGD
-setting, its final effective-LoRA RMS delta is `1.75e-4`, 4.28x the short
-Huber reference (`4.10e-5`), while its maximum layer gradient grows from 559
-to 1154 (Huber: 362 to 402).
+setting, its final effective-LoRA RMS delta is `1.75e-4`, 1.43x the matched
+short Huber reference (`1.23e-4`), while its maximum layer gradient grows from
+559 to 1154 (Huber: 359 to 728).  The previously written 4.28x comparison used
+the `1e-6` Huber arm and was not learning-rate matched; it is corrected here.
 
 The final three-corpus recall is `0.14255`, down from epoch zero `0.14852`
 (-4.02% relative).  Machado improves slightly (`0.12254` to `0.12441`), but
