@@ -681,5 +681,33 @@ repeat the first-token-agree measurement on 35B/122B (MoE, should show the
 same degradation) and 31B (dense, should not) to confirm the mechanism
 holds across the whole model set, not just this one MoE/dense pair.
 
-397B's own exact-seq (PPP8x cross-node, with the pre-existing borrowed-
-answer caveat) is in flight next.
+### 397B PPP8x exact-seq re-run: complete (2026-07-20)
+
+Re-ran `SELFUPDATE_V4_STAGE_HOSTS="local local local local agpuh02 agpuh02
+agpuh02 agpuh02" scripts/launch_v4_stages.sh
+configs/experiments/spec_verify/base_397b_v4_spec.yaml
+configs/experiments/spec_verify/397b_v4_spec_ppp8.yaml` (pre-fix run backed
+up to `runs/spec_397b_v4_ppp8x_e1.pre_exactseq_backup/`; one stale launch
+lease from the original completed run had to be cleared first — verified
+dead on both nodes before removing, per the documented procedure).
+`teacher_argmax_acceptance` reproduced (0.9715899536061569, matches the
+recorded 0.97159 to the precision published). `epoch_seconds` 250.5-266.7s
+across the 8 stages — consistent with the original 249.6-265.1s.
+
+**teacher_exact_seq_rate = 0.6021245774987929** (1247/2071, 60.21%) — source
+`runs/spec_397b_v4_ppp8x_e1/stage7/metrics.jsonl`. **This number is NOT
+comparable to the other 5 models'** — repeating the caveat from the top of
+this Phase 2 section: 397B's `responses_bs256.jsonl` is byte-copied from
+Qwen3.5-122B-A10B's own vLLM answers, so this measures how well 397B's OWN
+forward reproduces a DIFFERENT model's word choices (cross-model agreement),
+not genuine self-reproduction. A much lower exact-seq than the 5 real
+models (85.7-98.6%) is exactly what's expected under that framing — two
+different models, even both derived from the same Qwen3.5 lineage, will
+diverge far more on a full-answer-exact basis than a model does from its
+own vLLM-generated draft. This is a speed/mechanism data point, not a
+fidelity finding, per the standing caveat.
+
+### Phase 2 exact-seq work: CLOSED. Phase 3's exact-seq objective is now
+COMPLETE for all genuinely-testable models (26B/27B/31B/35B/122B); 397B is
+recorded with its caveat; DeepSeek remains excluded pending its separate
+PPP8 NCCL fix (owner-authorized follow-up, not required for this closure).
