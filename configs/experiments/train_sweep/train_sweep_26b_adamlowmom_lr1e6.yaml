@@ -1,0 +1,32 @@
+# gemma-4-26B PPP4 train_sweep arm 5: low-first-moment-inertia Adam
+# (beta1=0.5 instead of 0.9, beta2 unchanged) at the same LR as arm 3
+# (train_sweep_26b_adam_lr1e6.yaml), isolating the momentum effect alone.
+# Same fixed recipe otherwise — see train_sweep_26b_sgd_lr1e6.yaml for the
+# campaign rationale.
+run_name: train_sweep_26b_adamlowmom_lr1e6
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 12
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: adam
+  v4_adam_betas: [0.5, 0.999]
+  lr: 1.0e-6
+eval:
+  every_epochs: 4
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 4

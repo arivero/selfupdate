@@ -1,0 +1,30 @@
+# gemma-4-26B PPP4 train_sweep arm 2: SGD at 3x the e40 baseline LR.
+# Same fixed recipe as train_sweep_26b_sgd_lr1e6.yaml (see that file's header
+# for the campaign rationale) — only train.lr differs, isolating the LR
+# effect under the same immediate_sgd optimizer.
+run_name: train_sweep_26b_sgd_lr3e6
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 12
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 4
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 4
