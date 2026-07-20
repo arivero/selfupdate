@@ -1059,15 +1059,46 @@ summary in the OPEN diagnosis above.
   lowered `micro_batch` (now training-only) to `1`, in the same PPP8
   experiment config.
 
-**Recommendation on a real DeepSeek PPP8 relaunch:** all three issues have a
-validated-or-config-only fix now in place, but none has been validated
-end-to-end on a real full DeepSeek launch (only the hang mechanism, on a
-synthetic repro, and the OOM/util-gate root causes, via config reasoning
-plus the existing crash logs). Per the standing guidance to check in before
-that step (real risk: an unsupervised overnight cross-node DeepSeek launch,
-lowest scientific value remaining in the whole spec_verify campaign per
-project memory "phase2-models-borrowed-answers") — reported back to the
-coordinator with this summary; awaiting the go/no-go before attempting it.
+**Additional validation (same day, post-advisor-review):** the readiness
+gate's blocking path originally used a raw `TCPStore.wait()`, which blocks
+the FULL `v4_nccl_timeout_s` (up to 1800s) with no chance to notice a
+sibling's cooperative stop -- the exact failure class `drain()` exists to
+survive (2026-07-18 e500 finale). Replaced with a polling loop
+(`BoundaryTransport._wait_predecessor_relay_ready`) that checks
+`stop_requested()`/`rf.stop_seen()` every 2s and raises the existing
+`_RelayStopped`, mirroring `_RelayFiles.wait()`'s own pattern so both halves
+of the boundary transport honor a stop the same way. Separately, the WHOLE
+fix was then validated on a REAL cross-node trainer run, not only the
+synthetic repro: `h100_q0p6b_v4_ppp2_xnode`'s base config, 2 real stages
+(agpuh01 + agpuh02), `v4_relay_every_cohorts` overridden to 1 to force the
+relay path every epoch (the shipped config's default of 3 against 2 epochs
+would never have called `relay.submit()` at all). Both stages completed
+cleanly with checkpoints; stage1's `metrics.jsonl` shows
+`student_trajectory_eval` firing for both epochs with
+`trajectory: student_censored_flow_staged_relay` -- direct evidence the
+gated `recv_forward()`/`post_recv()` path executed correctly over real
+NCCL/IB, not just in isolation. `git log` on the `dsv4-relay-repro-afa4b8fb`
+branch has both commits (NCCL fix + A/B config fixes, then this
+STOP-awareness follow-up).
+
+**Recommendation on a real DeepSeek PPP8 relaunch — precise framing:** all
+three issues now have a fix validated either on a real 2-stage cross-node
+trainer run (the NCCL hang) or by config reasoning against the actual crash
+logs (issues A/B). This makes DeepSeek's failure mode CLEARER, not
+DeepSeek's completion GUARANTEED: stage3's store-fill was still running
+after 70+ minutes against the current 1800s `v4_nccl_timeout_s` in the
+original crash. If that recurs, the fix converts what was an opaque
+watchdog dump into a plain, correctly-attributed
+`RuntimeError: relay-ready timeout ... waiting for stage 3 ...` -- a correct
+and diagnosable outcome, not a completed run. Whether DeepSeek's PPP8 speed
+test actually finishes this time depends on whether stage3's real
+store-fill duration has also improved (untested here) or whether
+`v4_nccl_timeout_s` needs raising for this specific model before a relaunch.
+Per the standing guidance to check in before an unsupervised overnight
+cross-node DeepSeek launch (lowest scientific value remaining in the whole
+spec_verify campaign per project memory "phase2-models-borrowed-answers")
+— reported back to the coordinator with this summary; awaiting the go/no-go
+before attempting it.
 
 ## OPEN, HARDER THAN FIRST THOUGHT: DeepSeek-V4-Flash vLLM TP8 — no available nvcc both compiles DeepGEMM and runs on this driver (spec_verify Phase 2, 2026-07-20)
 
