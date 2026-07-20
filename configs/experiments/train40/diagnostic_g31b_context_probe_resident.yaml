@@ -1,0 +1,16 @@
+# Read-only context-leak diagnostic overlay. Load on the resolved campaign40
+# stage config so cache identity remains exactly 29b977c52739759e; these knobs
+# only replace staged training placement with one fully resident diagnostic.
+run_name: campaign40_g31b_context_probe_resident
+model:
+  device: cuda:0
+  pipeline_devices: [0]
+  pipeline_splits: []
+  pipeline_world_size: 1
+train:
+  v4_stage_scoped: false
+  v4_weight_residency: resident
+  v4_battery_mode: graft
+  v4_stage: -1
+  v4_stage_splits: []
+  v4_stage_devices: []
