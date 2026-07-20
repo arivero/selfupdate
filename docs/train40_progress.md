@@ -92,6 +92,16 @@ At most one objective can be promoted to a 40-epoch confirmation, and only if
 its whole-set CE/KL, all recall corpora, damage, gradient distribution, and
 LoRA-delta scale jointly pass the documented rule.
 
+`delta_cosine` now has a separate mechanics admission in
+`docs/delta_cosine_admission.md`: fresh Qwen3-0.6B one-epoch PPP1 and PPP2
+runs cover every interior layer plus the final post-norm fallback.  The shard
+comparator's historical loss-only blind spots were closed behind
+`--strict-current`; current admission additionally requires identical clean
+commit/loss provenance, exact nonoverlapping ownership, all 28 loss and 28
+gradient cells at zero tolerance, and passed correctly scoped inline locality
+certificates.  The procedural comparator check and historical compatibility
+check pass.  These mechanics runs remain pending and are not scientific arms.
+
 ## Locality certification repair
 
 The old end-of-run certifier could not run after a stage-scoped fill-once
