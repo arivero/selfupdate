@@ -421,3 +421,47 @@ not simple depth, are setting the effective loss scale.  A future normalizer
 should be calibrated by layer type/update scale and still applied without
 depth bias.  The encouraging output/recall direction must survive epoch 40
 and the 100-item endpoint before promotion.
+
+### 31B and 35B final training endpoints
+
+Both remaining single-node primary arms completed 40 epochs, four passed
+`live_fill_once_store` locality certificates, four checkpoints, and four done
+rows.  Their merged/report artifacts are being regenerated; the paired
+100-item standard endpoints remain separately queued.
+
+Gemma-31B improves whole-set output distance from epoch 1 to 40:
+cross-entropy falls 3.64% (`0.00796195` to `0.00767235`) and KL falls 4.37%
+(`0.00530913` to `0.00507716`).  Mean local Huber loss falls 15.67%, although
+its median remains almost unchanged and the six-layer architectural family
+continues to dominate.  The early recall gain does not persist: three-corpus
+mean ends `0.16286` versus epoch zero `0.16761` (-2.83% relative), driven by
+Machado `0.13223` to `0.11646`; both Quijote corpora are essentially flat.
+The 16-item standard macro moves `0.3125` to `0.2917` (one ARC-Easy item) and
+is not endpoint evidence.  Effective-LoRA RMS is `1.57e-4`, while the median
+layer delta is only `6.32e-6`, confirming concentrated rather than uniformly
+effective movement.
+
+Qwen3.6-35B ends with cross-entropy down 1.12% (`0.0237137` to `0.0234473`)
+and KL down 9.66% (`0.00666425` to `0.00602015`).  Mean local Huber loss falls
+31.42%.  Its cross-entropy first worsened through epoch 20 and recovered only
+later, another concrete reason not to stop a scientific arm on an early noisy
+plateau.  Three-corpus mean recall ends `0.14910` versus `0.14341` (+3.97%
+relative): Machado and chapter 4 rise while chapter 1 falls.  The 16-item
+standard macro rises `0.5417` to `0.5833`, again only a no-catastrophe probe.
+Effective-LoRA RMS reaches `1.89e-3` with median `7.21e-4`, much larger than
+31B and still organized by the four-layer architectural family.  Of the
+completed primary arms, 35B is the strongest provisional behavioral result,
+but promotion language waits for the paired 100-item endpoint.
+
+### Loss-screen routing update
+
+The obsolete 0.6B delta-cosine admission was attempted once, then explicitly
+cancelled when the owner restated that 0.6B is no longer an allowed campaign
+scale.  Its epoch-zero subprocess and trainer were terminated before a
+training epoch; the failure/STOP artifacts remain as provenance and will not
+be relaunched.  Delta-cosine now proceeds directly as the full 12-epoch,
+24,852-item Gemma-26B PPP4 arm `campaign40_loss_delta_cosine_g26b`, with the
+same live locality certificate and reporting requirements as the other loss
+screen arms.  It launched on agpuh02 at 16:02 CEST as
+`v4-20260720160230-4162849`, clean source `4a5c897`, exact ownership
+L1--8/L9--16/L17--23/L24--30, and physical GPUs 0--3.
