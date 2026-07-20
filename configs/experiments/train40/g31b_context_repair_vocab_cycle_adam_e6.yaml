@@ -1,0 +1,31 @@
+# Six full-corpus epochs (12,426 items) under the legal-A context repair.
+run_name: campaign40_g31b_context_repair_vocab_cycle_adam_e6
+model:
+  device: cuda:3
+  pipeline_devices: [3]
+  pipeline_splits: []
+  pipeline_world_size: 1
+train:
+  epochs: 6
+  micro_batch: 1
+  hidden_loss: vocab_cycle_mse
+  lr: 3.0e-7
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_grad_clip: 1.0
+  v4_capture_micro_batch: 1
+  v4_context_source: flow_censored_teacher
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_teacher_residency: rebuild
+  v4_stage_scoped: false
+  v4_weight_residency: resident
+  v4_battery_mode: graft
+  v4_stage: -1
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_relay_every_cohorts: 1
+eval:
+  every_epochs: 3
+  standard_damage_every_epochs: 3

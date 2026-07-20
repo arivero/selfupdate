@@ -139,3 +139,31 @@ to bucket composition.  It should remain behind the two strictly pointwise
 forms above.  None of these deferred ideas is queued until the four-arm screen
 establishes gradient scale, update-norm distributions, and whether pure
 direction matching has a nonzero behavioral benefit.
+
+## Repaired-context continuation (2026-07-20)
+
+The full-corpus censorship audit showed that the original v4 context fed
+uncensored teacher `h[L-1]` (and ordinary-position K/V which had already
+absorbed the privileged RAG) to every block after layer 1. Those arms remain
+objective-scale diagnostics but are not evidence that a censored student
+learned to reconstruct RAG information. The opt-in legal-A repair uses
+detached, adapters-off, fully flow-censored teacher `h_c[L-1]` for both query
+and frozen attention context while retaining uncensored teacher `h_u[L]` as
+the local target.
+
+Three six-epoch, full-corpus repaired-context arms were launched on agpuh01
+at 2026-07-20 15:30 UTC. Six epochs cover 12,426 items and therefore satisfy
+the minimum 12,000-item comparison budget:
+
+- `campaign40_g31b_context_repair_lens_kl_adam_e6` on physical GPU 1;
+- `campaign40_g31b_context_repair_vocab_mse_adam_e6` on physical GPU 2;
+- `campaign40_g31b_context_repair_vocab_cycle_adam_e6` on physical GPU 3.
+
+All use Adam at `3e-7`, gradient clipping at 1.0, depth-uniform objectives,
+and evaluation at epochs 0, 3, and 6. Adam and clipping are scale controls,
+not an assertion that these losses work: matched repaired-vs-legacy probes
+found sharply larger deep-layer gradients, particularly for `lens_kl`.
+The legacy-context 26B lens SGD arm already showed an effective layer-2 LoRA
+delta 2.49 times the epoch-zero base-weight norm by epoch 3. It is therefore
+provisionally a scale failure; preserve its endpoint evidence and do not call
+the large parameter motion learning.
