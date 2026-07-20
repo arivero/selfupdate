@@ -309,6 +309,49 @@ def _plots(rows: pd.DataFrame, manifests: list[dict], out: Path) -> None:
         plt.close(fig)
 
 
+def _coverage_layer_plots(coverage: pd.DataFrame, out: Path) -> list[tuple[str, Path]]:
+    """Descriptive cross-run layer summaries, never frontier evidence.
+
+    The publication frontier remains strict-local only.  AGENTS.md also
+    requires a cross-run layer summary for every in-scope completed report,
+    including historical runs whose locality certificate is honestly missing.
+    Keep those plots in a separately titled coverage section.
+    """
+    specs = (
+        ("layer_loss_by_epoch.csv", "loss", "final per-layer loss",
+         "coverage_final_layer_loss.png"),
+        ("parameter_delta_by_epoch.csv", "relative_l2",
+         "final relative parameter delta",
+         "coverage_final_parameter_delta.png"),
+    )
+    outputs = []
+    for csv_name, value, ylabel, filename in specs:
+        path = out / filename
+        path.unlink(missing_ok=True)
+        fig, ax = plt.subplots(figsize=(8.5, 4.8))
+        drawn = False
+        for row in coverage.itertuples(index=False):
+            if row.status not in ("report", "strict_local"):
+                continue
+            frame = _read_csv(RUNS / row.run, csv_name)
+            if frame.empty or value not in frame:
+                continue
+            final = frame[frame.epoch == frame.epoch.max()]
+            ax.plot(final.layer, final[value], lw=1, label=row.run)
+            drawn = True
+        if drawn:
+            ax.set(xlabel="layer", ylabel=ylabel,
+                   title=f"Coverage only (certification may be missing): {ylabel}")
+            ax.set_yscale("log")
+            ax.grid(alpha=.2)
+            ax.legend(fontsize=6, ncol=2, frameon=False)
+            fig.tight_layout()
+            fig.savefig(path, dpi=220)
+            outputs.append((f"Coverage only — {ylabel}", path))
+        plt.close(fig)
+    return outputs
+
+
 def _write_group(name: str, value: str, manifests: list[dict],
                  coverage: pd.DataFrame, root: Path) -> None:
     out = root / f"{_slug(name)}={_slug(value)}"
@@ -317,6 +360,7 @@ def _write_group(name: str, value: str, manifests: list[dict],
     rows.to_csv(out / "runs.csv", index=False)
     coverage.to_csv(out / "coverage.csv", index=False)
     _plots(rows, manifests, out)
+    coverage_figures = _coverage_layer_plots(coverage, out)
     table = _markdown_table(rows)
     campaign = (manifests[0].get("campaign") if manifests else
                 value if name == "campaign" else "unknown")
@@ -353,6 +397,17 @@ def _write_group(name: str, value: str, manifests: list[dict],
         "## Cross-run figures", "",
     ]
     md.extend(cross_run)
+    md.extend([
+        "## Coverage-only cross-run layer summaries", "",
+        "These figures include completed reports lacking strict-local "
+        "certification. They describe recorded dynamics and are not frontier "
+        "evidence.", "",
+    ])
+    if coverage_figures:
+        md.extend(item for title, path in coverage_figures
+                  for item in (f"![{title}]({path.name})", ""))
+    else:
+        md.extend(["_No completed report supplies cross-run layer data._", ""])
     md.extend(["## Missing artifacts and certification", ""])
     md.extend([f"- {note}" for note in notes])
     tmp = out / ".report.md.tmp"
@@ -371,7 +426,7 @@ def _write_group(name: str, value: str, manifests: list[dict],
         eligible=rows,
         coverage=coverage,
         notes=notes,
-        figures=available_figures,
+        figures=available_figures + coverage_figures,
     )
     pending = noneligible.run.tolist() if not noneligible.empty else []
     pending_checkpoints = {

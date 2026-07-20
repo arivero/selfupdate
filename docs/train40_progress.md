@@ -181,6 +181,24 @@ first cross-architecture conclusion should be that one global LR is not a
 matched-update comparison: calibrate future loss/model arms by early LoRA
 delta or gradient scale, not the nominal optimizer LR alone.
 
+Gemma-26B Adam completed at 12:28 CEST.  Relative to its epoch-1 whole-set
+measurement, its epoch-40 CE improved 2.23% and KL 6.65%, versus 1.75% and
+4.27% for SGD.  That modest incremental output-distance gain required a much
+larger update: the final effective-LoRA module RMS is 0.00184 for Adam versus
+0.000283 for SGD (6.5x), and the module mean is 10.7x larger.  Final
+three-corpus mean recall is 0.1334 for Adam versus the shared epoch-zero
+0.1485 (-10.2%); SGD ends at 0.1349 (-9.2%).  The 16-item standard macro ends
+-0.0417 for Adam and unchanged for SGD, but is explicitly too noisy for the
+endpoint claim.  On current evidence Adam is update-inefficient and carries no
+recall advantage; do not promote it as the default optimizer.
+
+The Adam stage shards were merged, and its layer-loss, effective-delta,
+individual Markdown/PDF, and grouped campaign artifacts were generated and
+visually inspected.  The grouped report now includes separate, explicitly
+uncertified coverage-only final-layer loss and parameter-delta comparisons;
+the strict-local frontier remains empty, so descriptive coverage cannot be
+mistaken for publication evidence.
+
 ### Standard-damage delta repair
 
 The staged subprocess battery's raw per-task standard accuracies were correct,
