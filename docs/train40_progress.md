@@ -353,6 +353,16 @@ that `report_v2.py` consumes.  Run it only on an otherwise idle node; endpoint
 jobs remain queued behind active training and will be followed by report
 regeneration.
 
+A read-only preflight caught two endpoint-contract defects before any GPU
+evaluation ran.  A zero-TTL checkpoint process could sweep its newly staged
+base between staging the base and adapter; staging cleanup is now once per
+resolved root/process.  The report also used to accept any nonempty task
+intersection, including fewer than 100 items or mismatched models.  It now
+requires the same nonempty model identity, typed epoch-zero/checkpoint roles,
+all three fixed tasks, finite accuracies, and at least 100 items on both sides.
+New baselines use the unambiguous `epoch0_<model>.json` identity; the old
+`teacher_<model>.json` name is read only as a historical compatibility alias.
+
 ### 35B epoch-10 scientific checkpoint
 
 The first third of Qwen3.6-35B is repeating the important Qwen-27B warning,
