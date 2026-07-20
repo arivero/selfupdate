@@ -405,6 +405,42 @@ reconciles exactly as an integrity check — 8-layer stages (0,3,4,7) report
 808728, 7-layer stages (1,2,5,6) report 707637, both dividing exactly to the
 101091 answer-token count.
 
+## Qwen3.5-397B-A17B and DeepSeek-V4-Flash — vLLM TP8 (inference-only) legs:
+CLOSED, both blocked for clear non-code reasons (2026-07-20)
+
+Distinct from the PPP8 trainer-native runs above (which have real results),
+neither model's OWN vLLM TP8 generation completed, after real investigation
+rather than a quick abandon. Both are genuine infrastructure/arithmetic
+blockers, not bugs in this repo's code — no further retry is planned unless
+one of the prerequisites below is separately addressed.
+
+- **397B**: bf16 Qwen3.5-397B-A17B is ~752-794GB of weights. Any
+  `tensor_parallel_size x pipeline_parallel_size = 8` split across 8x80GB
+  HBM3 = 640GB total leaves no headroom for activations/KV-cache, since
+  neither TP nor PP introduces weight redundancy — it does not fit,
+  regardless of parallelism shape or the cross-node connectivity fix below.
+  Unblocking needs quantization (fp8/int4) or CPU/disk weight offload, not a
+  retry. (A first attempt also hit a genuine, now-fixed, cross-node topology
+  bug — see next bullet — but confirmed the capacity ceiling is the deeper
+  blocker.)
+- **DeepSeek**: reached a live model forward pass for the first time ever
+  under vLLM (further than any single-node TP4 attempt), then hit
+  DeepGEMM's JIT compiler needing nvcc >=12.9 for a specific inline-PTX op,
+  while the only newer nvcc available on these nodes (13.2) compiles it but
+  fails at *runtime* because driver 565.57.01 doesn't support the cu13x
+  runtime. No installed toolkit satisfies both constraints; full diagnosis
+  in `issues.md`.
+- **Independent, validated progress**: a real cross-node vLLM mechanism bug
+  was found and fixed along the way — `distributed_executor_backend="mp"`
+  with `nnodes`/`node_rank` is confirmed broken for the offline `LLM()` API;
+  `external_launcher` under `torchrun` works, but a single TP communicator
+  spanning >1 GPU/node across nodes hangs deterministically, fixed via
+  `pipeline_parallel_size=nnodes` (keeps every TP communicator intra-node).
+  Landed in `scripts/vllm_2node_smoke.py` and `scripts/vllm_prefill_verify.py`
+  (`--multi-node`), confirmed working at PP2xTP4 (world_size=8) on a tiny
+  model. This fix is real and reusable; it just doesn't reach past either
+  model's own separate blocker above.
+
 ## PHASE 3 — PPP2 (2-stage, one node's 2 cards), gemma-4-26B-A4B and
 Qwen3.6-35B-A3B (2026-07-20, recovered from disk — not previously written here)
 
