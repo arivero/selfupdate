@@ -102,7 +102,17 @@ fi
 read -r -a STAGE_HOSTS <<< "${SELFUPDATE_V4_STAGE_HOSTS:-}"
 SELF_HOST="$(hostname -s)"
 MULTI_HOST=0
-for h in "${STAGE_HOSTS[@]:-}"; do
+# NOTE (2026-07-20 fix): do NOT write this as "${STAGE_HOSTS[@]:-}" — on an
+# array with ZERO elements (the normal single-node case, SELFUPDATE_V4_STAGE_HOSTS
+# unset), bash's ${arr[@]:-default} gotcha substitutes ONE default empty-string
+# element instead of iterating zero times. That silently turned a single-node
+# launch into a length-1 "host map" downstream (exported as one hostname),
+# which then failed validate.py's host/device equal-length check against the
+# 4-entry v4_stage_devices list — every single-node multi-stage launch was
+# broken from commit 60a268c (2026-07-19) until this fix. Bash 4.4+ (confirmed
+# on this cluster, 4.4.20) iterates zero times over "${arr[@]}" even under
+# `set -u` when the array is genuinely empty, so the plain form below is safe.
+for h in "${STAGE_HOSTS[@]}"; do
   if [[ -n "$h" && "$h" != "local" && "$h" != "$SELF_HOST" ]]; then
     MULTI_HOST=1
   fi
@@ -113,14 +123,19 @@ done
 # over NCCL/IB. No comms path ever touches a disk filesystem (ssd/lustre/nfs)
 # — owner 2026-07-19. The trainer's resolve_relay_transport reads this map.
 STAGE_HOSTS_RESOLVED=()
-for h in "${STAGE_HOSTS[@]:-}"; do
+for h in "${STAGE_HOSTS[@]}"; do
   if [[ -z "$h" || "$h" == "local" ]]; then
     STAGE_HOSTS_RESOLVED+=("$SELF_HOST")
   else
     STAGE_HOSTS_RESOLVED+=("$h")
   fi
 done
-export SELFUPDATE_V4_STAGE_HOSTS="${STAGE_HOSTS_RESOLVED[*]}"
+# A genuinely empty STAGE_HOSTS (the normal single-node case) must resolve to
+# an EMPTY SELFUPDATE_V4_STAGE_HOSTS, not a single-entry guess — validate.py
+# (line ~140) deliberately skips its host/device length check only when this
+# var is empty ("static config audit has no host assignment"). Do not
+# backfill STAGE_HOSTS_RESOLVED from v4_stage_devices count here.
+export SELFUPDATE_V4_STAGE_HOSTS="${STAGE_HOSTS_RESOLVED[*]:-}"
 
 # One identity per coordinated launch: every relay/adapter file is stamped
 # with it and stages refuse tensors from any other launch.
