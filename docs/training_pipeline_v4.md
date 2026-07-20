@@ -350,6 +350,21 @@ scripts/v4_stage_reaper.sh — their training telemetry is complete).
 Relay CE agreed across PPP1/3/4 to 4 decimals at 0.6B and was stable
 (3.0402±0.0005) at 4B.
 
+**Timing correction, 2026-07-20.** The `prep_fraction` measurements above
+were themselves intrusive: the implementation bounded every layer/cohort
+phase with two full-device synchronizations and then queried NVML after every
+write. On the 60-layer, 2,071-cohort 31B repaired-context runs that became
+248,520 CUDA drains plus 124,260 repeated NVML queries per epoch, producing a
+visible burst/idle sawtooth. Current code removes the hot-loop drains and
+samples NVML at most once per wall second. New rows set the old
+`prep_seconds`, `exec_seconds`, and `prep_fraction` fields to null and declare
+`timing_method: asynchronous_hot_loop_no_phase_drains`; do not compare the
+old phase fractions with new asynchronous runs. `epoch_seconds`, token
+throughput, losses, gradients, and boundary timing remain the comparable
+quantities. The historical utilization values remain evidence for those
+exact artifacts, not certification that the intrusive profiler is harmless
+at every model/cohort granularity.
+
 ### 27B full-true-epoch timing (v4_teacher_source=online, PPP4, 2026-07-17)
 
 Measured on the first full-corpus einf launch (2,071 tri-partite items,

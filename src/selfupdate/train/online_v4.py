@@ -1495,8 +1495,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         return moe_ctrl.student_phase()
 
     def local_forward_loss(layer: int, cohort_idx: int,
-                           capture: dict | None = None,
-                           *, measure_time: bool = False) -> dict:
+                           capture: dict | None = None) -> dict:
         """Run the exact local student route and construct its summed loss.
 
         Optimizer writes, clipping, gradient clearing and telemetry are kept
@@ -1508,7 +1507,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         moe_step = moe_ctrl is not None and layer in moe_ctrl.adapters
         router_extra = None
         aligned_input = None
-        prep_started = time.perf_counter()
         entry = build_layer_cohort(layer, cohort_idx, capture)
         if layer_type == "linear_attention":
             full_inputs, targets = tensors.staged_linear(entry)
@@ -1525,10 +1523,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 ctx = moe_student_ctx(layer, cohort_idx, row_map, row_mask)
             else:
                 ctx = contextlib.nullcontext()
-            if measure_time:
-                torch.cuda.synchronize(device)
-                prep_seconds = time.perf_counter() - prep_started
-            exec_started = time.perf_counter()
             with ctx:
                 out_full = stack.run_block(
                     layer, full_inputs, stack.rope(full_inputs, pos),
@@ -1575,10 +1569,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 ctx = moe_student_ctx(layer, cohort_idx, row_map, row_mask)
             else:
                 ctx = contextlib.nullcontext()
-            if measure_time:
-                torch.cuda.synchronize(device)
-                prep_seconds = time.perf_counter() - prep_started
-            exec_started = time.perf_counter()
             with ctx:
                 out = stack.run_block(
                     layer, inputs_q.requires_grad_(False), rope_q,
@@ -1613,15 +1603,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             "mean_loss": mean_loss,
             "summed": summed,
             "cells": flat_view.shape[0],
-            "prep_seconds": prep_seconds if measure_time else 0.0,
-            "exec_started": exec_started,
         }
 
     def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
                           epoch_lr: float, capture: dict | None = None
                           ) -> None:
-        result = local_forward_loss(
-            layer, cohort_idx, capture, measure_time=True)
+        result = local_forward_loss(layer, cohort_idx, capture)
         cohort = result["cohort"]
         out = result["out"]
         view = result["view"]
@@ -1629,8 +1616,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         mean_loss = result["mean_loss"]
         summed = result["summed"]
         cells = result["cells"]
-        epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
-                                  + result["prep_seconds"])
         params = _v4_clear_block_grads(stack, layer)
         summed.backward()
         if cfg.train.v4_optimizer == "adam":
@@ -1651,10 +1636,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             opt.zero_grad(set_to_none=True)
         else:
             grad_norm = _v4_immediate_sgd(params, epoch_lr)
-        torch.cuda.synchronize(device)
-        epoch_state["_exec_s"] = (epoch_state.get("_exec_s", 0.0)
-                                  + time.perf_counter()
-                                  - result["exec_started"])
         state = epoch_state.setdefault(layer, {
             "loss_sum": torch.zeros((), dtype=torch.float64, device=device),
             "cells": 0,
@@ -1665,33 +1646,42 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         state["cells"] += cells
         state["grad_sq"] += grad_norm.double().square()
         state["writes"] += 1
-        try:
-            util = torch.cuda.utilization(device)
-        except Exception:
-            util = -1
+        # NVML reports a time-window utilization sample, not a per-write
+        # value. Polling it after every write both duplicated the same sample
+        # thousands of times and added host overhead. More importantly, the
+        # old prep/exec timers surrounded every write with TWO full-device
+        # synchronizations, manufacturing the idle gaps they were intended to
+        # diagnose. Sample at most once per wall second and never drain CUDA
+        # here; stream ordering already protects forward/backward/optimizer
+        # correctness. Epoch-boundary scalar reads provide the one required
+        # drain before telemetry is emitted.
+        util = -1
+        now = time.monotonic()
+        last_util = epoch_state.get("_util_last_t", float("-inf"))
+        if now - last_util >= 1.0:
+            epoch_state["_util_last_t"] = now
+            try:
+                util = torch.cuda.utilization(device)
+            except Exception:
+                util = -1
         if util >= 0:
             samples = epoch_state.setdefault("_util", [])
             samples.append(util)
-            # Mid-epoch self-abort (owner, 2026-07-17): stop as soon as the
-            # evidence is in, not at the epoch boundary. Warmup of 128
-            # cohort-steps covers the tensor-build first pass; then a
-            # rolling last-128 mean below the floor is a FAIL. External
-            # watchers see the same signal in the v4_epoch rows and the
-            # sample_gpu_telemetry.sh CSV.
+            # Mid-epoch self-abort remains time-based, matching NVML's own
+            # semantics. Sixteen one-second samples after a 30 s warmup avoid
+            # judging compilation/startup while still stopping a long idle
+            # epoch promptly. Fast epochs retain the ordinary boundary gate.
             floor = cfg.train.v4_min_train_gpu_util
-            # Epoch 1 (0-indexed 0) is exempt, mirroring the epoch-boundary
-            # gate below: the first epoch's cache/prefill warm-up (v4
-            # online teacher recomputes per cohort) is recompute-bound, not a
-            # steady-state utilization signal.
+            epoch_elapsed = now - epoch_state.get("_started_mono", now)
             if (floor and epoch_state.get("_epoch", 0) > 0
-                    and len(samples) >= 256 and len(samples) % 64 == 0):
-                rolling = sum(samples[-128:]) / 128.0
+                    and epoch_elapsed >= 30.0 and len(samples) >= 16):
+                rolling = sum(samples[-16:]) / 16.0
                 if rolling < floor:
                     raise RuntimeError(
                         f"UTILIZATION GATE (mid-epoch): rolling "
                         f"training-phase GPU utilization {rolling:.1f}% < "
                         f"{floor:.0f}% floor after {len(samples)} cohort "
-                        f"steps (goal 90%). Aborting now rather than "
+                        f"one-second samples (goal 90%). Aborting now rather than "
                         f"finishing an idle epoch.")
         if layer == n:
             # CE/KL eval over the answer-predictor rows, streaming, before
@@ -1809,7 +1799,10 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             break
         epoch_started = time.time()
         epoch_lr = cfg.train.lr
-        epoch_state: dict = {"_util": [], "_epoch": epoch}
+        epoch_state: dict = {
+            "_util": [], "_epoch": epoch,
+            "_started_mono": time.monotonic(),
+        }
         rng = random.Random(cfg.train.seed + epoch)
         visit = list(range(len(cohorts)))
         rng.shuffle(visit)
@@ -1922,14 +1915,17 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     if isinstance(k, int)),
                 train_phase_gpu_util=train_util,
                 train_util_samples=len(util_samples),
-                prep_seconds=round(epoch_state.get("_prep_s", 0.0), 3),
+                # Retain the legacy keys as explicit nulls: their old values
+                # required two synchronizations per write and were themselves
+                # a major performance perturbation. Do not silently compare
+                # the new asynchronous runtime with that timing schema.
+                prep_seconds=None,
                 capture_seconds=round(
                     epoch_state.get("_capture_s", 0.0), 3),
-                exec_seconds=round(epoch_state.get("_exec_s", 0.0), 3),
-                prep_fraction=round(
-                    epoch_state.get("_prep_s", 0.0)
-                    / max(epoch_state.get("_prep_s", 0.0)
-                          + epoch_state.get("_exec_s", 0.0), 1e-9), 4),
+                exec_seconds=None,
+                prep_fraction=None,
+                timing_method="asynchronous_hot_loop_no_phase_drains",
+                utilization_sampling="nvml_at_most_once_per_second",
                 epoch_seconds=elapsed)
         # Utilization gate (owner, 2026-07-17): training-phase mean below
         # the configured floor is a FAIL — abort loudly, never let an idle
