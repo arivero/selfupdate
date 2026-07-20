@@ -144,6 +144,13 @@ def _sweep_stage_root(root: Path) -> None:
     atexit-cleaned normally but leak on SIGKILL — same TTL reaps orphans
     (eval jobs run minutes-hours, never days)."""
     ttl = float(os.environ.get("SELFUPDATE_EVAL_STAGE_TTL_DAYS", "7")) * 86400
+    # TTL=0 is used to request cleanup before a new model family, but several
+    # endpoint processes may share this node-local root concurrently.  Never
+    # reap something another evaluator published only seconds ago: it may be
+    # actively mmapped even though its build lock is already gone.
+    grace = float(os.environ.get(
+        "SELFUPDATE_EVAL_STAGE_MIN_GRACE_SECONDS", "600"))
+    reap_after = max(ttl, grace)
     now = time.time()
     for kind in ("models", "jobs"):
         base = root / kind
@@ -171,7 +178,7 @@ def _sweep_stage_root(root: Path) -> None:
                 idle = now - ref.stat().st_mtime
             except OSError:
                 continue
-            if idle >= ttl:
+            if idle >= reap_after:
                 print(f"stage janitor: removing {d} "
                       f"(idle {idle / 86400:.1f} d)", file=sys.stderr)
                 shutil.rmtree(d, ignore_errors=True)
