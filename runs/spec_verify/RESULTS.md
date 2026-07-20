@@ -548,3 +548,30 @@ citing CE/KL_eval_loss or student_argmax_acceptance as split-invariant.
 
 Fan-out to 27B/31B/35B/122B (via their proven PPP4 configs) and 397B (via
 PPP8x, with the borrowed-answer caveat) is next.
+
+### Fan-out results so far (2026-07-20)
+
+| model | arch | teacher_argmax_acceptance | bit-exact vs pre-fix | teacher_exact_seq_rate | matched/2071 | epoch_seconds (new vs old) |
+|---|---|---:|---|---:|---:|---|
+| gemma-4-26B-A4B | MoE (A4B) | 0.9952869328553885 | yes | 0.8570738773539353 | 1775 | 71.12 vs 71.16 |
+| Qwen3.6-27B | dense | 0.9995056985891225 | yes | 0.9859971028488653 | 2042 | 109.06 vs 109.2 |
+| Qwen3.6-35B-A3B | MoE (A3B) | 0.997829486626402 | yes | 0.9261226460647031 | 1918 | 71.87 vs 71.7 |
+| gemma-4-31B | dense | pending re-run | — | — | — | — |
+| Qwen3.5-122B-A10B | MoE (A10B) | pending | — | — | — | — |
+
+**Emerging pattern, not yet conclusive**: the two dense-vs-MoE points collected
+so far are directionally consistent with the dense/MoE split an advisor
+flagged in per-token acceptance (27B/31B dense >> 26B/35B/122B MoE by
+~10x) — 27B (dense) has by far the highest exact-seq (98.60%), while both
+MoE models measured so far are lower (26B 85.71%, 35B 92.61%). Note this
+is NOT a clean binary: 35B (MoE) is noticeably better than 26B (MoE), so
+if the mechanism is MoE-routing-driven, its severity varies by model/expert
+count, not a uniform dense-vs-MoE cliff. 27B's exact-seq via the real tool
+(98.60%) is close to but not required to bit-match its own earlier
+standalone-script measurement (98.50%, different code path — see the torch
+baseline entry above); the two are independent measurements, not a
+reproduction check. A dedicated diagnostic (concrete divergence examples,
+margin/depth table, MoE-routing correlation) for 26B specifically is in
+flight to distinguish bf16-tie noise from MoE-routing disagreement from an
+actual bug — see forthcoming section below. 31B and 122B will complete this
+table's dense/MoE picture.
