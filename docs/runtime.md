@@ -5,6 +5,9 @@ pipeline v4. The scientific protocol and full knob contract live in
 [`training_pipeline_v4.md`](training_pipeline_v4.md). Pipeline-v1/v2/v3
 implementations and their student-trajectory training inputs are historical;
 Git history and the explicitly archived protocol documents preserve them.
+Native stage-owned evaluation, cache provenance, and the explicit fallback
+matrix are documented in
+[`distributed_pp_evaluation.md`](distributed_pp_evaluation.md).
 
 ## Executable map
 

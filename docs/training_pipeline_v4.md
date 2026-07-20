@@ -5,6 +5,11 @@ knobs in `config.py` (`train.v4_*`), rules in `validate.py` (pipeline_version 4
 branch). Smoke configs: `configs/experiments/h100_smoke/base_qwen3_0p6b_v4_lora.yaml`
 plus the `qwen3_0p6b_v4_1proc` / `qwen3_0p6b_v4_4stage` overlays.
 
+The evaluation taxonomy (block-local diagnostic, teacher-forced full student
+trajectory, and autoregressive live-PP rollout), cache provenance, and support
+matrix are in
+[`distributed_pp_evaluation.md`](distributed_pp_evaluation.md).
+
 ## Objective
 
 For every block `L`, at every loss position `p` (teacher coordinates):
