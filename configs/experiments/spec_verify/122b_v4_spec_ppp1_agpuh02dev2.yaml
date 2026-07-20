@@ -1,0 +1,90 @@
+# PPP1 rotary recipe (Phase 3, agpuh02 3-way concurrent relaunch, 2026-07-20).
+# The committed 122b_v4_spec_ppp1.yaml was already CORRECTED (2026-07-20,
+# earlier this session) from an online/no-scoping first draft to
+# store+stage_scoped+rotate+cpu_stream — the right FAMILY of fix, confirmed
+# by scripts/memory_plan.py at the time. But its actual launch attempt
+# (runs/spec_122b_v4_ppp1_e1.log) produced a totally EMPTY log and empty
+# metrics.jsonl — no Python traceback, no output at all. That signature
+# (config.yaml written, then silence) is not a CUDA OOM (those always print
+# a traceback here); it is the documented signature of a HOST-side OOM-kill
+# (see project memory "shm is a consumable": "a stage dying with no
+# traceback = OOM, check dmesg"). The committed config kept micro_batch at
+# the inherited 64 and v4_optimizer at immediate_sgd — i.e. it copied the
+# residency/scoping knobs but NOT the rest of the proven recipe.
+#
+# FIX: this variant additionally copies micro_batch: 8 and v4_optimizer:
+# adam (+ explicit hyperparams) from the ALREADY-PROVEN rotary-PPP1 config
+# for this exact model, configs/experiments/h100_smoke/
+# qwen35_122b_v4_ppp1_rotate.yaml (real multi-epoch teacher_output_eval
+# completions: CE_eval_loss ~0.143, answer_token_count 101091). Per
+# CLAUDE.md's "knob copied without its enabling context" lesson, the
+# committed file's partial copy of the recipe is exactly that trap in a new
+# costume — this file copies the FULL coupled set instead.
+#
+# CORRECTION (coordinator, same session): the first launch of this file
+# ALSO overrode micro_batch: 8 and v4_optimizer: adam (+ hyperparams),
+# copied from the h100_smoke precedent, to fix the earlier empty-log
+# failure. Coordinator flagged this as a REAL numerics confound, not just
+# a style mismatch: online_v4.py groups v4_teacher_source=store WITH
+# online for capture purposes — store still runs a LIVE forward capture at
+# whatever micro_batch is set, and this campaign already has direct
+# evidence that batch composition perturbs bf16 GEMM numerics (26B
+# online-vs-store diagnostic: 0.99491 vs 0.99529, partly attributed to
+# batch-shape-dependent cuBLAS kernel/tiling selection). Confirmed on the
+# sibling 35B config: the confounded micro_batch:16+adam recipe came back
+# close-but-not-bit-exact vs PPP4 (0.99779 vs 0.99783 acceptance,
+# 0.92516 vs 0.92612 exact-seq-rate). This file now drops the
+# micro_batch/v4_optimizer/adam_* overrides entirely, inheriting
+# micro_batch: 64 and v4_optimizer: immediate_sgd from base_122b_v4_spec.
+# yaml — identical to PPP2/PPP4 in every knob except the stage-scoping/
+# residency knobs structurally required for single-GPU rotation (only ONE
+# block's weights+activations resident at a time under rotate). The
+# ORIGINAL empty-log failure is still explained by the missing
+# store+stage_scoped+rotate+cpu_stream+layer_major family (now present);
+# micro_batch was never conclusively implicated in THAT failure, only in
+# the numerics-confound risk this correction addresses. If 64 OOMs even
+# under rotate, that is reported as a genuine capacity finding, not
+# silently patched by shrinking the batch again.
+#
+# DEVICE: v4_stage_devices: [2] is the actual placement lever, NOT
+# model.device — see 27b_v4_spec_ppp1_agpuh02dev0.yaml for the full
+# empirical proof (train.py's --v4-stage override always recomputes
+# cfg.model.device from v4_stage_devices, defaulting to cuda:0 when empty;
+# this exact model's own smoke config said model.device: cuda:1 in the YAML
+# but its recorded physical_gpu_mapping was [0]). Setting v4_stage_devices:
+# [2] here lets this run concurrently with 27B (dev0) and 35B (dev1) on
+# distinct physical GPUs on agpuh02.
+#
+# COMPARISON CAVEAT: PPP4's reference teacher_argmax_acceptance /
+# teacher_exact_seq_rate (0.9966268015946029 / 0.8947368421052632) were
+# produced with v4_teacher_source: store already for 122B (PPP4 also needs
+# store at this size — 244GB exceeds one card), so unlike 27B/35B there is
+# NO teacher-source knob difference to flag here; this comparison is closer
+# to apples-to-apples than the other two models'.
+run_name: spec_122b_v4_ppp1_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+model:
+  device: cuda:2
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 2
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: []
+  v4_stage_devices: [2]
+  v4_stage: -1
+eval:
+  every_epochs: 100

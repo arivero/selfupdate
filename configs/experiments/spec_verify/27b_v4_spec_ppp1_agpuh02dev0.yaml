@@ -1,0 +1,106 @@
+# PPP1 rotary recipe (Phase 3, agpuh02 3-way concurrent relaunch, 2026-07-20).
+# Two PRIOR attempts on this run_name both OOM'd: (1) plain retry (online
+# teacher source, no stage_scoped) hit genuine CUDA OOM in
+# _online_teacher_capture -> chunk_gated_delta_rule at ~78GB/79.2GB
+# (runs/spec_27b_v4_ppp1_e1.log.attempt1_oom); (2) a "capfix" canary retry
+# adding v4_capture_micro_batch=2 ALSO OOM'd at virtually the same point
+# (runs/spec_27b_v4_ppp1_e1.log, 77.90GB in use, failed to allocate 30MB) —
+# read directly from online_v4.py:331-404: that knob's CPU-offload only
+# converts the accumulated owned-layer input snapshots to host AFTER the
+# whole capture loop finishes across every chunk, so it never reduces
+# PPP1's real problem (ALL 64 layers' [B,T,H] snapshots pile up on GPU
+# simultaneously through the whole capture, since PPP1 owns every layer);
+# chunking only shrinks the transient attention-compute peak, which was not
+# the dominant OOM driver here.
+#
+# FIX: switch to the PROVEN rotary-PPP1 recipe already validated end-to-end
+# for this exact model in configs/experiments/h100_smoke/
+# qwen36_27b_v4_ppp1_rotate.yaml (real multi-epoch teacher_output_eval
+# completions on the full 2071-item set, CE_eval_loss ~0.0137,
+# answer_token_count 70807 — matches PPP4's own 70807 exactly). That recipe
+# is v4_teacher_source: store + v4_stage_scoped: true + v4_weight_residency:
+# rotate + v4_teacher_residency: cpu_stream + v4_loop_order: layer_major
+# (validate.py REQUIRES store+layer_major together whenever v4_stage_scoped
+# is set — online is structurally forbidden there), plus micro_batch: 16
+# and v4_optimizer: adam with explicit hyperparams, matching the smoke
+# precedent. NOTE this is more than the 122B "corrected" spec_verify config
+# changed: that config kept micro_batch at the inherited 64 and
+# v4_optimizer at immediate_sgd, and its own PPP1 attempt produced a
+# SILENT EMPTY log (likely a host-RAM OOM under cpu_stream residency,
+# advisor-flagged) — not repeating that half-fix here.
+#
+# CORRECTION (coordinator, same session): the first launch of this file
+# ALSO overrode micro_batch: 16 and v4_optimizer: adam (+ hyperparams),
+# copied from the h100_smoke precedent. Coordinator flagged this as a REAL
+# numerics confound, not just a style mismatch: online_v4.py groups
+# v4_teacher_source=store WITH online for capture purposes
+# (online_source = v4_teacher_source in ("online", "store")) — store still
+# runs a LIVE forward capture through the model at whatever micro_batch is
+# set, and this campaign already has direct evidence that batch composition
+# perturbs bf16 GEMM numerics (26B online-vs-store diagnostic: 0.99491 vs
+# 0.99529, partly attributed to batch-shape-dependent cuBLAS kernel/tiling
+# selection). Empirically confirmed on the FIRST 35B launch of this fix
+# (before this correction): teacher_argmax_acceptance came back
+# 0.9977890422778257 vs the PPP4 reference 0.997829486626402 — close but
+# NOT bit-exact, unlike PPP2(store) which matched PPP4(online) exactly.
+# Memory math for why micro_batch:64 should still fit under rotate: only
+# ONE block's weights+activations are resident at a time under
+# v4_weight_residency=rotate — categorically smaller than the all-blocks-
+# resident "online, no stage_scoped" config that originally OOM'd at 64.
+# This file now drops the micro_batch/v4_optimizer/adam_* overrides
+# entirely, inheriting micro_batch: 64 and v4_optimizer: immediate_sgd from
+# base_27b_v4_spec.yaml — identical to PPP2/PPP4 in every knob except the
+# stage-scoping/residency knobs structurally required for single-GPU
+# rotation. If this OOMs even under rotate, that is reported as a genuine
+# capacity finding, not silently patched by shrinking the batch again.
+#
+# DEVICE: v4_stage_devices: [0] is the actual placement lever, NOT
+# model.device. Confirmed empirically (train.py + load_config simulation):
+# train.py's --v4-stage override — which launch_v4_stages.sh ALWAYS passes,
+# even for a single-stage PPP1 run — recomputes cfg.model.device from
+# v4_stage_devices (defaulting to range(stages)=[0] when the list is empty),
+# silently discarding whatever model.device says. Proof this bug already
+# fired once: configs/experiments/h100_smoke/qwen36_35b_v4_ppp1_rotate.yaml
+# and qwen35_122b_v4_ppp1_rotate.yaml both say model.device: cuda:1 in the
+# YAML, but their OWN recorded metrics.jsonl show physical_gpu_mapping: [0]
+# — they silently ran on GPU 0 despite the comment (harmless there since
+# each ran alone). This config sets v4_stage_devices explicitly so three of
+# these (devices 0/1/2) can truly run CONCURRENTLY on distinct physical
+# GPUs on agpuh02.
+#
+# COMPARISON CAVEAT: PPP4's reference teacher_argmax_acceptance /
+# teacher_exact_seq_rate (0.9995056985891225 / 0.9859971028488653) were
+# produced with v4_teacher_source: online; PPP1's stage_scoped lane
+# structurally requires store instead (validate.py forbids online whenever
+# v4_stage_scoped=true), so this is store vs online, not a strict knob
+# match. However PPP2 (also store) already matched PPP4 (online) BIT-EXACT
+# for this model, so store's bf16 cache re-quantization is not expected to
+# move these numbers here either — flagging the structural difference for
+# completeness, not as an expected source of divergence.
+run_name: spec_27b_v4_ppp1_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+model:
+  device: cuda:0
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_battery_mode: subprocess
+  v4_weight_residency: rotate
+  v4_relay_every_cohorts: 2
+  v4_stage_splits: []
+  v4_stage_devices: [0]
+  v4_stage: -1
+eval:
+  every_epochs: 100

@@ -1,0 +1,88 @@
+# PPP1 rotary recipe (Phase 3, agpuh02 3-way concurrent relaunch, 2026-07-20).
+# See 27b_v4_spec_ppp1_agpuh02dev0.yaml for the full root-cause note (same
+# mechanism, same model family). This model's PRIOR plain retry hit a
+# genuine CUDA OOM in _online_teacher_capture -> chunk_gated_delta_rule at
+# ~78.98GB/79.2GB (runs/spec_35b_v4_ppp1_e1.log); a "capfix" config adding
+# v4_capture_micro_batch=2 was drafted but never actually launched. Given
+# 27B's own capfix canary retry OOM'd anyway for the same structural reason
+# (that knob's CPU-offload only helps AFTER capture finishes, not during
+# it), this config skips straight to the PROVEN working recipe instead of
+# repeating an already-falsified fix.
+#
+# FIX: the rotary-PPP1 recipe already validated end-to-end for this exact
+# model in configs/experiments/h100_smoke/qwen36_35b_v4_ppp1_rotate.yaml
+# (real multi-epoch teacher_output_eval completions on the full 2071-item
+# set, CE_eval_loss ~0.0237, answer_token_count 74176). v4_teacher_source:
+# store + v4_stage_scoped: true + v4_weight_residency: rotate +
+# v4_teacher_residency: cpu_stream + v4_loop_order: layer_major (validate.py
+# requires store+layer_major together whenever v4_stage_scoped is set),
+# plus micro_batch: 16 and v4_optimizer: adam with explicit hyperparams,
+# matching the smoke precedent exactly.
+#
+# CORRECTION (coordinator, same session): the first launch of this file
+# ALSO overrode micro_batch: 16 and v4_optimizer: adam (+ hyperparams),
+# copied from the h100_smoke precedent. Coordinator flagged this as a REAL
+# numerics confound: online_v4.py groups v4_teacher_source=store WITH
+# online for capture purposes (store still runs a LIVE forward capture at
+# whatever micro_batch is set), and this campaign already has direct
+# evidence that batch composition perturbs bf16 GEMM numerics (26B
+# online-vs-store diagnostic: 0.99491 vs 0.99529, partly attributed to
+# batch-shape-dependent cuBLAS kernel/tiling selection). CONFIRMED
+# empirically on the first launch of THIS file: teacher_argmax_acceptance
+# came back 0.9977890422778257 vs the PPP4 reference 0.997829486626402,
+# and teacher_exact_seq_rate 0.9251569290197972 vs reference
+# 0.9261226460647031 — close but NOT bit-exact (unlike PPP2(store), which
+# matched PPP4(online) exactly). That confounded result is preserved at
+# runs/spec_35b_v4_ppp1_e1.confounded_microbatch16_adam for the record.
+# This file now drops the micro_batch/v4_optimizer/adam_* overrides
+# entirely, inheriting micro_batch: 64 and v4_optimizer: immediate_sgd from
+# base_35b_v4_spec.yaml — identical to PPP2/PPP4 in every knob except the
+# stage-scoping/residency knobs structurally required for single-GPU
+# rotation (only ONE block's weights+activations resident at a time under
+# rotate — categorically smaller footprint than the all-blocks-resident
+# online/no-scoping config that originally OOM'd at 64). If 64 OOMs even
+# under rotate, that is reported as a genuine capacity finding, not
+# silently patched by shrinking the batch again.
+#
+# DEVICE: v4_stage_devices: [1] is the actual placement lever, NOT
+# model.device — see 27b_v4_spec_ppp1_agpuh02dev0.yaml for the full
+# empirical proof (train.py's --v4-stage override always recomputes
+# cfg.model.device from v4_stage_devices, defaulting to cuda:0 when empty;
+# this exact model's own smoke config said model.device: cuda:1 in the
+# YAML but its recorded physical_gpu_mapping was [0]). Setting
+# v4_stage_devices: [1] here lets this run concurrently with 27B (dev0) and
+# 122B (dev2) on distinct physical GPUs on agpuh02.
+#
+# COMPARISON CAVEAT: PPP4's reference teacher_argmax_acceptance /
+# teacher_exact_seq_rate (0.997829486626402 / 0.9261226460647031) were
+# produced with v4_teacher_source: online; PPP1's stage_scoped lane
+# structurally requires store instead. PPP2 (also store) already matched
+# PPP4 (online) BIT-EXACT for this model, so no divergence is expected from
+# that difference alone — flagged for completeness.
+run_name: spec_35b_v4_ppp1_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+model:
+  device: cuda:1
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_battery_mode: subprocess
+  v4_weight_residency: rotate
+  v4_relay_every_cohorts: 2
+  v4_stage_splits: []
+  v4_stage_devices: [1]
+  v4_stage: -1
+eval:
+  every_epochs: 100
