@@ -175,6 +175,17 @@ labelled as such, and no loss-family winner is promoted until the probe is
 interpreted.  The already-running 26B `delta_cosine` arm continues to its
 matched 24,852-item budget; no 0.6B arm is permitted.
 
+Operational continuation (2026-07-20 16:31 CEST): all eight H100s are in
+use.  agpuh02 runs the 26B `delta_cosine` PPP4 arm.  agpuh01 runs four
+independent, read-only Gemma-31B context probes (seeds 17/29/41/53, four
+examples each) on GPUs 0--3, using the exact completed-campaign cache identity
+`29b977c52739759e` through
+`diagnostic_g31b_context_probe_resident.yaml`.  The first attempted probe used
+the older full-input base identity `e00ebd70af2d260b` and failed before any
+example; it produced no result and was not silently reused.  The 31B and 35B
+merged checkpoints/reports are now complete; their missing 100-item standard
+endpoints are the next GPU work when these probes release cards.
+
 Completed: `campaign40_g26b_sgd` (full report generated and hand-verified).
 Running or queued at write time: `campaign40_q27b` (27B primary, just
 launched), `campaign40_g26b_adam` (26B confirmatory, just launched);
