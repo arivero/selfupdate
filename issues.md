@@ -933,49 +933,73 @@ including the 397B spec_verify run in progress as of this writing. The real
 cross-node "cert relay" is explicitly deferred future work
 (`online_v4.py:1855`), not a DeepSeek-specific gap.
 
-## OPEN -> ROOT-CAUSED: DeepSeek-V4-Flash vLLM TP8 crash — NVCC missing from PATH breaks DeepGEMM JIT (spec_verify Phase 2, 2026-07-20)
+## OPEN, HARDER THAN FIRST THOUGHT: DeepSeek-V4-Flash vLLM TP8 — no available nvcc both compiles DeepGEMM and runs on this driver (spec_verify Phase 2, 2026-07-20)
+
+CORRECTION (2026-07-20, later same day): the entry originally here said
+"export `CUDA_HOME=/usr/local/cuda-12.6` + PATH" was a sufficient fix. It is
+NOT — that was written from the surface error message alone
+(`"NVCC compilation failed"`) without checking whether 12.6 could actually
+compile the specific failing construct. A follow-up investigation read the
+real compiler output and found the true, harder root cause below; the naive
+"just export PATH" fix would have failed again in exactly the same way.
 
 Separate from the training-side PPP8 NCCL hang above, DeepSeek's *inference*
 (vLLM TP8, cross-node via torchrun external_launcher, TP4xPP2=world_size 8)
-crashed identically on all of agpuh02's local ranks (4-7) during
-`profile_run` -> `_dummy_run` -> the NVIDIA-optimized `deepseek_v4` model's
-`mhc_pre_tilelang` -> `tf32_hc_prenorm_gemm` -> DeepGEMM JIT path:
+crashed on agpuh02's local ranks during `profile_run` -> the NVIDIA-optimized
+`deepseek_v4` model's `mhc_pre_tilelang` -> `tf32_hc_prenorm_gemm` ->
+DeepGEMM JIT path. The actual compiler output (not just the assertion) is:
 
 ```
-RuntimeError: Assertion error (.../jit_kernels/impls/../../jit/compiler.hpp:234):
-false and "NVCC compilation failed"
+Warning: please use at least NVCC 12.9 for the best DeepGEMM performance
+NVCC compilation failed: .../deep_gemm/ptx/ld_st.cuh(152): error: asm operand type size(16)
+  does not match type/size implied by constraint 'q'
+      asm volatile("st.shared.b128 [%0], %1;" :: "l"(__cvta_generic_to_shared(ptr)), "q"(val));
 ```
 
-Root cause: `nvcc` is not on `PATH` on either node by default (already noted
-generically elsewhere in this repo's docs — "No nvcc on PATH by default").
-DeepGEMM needs to JIT-compile a CUDA kernel at runtime for this model's
-custom MHC/tilelang op and has no fallback. A working `nvcc` DOES exist on
-both nodes at `/usr/local/cuda-12.6/bin/nvcc` (confirmed: `nvcc --version`
-reports release 12.6, V12.6.85 on both agpuh01 and agpuh02) — it is simply
-not exported. Fix for the retry: export `CUDA_HOME=/usr/local/cuda-12.6` and
-prepend `/usr/local/cuda-12.6/bin` to `PATH` (and, if DeepGEMM's JIT also
-needs headers/libs at link time, `LD_LIBRARY_PATH` +=
-`/usr/local/cuda-12.6/lib64`) before launching the vLLM TP8 job. agpuh01's
-ranks (0-3) never reached this code path themselves before the whole
-`torchrun` group was torn down by the other node's failure (SIGTERM,
-`Process ... got signal: 15`) — the crash is agpuh02-side but PATH is
-identically absent on both nodes, so both would hit it once the surviving
-ranks reached the same op.
+DeepGEMM's `_find_cuda_home()` resolves (via the system `/usr/local/cuda ->
+/etc/alternatives/cuda -> cuda-12.6` symlink) to **nvcc 12.6**, which is too
+old for this inline-PTX construct — reproduced standalone with a minimal
+`.cu` file containing the identical `st.shared.b128`/`"q"`-constraint
+pattern: fails identically on nvcc 12.6, compiles cleanly on nvcc 13.2 (the
+venv's pip-installed `nvidia-cuda-nvcc-cu13` dependency). But a 13.2-linked
+binary then fails at **runtime** on this node: `CUDA driver version is
+insufficient for CUDA runtime version` — driver 565.57.01 only supports up
+to the cu128 runtime (which is why torch itself is pinned to cu128, not
+cu13x). So the actual constraint is a **compatibility window**: DeepGEMM
+needs an nvcc >=12.9 to compile this op, AND that nvcc's runtime must stay
+within what driver 565.57.01 supports (<=~12.8-class). No toolkit currently
+installed on either node satisfies both: 12.6 is too old, 13.2 is too new
+for the driver. The cluster's `cudatoolkit/12.9` Lmod module — the likely
+sweet spot — fails to load for an unrelated reason (`ncurses/6.4-aocc-4.1.0-
+whgpitb` module dependency not found), a separate infrastructure gap. A
+bounded attempt to pip-install `nvidia-cuda-nvcc-cu12==12.8.*` standalone
+(no venv modification) to test 12.8 was inconclusive: that wheel ships only
+`ptxas`, not the `nvcc` frontend binary, so it can't compile the test case.
+
+**Net: unresolved, third-party toolkit/driver incompatibility inside
+DeepGEMM's JIT, not a defect in our snapshot, code, or multi-node plumbing.**
+Positive finding despite the block: rank1's PP stage fully loaded its share
+of the 543GB dequantized bf16 snapshot and reached a live forward pass
+before hitting this error — the first time this snapshot has been shown to
+instantiate under vLLM at any topology (it never fit TP4 single-node
+before). To actually unblock this: either get `cudatoolkit/12.9` loading
+(fix the missing `ncurses` Lmod dependency — a cluster/module-system issue,
+likely needs sysadmin access or a different ncurses module substitution) or
+find another nvcc build in the 12.9-12.8ish window compatible with driver
+565.57.01.
 
 Separately, the SAME cross-node vLLM TP8 window also had a 397B
 (Qwen3.5-397B-A17B, pure TP8, no PP split) attempt die silently: rank0
 (agpuh01) logs nothing past `vLLM is using nccl==2.28.9` (00:50:20), then
 agpuh02's ranks 4-7 lose their TCPStore connection to it with `Broken
-pipe`/`TCPStore server has shut down too early` at 00:55:24 — a ~5-minute
-gap with zero log output on rank0's side, then silent death. Checked
-`dmesg -T` on agpuh01 for the OOM-killer around that window: nothing (last
-OOM entry predates this run by many hours) — so this is NOT the OOM
-hypothesis one might reach for by default; the actual cause is still
-unknown (segfault with no Python traceback? killed by something outside the
-process? needs the process's own exit code / a core dump / re-run with
-`NCCL_DEBUG=INFO` and closer log capture around the silent window to
-diagnose, rather than guessing). Also worth checking independently: bf16
-Qwen3.5-397B-A17B is ~794GB of weights; pure `tensor_parallel_size=8` across
-8x80GB=640GB total leaves no room for activations/KV-cache even before this
-silent-death question — a capacity issue distinct from the connectivity bug,
-and possibly the real explanation once diagnosed properly.
+pipe`/`TCPStore server has shut down too early` at 00:55:24. `dmesg -T`
+ruled out the OOM-killer for this window. **This is very likely a plain
+arithmetic capacity issue, not a bug worth chasing further**: bf16
+Qwen3.5-397B-A17B is ~752-794GB of weights; ANY partitioning of
+`tensor_parallel_size x pipeline_parallel_size = 8` across 8x80GB=640GB
+total leaves no headroom for activations/KV-cache, since neither TP nor PP
+introduces weight redundancy — confirmed by a follow-up investigation that
+deliberately did NOT retry with the (otherwise-fixed) PP2xTP4 topology for
+this reason. Unblocking 397B's vLLM TP8 leg needs quantization (fp8/int4)
+or CPU/disk weight offload, not a retry of the same bf16 attempt under a
+different parallelism shape.
