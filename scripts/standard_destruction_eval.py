@@ -152,6 +152,17 @@ def _sweep_stage_root(root: Path) -> None:
         for d in base.iterdir():
             if not d.is_dir() or d.name.endswith(".lock"):
                 continue
+            # Shared publishers build as <dest>.tmp-<pid> before atomic
+            # rename.  Every evaluator has its own janitor, so a zero-day TTL
+            # must not let one process reap another process's live copy.
+            tmp_owner = re.search(r"\.tmp-(\d+)$", d.name)
+            if tmp_owner:
+                try:
+                    os.kill(int(tmp_owner.group(1)), 0)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                else:
+                    continue
             if kind == "models" and d.with_name(d.name + ".lock").exists():
                 continue  # being (re)built right now
             marker = d / ".complete"
