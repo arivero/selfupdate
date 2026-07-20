@@ -22,6 +22,10 @@ layers when the input is layer-ordered.
 
 Usage (CPU; run detached on a free node):
     python scripts/fuse_experts_snapshot.py <unfused-bf16-dir> --out <fused-dir>
+
+The output is the ordinary Hugging Face sharded-safetensors contract consumed
+directly by Transformers and vLLM; no selfupdate manifest or tensor wrapper is
+introduced.
 """
 
 from __future__ import annotations
@@ -40,6 +44,31 @@ _EXPERT_RE = re.compile(
     r"^(?P<prefix>.*\.experts)\.(?P<idx>\d+)\."
     r"(?P<proj>gate_proj|up_proj|down_proj)\.weight$")
 SHARD_BYTES = 5 << 30
+
+
+def _verify_standard_hf_snapshot(out: Path) -> None:
+    """Header-only validation of the standard HF shard/index contract."""
+    index_path = out / "model.safetensors.index.json"
+    index = json.loads(index_path.read_text())
+    weight_map = index.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        raise RuntimeError("fused snapshot has no HF weight_map")
+    if not (out / "config.json").is_file():
+        raise RuntimeError("fused snapshot is missing config.json")
+    expected_by_shard: dict[str, set[str]] = {}
+    for key, shard in weight_map.items():
+        expected_by_shard.setdefault(shard, set()).add(key)
+    for shard, expected in expected_by_shard.items():
+        path = out / shard
+        if not path.is_file():
+            raise RuntimeError(f"HF index references missing shard {shard}")
+        with safe_open(str(path), framework="pt") as handle:
+            actual = set(handle.keys())
+        if actual != expected:
+            raise RuntimeError(
+                f"HF shard/index key mismatch in {shard}: "
+                f"missing={sorted(expected - actual)[:5]} "
+                f"unexpected={sorted(actual - expected)[:5]}")
 
 
 def _fused_target(prefix: str, proj: str) -> str:
@@ -183,7 +212,10 @@ def main() -> None:
         if extra.suffix in (".json", ".jinja", ".txt", ".model") \
                 and extra.name != "model.safetensors.index.json":
             shutil.copy2(extra, out / extra.name)
-    print(f"DONE: {total / 2**30:.1f} GiB fused bf16 -> {out}", flush=True)
+    _verify_standard_hf_snapshot(out)
+    print(f"DONE: {total / 2**30:.1f} GiB fused bf16 -> {out} "
+          "(standard Hugging Face/vLLM sharded checkpoint verified)",
+          flush=True)
 
 
 if __name__ == "__main__":

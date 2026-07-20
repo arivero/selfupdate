@@ -6,7 +6,7 @@ seed 17, immediate SGD. It is not scientific evidence and is exempt from the
 12,000-item campaign floor.
 
 Both legs use the fill-once `store`, stage-scoped loading, the current inline
-live-store locality certificate, and the subprocess battery. PPP1 owns all 28
+live-store locality certificate, and the native live-owner battery. PPP1 owns all 28
 blocks on one GPU. PPP2 cuts after layer 14 across two GPUs. Therefore both
 placements execute the interior objective
 `cos(student_block_L(x)-x, teacher_h[L]-x)` for middle layers, and both execute
@@ -39,9 +39,8 @@ scripts/launch_v4_stages.sh \
   configs/experiments/h100_smoke/delta_cosine_0p6b_store_ppp2_e1.yaml
 ```
 
-The battery is not launched by hand. `v4_battery_mode: distributed` runs the
-live v4.5 student after every owner reaches the boundary; unsupported models
-may use `subprocess`, which makes the trainer self-invoke its private fallback.
+The battery is not launched by hand. The v4.6 trainer runs the live student
+after every owner reaches the configured boundary.
 The one-corpus recall battery is retained; the unrelated standard-damage probe
 is disabled to keep admission short.
 
@@ -54,14 +53,14 @@ For PPP2, inspect both `stage0/metrics.jsonl` and `stage1/metrics.jsonl` under
 Require:
 
 - exactly one complete `v4_epoch` per owner with `loss_kind=delta_cosine`;
-- finite L14 and L15 losses, and finite L28 loss in both reconstructed
+- finite L14 and L15 losses, and finite L28 loss in both native
   placements;
 - one non-skipped `locality_certification` per owner with `passed=true`,
   `certificate_source=live_fill_once_store`, positive finite local signal for
   every owned layer, zero foreign/frozen-vocabulary gradients, and exact
   adapter/optimizer preservation;
-- epoch-zero and epoch-one `v4_battery_subprocess` rows in PPP1 and PPP2 stage
-  0, with the expected grafted tensor count and successful child exit;
+- epoch-zero and epoch-one `distributed_battery` rows in PPP1 and PPP2 stage
+  0, with exact epoch/ownership fingerprints and successful completion;
 - checkpoints only after those certificates pass.
 
 Then require exact placement numerics (do not relax tolerance pre-emptively):

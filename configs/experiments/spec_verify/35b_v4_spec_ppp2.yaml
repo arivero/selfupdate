@@ -9,14 +9,13 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   v4_teacher_source: store
   v4_loop_order: layer_major
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: rotate
-  v4_battery_mode: subprocess
   v4_stage_splits: [20]
   v4_stage_devices: [0, 1]
 eval:

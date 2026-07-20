@@ -258,40 +258,44 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
                          generation_backend=backend)
         for name, path in _epoch_recall_corpora(cfg)
     }
-    summary = {
-        name: {
-            "next_acc": result["tasks"]["next"]["word_acc"],
-            "prev_acc": result["tasks"]["prev"]["word_acc"],
-            "cloze_acc": result["tasks"]["cloze"]["word_acc"],
-            "overall_word_acc": result["overall_word_acc"],
+    def finish():
+        summary = {
+            name: {
+                "next_acc": result["tasks"]["next"]["word_acc"],
+                "prev_acc": result["tasks"]["prev"]["word_acc"],
+                "cloze_acc": result["tasks"]["cloze"]["word_acc"],
+                "overall_word_acc": result["overall_word_acc"],
+            }
+            for name, result in results.items()
         }
-        for name, result in results.items()
-    }
-    # Retain flat fields for existing tooling; the corpus map is the source of
-    # truth for new/combined arms.
-    primary = next(iter(summary.values()))
-    overall = sum(v["overall_word_acc"] for v in summary.values()) / len(summary)
-    elapsed = time.perf_counter() - probe_started
-    if timings is not None:
-        timings["recall_telemetry_seconds"] = round(elapsed, 3)
-    if writer:
-        log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
-                recall_items_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
-                next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
-                cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
-                inference_semantics="autoregressive_greedy_rollout",
-                teacher_forced=False,
-                censorship_state="student_prompt_without_privileged_context",
-                prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
-                **(provenance or {}),
-                vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                vram_reserved_gb=round(
-                    torch.cuda.max_memory_reserved() / 2**30, 2),
-                probe_seconds=round(elapsed, 3),
-                minutes=round((time.time() - started_at) / 60, 1))
-        print(" ".join(
-            f"{name}: {value['overall_word_acc']:.2f}"
-            for name, value in summary.items()))
+        primary = next(iter(summary.values()))
+        overall = (sum(v["overall_word_acc"] for v in summary.values())
+                   / len(summary))
+        elapsed = time.perf_counter() - probe_started
+        if timings is not None:
+            timings["recall_telemetry_seconds"] = round(elapsed, 3)
+        if writer:
+            log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
+                    recall_items_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
+                    next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
+                    cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
+                    inference_semantics="autoregressive_greedy_rollout",
+                    teacher_forced=False,
+                    censorship_state="student_prompt_without_privileged_context",
+                    prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
+                    **(provenance or {}),
+                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(
+                        torch.cuda.max_memory_reserved() / 2**30, 2),
+                    probe_seconds=round(elapsed, 3),
+                    minutes=round((time.time() - started_at) / 60, 1))
+            print(" ".join(
+                f"{name}: {value['overall_word_acc']:.2f}"
+                for name, value in summary.items()))
+    if backend is not None:
+        backend.guard_phase("recall_telemetry_summary_and_log", finish)
+    else:
+        finish()
 
 
 def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
@@ -310,39 +314,45 @@ def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
         device=cfg.model.device, keep_examples=False, backend=backend,
     )
     base = baseline or probe
-    deltas = {
-        task: probe["tasks"][task]["accuracy"] - base["tasks"][task]["accuracy"]
-        for task in STANDARD_TASKS
-    }
-    worst_task = min(deltas, key=deltas.get)
-    mean_delta = sum(deltas.values()) / len(deltas)
-    elapsed = time.perf_counter() - probe_started
-    if timings is not None:
-        timings["standard_telemetry_seconds"] = round(elapsed, 3)
-    if writer:
-        log.log(kind="standard_eval", epoch=epoch, phase=phase,
-                standard_tasks={task: probe["tasks"][task]["accuracy"]
-                                for task in STANDARD_TASKS},
-                standard_macro_accuracy=probe["macro_accuracy"],
-                standard_epoch0_delta=mean_delta,
-                standard_worst_task=worst_task,
-                standard_worst_delta=deltas[worst_task],
-                standard_limit=probe["limit"],
-                benchmark_revisions=probe["benchmark_revisions"],
-                inference_semantics=(
-                    "teacher_forced_normalized_option_log_likelihood"),
-                teacher_forced=True,
-                autoregressive=False,
-                prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
-                **(provenance or {}),
-                vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-                vram_reserved_gb=round(
-                    torch.cuda.max_memory_reserved() / 2**30, 2),
-                probe_seconds=round(elapsed, 3),
-                minutes=round((time.time() - started_at) / 60, 1))
-        print(f"{phase}: standard {probe['macro_accuracy']:.3f} "
-              f"(Δ {mean_delta:+.3f}; worst {worst_task} "
-              f"{deltas[worst_task]:+.3f})")
+    def finish():
+        deltas = {
+            task: (probe["tasks"][task]["accuracy"]
+                   - base["tasks"][task]["accuracy"])
+            for task in STANDARD_TASKS
+        }
+        worst_task = min(deltas, key=deltas.get)
+        mean_delta = sum(deltas.values()) / len(deltas)
+        elapsed = time.perf_counter() - probe_started
+        if timings is not None:
+            timings["standard_telemetry_seconds"] = round(elapsed, 3)
+        if writer:
+            log.log(kind="standard_eval", epoch=epoch, phase=phase,
+                    standard_tasks={task: probe["tasks"][task]["accuracy"]
+                                    for task in STANDARD_TASKS},
+                    standard_macro_accuracy=probe["macro_accuracy"],
+                    standard_epoch0_delta=mean_delta,
+                    standard_worst_task=worst_task,
+                    standard_worst_delta=deltas[worst_task],
+                    standard_limit=probe["limit"],
+                    benchmark_revisions=probe["benchmark_revisions"],
+                    inference_semantics=(
+                        "teacher_forced_normalized_option_log_likelihood"),
+                    teacher_forced=True,
+                    autoregressive=False,
+                    prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
+                    **(provenance or {}),
+                    vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                    vram_reserved_gb=round(
+                        torch.cuda.max_memory_reserved() / 2**30, 2),
+                    probe_seconds=round(elapsed, 3),
+                    minutes=round((time.time() - started_at) / 60, 1))
+            print(f"{phase}: standard {probe['macro_accuracy']:.3f} "
+                  f"(Δ {mean_delta:+.3f}; worst {worst_task} "
+                  f"{deltas[worst_task]:+.3f})")
+    if backend is not None:
+        backend.guard_phase("standard_telemetry_summary_and_log", finish)
+    else:
+        finish()
     return base
 
 

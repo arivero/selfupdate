@@ -1,4 +1,4 @@
-# Training pipeline v4.5 — blockwise teacher-forced, frozen teacher KV
+# Training pipeline v4.6 — blockwise teacher-forced, frozen teacher KV
 
 Owner-specified 2026-07-17. Implementation: `src/selfupdate/train/online_v4.py`;
 knobs in `config.py` (`train.v4_*`), rules in `validate.py` (pipeline_version 4
@@ -36,6 +36,12 @@ window is introduced.
   projections are DISCARDED and the stored tensors returned (frozen mode), so
   **gradients enter only through the query-side path** of block L: q_proj,
   o_proj, MLP, norms — never k/v of any position.
+- **Shared-KV consumers keep the same law.** `_FrozenSharedKV` carries the
+  adapters-disabled producer's full-sequence K/V under its attention type;
+  the consumer receives it through `shared_kv_states` and never fabricates an
+  empty ordinary cache. Store-fill transports this typed state across stage
+  cuts. Gemma per-layer token inputs come from frozen modules and are gathered
+  at the same query rows.
 - **Censorship is attention censorship.** The additive mask removes every
   privileged key: the RAG passage AND the prompt text announcing it (both are
   inside `t_privileged`, see `masking.py`). Fill content is irrelevant
@@ -193,19 +199,19 @@ inputs remain teacher hidden states. Despite its historical name,
   enables it; the current implementation fires at EPOCH boundaries (under
   layer_major, sub-epoch sync levels do not exist; an item_major sub-epoch
   cadence needs a sequence protocol and is future work). This is the
-  deployment-matched CE/KL.
+  deployment-matched teacher-forced CE/KL. Its Gemma boundary envelope
+  includes shared producer K/V and its block calls include frozen per-layer
+  token inputs; hidden-only transport is never substituted.
 - **Per-epoch particular evaluations are non-negotiable** (owner,
   2026-07-17): recall corpora (machado, quijote_ch1, quijote_ch4, incl.
   epoch zero), the standard-damage battery, and parameter-delta profiles run
-  every epoch — in single-process mode directly (same telemetry as v3); in
-  staged mode via `_staged_epoch_battery`: every stage publishes its owned
-  adapter tensors per epoch, then stage 0's subprocess loads the full model,
-  grafts every stage shard, and runs the same probes. Across hosts the
-  enveloped adapter files travel over a battery-only NCCL communicator into
-  stage 0's local `/dev/shm`; its scalar result is published through the
-  launch-scoped TCPStore, so a failed child stops the whole stage set instead
-  of leaving remote ranks in a node-local file wait (or a long-lived NCCL
-  collective).
+  at the configured evaluation cadence. Single-process runs use the resident
+  model. Every staged rank enters `DistributedBattery` synchronously at the
+  same epoch: rank 0 tokenizes/embeds, owners execute only their blocks, and
+  the final owner applies norm/head. Autoregressive recall prefills once and
+  then retains owner-local caches; rotary blocks page on demand; shared K/V,
+  per-layer token inputs, hybrid caches, and mHC boundary tails are native.
+  There is no reconstructed-model subprocess or adapter-graft fallback.
 - **Locality certification** (`certify_locality_v4`): measured, not assumed —
   sampled (item, layer) backwards must put zero gradient on every foreign
   block and on embed/norm/head. The dispatch refuses to publish a checkpoint

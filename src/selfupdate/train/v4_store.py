@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import contextlib
 import time
+from collections import UserDict
 
 import torch
 
@@ -76,7 +77,8 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                         moe_ctrl=None, moe_routing=None,
                         teacher_eval_rows=None, rotator=None,
                         transport=None) -> None:
-    from .online_v4 import _FrozenKV, _RelayFiles, _v4_layer_type
+    from .online_v4 import (_FrozenKV, _FrozenSharedKV, _RelayFiles,
+                            _v4_layer_type)
 
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
@@ -121,22 +123,31 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
 
     for idx, cohort in enumerate(cohorts):
         B, T = len(cohort.indices), cohort.T
+        teacher_ids_device = cohort.teacher_ids.to(device)
+        per_layer_inputs = stack.per_layer_inputs(teacher_ids_device)
         pos = torch.arange(T, device=device)[None].expand(B, -1)
         if first:
-            h = stack.embed(cohort.teacher_ids.to(device))
+            h = stack.embed(teacher_ids_device)
+            shared_kv = UserDict()
         else:
             # Co-location routed (same-node /dev/shm file / cross-node NCCL).
             # This cohort-outer fallback runs whenever the stage is RESIDENT
             # (rotator is None) — e.g. 122B PPP8 — so it MUST route cross-node
             # boundaries over NCCL, never node-local files.
-            h = transport.recv_fill_one(idx, cohort).to(device)
+            payload = transport.recv_fill_one(idx, cohort)
+            h = payload["h"].to(device)
+            shared_kv = UserDict({
+                layer_type: (key.to(device), value.to(device))
+                for layer_type, (key, value) in
+                payload.get("shared_kv", {}).items()
+            })
         ctx_a = (adapters_off() if adapters_off is not None
                  else contextlib.nullcontext())
         ctx_m = (moe_ctrl.teacher_phase() if moe_ctrl is not None
                  else contextlib.nullcontext())
         with torch.no_grad(), ctx_a, ctx_m:
-            pe = stack.rope(h, pos)
-            ids_dev = (cohort.teacher_ids.to(device)
+            pe = stack.rope(h, pos, shared_kv_states=shared_kv)
+            ids_dev = (teacher_ids_device
                        if getattr(stack, "needs_deepseek_masks", False)
                        else None)
             for layer in owned_list:
@@ -148,11 +159,37 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                         tensors)
                 elif _v4_layer_type(stack, layer) == "linear_attention":
                     h_in = h
-                    h = stack.run_block(layer, h, pe, position_ids=pos)
+                    h = stack.run_block(
+                        layer, h, pe, position_ids=pos,
+                        per_layer_input=(
+                            per_layer_inputs[:, :, layer - 1]
+                            if per_layer_inputs is not None else None))
                     view = h if layer < n else stack.final_norm(h)
                     tensors.put_linear(
                         layer, idx, h_in.clone(),
                         cohort.gather_query_inputs(view).clone())
+                elif stack.is_kv_shared_layer(layer):
+                    layer_type = _v4_layer_type(stack, layer)
+                    if layer_type not in shared_kv:
+                        raise RuntimeError(
+                            f"store-fill shared-KV layer {layer} has no "
+                            f"{layer_type!r} producer state")
+                    key, value = shared_kv[layer_type]
+                    frozen = _FrozenSharedKV(layer_type, key, value)
+                    inputs_q = cohort.gather_query_inputs(h).clone()
+                    h = stack.run_block(
+                        layer, h, pe, position_ids=pos,
+                        shared_kv_states=shared_kv, causal_length=T,
+                        per_layer_input=(
+                            per_layer_inputs[:, :, layer - 1]
+                            if per_layer_inputs is not None else None))
+                    view = h if layer < n else stack.loss_view(n, h)
+                    tensors.put(
+                        layer, idx, frozen, inputs_q,
+                        cohort.gather_query_inputs(view).clone(),
+                        per_layer_input=(cohort.gather_query_inputs(
+                            per_layer_inputs[:, :, layer - 1]).clone()
+                            if per_layer_inputs is not None else None))
                 else:
                     kv = _FrozenKV()
                     inputs_q = cohort.gather_query_inputs(h).clone()
@@ -162,11 +199,18 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                     h = stack.run_block(
                         layer, h, pe, position_ids=pos,
                         past_key_values=kv, use_cache=True,
-                        causal_length=T)
+                        causal_length=T,
+                        per_layer_input=(
+                            per_layer_inputs[:, :, layer - 1]
+                            if per_layer_inputs is not None else None))
                     kv.recording = False
                     view = h if layer < n else stack.final_norm(h)
-                    tensors.put(layer, idx, kv, inputs_q,
-                                cohort.gather_query_inputs(view).clone())
+                    tensors.put(
+                        layer, idx, kv, inputs_q,
+                        cohort.gather_query_inputs(view).clone(),
+                        per_layer_input=(cohort.gather_query_inputs(
+                            per_layer_inputs[:, :, layer - 1]).clone()
+                            if per_layer_inputs is not None else None))
                 entries += 1
                 if layer == n and teacher_eval_rows is not None:
                     rows = []
@@ -187,7 +231,8 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
             }
         if not last:
             remote = transport.fwd_remote()
-            transport.send_fill_one(idx, h)
+            transport.send_fill_one(
+                idx, {"h": h, "shared_kv": shared_kv})
             if remote:
                 transport.throttle_sends(inflight)
             else:
@@ -221,7 +266,7 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
     (~0.5 GB/cohort at 397B, so K=8 fits comfortably beside the 43 GB
     working set). Numerics are identical to cohort-outer — only the visit
     order changes, and no store entry accumulates across entries."""
-    from .online_v4 import _FrozenKV, _v4_layer_type
+    from .online_v4 import _FrozenKV, _FrozenSharedKV, _v4_layer_type
 
     n = n_layers
     first = stage <= 0
@@ -233,19 +278,29 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
     with torch.no_grad():
         for c0 in range(0, len(idxs), K):
             chunk = idxs[c0:c0 + K]
-            hs, poss, pes = {}, {}, {}
+            hs, poss, pes, ples, shared = {}, {}, {}, {}, {}
             for idx in chunk:
                 cohort = cohorts[idx]
                 B, T = len(cohort.indices), cohort.T
                 poss[idx] = torch.arange(
                     T, device=device)[None].expand(B, -1)
+                teacher_ids_device = cohort.teacher_ids.to(device)
+                ples[idx] = stack.per_layer_inputs(teacher_ids_device)
                 if first:
-                    hs[idx] = stack.embed(cohort.teacher_ids.to(device))
+                    hs[idx] = stack.embed(teacher_ids_device)
+                    shared[idx] = UserDict()
                 else:
                     # Co-location routed: same-node predecessor -> /dev/shm
                     # file, cross-node -> NCCL/IB recv. Never a disk FS.
-                    hs[idx] = transport.recv_fill_one(idx, cohort).to(device)
-                pes[idx] = stack.rope(hs[idx], poss[idx])
+                    payload = transport.recv_fill_one(idx, cohort)
+                    hs[idx] = payload["h"].to(device)
+                    shared[idx] = UserDict({
+                        layer_type: (key.to(device), value.to(device))
+                        for layer_type, (key, value) in
+                        payload.get("shared_kv", {}).items()
+                    })
+                pes[idx] = stack.rope(
+                    hs[idx], poss[idx], shared_kv_states=shared[idx])
             for pos_i, layer in enumerate(owned):
                 rotator.activate(layer)
                 if pos_i + 1 < len(owned):
@@ -267,25 +322,58 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                                 tensors)
                         elif ltype == "linear_attention":
                             h_new = stack.run_block(
-                                layer, h, pes[idx], position_ids=poss[idx])
+                                layer, h, pes[idx], position_ids=poss[idx],
+                                per_layer_input=(
+                                    ples[idx][:, :, layer - 1]
+                                    if ples[idx] is not None else None))
                             view = (h_new if layer < n
                                     else stack.final_norm(h_new))
                             tensors.put_linear(
                                 layer, idx, h.clone(),
                                 cohort.gather_query_inputs(view).clone())
+                        elif stack.is_kv_shared_layer(layer):
+                            if ltype not in shared[idx]:
+                                raise RuntimeError(
+                                    f"store-fill shared-KV layer {layer} "
+                                    f"has no {ltype!r} producer state")
+                            key, value = shared[idx][ltype]
+                            frozen = _FrozenSharedKV(ltype, key, value)
+                            inputs_q = cohort.gather_query_inputs(h).clone()
+                            h_new = stack.run_block(
+                                layer, h, pes[idx],
+                                position_ids=poss[idx],
+                                shared_kv_states=shared[idx],
+                                causal_length=cohort.T,
+                                per_layer_input=(
+                                    ples[idx][:, :, layer - 1]
+                                    if ples[idx] is not None else None))
+                            view = (h_new if layer < n
+                                    else stack.loss_view(n, h_new))
+                            tensors.put(
+                                layer, idx, frozen, inputs_q,
+                                cohort.gather_query_inputs(view).clone(),
+                                per_layer_input=(cohort.gather_query_inputs(
+                                    ples[idx][:, :, layer - 1]).clone()
+                                    if ples[idx] is not None else None))
                         else:
                             kv = _FrozenKV()
                             inputs_q = cohort.gather_query_inputs(h).clone()
                             h_new = stack.run_block(
                                 layer, h, pes[idx], position_ids=poss[idx],
                                 past_key_values=kv, use_cache=True,
-                                causal_length=cohort.T)
+                                causal_length=cohort.T,
+                                per_layer_input=(
+                                    ples[idx][:, :, layer - 1]
+                                    if ples[idx] is not None else None))
                             kv.recording = False
                             view = (h_new if layer < n
                                     else stack.final_norm(h_new))
                             tensors.put(
                                 layer, idx, kv, inputs_q,
-                                cohort.gather_query_inputs(view).clone())
+                                cohort.gather_query_inputs(view).clone(),
+                                per_layer_input=(cohort.gather_query_inputs(
+                                    ples[idx][:, :, layer - 1]).clone()
+                                    if ples[idx] is not None else None))
                     entries += 1
                     if moe_ctrl is not None and moe_routing is not None:
                         r = moe_routing.setdefault(
@@ -314,7 +402,9 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                 for idx in chunk:
                     # send_fill_one routes by co-location (same-node /dev/shm
                     # file / cross-node NCCL isend). Never a disk FS.
-                    transport.send_fill_one(idx, hs[idx])
+                    transport.send_fill_one(
+                        idx, {"h": hs[idx],
+                              "shared_kv": shared[idx]})
                     if not remote:
                         written.append(rf.path(
                             0, f"capture_c{idx:04d}_stage{stage}.st"))
@@ -327,7 +417,7 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                     while sum(1 for p in written
                               if p.exists()) >= max(inflight, K):
                         time.sleep(0.5)
-            del hs, pes, poss
+            del hs, pes, poss, ples, shared
     log.log(kind="v4_store_capture",
             seconds=round(time.perf_counter() - started, 3),
             cohorts=len(cohorts), layer_entries=entries, stage=stage,
@@ -343,16 +433,18 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
     run every cohort through it before evicting. Boundary hiddens and the
     per-cohort rope bundles (which carry gemma's shared-KV side channel
     across the whole sweep) stay resident for the duration."""
-    from .online_v4 import _FrozenKV, _v4_layer_type
+    from .online_v4 import _FrozenKV, _FrozenSharedKV, _v4_layer_type
 
     n = n_layers
     entries = 0
-    hs, poss, pes = {}, {}, {}
+    hs, poss, pes, ples = {}, {}, {}, {}
     with torch.no_grad():
         for idx, cohort in enumerate(cohorts):
             B, T = len(cohort.indices), cohort.T
             poss[idx] = torch.arange(T, device=device)[None].expand(B, -1)
-            hs[idx] = stack.embed(cohort.teacher_ids.to(device))
+            teacher_ids_device = cohort.teacher_ids.to(device)
+            hs[idx] = stack.embed(teacher_ids_device)
+            ples[idx] = stack.per_layer_inputs(teacher_ids_device)
             pes[idx] = stack.rope(hs[idx], poss[idx])
         for pos_i, layer in enumerate(owned):
             rotator.activate(layer)
@@ -373,24 +465,60 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                             tensors)
                     elif ltype == "linear_attention":
                         h_new = stack.run_block(layer, h, pes[idx],
-                                                position_ids=poss[idx])
+                                                position_ids=poss[idx],
+                                                per_layer_input=(
+                                                    ples[idx][:, :, layer - 1]
+                                                    if ples[idx] is not None
+                                                    else None))
                         view = (h_new if layer < n
                                 else stack.loss_view(n, h_new))
                         tensors.put_linear(
                             layer, idx, h.clone(),
                             cohort.gather_query_inputs(view).clone())
+                    elif stack.is_kv_shared_layer(layer):
+                        shared = pes[idx].get("shared_kv_states", {})
+                        if ltype not in shared:
+                            raise RuntimeError(
+                                f"store-fill shared-KV layer {layer} has "
+                                f"no {ltype!r} producer state")
+                        key, value = shared[ltype]
+                        frozen = _FrozenSharedKV(ltype, key, value)
+                        inputs_q = cohort.gather_query_inputs(h).clone()
+                        h_new = stack.run_block(
+                            layer, h, pes[idx],
+                            position_ids=poss[idx],
+                            shared_kv_states=shared,
+                            causal_length=cohort.T,
+                            per_layer_input=(
+                                ples[idx][:, :, layer - 1]
+                                if ples[idx] is not None else None))
+                        view = (h_new if layer < n
+                                else stack.loss_view(n, h_new))
+                        tensors.put(
+                            layer, idx, frozen, inputs_q,
+                            cohort.gather_query_inputs(view).clone(),
+                            per_layer_input=(cohort.gather_query_inputs(
+                                ples[idx][:, :, layer - 1]).clone()
+                                if ples[idx] is not None else None))
                     else:
                         kv = _FrozenKV()
                         inputs_q = cohort.gather_query_inputs(h).clone()
                         h_new = stack.run_block(
                             layer, h, pes[idx], position_ids=poss[idx],
                             past_key_values=kv, use_cache=True,
-                            causal_length=cohort.T)
+                            causal_length=cohort.T,
+                            per_layer_input=(
+                                ples[idx][:, :, layer - 1]
+                                if ples[idx] is not None else None))
                         kv.recording = False
                         view = (h_new if layer < n
                                 else stack.loss_view(n, h_new))
-                        tensors.put(layer, idx, kv, inputs_q,
-                                    cohort.gather_query_inputs(view).clone())
+                        tensors.put(
+                            layer, idx, kv, inputs_q,
+                            cohort.gather_query_inputs(view).clone(),
+                            per_layer_input=(cohort.gather_query_inputs(
+                                ples[idx][:, :, layer - 1]).clone()
+                                if ples[idx] is not None else None))
                 entries += 1
                 if moe_ctrl is not None and moe_routing is not None:
                     r = moe_routing.setdefault(idx, {"idx": {}, "logp": {}})

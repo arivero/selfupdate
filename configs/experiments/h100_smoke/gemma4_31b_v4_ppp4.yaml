@@ -14,7 +14,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   micro_batch: 8
   v4_min_train_gpu_util: 20.0

@@ -99,10 +99,10 @@ liveness, checkpoints, evaluation completion, and scientific telemetry.
   foreign blocks and embedding/norm/head gradients are exactly zero.
 - Compare equal-seed single-process and PPP artifacts with
   `scripts/compare_v4_shard_numerics.py`.
-- Run the v4.5 trainer with `v4_battery_mode: distributed` for the ordinary
-  censored live-student token metrics. Unsupported architectures select the
-  trainer-owned reconstructed fallback. Both run without backward and have
-  optimizer weight zero.
+- The v4.6 trainer always uses the synchronous live-owner battery for staged
+  evaluation. There is no battery-mode knob or reconstructed fallback.
+  Evaluation runs without backward and with optimizer weight zero; rotary,
+  shared-KV, per-layer-input, hybrid-cache, and mHC state stay stage-owned.
 - Merge staged adapters with `scripts/merge_v4_adapters.py`; ownership is
   disjoint, so merge selects tensors rather than averaging them.
 

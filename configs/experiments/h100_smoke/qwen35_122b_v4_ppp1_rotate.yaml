@@ -13,7 +13,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   micro_batch: 8
   epochs: 3
@@ -27,7 +27,6 @@ train:
   v4_grad_clip: 0.0
   v4_teacher_residency: cpu_stream
   v4_stage_scoped: true
-  v4_battery_mode: subprocess
   v4_weight_residency: rotate
   v4_relay_every_cohorts: 2
   v4_min_train_gpu_util: 0.0

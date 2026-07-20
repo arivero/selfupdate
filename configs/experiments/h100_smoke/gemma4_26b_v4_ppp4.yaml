@@ -8,7 +8,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   # B=32 OOMs an 80 GB card: the full-attention training forward of the first
   # owned block peaks ~78 GiB alongside the ~52 GB resident model (capture and

@@ -9,7 +9,7 @@ cache:
   store_full_teacher_inputs: true
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   epochs: 60
   seed: 17

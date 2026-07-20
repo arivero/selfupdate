@@ -11,7 +11,7 @@ model:
   device: cuda:0
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   epochs: 2
   v4_optimizer: adam

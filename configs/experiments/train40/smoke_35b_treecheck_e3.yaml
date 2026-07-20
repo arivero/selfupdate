@@ -15,7 +15,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   epochs: 3
   seed: 17
@@ -24,7 +24,6 @@ train:
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: auto
-  v4_battery_mode: subprocess
   v4_stage_splits: [10, 20, 30]
   v4_stage_devices: [0, 1, 2, 3]
 eval:

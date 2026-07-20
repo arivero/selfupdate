@@ -8,7 +8,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   method: layerwise
   run_class: open
   batching: bucketed
@@ -28,7 +28,6 @@ train:
   v4_teacher_residency: auto
   v4_stage_scoped: true
   v4_weight_residency: auto
-  v4_battery_mode: subprocess
   v4_min_train_gpu_util: 50.0
   v4_nccl_timeout_s: 1800
   v4_stage_splits: [8, 16, 23]

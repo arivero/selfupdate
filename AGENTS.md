@@ -101,7 +101,7 @@ point `HF_HOME` at the stage. Keep TorchInductor/Triton caches node-local
 Full bring-up recipe, including the teacher-cache bootstrap and the traps that
 cost a session, is in `docs/h100_bringup.md`.
 
-## Training Runtime & Certification (v4.5, 2026-07-20)
+## Training Runtime & Certification (v4.6, 2026-07-20)
 
 `src/selfupdate/train/layerwise.py` is a thin v4 entry point;
 `online_v4.py` owns the teacher-hidden block steps and validation relay;
@@ -127,14 +127,13 @@ graph-leak/MoE tripwires in the walk, `scripts/audit_configs.py`.
 For a numerics-preserving trainer change, mint fresh single-process and PPP
 artifacts on current HEAD and compare them with
 `scripts/compare_v4_shard_numerics.py`; then run the ordinary token-prediction
-battery through a disposable v4.5 trainer launch with
-`v4_battery_mode: distributed` (or the trainer-owned reconstructed fallback
-for an unsupported architecture). References are disposable and never stored
+battery through a disposable v4.6 trainer launch with
+the mandatory live-owner evaluator. References are disposable and never stored
 as a frozen specification. See `certs/README.md`.
 
 ## Branch Focus (current, 2026-07-20)
 
-This branch is pipeline-v4.5 only: teacher h[L-1] -> owned block L -> teacher
+This branch is pipeline-v4.6 only: teacher h[L-1] -> owned block L -> teacher
 h[L], with frozen teacher attention context and no cross-block training graph.
 PPP means independent block-owner processes, not activation pipelining.
 Local hidden objectives including `lens_kl` remain permitted through the
@@ -365,7 +364,7 @@ interpreted without silently promoting them to frontier evidence.
   ready marker makes `scripts/l40s_exec.sh` export
   `SELFUPDATE_TEACHER_CACHE_ROOT` for subsequent workers. Never copy the whole
   historical root (943 GB measured 2026-07-14); Qwen3.5-4B alone is ~35 GB.
-  The copy-based path is historical. Pipeline v4.5 uses its configured
+  The copy-based path is historical. Pipeline v4.6 uses its configured
   `cache.runtime_policy` plus `v4_teacher_source` (`cache`, `online`, or the
   fill-once `store`). Multi-stage launches go through
   `scripts/launch_v4_stages.sh`; `/dev/shm` is node-local, so every host must
@@ -547,7 +546,7 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - After changes touching masking, aligned spans, cache layer-index conventions,
   or detach discipline, run `scripts/audit_configs.py`, compare single-process
   and PPP artifacts with `scripts/compare_v4_shard_numerics.py`, and run the
-  v4.5 trainer-owned distributed battery; stored fingerprints remain
+  v4.6 trainer-owned distributed battery; stored fingerprints remain
   intentionally absent.
 
 ## Hardware Ladder
@@ -558,7 +557,7 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 
 ## Current Pointer
 
-Current campaign guidance is pipeline v4.5 and `docs/training_pipeline_v4.md`.
+Current campaign guidance is pipeline v4.6 and `docs/training_pipeline_v4.md`.
 The final synthesis may group atomic reports by campaign, model, loss,
 censorship, teacher source/residency, and PPP ownership; it must exclude
 archived v1-v3/readout diagnostics from frontier claims.

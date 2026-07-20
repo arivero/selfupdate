@@ -1,6 +1,6 @@
 # gemma-4-26B PPP4 EVAL-IN pilot (owner goal 2026-07-19: 3-epoch runs with
 # per-epoch Machado + destruction + validation-loss). Store lane (capture-once),
-# subprocess battery does recall (machado/quijote) + standard-damage each epoch;
+# native live-owner battery does recall (machado/quijote) + standard-damage each epoch;
 # CE/KL validation-loss are emitted at every epoch boundary regardless. This is
 # the first eval-IN datapoint: it measures the real time-with-eval AND settles
 # whether machado moves when training moves (vs the greedy-stable 0.6B).
@@ -11,7 +11,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   micro_batch: 16
   epochs: 3
@@ -21,7 +21,6 @@ train:
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: auto
-  v4_battery_mode: subprocess
   v4_stage_splits: [8, 16, 23]
   v4_stage_devices: [0, 1, 2, 3]
 eval:

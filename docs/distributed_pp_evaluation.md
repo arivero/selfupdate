@@ -1,145 +1,121 @@
-# Pipeline v4.5 native pipeline-parallel evaluation
+# Pipeline v4.6 native pipeline-parallel evaluation
 
-`train.v4_battery_mode: distributed` evaluates the live stage-owned student.
-It never reconstructs a complete model, materializes a foreign block, or sends
-token traffic through `/dev/shm`. Every rank enters a dedicated NCCL group at
-one epoch boundary, after the ordinary relay has been drained. Rank 0
-tokenizes and embeds, each owner executes its contiguous blocks, and the final
-rank alone applies final norm and the frozen vocabulary head.
+Pipeline v4.6 has one staged evaluation path: the live stage owners evaluate
+the current student together. There is no reconstructed-model child, adapter
+publication/graft protocol, CPU evaluator, or architecture fallback.
 
-This mode is opt-in until disposable-checkpoint multi-GPU parity is complete.
-Unsupported configurations fall back explicitly to the reconstructed-model
-subprocess battery and write `distributed_battery_fallback`.
+Every rank enters a dedicated NCCL evaluation group at the same epoch. The
+trainer first drains the asynchronous fixed-sequence relay, barriers, verifies
+launch/epoch/ownership, and then executes an identical collective sequence.
+Rank 0 alone tokenizes and embeds. Each owner executes its contiguous blocks
+exactly once. The final rank alone applies final norm and the frozen vocabulary
+head; rank 0 alone writes durable telemetry.
 
 ## Evaluation taxonomy
 
-The telemetry names four distinct experiments.
+| Row | Student computation | Reference | Autoregressive |
+|---|---|---|---:|
+| `teacher_output_eval` | One trained final block on detached zero-run teacher `h[n-1]` and frozen teacher context | vLLM answer IDs / zero-run teacher output | no |
+| a: `vllm_teacher_forced_reproduction_eval` | Epoch-zero uncensored full PP trajectory over vLLM input+answer | vLLM answer token IDs | no |
+| b: `student_trajectory_eval` | Current adapters-enabled censored full student trajectory | adapters-disabled uncensored zero-run teacher trajectory | no |
+| c: recall `eval` rows | Current adapters-enabled censored/no-RAG prompt rollout | reference answer text | yes |
+| a′: `vllm_uncensored_autoregressive_control` | Current adapters-enabled full-RAG prompt rollout | vLLM answer text/token sequence | yes |
 
-| Test / row | Student path | Reference | Cache/KV provenance | Autoregressive |
-|---|---|---|---|---|
-| a: `vllm_teacher_forced_reproduction_eval` | Epoch-zero, uncensored full PP forward over the stored vLLM input and answer | vLLM answer token IDs | Frozen adapters-disabled zero-run teacher state, constructed as one cached prefill | No |
-| b: native `student_trajectory_eval` | Current adapters enabled; full censored student trajectory through every PP block | Frozen adapters-disabled, uncensored zero-run teacher trajectory | Student retains only current student state for its owned layers; teacher reference retains only zero-run state for its owned layers | No |
-| c: `eval` recall battery | Current adapters enabled; prompt omits privileged/RAG context | Reference answer text | Fresh prefill once, then per-owned-layer cache retained across incremental greedy tokens | Yes |
-| a′: `vllm_uncensored_autoregressive_control` | Current adapters enabled; full privileged/RAG prompt | vLLM answer text and token sequence | Same live per-owned-layer cached decode as c | Yes |
+CE-eval-loss, KL-eval-loss, argmax acceptance, exact-answer acceptance,
+standard option scores, a, and b are teacher-forced. They do not become
+generation metrics merely because every student block participates. Only c
+and a′ are autoregressive.
 
-Test a is recorded only at epoch zero. At zero-initialized LoRA, whether the
-adapter switch is enabled is numerically irrelevant; the implementation makes
-the provenance explicit by disabling adapters before constructing all teacher
-hidden and K/V state. Test b recomputes that frozen reference at the boundary
-and compares the adapters-enabled censored student with it.
+At epoch zero, zero-initialized LoRA is numerically the base model whether the
+adapter switch is enabled or disabled. The implementation disables adapters
+for the reference anyway, making provenance explicit. At later boundaries b
+compares the current censored student with that adapters-disabled zero-run
+trajectory. The frozen teacher K/V used by local training is likewise typed
+separately from the current student cache.
 
-`teacher_output_eval` is neither a nor b. It is a streaming, block-local
-final-block diagnostic: the trained final block consumes zero-run teacher
-`h[n-1]` and frozen teacher K/V. It reports answer-token and exact-answer
-vLLM agreement, cross-entropy against the vLLM token IDs, and teacher-to-
-student KL, but it is not a complete student trajectory.
+The asynchronous staged b relay remains useful between batteries: it is a
+complete fixed-sequence student trajectory, but its telemetry explicitly says
+that stages may have serviced the requested row at different training
+frontiers. The synchronous boundary b row is epoch-exact. Neither uses teacher
+hidden as a student input after the embedding.
 
-The legacy asynchronous staged `student_trajectory_eval` is a complete
-censored student forward over fixed sequences, but stages may service the
-requested epoch after training farther. Its rows now state
-`may_combine_different_adapter_epochs=true`, `adapter_epoch_exact=false`, and
-the final stage's service epoch. Only the native epoch-boundary row claims a
-synchronized adapter epoch.
+## Architecture state carried natively
 
-Standard evaluation remains teacher-forced normalized continuation log
-likelihood. CE/KL/acceptance rows are also teacher-forced. Only c and a′ are
-autoregressive rollouts.
+There is no model-name allowlist. The block adapter reflects the loaded
+Transformers contract:
 
-## Audit of the pre-native paths
+- dense/full and sliding attention use the owner-local dynamic cache;
+- Qwen3.5 linear/recurrent layers retain recurrent state only on their owner;
+- rotary residency pages only the active owner block, records evaluation H2D
+  cost, then restores a quiescent rotator and its counters;
+- mHC boundaries preserve the `[B,T,hc_mult,H]` tail and the final owner uses
+  the frozen hyper-head before final norm;
+- Gemma per-layer token inputs are computed by the frozen input stack and the
+  relevant owner slice is transported;
+- Gemma shared-KV producers retain their ordinary prefix cache. Their
+  full-length `(K,V)` mapping is a transient NCCL side channel at every stage
+  cut and token step. Shared consumers never pretend hidden-only transport is
+  sufficient;
+- mixed full/sliding caches derive physical key length from the actual cache
+  class or transported producer tensor, not from a family label;
+- DeepSeek compressed/mHC block inputs and token-id routing remain the loaded
+  block adapter's responsibility; no foreign block is materialized.
 
-- The reconstructed subprocess recall row is genuine autoregressive inference
-  from a complete reconstructed student. Each stage publishes its trainable
-  tensors under an epoch and launch envelope before the subprocess grafts
-  them. The old reader checked launch and epoch but did not require the
-  envelope producer to equal the requested stage, and the child did not prove
-  that each stage's complete expected adapter key set arrived. Both checks are
-  now mandatory. With them, every reported token either uses every stage's
-  requested-epoch adapter or the battery fails; there is no partial graft.
-- Graft/subprocess epoch snapshots cannot mix named epochs because paths and
-  envelopes carry the requested epoch and launch identity. They can only have
-  been silently incomplete before the new key-set check. The live native path
-  additionally exchanges epoch, launch hash, ownership, and adapter
-  fingerprints before inference.
-- `teacher_output_eval` uses uncensored zero-run teacher `h[n-1]` after the
-  first block. It is intentionally a block-local surrogate. Native and relay
-  `student_trajectory_eval` start from the student embedding and never inject
-  teacher hidden after it; teacher states are scoring targets only.
-- CE-eval-loss, KL-eval-loss, both argmax-acceptance rates, exact-sequence
-  rates, and standard option NLL are teacher-forced. None is produced from
-  generated answers and none enters backward or an optimizer.
-- Epoch-zero and post-epoch recall/standard calls use the same task builders,
-  item order, prompts, censorship state, token budgets, padding, position-ID
-  rules, and scoring functions. Epoch zero is not the uncensored RAG teacher
-  control. a′ is named separately for that condition.
-- The asynchronous relay can combine stage weights serviced at different
-  training frontiers. Its requested epoch labels the sequence payload, not an
-  exact multi-stage weight snapshot. Native evaluation flushes that traffic,
-  barriers all ranks, and therefore cannot race asynchronous training.
-- Runtime freezes embedding, final norm, and LM head on every rank. Native
-  entry compares their fingerprints across ranks and evaluation exit compares
-  them with their pre-evaluation values.
+The same shared-KV envelope is used by the asynchronous b relay and teacher
+store-fill. Frozen local training of a shared consumer uses `_FrozenSharedKV`,
+which supplies the adapters-disabled producer state through the explicit
+`shared_kv_states` argument while preserving query-side-only gradients.
 
-## Why student K/V is rebuilt at the epoch boundary
+Current Gemma 26B/31B snapshots report `num_kv_shared_layers=0` and
+`hidden_size_per_layer_input=0`, but v4.6 tests nonzero synthetic instances so
+support does not depend on those current values.
 
-A current student trajectory must construct K/V from current adapters-enabled
-student states. Reusing the training teacher cache would create a hybrid
-surrogate and must not be called student inference. The native b path creates
-a fresh cache for each validation cohort and proves that every foreign cache
-slot is empty.
+## Cached generation
 
-The certified schedule is the epoch boundary. This is the natural coherent
-frontier at which all blocks and stages have completed the same epoch.
-Per-cohort or per-batch recomputation is mechanically possible for
-`item_major`: all ranks would need a barrier after every N cohorts (N=1 for
-every batch) and a fresh student prefill. It is not certified or enabled.
-There is no coherent mid-epoch frontier in `layer_major`, because blocks have
-processed different corpus prefixes. Carrying a student cache between
-training cohorts is invalid because examples are independent sequences.
+Recall and a′ begin with one left-padded prefill. Each rank retains cache state
+only for its owned non-shared layers. The final rank chooses the greedy token;
+the token is broadcast to rank 0, embedded, and decoded as a one-token chunk.
+Finished rows emit pad, variable per-row budgets are honored, EOS is counted
+with the same current battery semantics, and the complete prefix is never
+recomputed per token.
 
-## Supported architectures and fallback
+Standard multiple-choice scoring preserves the vendored task order, prompt and
+continuation boundaries, right padding, masks, position IDs, normalized
+continuation log likelihood, per-option rows, predictions, and aggregate
+schema. Only the logit backend changed.
 
-| Configuration | Native standard | Native cached generation | Result |
-|---|---:|---:|---|
-| Qwen3 dense full attention | yes | yes | supported |
-| Qwen3.5 dense text with full + linear attention | yes | yes | supported at protocol/unit level; fleet checkpoint parity still required |
-| Qwen3.5 MoE text | no | no | subprocess fallback until separately certified |
-| Gemma4 text with sliding + full attention, `num_kv_shared_layers=0`, `hidden_size_per_layer_input=0` | yes | yes | supported at protocol/unit level; fleet checkpoint parity still required |
-| Gemma shared K/V (`num_kv_shared_layers>0`) | no | no | loud subprocess fallback; shared-KV side channel is not transported |
-| Gemma per-layer input embedding | no | no | loud subprocess fallback |
-| DeepSeek compressed/mHC boundaries | no | no | subprocess fallback |
-| Rotary/nonresident block paging | no | no | subprocess fallback |
-| Non-LoRA training | no | no | subprocess fallback; a/b need an adapters-disabled zero-run reference |
+## Entry, failure, and restoration protocol
 
-Current locally resolved Gemma 26B and 31B text configurations report
-`num_kv_shared_layers=0` and `hidden_size_per_layer_input=0`. Runtime support
-still checks the loaded config instead of relying on model names.
+Before the first payload collective ranks exchange launch hash, epoch, exact
+ownership bounds, complete live trainable key sets, and byte-exact SHA-256
+fingerprints. Embedding, final norm, LM head, mHC head, and frozen per-layer
+input modules must match across ranks and remain unchanged.
 
-## Protocol and invariants
+Every tokenizer, allocation, owner-compute, head, decode, postprocess,
+tokenizer-restoration, and durable-log phase reduces a local failure before a
+sibling enters the next payload collective. Injected rank-0 failures therefore
+terminate all peers instead of stranding one in NCCL. Evaluation runs under
+`torch.inference_mode()`, switches the entire model to eval, and restores each
+module's exact prior `training` flag rather than recursively imposing one mode.
+Trainable bytes, optimizer-inaccessible weights, frozen vocabulary bytes,
+cache ownership, and rotary state are checked on exit.
 
-Before evaluation, ranks barrier and exchange launch hash, requested epoch,
-and exact contiguous ownership bounds. Trainable surfaces are fingerprinted
-per stage; embedding, final norm, and LM head fingerprints must match across
-ranks. Relevant modules enter eval under `torch.inference_mode()`. Exact
-heterogeneous train/eval flags are restored afterward, and adapter plus frozen
-vocabulary fingerprints must be unchanged.
+Foreign-GPU inspection is tri-state. `verified_no_foreign_context` is emitted
+only when the process table proves the process opened exactly its configured
+physical device. Unavailable inspection records null/unverified, never a
+fabricated pass.
 
-Every forward broadcasts the boundary after each owner. This deliberately
-gives every rank the same collective sequence. Local compute/tokenizer/head
-errors are reduced before the next payload collective. An execution counter
-must show every layer exactly once. Dynamic-cache tensor state must be present
-for every owned layer and absent for every foreign layer. Stage 0 alone writes
-durable telemetry.
-
-## Timing rows
+## Timing
 
 `distributed_battery` records fixed-sequence validation, standard scoring,
-recall generation, optional uncensored vLLM generation, and total boundary
-seconds. Offload, model load, and adapter graft are exactly zero.
+recall generation, optional uncensored generation, rotary page stalls/H2D,
+and total boundary seconds. Reconstructed-evaluator fields are retained at
+zero for row compatibility: `offload_seconds=0`, `model_load_seconds=0`, and
+`adapter_graft_seconds=0`.
 
-The fallback records parent offload/restore/total boundary time and child
-model-load, adapter-attach, adapter-graft, recall, standard, and evaluation
-time. Existing historical rows lack some components; before/after claims need
-fresh disposable runs under both backends on the same checkpoint.
+Historical subprocess timings remain historical evidence only. Fresh
+before/after timing requires a disposable old-revision checkout and a v4.6
+checkout on the same copied checkpoint; never disturb a live campaign.
 
 ## Certification
 
@@ -151,14 +127,16 @@ TRANSFORMERS_VERBOSITY=error \
 /tmp/$USER/selfupdate-venv/bin/python scripts/check_distributed_eval_cpu.py
 ```
 
-It compares complete-model versus stage-cut logits, normalized option NLL,
-prefill logits, and five cached greedy tokens for B=1 and a variable-left-
-padding batch. It uses independent stage caches for Qwen3, hybrid Qwen3.5,
-and Gemma4; checks parameter/mode preservation; and proves a rank-local Gloo
-failure does not strand its peer.
+It compares full-model and stage-cut logits, normalized option NLL, task rows,
+prefill logits, and five cached greedy tokens for B=1 and variable left
+padding. It covers Qwen3, hybrid Qwen3.5, ordinary Gemma4, Gemma shared-KV
+across a producer/consumer cut, and Gemma per-layer inputs; checks frozen
+producer-KV local-query parity and side-channel file encoding; proves no
+parameter mutation and exact mode restoration; and injects asymmetric decode,
+postprocess, and logging failures through a two-rank Gloo protocol.
 
-This is not final fleet parity. Adoption still requires disposable artifacts
-for epoch zero and nonzero LoRA, B=1 and configured batching/EOS budgets,
-standard and recall telemetry row parity, Qwen and Gemma checkpoints, no
-foreign CUDA context, and injected-rank failure. Do not run that certification
-on live campaign processes or GPUs.
+This unit coverage does not replace disposable multi-GPU checkpoint parity.
+Certification still compares epoch zero and nonzero LoRA, configured batches
+and budgets, complete standard/recall telemetry, Qwen/Gemma fleet checkpoints,
+rotary PPP1/PPP2 large-model runs, no foreign CUDA context, and injected-rank
+failure. A narrow smoke test is not a parity claim.

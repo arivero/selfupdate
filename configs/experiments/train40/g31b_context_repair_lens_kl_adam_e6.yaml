@@ -23,7 +23,6 @@ train:
   v4_teacher_residency: rebuild
   v4_stage_scoped: false
   v4_weight_residency: resident
-  v4_battery_mode: graft
   v4_stage: -1
   v4_stage_splits: []
   v4_stage_devices: []

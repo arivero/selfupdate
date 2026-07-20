@@ -189,9 +189,9 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
-    # This checkout exposes only pipeline-v4.5 teacher-hidden training.
+    # This checkout exposes only pipeline-v4.6 teacher-hidden training.
     pipeline_version: int = 4
-    pipeline_revision: str = "4.5"
+    pipeline_revision: str = "4.6"
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"
     # method | teacher_reference | ablation | control | legacy_archive | confounded | open
@@ -331,9 +331,8 @@ class TrainConfig:
     # different times, so "all owned layers current to cohort c" only exists
     # at epoch boundaries anyway. An item_major sub-epoch relay would need a
     # sequence protocol on top of _RelayFiles and is future work.
-    # In v4_battery_mode=distributed, positive means run the exact
-    # synchronized b trajectory at native battery epoch boundaries; the
-    # approximate asynchronous relay is not started in that mode.
+    # Positive means run the exact synchronized b trajectory at native battery
+    # epoch boundaries.
     v4_relay_every_cohorts: int = 4
     # Where per-layer teacher tensors live during training. gpu_corpus keeps
     # the active layer's whole-corpus inputs/targets/KV resident (layer_major
@@ -373,8 +372,8 @@ class TrainConfig:
     # Scaling lane (models over one card per stage): materialize only the
     # owned blocks + vocab stack from the safetensors index; foreign blocks
     # stay on the meta device (shard_load.py). Requires a staged launch and
-    # LoRA; the per-epoch battery degrades to a loudly-marked skip row until
-    # v4_battery_mode=subprocess lands (plan B6).
+    # LoRA. The v4.6 battery pages these same live blocks; it never reconstructs
+    # a second model.
     v4_stage_scoped: bool = False
     # Where owned FROZEN block weights live between visits (plan B4).
     # resident: on the card (fits through ~122B at 4 stages). rotate: CPU
@@ -382,17 +381,6 @@ class TrainConfig:
     # moments (the 397B lane). auto: measure owned bytes vs free VRAM at
     # load. Non-resident requires v4_stage_scoped + layer_major.
     v4_weight_residency: str = "resident"  # resident | rotate | auto
-    # How the owner-mandated per-epoch battery runs in staged mode. distributed:
-    # all ranks synchronously evaluate with their live owned blocks over a
-    # dedicated NCCL communicator (supported resident Qwen/Gemma families).
-    # graft:
-    # stage 0 grafts every stage's adapters onto its full resident model
-    # (impossible under v4_stage_scoped). subprocess: all stages release
-    # VRAM at the boundary; stage 0 self-invokes the trainer's private worker,
-    # which loads the model device_map=auto over every card, grafts, probes,
-    # and exits. There is no user-facing battery script. Requires
-    # scripts/train.py's SELFUPDATE_V4_CONFIG.
-    v4_battery_mode: str = "graft"  # distributed | graft | subprocess
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
     # clips each block's gradient to that max L2 norm before the step, and the

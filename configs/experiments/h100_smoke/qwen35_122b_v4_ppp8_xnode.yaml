@@ -2,7 +2,7 @@
 # BOTH nodes' 8 H100s — stages 0-3 on agpuh01 GPUs 0-3, stages 4-7 on
 # agpuh02 GPUs 0-3. 48 blocks -> even 6-block stages. Store lane (scoped
 # loading is mandatory at 122B; store is the only scoped-legal source),
-# capture-once, subprocess battery. 3-epoch SPEED test. The stage3->stage4
+# capture-once, native live-owner battery. 3-epoch SPEED test. The stage3->stage4
 # boundary crosses nodes via the Lustre relay.
 run_name: h100_q122b_v4_ppp8x
 mask:
@@ -11,7 +11,7 @@ cache:
   store_full_teacher_inputs: false
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   epochs: 3
   seed: 17
@@ -20,7 +20,6 @@ train:
   v4_relay_every_cohorts: 3
   v4_stage_scoped: true
   v4_weight_residency: auto
-  v4_battery_mode: subprocess
   v4_stage_splits: [6, 12, 18, 24, 30, 36, 42]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
 eval:

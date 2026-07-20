@@ -39,6 +39,7 @@ import os
 import random
 import socket
 import time
+from collections import UserDict
 from pathlib import Path
 
 import torch
@@ -179,6 +180,46 @@ class _FrozenKV:
             return 0
         return (self.keys.numel() + self.values.numel()
                 ) * self.keys.element_size()
+
+
+class _FrozenSharedKV:
+    """Frozen Gemma producer K/V for one shared-KV consumer block.
+
+    Shared consumers deliberately bypass the ordinary HF cache protocol.
+    This typed carrier therefore exposes the same residency surface as
+    ``_FrozenKV`` while handing ``run_block`` the explicit layer-type map.
+    """
+
+    def __init__(self, layer_type: str, keys: torch.Tensor,
+                 values: torch.Tensor):
+        self.layer_type = str(layer_type)
+        self.keys = keys.detach()
+        self.values = values.detach()
+
+    @property
+    def states(self):
+        return UserDict({self.layer_type: (self.keys, self.values)})
+
+    def to(self, device):
+        self.keys = self.keys.to(device, non_blocking=True)
+        self.values = self.values.to(device, non_blocking=True)
+        return self
+
+    def pin(self):
+        if self.keys.device.type == "cpu":
+            self.keys = self.keys.pin_memory()
+            self.values = self.values.pin_memory()
+        return self
+
+    def staged_to(self, device) -> "_FrozenSharedKV":
+        return _FrozenSharedKV(
+            self.layer_type,
+            self.keys.to(device, non_blocking=True),
+            self.values.to(device, non_blocking=True))
+
+    def nbytes(self) -> int:
+        return ((self.keys.numel() + self.values.numel())
+                * self.keys.element_size())
 
 
 def _owned_range(cfg, n_layers: int) -> range:
@@ -365,16 +406,21 @@ class _TeacherTensors:
             return None
         return self.store.get((layer, cohort_idx))
 
-    def put(self, layer: int, cohort_idx: int, kv: _FrozenKV,
-            inputs: torch.Tensor, targets: torch.Tensor) -> dict:
-        entry = {"kv": kv, "inputs": inputs, "targets": targets}
+    def put(self, layer: int, cohort_idx: int, kv,
+            inputs: torch.Tensor, targets: torch.Tensor,
+            per_layer_input: torch.Tensor | None = None) -> dict:
+        entry = {"kv": kv, "inputs": inputs, "targets": targets,
+                 "per_layer_input": per_layer_input}
         if self.residency == "rebuild":
             return entry  # never stored: rebuilt from the shm cache per visit
         if self.residency == "cpu_stream":
             kv = kv.to("cpu").pin()
             inputs = inputs.cpu().pin_memory()
             targets = targets.cpu().pin_memory()
-            entry = {"kv": kv, "inputs": inputs, "targets": targets}
+            if per_layer_input is not None:
+                per_layer_input = per_layer_input.cpu().pin_memory()
+            entry = {"kv": kv, "inputs": inputs, "targets": targets,
+                     "per_layer_input": per_layer_input}
         self.store[(layer, cohort_idx)] = entry
         return entry
 
@@ -397,11 +443,15 @@ class _TeacherTensors:
 
     def staged(self, entry: dict):
         if self.residency != "cpu_stream":
-            return entry["kv"], entry["inputs"], entry["targets"]
+            return (entry["kv"], entry["inputs"], entry["targets"],
+                    entry.get("per_layer_input"))
         # Both _FrozenKV and FrozenDeepseekCtx implement staged_to.
         kv = entry["kv"].staged_to(self.device)
+        ple = entry.get("per_layer_input")
         return (kv, entry["inputs"].to(self.device, non_blocking=True),
-                entry["targets"].to(self.device, non_blocking=True))
+                entry["targets"].to(self.device, non_blocking=True),
+                (ple.to(self.device, non_blocking=True)
+                 if ple is not None else None))
 
     def drop_layer(self, layer: int) -> None:
         for key in [k for k in self.store if k[0] == layer]:
@@ -441,6 +491,9 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
     chunk = cfg.train.v4_capture_micro_batch or B
     inputs_parts: dict = {layer: [] for layer in owned}
     targets_parts: dict = {layer: [] for layer in owned}
+    shared_kv_parts: dict = {
+        layer: [] for layer in owned if stack.is_kv_shared_layer(layer)
+    }
     eval_parts: list = []
     for b0 in range(0, B, chunk):
         b1 = min(b0 + chunk, B)
@@ -456,14 +509,21 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
         ctx = (adapters_off() if adapters_off is not None
                else contextlib.nullcontext())
         with ctx:
-            h_teacher = stack.embed(ids)
-            h_context = (stack.embed(ids_censored)
-                         if repaired_context else h_teacher)
+            h_teacher, teacher_ple = stack.embed_and_per_layer_inputs(ids)
+            if repaired_context:
+                h_context, context_ple = stack.embed_and_per_layer_inputs(
+                    ids_censored)
+            else:
+                h_context, context_ple = h_teacher, teacher_ple
+            teacher_shared = UserDict()
+            context_shared = (UserDict() if repaired_context
+                              else teacher_shared)
             # Preserve the proven online-teacher path byte-for-byte: its
             # position bundle is constructed once before the block walk.
             # The censored context follows the deployment relay and rebuilds
             # its bundle at each layer from its own current state.
-            pe_teacher = stack.rope(h_teacher, pos)
+            pe_teacher = stack.rope(
+                h_teacher, pos, shared_kv_states=teacher_shared)
             # No prepared mask: with a plain rope, run_block leaves
             # attention_mask None and SDPA's is_causal fast path gives exact
             # causal attention (why the 0.6B online-vs-cache equivalence
@@ -474,14 +534,33 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
             for layer in range(1, n_layers + 1):
                 if layer in owned:
                     inputs_parts[layer].append(h_context.clone())
+                    if stack.is_kv_shared_layer(layer):
+                        layer_type = _v4_layer_type(stack, layer)
+                        source = context_shared.get(layer_type)
+                        if source is None:
+                            raise RuntimeError(
+                                f"shared-KV layer {layer} has no captured "
+                                f"{layer_type!r} producer state")
+                        shared_kv_parts[layer].append(
+                            (source[0].detach(), source[1].detach()))
                 h_teacher = stack.run_block(
                     layer, h_teacher, pe_teacher,
-                    position_ids=pos, input_ids=ids)
+                    position_ids=pos, input_ids=ids,
+                    shared_kv_states=teacher_shared,
+                    per_layer_input=(
+                        teacher_ple[:, :, layer - 1]
+                        if teacher_ple is not None else None))
                 if repaired_context:
                     h_context = stack.run_block(
-                        layer, h_context, stack.rope(h_context, pos),
+                        layer, h_context, stack.rope(
+                            h_context, pos,
+                            shared_kv_states=context_shared),
                         position_ids=pos, flow_keep=keep, causal_length=T,
-                        input_ids=ids_censored)
+                        input_ids=ids_censored,
+                        shared_kv_states=context_shared,
+                        per_layer_input=(
+                            context_ple[:, :, layer - 1]
+                            if context_ple is not None else None))
                 else:
                     h_context = h_teacher
                 if layer in owned:
@@ -510,8 +589,16 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
                       if offload else torch.cat(inputs_parts[layer], 0))
               for layer in owned}
     targets = {layer: torch.cat(targets_parts[layer], 0) for layer in owned}
+    shared_kv = {
+        layer: _FrozenSharedKV(
+            _v4_layer_type(stack, layer),
+            torch.cat([pair[0] for pair in parts], 0),
+            torch.cat([pair[1] for pair in parts], 0))
+        for layer, parts in shared_kv_parts.items()
+    }
     eval_rows_teacher = eval_parts if n_layers in owned else None
     return {"inputs": inputs, "targets": targets,
+            "shared_kv": shared_kv,
             "eval_rows_teacher": eval_rows_teacher}
 
 
@@ -584,8 +671,26 @@ def _student_ids(ds, cohort) -> torch.Tensor:
 @torch.no_grad()
 def _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in, idx, device):
     if boundaries_in is not None:
-        return boundaries_in[idx].to(device)
-    return stack.embed(_student_ids(ds, cohort).to(device))
+        payload = boundaries_in[idx]
+        if torch.is_tensor(payload):
+            return payload.to(device), UserDict()
+        shared = UserDict({
+            layer_type: (key.to(device), value.to(device))
+            for layer_type, (key, value) in
+            payload.get("shared_kv", {}).items()
+        })
+        return payload["h"].to(device), shared
+    return (stack.embed(_student_ids(ds, cohort).to(device)), UserDict())
+
+
+def _relay_payload(hidden: torch.Tensor, shared_kv_states) -> dict:
+    return {
+        "h": hidden.cpu(),
+        "shared_kv": {
+            layer_type: (key.cpu(), value.cpu())
+            for layer_type, (key, value) in shared_kv_states.items()
+        },
+    }
 
 
 @torch.no_grad()
@@ -605,52 +710,68 @@ def _relay_segment(cfg, stack, ds, cohorts, device, owned,
     instead (~10 GB at 27B scale) — the cheap side of that trade.
     """
     deepseek = getattr(stack, "needs_deepseek_masks", False)
+    needs_ple = bool(int(getattr(
+        stack.text_config, "hidden_size_per_layer_input", 0) or 0))
     out = {}
     if rotator is None:
         for idx, cohort in enumerate(cohorts):
             B, T = len(cohort.indices), cohort.T
             keep = cohort.keep.to(device)
             pos = torch.arange(T, device=device)[None].expand(B, -1)
-            h = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
-                                  idx, device)
+            h, shared_kv = _relay_boundary_h(
+                cfg, stack, ds, cohort, boundaries_in, idx, device)
             # Hash-MoE routing in the relay uses the STUDENT (censored)
             # ids — this is the deployment walk.
-            ids = (_student_ids(ds, cohort).to(device) if deepseek else None)
-            pe = stack.rope(h, pos)
+            token_ids = (_student_ids(ds, cohort).to(device)
+                         if deepseek or needs_ple else None)
+            ple = (stack.per_layer_inputs(token_ids)
+                   if needs_ple else None)
+            pe = stack.rope(h, pos, shared_kv_states=shared_kv)
             for layer in owned:
                 h = stack.run_block(layer, h, pe, position_ids=pos,
                                     flow_keep=keep, causal_length=T,
-                                    input_ids=ids)
+                                    input_ids=(token_ids if deepseek else None),
+                                    shared_kv_states=shared_kv,
+                                    per_layer_input=(
+                                        ple[:, :, layer - 1]
+                                        if ple is not None else None))
             # Stream each cohort's boundary to host immediately: holding all
             # cohorts' finals on the card (~30-50 GB at 26B/31B) is what
             # pushed stage 0 over the edge on 2026-07-18 (with the missing
             # no_grad compounding it). Consumers (.to(device) in the eval
             # tail, .cpu() in the envelope write) already accept host
             # tensors.
-            out[idx] = h.cpu()
+            out[idx] = _relay_payload(h, shared_kv)
         return out
-    hs, keeps, poss, idss = {}, {}, {}, {}
+    hs, keeps, poss, idss, ples, shared = {}, {}, {}, {}, {}, {}
     for idx, cohort in enumerate(cohorts):
         B, T = len(cohort.indices), cohort.T
         keeps[idx] = cohort.keep.to(device)
         poss[idx] = torch.arange(T, device=device)[None].expand(B, -1)
-        hs[idx] = _relay_boundary_h(cfg, stack, ds, cohort, boundaries_in,
-                                    idx, device)
-        idss[idx] = (_student_ids(ds, cohort).to(device)
-                     if deepseek else None)
+        hs[idx], shared[idx] = _relay_boundary_h(
+            cfg, stack, ds, cohort, boundaries_in, idx, device)
+        token_ids = (_student_ids(ds, cohort).to(device)
+                     if deepseek or needs_ple else None)
+        idss[idx] = token_ids if deepseek else None
+        ples[idx] = (stack.per_layer_inputs(token_ids)
+                     if needs_ple else None)
     owned_list = list(owned)
     for pos_i, layer in enumerate(owned_list):
         rotator.activate(layer)
         if pos_i + 1 < len(owned_list):
             rotator.prefetch(owned_list[pos_i + 1])
         for idx, cohort in enumerate(cohorts):
-            pe = stack.rope(hs[idx], poss[idx])
+            pe = stack.rope(
+                hs[idx], poss[idx], shared_kv_states=shared[idx])
             hs[idx] = stack.run_block(
                 layer, hs[idx], pe, position_ids=poss[idx],
                 flow_keep=keeps[idx], causal_length=cohort.T,
-                input_ids=idss[idx])
+                input_ids=idss[idx], shared_kv_states=shared[idx],
+                per_layer_input=(
+                    ples[idx][:, :, layer - 1]
+                    if ples[idx] is not None else None))
         rotator.evict(layer)
-    return hs
+    return {idx: _relay_payload(hs[idx], shared[idx]) for idx in hs}
 
 
 @torch.no_grad()
@@ -669,7 +790,10 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
     count = 0
     answers = 0
     for idx, cohort in enumerate(cohorts):
-        view = stack.loss_view(n, finals[idx].to(device))
+        final_payload = finals[idx]
+        final_hidden = (final_payload if torch.is_tensor(final_payload)
+                        else final_payload["h"])
+        view = stack.loss_view(n, final_hidden.to(device))
         rows_v, rows_t, row_ids = [], [], []
         stashed = (teacher_rows_by_cohort or {}).get(idx)
         for b, example_id in enumerate(cohort.example_ids):
@@ -1011,265 +1135,19 @@ class _RelayServicer:
             self.transport.reap_forward(block=False)
 
 
-def _owned_adapter_tensors(stack, owned) -> dict:
-    """This stage's trainable parameters, keyed stably by block + local name."""
-    tensors = {}
-    for layer in owned:
-        block = stack.blocks[layer - 1]
-        for name, param in block.named_parameters():
-            if param.requires_grad:
-                tensors[f"L{layer:03d}.{name}"] = param.detach().cpu()
-    return tensors
-
-
-def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
-                        owned, baseline, rotator=None, transport=None):
-    """Every stage publishes adapters and releases VRAM; stage 0 self-invokes
-    scripts/train.py's private reconstructed-evaluator worker (full model,
-    device_map=auto over all cards) and signals done; stages resume."""
-    import os
-    import subprocess
-    import sys as _sys
-
-    boundary_started = time.perf_counter()
-    # Single-process (rotary PPP1) normalizes to stage 0: it publishes,
-    # spawns, and has no siblings to ack/notify.
-    stage = max(cfg.train.v4_stage, 0)
-    stages = len(cfg.train.v4_stage_splits or []) + 1
-    # Single-process (PPP1) run_dir IS the run root; staged run_dirs
-    # are runs/<name>/stage<k>. Using .parent unconditionally made
-    # every solo run share ONE exchange (collision, 2026-07-18).
-    rf = _RelayFiles(run_dir.parent if cfg.train.v4_stage >= 0
-                     else run_dir)
-    rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
-             _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
-    evicted_blocks = []
-    offload_started = time.perf_counter()
-    if rotator is not None:
-        for L in list(rotator._staged):
-            rotator.evict(L)
-    else:
-        # Resident stages keep their block weights on-card. Offload them to CPU
-        # for the battery so the eval subprocess's SINGLE-CARD load fits: a 70GB
-        # 35B does not fit alongside ~20GB resident, which forces the slow
-        # device_map=auto spread (~15-20 min/battery vs ~5 min single-card).
-        # nn.Module.to moves params in place, so optimizer references stay valid;
-        # restored before training resumes.
-        for L in owned:
-            blk = stack.blocks[L - 1]
-            try:
-                dev = next(blk.parameters()).device
-            except StopIteration:
-                continue
-            if dev.type == "cuda":
-                blk.to("cpu")
-                evicted_blocks.append((L, dev))
-    torch.cuda.empty_cache()
-    offload_seconds = time.perf_counter() - offload_started
-
-    def _restore_evicted():
-        for L, dev in evicted_blocks:
-            stack.blocks[L - 1].to(dev)
-
-    cross_node = transport is not None and transport.nccl is not None
-    status = 0
-    logf = run_dir / f"battery_e{epoch:04d}.log"
-    try:
-        if cross_node:
-            # Publications live in host-private /dev/shm. Move the enveloped
-            # files over the dedicated battery communicator; only stage 0
-            # materializes remote shards for its child.
-            transport.collect_battery_adapters(epoch)
-        else:
-            rf.write(rf.path(epoch, f"battery_ack_stage{stage}.st"),
-                     {"ack": torch.zeros(1)}, stage=stage, epoch=epoch)
-        if stage != 0:
-            if cross_node:
-                status = transport.exchange_battery_status(epoch, 0)
-                if status == 0:
-                    rf.path(epoch, f"adapters_stage{stage}.st").unlink(
-                        missing_ok=True)
-                if status != 0:
-                    raise RuntimeError(
-                        f"stage 0 battery subprocess failed rc={status} at "
-                        f"epoch {epoch}; all stages are stopping")
-            else:
-                rf.wait(rf.path(epoch, "battery_done.st"))
-            return baseline
-        if not cross_node:
-            for k in range(1, stages):
-                rf.wait(rf.path(epoch, f"battery_ack_stage{k}.st"))
-
-        child_error = None
-        try:
-            paths = os.environ.get("SELFUPDATE_V4_CONFIG", "")
-            base_p, _, exp_p = paths.partition("::")
-            if not base_p or not exp_p:
-                status = -1
-            else:
-                script = (Path(__file__).resolve().parents[3] / "scripts" /
-                          "train.py")
-                child_env = dict(os.environ)
-                # The child must speak THIS launch's identity; solo children
-                # otherwise mint a pid-flavoured identity and fail the envelope.
-                child_env["SELFUPDATE_V4_LAUNCH_ID"] = rf.launch_id
-                if cfg.train.v4_stage < 0:
-                    own = torch.device(cfg.model.device).index or 0
-                    child_env["CUDA_VISIBLE_DEVICES"] = str(own)
-                with open(logf, "ab") as fh:
-                    status = subprocess.run(
-                        [_sys.executable, str(script), "--config", base_p,
-                         "--experiment", exp_p, "--v4-battery-worker",
-                         "--v4-battery-run-dir", str(run_dir),
-                         "--v4-battery-epoch", str(epoch),
-                         "--v4-battery-stages", str(stages)],
-                        stdout=fh, stderr=fh, env=child_env).returncode
-        except Exception as exc:
-            # Stage 0 must still release every remote rank from its status
-            # broadcast if log creation/spawn itself fails.
-            child_error = exc
-            status = -2
-        if cross_node:
-            status = transport.exchange_battery_status(epoch, status)
-            if status == 0:
-                rf.path(epoch, f"adapters_stage{stage}.st").unlink(
-                    missing_ok=True)
-        elif status == 0:
-            rf.write(rf.path(epoch, "battery_done.st"),
-                     {"done": torch.zeros(1)}, stage=0, epoch=epoch)
-        elif child_error is not None:
-            rf.request_stop()
-        if child_error is not None:
-            raise RuntimeError(
-                f"battery subprocess could not be launched; {child_error}") \
-                from child_error
-        if status != 0:
-            if not cross_node:
-                rf.request_stop()
-            detail = ("missing SELFUPDATE_V4_CONFIG=<base>::<experiment>"
-                      if status == -1 else f"see {logf}")
-            raise RuntimeError(
-                f"battery subprocess failed rc={status}; {detail} — the "
-                "per-epoch battery is non-negotiable, a run without it "
-                "must not continue silently")
-        return baseline
-    finally:
-        restore_started = time.perf_counter()
-        _restore_evicted()
-        if stage == 0:
-            log.log(
-                kind="v4_battery_boundary_timing", epoch=epoch,
-                evaluation_backend="reconstructed_full_model_subprocess",
-                offload_seconds=round(offload_seconds, 3),
-                restore_seconds=round(
-                    time.perf_counter() - restore_started, 3),
-                total_boundary_seconds=round(
-                    time.perf_counter() - boundary_started, 3))
-
-
 def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                           owned, baseline, started_at: float,
                           rotator=None, transport=None,
                           distributed_battery=None, relay=None):
-    """Owner-mandated per-epoch battery in staged mode.
-
-    Every stage publishes its owned adapter tensors; stage 0 waits for all
-    of them, grafts the foreign-block adapters onto its own full model
-    (harmless for its training — v4 never reads foreign blocks), and runs
-    the SAME recall/standard-damage probes as v3.  Other stages return
-    immediately and keep training.
-    """
-    if cfg.train.v4_battery_mode == "distributed":
-        if distributed_battery is None:
-            raise RuntimeError("distributed battery mode has no evaluator")
-        if relay is not None:
-            relay.flush_strict()
-        elif transport is not None:
-            transport.reap_forward(block=True)
-        verdict = distributed_battery.consensus_support()
-        if verdict.supported:
-            return distributed_battery.run_epoch(
-                epoch, baseline=baseline, started_at=started_at)
-        if distributed_battery.is_writer:
-            log.log(kind="distributed_battery_fallback", epoch=epoch,
-                    reason=verdict.reason, model_type=verdict.model_type,
-                    fallback="reconstructed_full_model_subprocess")
-        return _subprocess_battery(
-            cfg, stack, log, epoch, run_dir, owned, baseline,
-            rotator=rotator, transport=transport)
-    if cfg.train.v4_battery_mode == "subprocess":
-        return _subprocess_battery(cfg, stack, log, epoch, run_dir,
-                                   owned, baseline, rotator=rotator,
-                                   transport=transport)
-    stage = cfg.train.v4_stage
-    stages = len(cfg.train.v4_stage_splits or []) + 1
-    # Single-process (PPP1) run_dir IS the run root; staged run_dirs
-    # are runs/<name>/stage<k>. Using .parent unconditionally made
-    # every solo run share ONE exchange (collision, 2026-07-18).
-    rf = _RelayFiles(run_dir.parent if cfg.train.v4_stage >= 0
-                     else run_dir)
-    if cfg.train.v4_stage_scoped:
-        # Graft mode requires stage 0 to hold the FULL model; under stage-
-        # scoped loading foreign blocks are meta. validate steers scoped
-        # runs to v4_battery_mode=subprocess; this loud row remains as the
-        # last-resort marker — a skipped battery must never be mistaken
-        # for a run without the obligation.
-        if stage == 0:
-            log.log(kind="epoch_battery_skipped", epoch=epoch,
-                    reason="v4_stage_scoped_graft_impossible",
-                    owner_law="per-epoch battery is NON-NEGOTIABLE; this "
-                              "row marks debt, not permission")
-        return baseline
-    if stage != 0:
-        # Stage 0 is the only consumer; it needs no copy of its own.
-        rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
-                 _owned_adapter_tensors(stack, owned), stage=stage,
-                 epoch=epoch)
-        return baseline
-    n = stack.n_layers
-    bounds = [0] + list(cfg.train.v4_stage_splits or []) + [n]
-    with torch.no_grad():
-        for other in range(1, stages):
-            path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
-            grafted = rf.read(path, expect_epoch=epoch, as_stage=0,
-                              expect_stage=other)
-            path.unlink(missing_ok=True)
-            with contextlib.suppress(OSError):
-                path.parent.rmdir()
-            expected = {
-                f"L{layer:03d}.{name}"
-                for layer in range(bounds[other] + 1,
-                                   bounds[other + 1] + 1)
-                for name, param in
-                stack.blocks[layer - 1].named_parameters()
-                if param.requires_grad
-            }
-            if set(grafted) != expected:
-                raise RuntimeError(
-                    f"stage {other} adapter publication mismatch at epoch "
-                    f"{epoch}: missing={sorted(expected - set(grafted))[:8]} "
-                    f"unexpected={sorted(set(grafted) - expected)[:8]}")
-            for key, value in grafted.items():
-                layer_tag, _, local = key.partition(".")
-                layer = int(layer_tag[1:])
-                if layer in owned:
-                    raise RuntimeError(
-                        f"stage {other} published block {layer}, owned here")
-                params = dict(stack.blocks[layer - 1].named_parameters())
-                params[local].copy_(value.to(params[local].device))
-    return _epoch_end_telemetry(
-        cfg, stack, tok, log, epoch=epoch - 1, baseline=baseline,
-        started_at=started_at,
-        provenance={
-            "evaluation_backend": "live_full_model_grafted_adapters",
-            "weight_source": "epoch_enveloped_stage_adapter_graft",
-            "adapter_epoch": epoch,
-            "launch_identity": rf.launch_id,
-            "stage_epoch_synchronized": True,
-            "complete_student_trajectory": True,
-            "foreign_blocks_materialized": True,
-        })
-
+    """Run the mandatory v4.6 battery through the live stage owners."""
+    if distributed_battery is None:
+        raise RuntimeError("staged v4.6 battery has no distributed evaluator")
+    if relay is not None:
+        relay.flush_strict()
+    elif transport is not None:
+        transport.reap_forward(block=True)
+    return distributed_battery.run_epoch(
+        epoch, baseline=baseline, started_at=started_at)
 
 def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     run_dir: Path | None = None) -> tuple[bool, dict | None]:
@@ -1309,20 +1187,6 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     teacher_eval_rows: dict = {}
     n = stack.n_layers
     owned = _owned_range(cfg, n)
-    # Frozen-KV contract tripwire: KV-sharing layers (gemma-class
-    # num_kv_shared_layers > 0) read another layer's KV through the
-    # shared_kv_states side channel and never call past_key_values.update,
-    # so _FrozenKV would stay empty and fail later with a generic consume
-    # error. The 2026-07 gemma-4 targets set 0; fail loudly and by name if
-    # a future variant does not.
-    shared_kv = int(getattr(stack.text_config, "num_kv_shared_layers", 0)
-                    or 0)
-    if shared_kv:
-        raise NotImplementedError(
-            f"pipeline-v4 frozen teacher KV does not support KV-sharing "
-            f"layers yet (num_kv_shared_layers={shared_kv}): the shared "
-            f"layers bypass past_key_values.update; a shared-kv arm of "
-            f"_FrozenKV is required")
     repaired_context = (
         cfg.train.v4_context_source == "flow_censored_teacher")
     if repaired_context:
@@ -1491,12 +1355,58 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         else:
             full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
             targets = cohort.gather_targets(cache, layer).to(device)
+        ple_full = stack.per_layer_inputs(
+            (cohort.student_ids if repaired_context
+             and cohort.student_ids is not None else cohort.teacher_ids
+             ).to(device))
+        ple_query = (cohort.gather_query_inputs(
+            ple_full[:, :, layer - 1]) if ple_full is not None else None)
         if layer_type == "linear_attention":
             # Recurrent mixers have no K/V to freeze: the layer runs the
             # FULL teacher-forced sequence with its own (trainable)
             # recurrence, censored by flow_keep row-zeroing. Store the full
             # inputs; no prefill.
             return tensors.put_linear(layer, cohort_idx, full_inputs, targets)
+        if stack.is_kv_shared_layer(layer):
+            if capture is not None:
+                frozen = capture["shared_kv"].pop(layer)
+            else:
+                source_layer = stack.shared_kv_source(layer)
+                source_inputs = cohort.gather_full_inputs(
+                    cache, source_layer).to(device)
+                Bc = len(cohort.indices)
+                chunk = cfg.train.v4_capture_micro_batch or Bc
+                refresh = cfg.train.v4_kv_source == "student_refresh"
+                ctx = (contextlib.nullcontext()
+                       if refresh or adapters_off is None else adapters_off())
+                key_parts, value_parts = [], []
+                with torch.no_grad(), ctx:
+                    for b0 in range(0, Bc, chunk):
+                        b1 = min(b0 + chunk, Bc)
+                        source = source_inputs[b0:b1]
+                        pos = torch.arange(
+                            cohort.T, device=device)[None].expand(
+                                b1 - b0, -1)
+                        recorder = _FrozenKV()
+                        stack.run_block(
+                            source_layer, source,
+                            stack.rope(source, pos), position_ids=pos,
+                            past_key_values=recorder, use_cache=True,
+                            prepared_attention_mask=
+                            NO_PREPARED_ATTENTION_MASK,
+                            per_layer_input=(
+                                ple_full[b0:b1, :, source_layer - 1]
+                                if ple_full is not None else None))
+                        key_parts.append(recorder.keys)
+                        value_parts.append(recorder.values)
+                frozen = _FrozenSharedKV(
+                    layer_type, torch.cat(key_parts, 0),
+                    torch.cat(value_parts, 0))
+            inputs_q = cohort.gather_query_inputs(full_inputs)
+            del full_inputs
+            return tensors.put(
+                layer, cohort_idx, frozen, inputs_q, targets,
+                per_layer_input=ple_query)
         if getattr(stack, "needs_deepseek_masks", False):
             # DeepSeek-V4 record pass: real typed cache layers run the
             # compressor's genuine window arithmetic; the indexer's top-k is
@@ -1573,7 +1483,10 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 stack.run_block(
                     layer, fi, rope_c, position_ids=pos,
                     past_key_values=kv_c, use_cache=True,
-                    prepared_attention_mask=NO_PREPARED_ATTENTION_MASK)
+                    prepared_attention_mask=NO_PREPARED_ATTENTION_MASK,
+                    per_layer_input=(
+                        ple_full[b0:b1, :, layer - 1]
+                        if ple_full is not None else None))
                 key_parts.append(kv_c.keys)
                 val_parts.append(kv_c.values)
         kv.keys = torch.cat(key_parts, 0) if len(key_parts) > 1 else key_parts[0]
@@ -1582,7 +1495,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         kv.recording = False
         inputs_q = cohort.gather_query_inputs(full_inputs)
         del full_inputs
-        return tensors.put(layer, cohort_idx, kv, inputs_q, targets)
+        return tensors.put(
+            layer, cohort_idx, kv, inputs_q, targets,
+            per_layer_input=ple_query)
 
     def moe_student_ctx(layer: int, cohort_idx: int, row_map, row_mask):
         """Arm the controller for ONE owned MoE layer's student pass: load
@@ -1639,7 +1554,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             if loss_fn.kind == "delta_cosine":
                 aligned_input = cohort.gather_query_inputs(full_inputs)
         else:
-            kv, inputs_q, targets = tensors.staged(entry)
+            kv, inputs_q, targets, per_layer_input = tensors.staged(entry)
             rope_q = stack.rope(inputs_q, cohort.qpos_dev)
             input_ids_q = None
             if isinstance(kv, FrozenDeepseekCtx):
@@ -1675,11 +1590,17 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             else:
                 ctx = contextlib.nullcontext()
             with ctx:
+                shared_states = (kv.states
+                                 if isinstance(kv, _FrozenSharedKV)
+                                 else None)
                 out = stack.run_block(
                     layer, inputs_q.requires_grad_(False), rope_q,
                     position_ids=cohort.qpos_dev,
-                    past_key_values=kv, use_cache=False,
-                    prepared_attention_mask=mask, input_ids=input_ids_q)
+                    past_key_values=(None if shared_states is not None
+                                     else kv),
+                    shared_kv_states=shared_states, use_cache=False,
+                    prepared_attention_mask=mask, input_ids=input_ids_q,
+                    per_layer_input=per_layer_input)
                 if moe_step:
                     router_extra = pending_router_loss()
             if loss_fn.kind == "delta_cosine":
@@ -1826,11 +1747,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
 
     stopped = False
     expected_eval = sum(c.n_eval for c in cohorts)
-    # Per-epoch particular evaluations (recall corpora incl. epoch zero,
-    # standard damage, parameter deltas) are non-negotiable (owner,
-    # 2026-07-17).  They need every trained layer in one model, so staged
-    # multi-process runs defer them to the merged-adapter pass (M3); the
-    # single-process mode runs them exactly as v3 does.
+    # A negative stage is the fully resident, non-PPP diagnostic lane. Every
+    # staged run—including rotary PPP1 normalized to stage 0 by train.py—uses
+    # the live distributed evaluator.
     single_process = cfg.train.v4_stage == -1
     # ONE boundary transport per staged run, created (and — cross-node — the
     # NCCL group init'd COLLECTIVELY) before any boundary moves. It routes each
@@ -1846,17 +1765,30 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         _H = int(stack.text_config.hidden_size)
         _dims = (stack.hc_mult, _H) if stack.hc_mult > 1 else (_H,)
         boundary_transport.set_hidden_dims(_dims, torch.bfloat16)
+        bounds = [0] + list(cfg.train.v4_stage_splits or []) + [n]
+        boundary_transport.set_shared_kv_contract(
+            incoming_types=stack.shared_kv_types_through(
+                bounds[cfg.train.v4_stage]),
+            outgoing_types=stack.shared_kv_types_through(
+                bounds[cfg.train.v4_stage + 1]),
+            num_key_value_heads=int(getattr(
+                stack.text_config, "num_key_value_heads", 0) or
+                stack.text_config.num_attention_heads),
+            head_dim=int(getattr(stack.text_config, "head_dim", 0) or
+                         (_H // stack.text_config.num_attention_heads)))
     relay = None
     if (not single_process and cfg.train.v4_relay_every_cohorts
-            and cfg.train.v4_battery_mode != "distributed"
             and run_dir is not None):
-        relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
-                               run_dir, owned, rotator=rotator,
-                               teacher_eval_rows=teacher_eval_rows,
-                               transport=boundary_transport)
+        # Keep test (b)'s asynchronous, fixed-sequence student trajectory
+        # alive between synchronous autoregressive batteries.  The native
+        # battery flushes this relay strictly before entering its dedicated
+        # collective sequence, so the two protocols cannot overlap traffic.
+        relay = _RelayServicer(
+            cfg, stack, ds, cohorts, cache, device, log, run_dir, owned,
+            rotator=rotator, teacher_eval_rows=teacher_eval_rows,
+            transport=boundary_transport)
     distributed_battery = None
-    if (not single_process
-            and cfg.train.v4_battery_mode == "distributed"):
+    if not single_process:
         from ..eval.distributed_pp import DistributedBattery
 
         distributed_battery = DistributedBattery(
@@ -1885,32 +1817,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
-    if cfg.train.v4_battery_mode == "distributed":
+    if not single_process:
         baseline = _staged_epoch_battery(
             cfg, stack, tok, log, 0, run_dir, owned, baseline, started_at,
             rotator=rotator, transport=boundary_transport,
             distributed_battery=distributed_battery, relay=relay)
-    elif cfg.train.v4_battery_mode == "subprocess":
-        if int(cfg.eval.every_epochs) > int(cfg.train.epochs):
-            # Declared debt, not silence (owner kill-doomed-runs policy,
-            # 2026-07-18): a smoke whose eval cadence exceeds its epoch
-            # count wants TIMING data, not batteries — at 122B PPP1 the
-            # one-card epoch-0 battery is hours of CPU-offload generation
-            # before the first training epoch.
-            log.log(kind="epoch_battery_skipped", epoch=0,
-                    reason="eval_cadence_beyond_run_epochs")
-        else:
-            # Epoch-zero baseline under the subprocess battery: every
-            # stage participates (publish zero-init adapters, release
-            # VRAM, ack); the subprocess evaluates the base model. This
-            # INCLUDES rotary PPP1 (single_process + scoped): an
-            # in-process epoch-0 probe would run a full model.forward
-            # against CPU-mastered rotated blocks — the 2026-07-18 g31b
-            # PPP1 crash ("cuda:0 and cpu").
-            baseline = _subprocess_battery(cfg, stack, log, 0, run_dir,
-                                           owned, baseline, rotator=rotator,
-                                           transport=boundary_transport)
-    elif single_process or cfg.train.v4_stage == 0:
+    else:
         # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
         # so its full resident model IS the base model at this point.
         baseline = _epoch_zero_telemetry(
@@ -2143,41 +2055,23 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         epoch=epoch + 1,
                         teacher_rows_by_cohort=teacher_eval_rows,
                         rotator=rotator)
-                if cfg.train.v4_stage_scoped:
-                    # Rotary PPP1: the model is never resident, so the
-                    # direct telemetry probes cannot run in-process. Spawn
-                    # the subprocess battery at the eval cadence; mark the
-                    # off-cadence epochs loudly (the per-epoch battery law
-                    # is visible debt here, not silence).
-                    every = max(int(cfg.eval.every_epochs), 1)
-                    if (epoch + 1) % every == 0:
-                        baseline = _subprocess_battery(
-                            cfg, stack, log, epoch + 1, run_dir, owned,
-                            baseline, rotator=rotator)
-                    else:
-                        log.log(kind="epoch_battery_skipped",
-                                epoch=epoch + 1,
-                                reason="ppp1_rotate_battery_at_eval_cadence")
-                else:
-                    baseline = _epoch_end_telemetry(
-                        cfg, stack, tok, log, epoch=epoch, baseline=baseline,
-                        started_at=started_at,
-                        provenance={
-                            "evaluation_backend": (
-                                "live_complete_model_in_process"),
-                            "weight_source": "live_single_process_weights",
-                            "adapter_epoch": epoch + 1,
-                            "stage_epoch_synchronized": True,
-                            "complete_student_trajectory": True,
-                            "foreign_blocks_materialized": True,
-                        })
+                baseline = _epoch_end_telemetry(
+                    cfg, stack, tok, log, epoch=epoch, baseline=baseline,
+                    started_at=started_at,
+                    provenance={
+                        "evaluation_backend": "live_complete_model_in_process",
+                        "weight_source": "live_single_process_weights",
+                        "adapter_epoch": epoch + 1,
+                        "stage_epoch_synchronized": True,
+                        "complete_student_trajectory": True,
+                        "foreign_blocks_materialized": True,
+                    })
             elif not stopped:
                 if run_dir is None:
                     raise ValueError("staged pipeline-v4 needs run_dir for "
                                      "the relay/battery exchange")
                 native_battery_due = (
-                    cfg.train.v4_battery_mode == "distributed"
-                    and (epoch + 1) % max(int(cfg.eval.every_epochs), 1) == 0)
+                    (epoch + 1) % max(int(cfg.eval.every_epochs), 1) == 0)
                 if relay is not None and not native_battery_due and (
                         (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
                         == 0):
@@ -2307,7 +2201,8 @@ def _certify_live_store_locality(cfg, stack, tensors, cohorts, owned,
         return out
 
     frozen_modules = [stack.embed_tokens, stack.final_norm, stack.lm_head,
-                      getattr(stack, "hc_head", None)]
+                      getattr(stack, "hc_head", None),
+                      *getattr(stack, "frozen_input_modules", [])]
     translators = getattr(loss_fn, "translators", None)
     if translators is not None:
         frozen_modules.append(translators)
@@ -2542,6 +2437,9 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
     vocab_params = (list(stack.embed_tokens.parameters())
                     + list(stack.final_norm.parameters())
                     + list(stack.lm_head.parameters())
+                    + [p for module in getattr(
+                        stack, "frozen_input_modules", [])
+                       for p in module.parameters()]
                     + (list(stack.hc_head.parameters())
                        if getattr(stack, "hc_head", None) is not None
                        else []))

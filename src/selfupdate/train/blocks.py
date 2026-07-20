@@ -92,6 +92,7 @@ class BlockStack:
     def __init__(self, model):
         self.model = model
         inner = _resolve_text_stack(model)
+        self.text_model = inner
         # This module layout is shared by the Qwen/Llama/DeepSeek/GLM HF
         # ports. The resolver above also handles Qwen3.6 multimodal text
         # composites without assuming ``model.model.*``.
@@ -137,6 +138,7 @@ class BlockStack:
         self._block_params = [list(block.parameters()) for block in self.blocks]
         self._accepts_past_key_values = []
         self._accepts_shared_kv_states = []
+        self._accepts_per_layer_input = []
         self._accepts_input_ids = []
         for block in self.blocks:
             params = inspect.signature(block.forward).parameters
@@ -155,6 +157,7 @@ class BlockStack:
             self._accepts_past_key_values.append(
                 "past_key_values" in params or (has_var_kw and attn_pkv))
             self._accepts_shared_kv_states.append("shared_kv_states" in params)
+            self._accepts_per_layer_input.append("per_layer_input" in params)
             self._accepts_input_ids.append("input_ids" in params)
         self.final_norm = inner.norm
         self.lm_head = lm_head_owner.lm_head
@@ -163,6 +166,13 @@ class BlockStack:
         # per-layer rotary bundle. Gemma4 supplies a fresh mapping in rope();
         # this path is latent on the current models but must still initialize.
         self._shared_kv_states = None
+        self.frozen_input_modules = [
+            module for module in (
+                getattr(inner, "embed_tokens_per_layer", None),
+                getattr(inner, "per_layer_model_projection", None),
+                getattr(inner, "per_layer_projection_norm", None),
+            ) if module is not None
+        ]
 
     def freeze_non_blocks(self) -> None:
         """Embedding, final norm and lm_head stay at init: block-only training
@@ -175,6 +185,8 @@ class BlockStack:
             # The mHC stream-collapse head sits between the last block and
             # the frozen norm/lm_head: same frozen-vocabulary treatment.
             self.hc_head.requires_grad_(False)
+        for module in self.frozen_input_modules:
+            module.requires_grad_(False)
 
     def embed(self, input_ids: torch.Tensor) -> torch.Tensor:
         # KV sharing across layer types (gemma4-class) lives in the per-call
@@ -191,7 +203,60 @@ class BlockStack:
                                           -1).contiguous()
             return h
 
-    def rope(self, hidden: torch.Tensor, position_ids: torch.Tensor):
+    def embed_and_per_layer_inputs(self, input_ids: torch.Tensor):
+        """Embed once and prepare Gemma per-layer inputs when configured."""
+        with torch.no_grad():
+            raw = self.embed_tokens(input_ids)
+            per_layer = self.per_layer_inputs(input_ids, raw=raw)
+            hidden = raw
+            if self.hc_mult > 1:
+                hidden = hidden.unsqueeze(2).expand(
+                    -1, -1, self.hc_mult, -1).contiguous()
+            return hidden, per_layer
+
+    def per_layer_inputs(self, input_ids: torch.Tensor, *, raw=None):
+        """Frozen per-layer token features, or ``None`` for ordinary LMs."""
+        if not int(getattr(self.text_config,
+                           "hidden_size_per_layer_input", 0) or 0):
+            return None
+        with torch.no_grad():
+            if raw is None:
+                raw = self.embed_tokens(input_ids)
+            token_part = self.text_model.get_per_layer_inputs(input_ids, raw)
+            return self.text_model.project_per_layer_inputs(raw, token_part)
+
+    def is_kv_shared_layer(self, L: int) -> bool:
+        attention = getattr(self.blocks[L - 1], "self_attn", None)
+        return bool(getattr(attention, "is_kv_shared_layer", False))
+
+    def shared_kv_source(self, L: int) -> int:
+        """Nearest preceding producer for a shared-KV decoder layer."""
+        if not self.is_kv_shared_layer(L):
+            return L
+        layer_type = (self.layer_types[L - 1]
+                      if L - 1 < len(self.layer_types) else None)
+        for source in range(L - 1, 0, -1):
+            source_type = (self.layer_types[source - 1]
+                           if source - 1 < len(self.layer_types) else None)
+            if source_type == layer_type and not self.is_kv_shared_layer(source):
+                return source
+        raise RuntimeError(
+            f"shared-KV layer {L} has no preceding {layer_type!r} producer")
+
+    def shared_kv_types_through(self, stop: int) -> list[str]:
+        """Shared-KV mappings guaranteed to exist after block ``stop``."""
+        if not any(self.is_kv_shared_layer(layer)
+                   for layer in range(1, self.n_layers + 1)):
+            return []
+        produced = set()
+        for layer in range(1, min(int(stop), self.n_layers) + 1):
+            attention = getattr(self.blocks[layer - 1], "self_attn", None)
+            if bool(getattr(attention, "store_full_length_kv", False)):
+                produced.add(self.layer_types[layer - 1])
+        return sorted(produced)
+
+    def rope(self, hidden: torch.Tensor, position_ids: torch.Tensor, *,
+             shared_kv_states=None):
         if self.rotary_emb is None:
             return None  # attention computes rotary internally (MLA-style)
         if self.rotary_needs_layer_type:
@@ -237,7 +302,9 @@ class BlockStack:
                     "full_attention": create_causal_mask(**mask_kwargs),
                     "sliding_attention": create_sliding_window_causal_mask(**mask_kwargs),
                 }
-                bundle["shared_kv_states"] = UserDict()
+                bundle["shared_kv_states"] = (
+                    shared_kv_states if shared_kv_states is not None
+                    else UserDict())
             if self.needs_deepseek_masks:
                 from transformers.masking_utils import (
                     create_sliding_window_causal_mask,
@@ -260,7 +327,8 @@ class BlockStack:
     def run_block(self, L: int, hidden, position_embeddings, position_ids=None,
                   *, flow_keep=None, past_key_values=None, use_cache=False,
                   causal_length=None, prepared_attention_mask=None,
-                  input_ids=None):
+                  input_ids=None, shared_kv_states=None,
+                  per_layer_input=None):
         """Forward decoder block L (1-based) on ``[B,n,H]`` states.
 
         ``flow_keep`` is the pipeline-v3 information-flow mask over the full
@@ -272,7 +340,6 @@ class BlockStack:
         current Transformers.
         """
         attention_mask = None
-        shared_kv_states = None
         layer_type = (
             self.layer_types[L - 1] if L - 1 < len(self.layer_types)
             else getattr(self.blocks[L - 1], "layer_type", None)
@@ -285,7 +352,8 @@ class BlockStack:
             masks = bundle.get("attention_masks")
             if masks is not None:
                 attention_mask = masks[layer_type]
-            shared_kv_states = bundle.get("shared_kv_states")
+            if shared_kv_states is None:
+                shared_kv_states = bundle.get("shared_kv_states")
             if "rope_dict" in bundle:
                 # deepseek-style: the attention module indexes the dict by
                 # its own rope_layer_type; never collapse to one pair.
@@ -338,6 +406,41 @@ class BlockStack:
                     raise ValueError(
                         f"causal_length {kv_len} shorter than query {q_len}")
                 past_len = kv_len - q_len
+                window = None
+                if layer_type in ("sliding_attention", "chunked_attention",
+                                  "compressed_sparse_attention",
+                                  "heavily_compressed_attention"):
+                    window = getattr(self.text_config, "sliding_window", None)
+                    if window is None:
+                        window = getattr(
+                            self.text_config, "attention_chunk_size", None)
+                # The configured cache class, rather than layer_type alone,
+                # determines physical K length. A plain DynamicCache may grow
+                # a full DynamicLayer lazily, while Gemma shared-KV configs
+                # pre-create DynamicSlidingWindowLayer producers. Consumers
+                # have no cache layer of their own and use the transported
+                # producer tensor directly.
+                physical_kv_len = None
+                if (self.is_kv_shared_layer(L)
+                        and shared_kv_states is not None
+                        and layer_type in shared_kv_states):
+                    physical_kv_len = int(
+                        shared_kv_states[layer_type][0].shape[-2])
+                elif past_key_values is not None:
+                    cache_layer_index = self.shared_kv_source(L) - 1
+                    cache_layers = getattr(past_key_values, "layers", ())
+                    if cache_layer_index < len(cache_layers):
+                        cache_layer = cache_layers[cache_layer_index]
+                        get_sizes = getattr(cache_layer, "get_mask_sizes", None)
+                        if get_sizes is not None:
+                            physical_kv_len = int(get_sizes(q_len)[0])
+                if physical_kv_len is not None:
+                    if physical_kv_len < q_len:
+                        raise ValueError(
+                            f"physical KV length {physical_kv_len} shorter "
+                            f"than query {q_len} at layer {L}")
+                    kv_len = physical_kv_len
+                    past_len = kv_len - q_len
                 q_pos = torch.arange(
                     past_len, kv_len, device=hidden.device)[:, None]
                 k_pos = torch.arange(kv_len, device=hidden.device)[None, :]
@@ -348,10 +451,6 @@ class BlockStack:
                 if layer_type in ("sliding_attention", "chunked_attention",
                                   "compressed_sparse_attention",
                                   "heavily_compressed_attention"):
-                    window = getattr(self.text_config, "sliding_window", None)
-                    if window is None:
-                        window = getattr(
-                            self.text_config, "attention_chunk_size", None)
                     if window:
                         allowed &= k_pos > (q_pos - int(window))
                 # Out-of-place: the batch dimension arrives by broadcasting.
@@ -359,7 +458,8 @@ class BlockStack:
                 # ever worked at B=1 (stride-0 views reject in-place writes);
                 # batched flow_keep callers (pipeline-v4 relay) tripped it.
                 if flow_keep is not None:
-                    allowed = allowed[None] & flow_keep[:, None, :].bool()
+                    physical_keep = flow_keep[:, -kv_len:]
+                    allowed = allowed[None] & physical_keep[:, None, :].bool()
                 else:
                     allowed = allowed[None].expand(hidden.shape[0], -1, -1)
                 attention_mask = torch.zeros(
@@ -378,6 +478,8 @@ class BlockStack:
             # expert table and CRASH on input_ids=None; every caller of a
             # deepseek block must supply the row-aligned token ids.
             kwargs["input_ids"] = input_ids
+        if self._accepts_per_layer_input[L - 1]:
+            kwargs["per_layer_input"] = per_layer_input
         if past_key_values is not None:
             if not self._accepts_past_key_values[L - 1]:
                 raise NotImplementedError(

@@ -6,10 +6,10 @@ tokenizes and embeds, each rank executes only its contiguous owned blocks, and
 the last rank applies the frozen final norm / vocabulary head.  No foreign
 block is materialized and no optimizer is reachable from this module.
 
-The implementation intentionally supports a narrow, named architecture set.
-Unsupported cache or residency semantics are reported to the caller so it can
-use the reconstructed-model subprocess battery without silently changing the
-scientific evaluation.
+Pipeline-v4.6 has no reconstructed-model fallback. Architecture-specific state
+(rotated weights, shared KV, per-layer token inputs, hybrid caches and mHC
+boundaries) is carried by the live owners or rejected as a launch defect before
+the first evaluation collective.
 """
 
 from __future__ import annotations
@@ -20,54 +20,10 @@ import hashlib
 import math
 import os
 import time
-from dataclasses import dataclass
+from collections import UserDict
 
 import torch
 import torch.nn.functional as F
-
-
-@dataclass(frozen=True)
-class DistributedBatterySupport:
-    supported: bool
-    reason: str | None
-    model_type: str
-
-
-def distributed_battery_support(cfg, stack, *, rotator=None
-                                ) -> DistributedBatterySupport:
-    """Return the deliberately conservative native-PP support verdict."""
-    model_type = str(getattr(stack.text_config, "model_type", ""))
-    allowed = {
-        "qwen3", "qwen3_5_text", "gemma4_text",
-    }
-    reason = None
-    if cfg.train.v4_stage < 0:
-        reason = "native distributed battery requires a staged launch"
-    elif not cfg.train.lora.enabled:
-        reason = (
-            "native distributed a/b certification requires LoRA so the "
-            "uncensored teacher can be evaluated adapters-disabled")
-    elif model_type not in allowed:
-        reason = f"model_type={model_type!r} has no certified PP evaluator"
-    elif rotator is not None or cfg.train.v4_weight_residency == "rotate":
-        reason = "rotary weight residency remains on the subprocess fallback"
-    elif int(getattr(stack.text_config, "num_kv_shared_layers", 0) or 0):
-        reason = (
-            "Gemma shared-KV side-channel transport is not implemented "
-            f"(num_kv_shared_layers="
-            f"{getattr(stack.text_config, 'num_kv_shared_layers')})")
-    elif int(getattr(stack.text_config, "hidden_size_per_layer_input", 0) or 0):
-        reason = "Gemma per-layer-input embeddings are not transported"
-    elif getattr(stack, "hc_mult", 0):
-        reason = "multi-stream mHC boundaries are not certified for generation"
-    else:
-        layer_types = set(getattr(stack, "layer_types", []) or [])
-        unknown = layer_types - {
-            "full_attention", "sliding_attention", "linear_attention",
-        }
-        if unknown:
-            reason = f"unsupported cache-bearing layer types: {sorted(unknown)}"
-    return DistributedBatterySupport(reason is None, reason, model_type)
 
 
 def _tensor_digest(named_tensors) -> str:
@@ -77,8 +33,12 @@ def _tensor_digest(named_tensors) -> str:
         digest.update(name.encode())
         digest.update(str(tuple(tensor.shape)).encode())
         digest.update(str(tensor.dtype).encode())
-        raw = tensor.detach().contiguous().reshape(-1).view(torch.uint8).cpu()
-        digest.update(raw.numpy().tobytes())
+        # Stream large vocabulary matrices to host.  Byte exactness does not
+        # require a multi-GB CPU copy (or a second full-size GPU contiguous
+        # allocation) at an epoch boundary.
+        for chunk in tensor.detach().reshape(-1).split(1 << 22):
+            raw = chunk.contiguous().view(torch.uint8).cpu()
+            digest.update(raw.numpy().tobytes())
     return digest.hexdigest()
 
 
@@ -108,13 +68,12 @@ class DistributedBattery:
         self.ds = ds
         self.cohorts = cohorts
         self.adapters_off = adapters_off
+        self.rotator = rotator
         self.device = torch.device(cfg.model.device)
         self.stage = int(cfg.train.v4_stage)
         self.stages = len(cfg.train.v4_stage_splits or []) + 1
         self.last_stage = self.stages - 1
         self.dist = dist
-        self.support = distributed_battery_support(
-            cfg, stack, rotator=rotator)
         self.timings: dict[str, float] = {}
         self._epoch = None
 
@@ -143,18 +102,6 @@ class DistributedBattery:
     def is_writer(self) -> bool:
         return self.stage == 0
 
-    def consensus_support(self) -> DistributedBatterySupport:
-        """All ranks must select native execution or fallback together."""
-        flag = torch.tensor(
-            [int(self.support.supported)], dtype=torch.int32,
-            device=self.device)
-        self.dist.all_reduce(flag, op=self.dist.ReduceOp.MIN, group=self.group)
-        if int(flag.item()):
-            return self.support
-        reason = self.support.reason or "unsupported on a sibling stage"
-        return DistributedBatterySupport(False, reason,
-                                         self.support.model_type)
-
     def _failure_guard(self, label: str, fn):
         value = None
         error = None
@@ -175,20 +122,33 @@ class DistributedBattery:
                 f"distributed battery {label} failed on a sibling stage")
         return value
 
+    def guard_phase(self, label: str, fn):
+        """Run a rank-local phase before the next distributed payload.
+
+        Evaluation helpers use this public spelling for decode, scoring and
+        durable logging.  A failure is reduced here, while every rank is still
+        at the same protocol boundary, rather than being discovered by an
+        outer catch after a sibling has entered the next payload collective.
+        """
+        return self._failure_guard(label, fn)
+
     def _broadcast_header(self, values: list[int], src: int = 0) -> list[int]:
         n = len(values)
-        header = (torch.tensor(values, dtype=torch.long, device=self.device)
-                  if self.stage == src else
-                  torch.empty(n, dtype=torch.long, device=self.device))
+        header = self._failure_guard(
+            "broadcast_header_prepare",
+            lambda: (torch.tensor(values, dtype=torch.long, device=self.device)
+                     if self.stage == src else
+                     torch.empty(n, dtype=torch.long, device=self.device)))
         self.dist.broadcast(header, src=src, group=self.group)
         return [int(x) for x in header.tolist()]
 
     def _broadcast_tensor(self, tensor: torch.Tensor | None, *, src: int,
                           shape: tuple[int, ...], dtype) -> torch.Tensor:
-        if self.stage != src:
-            tensor = torch.empty(shape, dtype=dtype, device=self.device)
-        else:
-            tensor = tensor.to(self.device).contiguous()
+        tensor = self._failure_guard(
+            "broadcast_tensor_prepare",
+            lambda: (torch.empty(shape, dtype=dtype, device=self.device)
+                     if self.stage != src else
+                     tensor.to(self.device).contiguous()))
         self.dist.broadcast(tensor, src=src, group=self.group)
         return tensor
 
@@ -224,8 +184,27 @@ class DistributedBattery:
             for layer in self.owned
             for param in self.stack.blocks[layer - 1].parameters())
 
-    def _assert_own_gpu_only(self) -> None:
-        """Tripwire for accidental contexts on a foreign physical GPU."""
+    def _expected_owned_adapter_keys(self) -> set[str]:
+        # Stage-scoped loading leaves foreign tensors on meta, but the PEFT
+        # parameter topology (and requires_grad flags) is still complete.  The
+        # same key law is used by adapter publication/grafting.
+        return {
+            f"L{layer:03d}.{name}"
+            for layer in self.owned
+            for name, param in self.stack.blocks[layer - 1].named_parameters()
+            if param.requires_grad
+        }
+
+    def _live_owned_adapter_keys(self) -> set[str]:
+        return {
+            f"L{layer:03d}.{name}"
+            for layer in self.owned
+            for name, param in self.stack.blocks[layer - 1].named_parameters()
+            if param.requires_grad and not param.is_meta
+        }
+
+    def _assert_own_gpu_only(self) -> bool | None:
+        """Tripwire for foreign contexts; None means it could not be verified."""
         import subprocess
 
         try:
@@ -238,29 +217,59 @@ class DistributedBattery:
                  "--format=csv,noheader"], capture_output=True, text=True,
                 timeout=10).stdout
         except Exception:
-            return
-        index_of = {}
-        for line in gpus.strip().splitlines():
-            index, uuid = (part.strip() for part in line.split(","))
-            index_of[uuid] = int(index)
+            return None
+        try:
+            index_of = {}
+            for line in gpus.strip().splitlines():
+                index, uuid = (part.strip() for part in line.split(","))
+                index_of[uuid] = int(index)
+            own_rows = [
+                (uuid, pid)
+                for uuid, pid in
+                (tuple(part.strip() for part in line.split(","))
+                 for line in apps.strip().splitlines() if line.strip())
+                if pid.isdigit() and int(pid) == os.getpid()
+            ]
+        except (TypeError, ValueError):
+            return None
         foreign = sorted({
-            index_of[uuid]
-            for uuid, pid in
-            (tuple(part.strip() for part in line.split(","))
-             for line in apps.strip().splitlines() if line.strip())
-            if pid.isdigit() and int(pid) == os.getpid()
-            and uuid in index_of and index_of[uuid] != self.device.index
+            index_of[uuid] for uuid, _pid in own_rows
+            if uuid in index_of and index_of[uuid] != self.device.index
         })
         if foreign:
             raise RuntimeError(
                 f"distributed battery stage {self.stage} opened foreign "
                 f"CUDA devices {foreign}; owned device is {self.device.index}")
+        if (self.device.index is None or not apps.strip() or not gpus.strip()
+                or not own_rows):
+            return None
+        return True
 
-    def _vocab_vector(self) -> torch.Tensor:
-        from ..train.runtime import vocab_signature
-
-        flat = [value for pair in vocab_signature(self.stack) for value in pair]
-        return torch.tensor(flat, dtype=torch.float64, device=self.device)
+    def _frozen_vocab_digest(self) -> str:
+        """Byte-exact digest of the named frozen vocabulary surface."""
+        tensors = []
+        modules = [
+            ("embedding", self.stack.embed_tokens),
+            ("final_norm", self.stack.final_norm),
+            ("lm_head", self.stack.lm_head),
+            ("hc_head", getattr(self.stack, "hc_head", None)),
+        ]
+        modules.extend(
+            (f"frozen_input_{index}", module)
+            for index, module in enumerate(
+                getattr(self.stack, "frozen_input_modules", [])))
+        for prefix, module in modules:
+            if module is None:
+                continue
+            for name, tensor in module.named_parameters():
+                if tensor.is_meta:
+                    raise RuntimeError(f"frozen vocabulary tensor is meta: {prefix}.{name}")
+                tensors.append((f"{prefix}.{name}", tensor))
+            for name, tensor in module.named_buffers():
+                if tensor.is_meta:
+                    raise RuntimeError(f"frozen vocabulary buffer is meta: {prefix}.{name}")
+                tensors.append((f"{prefix}.{name}", tensor))
+        return _tensor_digest(tensors)
 
     def _verify_entry(self, epoch: int) -> None:
         launch = os.environ.get("SELFUPDATE_V4_LAUNCH_ID", "")
@@ -285,8 +294,18 @@ class DistributedBattery:
                 raise RuntimeError(
                     f"distributed battery epoch/launch/ownership mismatch at "
                     f"rank {rank}: got={got}, expected={expected}")
-        local_count = self._failure_guard(
-            "adapter_count", self._owned_adapter_count)
+        def validate_adapter_keys():
+            expected_keys = self._expected_owned_adapter_keys()
+            live_keys = self._live_owned_adapter_keys()
+            if live_keys != expected_keys:
+                raise RuntimeError(
+                    f"stage {self.stage} live adapter key-set mismatch: "
+                    f"missing={sorted(expected_keys - live_keys)[:8]} "
+                    f"unexpected={sorted(live_keys - expected_keys)[:8]}")
+            return live_keys
+        live_keys = self._failure_guard(
+            "complete_adapter_keyset", validate_adapter_keys)
+        local_count = len(live_keys)
         count = torch.tensor([local_count], dtype=torch.long,
                              device=self.device)
         counts = [torch.empty_like(count) for _ in range(self.stages)]
@@ -303,18 +322,29 @@ class DistributedBattery:
         digests = [torch.empty_like(digest_tensor) for _ in range(self.stages)]
         self.dist.all_gather(digests, digest_tensor, group=self.group)
         self.adapter_digests = [bytes(x.tolist()).hex() for x in digests]
-        vocab = self._failure_guard("vocabulary_fingerprint",
-                                    self._vocab_vector)
+        vocab_digest = self._failure_guard(
+            "vocabulary_fingerprint", self._frozen_vocab_digest)
+        vocab = torch.tensor(list(bytes.fromhex(vocab_digest)),
+                             dtype=torch.uint8, device=self.device)
         vocabs = [torch.empty_like(vocab) for _ in range(self.stages)]
         self.dist.all_gather(vocabs, vocab, group=self.group)
         if any(not torch.equal(vocabs[0], other) for other in vocabs[1:]):
             raise RuntimeError(
                 "embedding/final-norm/lm-head fingerprints differ across PP ranks")
         frozen_error = None
-        for name, module in (
-                ("embedding", self.stack.embed_tokens),
-                ("final_norm", self.stack.final_norm),
-                ("lm_head", self.stack.lm_head)):
+        modules = [
+            ("embedding", self.stack.embed_tokens),
+            ("final_norm", self.stack.final_norm),
+            ("lm_head", self.stack.lm_head),
+            ("hc_head", getattr(self.stack, "hc_head", None)),
+        ]
+        modules.extend(
+            (f"frozen_input_{index}", module)
+            for index, module in enumerate(
+                getattr(self.stack, "frozen_input_modules", [])))
+        for name, module in modules:
+            if module is None:
+                continue
             if any(parameter.requires_grad for parameter in module.parameters()):
                 frozen_error = RuntimeError(
                     f"distributed battery requires frozen {name}")
@@ -337,36 +367,130 @@ class DistributedBattery:
         batch, width = input_ids.shape
         hidden_size = int(self.stack.text_config.hidden_size)
         hidden_dtype = self.stack.embed_tokens.weight.dtype
+        hc_mult = int(getattr(self.stack, "hc_mult", 0) or 0)
+        boundary_tail = ((hc_mult, hidden_size) if hc_mult > 1
+                         else (hidden_size,))
 
-        hidden = self._failure_guard(
-            "embedding",
-            lambda: self.stack.embed(input_ids) if self.stage == 0 else None)
+        embedded = self._failure_guard(
+            "embedding_and_frozen_layer_inputs",
+            lambda: self.stack.embed_and_per_layer_inputs(input_ids)
+            if self.stage == 0 else None)
+        if self.stage == 0:
+            hidden, per_layer_inputs = embedded
+        else:
+            hidden = per_layer_inputs = None
         hidden = self._broadcast_tensor(
             hidden if self.stage == 0 else None, src=0,
-            shape=(batch, width, hidden_size), dtype=hidden_dtype)
+            shape=(batch, width, *boundary_tail), dtype=hidden_dtype)
+
+        shared_types = (sorted(set(self.stack.layer_types))
+                        if any(self.stack.is_kv_shared_layer(layer)
+                               for layer in range(1, self.stack.n_layers + 1))
+                        else [])
+        shared_kv_states = UserDict()
+
+        def synchronize_shared_kv(owner: int) -> None:
+            """Broadcast Gemma's full-length shared-KV side channel.
+
+            Every rank executes the same header/tensor sequence. The mapping is
+            transient for this token step; persistent prefix state remains only
+            in the producing owner's ordinary DynamicCache layer.
+            """
+            for layer_type in shared_types:
+                present = (self.stage == owner
+                           and layer_type in shared_kv_states)
+                has_value = self._broadcast_header(
+                    [int(present)] if self.stage == owner else [0],
+                    src=owner)[0]
+                if not has_value:
+                    shared_kv_states.pop(layer_type, None)
+                    continue
+                if self.stage == owner:
+                    key, value = shared_kv_states[layer_type]
+                    header = list(key.shape)
+                else:
+                    key = value = None
+                    header = [0, 0, 0, 0]
+                shape = tuple(self._broadcast_header(header, src=owner))
+                key = self._broadcast_tensor(
+                    key, src=owner, shape=shape, dtype=hidden_dtype)
+                value = self._broadcast_tensor(
+                    value, src=owner, shape=shape, dtype=hidden_dtype)
+                shared_kv_states[layer_type] = (key, value)
 
         executed = torch.zeros(
             self.stack.n_layers, dtype=torch.int32, device=self.device)
+        if self.rotator is not None:
+            self._failure_guard(
+                "rotation_prefetch_first_owned_block",
+                lambda: self.rotator.prefetch(self.owned.start))
+        bounds = [0] + list(self.cfg.train.v4_stage_splits or []) + [
+            self.stack.n_layers]
         for owner in range(self.stages):
+            owner_start, owner_stop = bounds[owner], bounds[owner + 1]
+            per_owner = None
+            ple_dim = int(getattr(
+                self.stack.text_config, "hidden_size_per_layer_input", 0) or 0)
+            if ple_dim:
+                ple_shape = (batch, width, owner_stop - owner_start, ple_dim)
+                source_ple = (per_layer_inputs[:, :, owner_start:owner_stop]
+                              if self.stage == 0 else None)
+                per_owner = self._broadcast_tensor(
+                    source_ple, src=0, shape=ple_shape, dtype=hidden_dtype)
+
             def compute_stage():
                 nonlocal hidden
                 if self.stage != owner:
                     return None
-                rope = self.stack.rope(hidden, position_ids)
-                for layer in self.owned:
-                    hidden = self.stack.run_block(
-                        layer, hidden, rope, position_ids=position_ids,
-                        flow_keep=attention_mask.bool(),
-                        past_key_values=caches,
-                        use_cache=use_cache,
-                        causal_length=attention_mask.shape[1])
-                    executed[layer - 1] += 1
+                rope = self.stack.rope(
+                    hidden, position_ids,
+                    shared_kv_states=shared_kv_states)
+                owned_layers = list(self.owned)
+                for local_index, layer in enumerate(owned_layers):
+                    activated = False
+                    try:
+                        if self.rotator is not None:
+                            self.rotator.activate(layer)
+                            activated = True
+                            if local_index + 1 < len(owned_layers):
+                                self.rotator.prefetch(
+                                    owned_layers[local_index + 1])
+                        hidden = self.stack.run_block(
+                            layer, hidden, rope, position_ids=position_ids,
+                            flow_keep=attention_mask.bool(),
+                            past_key_values=caches,
+                            use_cache=use_cache,
+                            causal_length=attention_mask.shape[1],
+                            input_ids=input_ids,
+                            shared_kv_states=shared_kv_states,
+                            per_layer_input=(
+                                per_owner[:, :, layer - owner_start - 1]
+                                if per_owner is not None else None))
+                        executed[layer - 1] += 1
+                    finally:
+                        if activated:
+                            self.rotator.evict(layer)
                 return hidden
             owner_hidden = self._failure_guard(
                 f"stage_{owner}_blocks", compute_stage)
             hidden = self._broadcast_tensor(
                 owner_hidden if self.stage == owner else None, src=owner,
-                shape=(batch, width, hidden_size), dtype=hidden_dtype)
+                shape=(batch, width, *boundary_tail), dtype=hidden_dtype)
+            def validate_shared_kv():
+                if self.stage != owner:
+                    return
+                for layer_type, (key, value) in shared_kv_states.items():
+                    if key.ndim != 4 or value.shape != key.shape:
+                        raise RuntimeError(
+                            f"shared KV {layer_type!r} must be matching 4-D "
+                            f"tensors, got {key.shape}/{value.shape}")
+                    if key.dtype != hidden_dtype or value.dtype != hidden_dtype:
+                        raise RuntimeError(
+                            f"shared KV {layer_type!r} dtype "
+                            f"{key.dtype}/{value.dtype} != {hidden_dtype}")
+            self._failure_guard(
+                f"stage_{owner}_shared_kv_validation", validate_shared_kv)
+            synchronize_shared_kv(owner)
 
         self.dist.all_reduce(executed, op=self.dist.ReduceOp.SUM,
                              group=self.group)
@@ -474,6 +598,18 @@ class DistributedBattery:
     @staticmethod
     def _cache_layer_bytes(layer) -> int:
         """Count tensor state retained by one Transformers cache layer."""
+        # Config-aware DynamicCache constructors pre-create cache-layer
+        # objects.  Sliding layers contain a scalar window tensor even before
+        # they have seen a token; that is immutable cache metadata, not
+        # retained sequence state.  Ownership concerns initialized layers.
+        if (hasattr(layer, "is_initialized")
+                and not bool(layer.is_initialized)):
+            return 0
+        if (hasattr(layer, "is_conv_states_initialized")
+                and hasattr(layer, "is_recurrent_states_initialized")
+                and not (bool(layer.is_conv_states_initialized)
+                         or bool(layer.is_recurrent_states_initialized))):
+            return 0
         seen: set[int] = set()
 
         def walk(value) -> int:
@@ -491,7 +627,12 @@ class DistributedBattery:
         return walk(vars(layer))
 
     def _assert_cache_ownership(self, cache) -> None:
-        """Only this rank's absolute layer indices may retain KV/state."""
+        """Only this rank's persistent cache layers may retain state.
+
+        Shared-KV consumer layers intentionally have no DynamicCache entry;
+        their producer's full-length K/V is transported transiently during the
+        same token step and the producer alone retains the prefix cache.
+        """
         retained = {
             index + 1: self._cache_layer_bytes(layer)
             for index, layer in enumerate(cache.layers)
@@ -499,6 +640,7 @@ class DistributedBattery:
         foreign = {layer: size for layer, size in retained.items()
                    if layer not in self.owned and size}
         missing = [layer for layer in self.owned
+                   if not self.stack.is_kv_shared_layer(layer)
                    if retained.get(layer, 0) <= 0]
         if foreign or missing:
             raise RuntimeError(
@@ -672,7 +814,8 @@ class DistributedBattery:
             adapter_flags = self._adapter_disable_flags()
             teacher_ctx = (self.adapters_off() if self.adapters_off is not None
                            else contextlib.nullcontext())
-            teacher_cache = self._new_cache()
+            teacher_cache = self._failure_guard(
+                "zero_teacher_cache_init", self._new_cache)
             with teacher_ctx:
                 teacher_hidden = self._run_pipeline(
                     ids, mask, pos, caches=teacher_cache, use_cache=True)
@@ -701,7 +844,8 @@ class DistributedBattery:
                     "censored_fixed_sequence_inputs",
                     lambda c=cohort: self._cohort_inputs(c, censored=True))
                 ids, mask, pos = prepared
-                student_cache = self._new_cache()
+                student_cache = self._failure_guard(
+                    "censored_student_cache_init", self._new_cache)
                 student_hidden = self._run_pipeline(
                     ids, mask, pos, caches=student_cache, use_cache=True)
                 self._failure_guard(
@@ -717,11 +861,16 @@ class DistributedBattery:
                 self.dist.broadcast(value, src=self.last_stage,
                                     group=self.group)
                 b_total += value
-        if epoch == 0:
-            self._log_fixed_sequence(epoch=epoch, censored=False,
-                                     totals=a_total)
-        if include_b:
-            self._log_fixed_sequence(epoch=epoch, censored=True, totals=b_total)
+        self._failure_guard(
+            "fixed_sequence_logging",
+            lambda: (
+                self._log_fixed_sequence(epoch=epoch, censored=False,
+                                         totals=a_total)
+                if epoch == 0 else None,
+                self._log_fixed_sequence(epoch=epoch, censored=True,
+                                         totals=b_total)
+                if include_b else None,
+            ))
         self.timings["fixed_sequence_validation_seconds"] = (
             time.perf_counter() - started)
 
@@ -733,12 +882,14 @@ class DistributedBattery:
         started = time.perf_counter()
         answers: list[str] = [""] * len(prompts)
         completion: list[dict] = [{} for _ in prompts]
-        was_padding = tokenizer.padding_side
-        was_pad_token = tokenizer.pad_token
-        tokenizer.padding_side = "left"
-        if tokenizer.pad_token_id is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        pad = int(tokenizer.pad_token_id)
+        def configure_tokenizer():
+            previous = (tokenizer.padding_side, tokenizer.pad_token)
+            tokenizer.padding_side = "left"
+            if tokenizer.pad_token_id is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            return previous, int(tokenizer.pad_token_id)
+        (was_padding, was_pad_token), pad = self._failure_guard(
+            "recall_tokenizer_setup", configure_tokenizer)
         try:
             for begin in range(0, len(prompts), max(1, generation_batch)):
                 chunk_prompts = prompts[begin:begin + max(1, generation_batch)]
@@ -761,7 +912,8 @@ class DistributedBattery:
                     ids, mask, pos = prepared
                 else:
                     ids = mask = pos = None
-                cache = self._new_cache()
+                cache = self._failure_guard(
+                    "recall_cache_init", self._new_cache)
                 hidden = self._run_pipeline(
                     ids, mask, pos, caches=cache, use_cache=True)
                 self._failure_guard(
@@ -814,29 +966,33 @@ class DistributedBattery:
                         src=self.last_stage, shape=(len(chunk_prompts),),
                         dtype=torch.long)
 
-                generated_rows = torch.stack(generated, dim=1).tolist()
-                for row, (token_row, budget) in enumerate(
-                        zip(generated_rows, chunk_budgets)):
-                    token_row = token_row[:budget]
-                    stopped = eos in token_row
-                    decoded_ids = token_row[:token_row.index(eos)] \
-                        if stopped else token_row
-                    generated_tokens = (token_row.index(eos) + 1
-                                        if stopped else len(token_row))
-                    if self.stage == 0:
-                        answers[begin + row] = tokenizer.decode(
-                            decoded_ids, skip_special_tokens=True)
-                    completion[begin + row] = {
-                        "generated_tokens": generated_tokens,
-                        "budget_tokens": budget,
-                        "stopped": stopped,
-                        "hard_cut": len(token_row) >= budget and not stopped,
-                        "decoded_token_ids": decoded_ids,
-                    }
+                def decode_outputs():
+                    generated_rows = torch.stack(generated, dim=1).tolist()
+                    for row, (token_row, budget) in enumerate(
+                            zip(generated_rows, chunk_budgets)):
+                        token_row = token_row[:budget]
+                        stopped = eos in token_row
+                        decoded_ids = token_row[:token_row.index(eos)] \
+                            if stopped else token_row
+                        generated_tokens = (token_row.index(eos) + 1
+                                            if stopped else len(token_row))
+                        if self.stage == 0:
+                            answers[begin + row] = tokenizer.decode(
+                                decoded_ids, skip_special_tokens=True)
+                        completion[begin + row] = {
+                            "generated_tokens": generated_tokens,
+                            "budget_tokens": budget,
+                            "stopped": stopped,
+                            "hard_cut": len(token_row) >= budget and not stopped,
+                            "decoded_token_ids": decoded_ids,
+                        }
+                self._failure_guard("recall_decode_outputs", decode_outputs)
         finally:
-            tokenizer.padding_side = was_padding
-            if tokenizer.pad_token != was_pad_token:
-                tokenizer.pad_token = was_pad_token
+            def restore_tokenizer():
+                tokenizer.padding_side = was_padding
+                if tokenizer.pad_token != was_pad_token:
+                    tokenizer.pad_token = was_pad_token
+            self._failure_guard("recall_tokenizer_restore", restore_tokenizer)
         self.timings[timing_key] = (
             self.timings.get(timing_key, 0.0)
             + time.perf_counter() - started)
@@ -850,17 +1006,23 @@ class DistributedBattery:
         from .recite import (character_error_rate, normalize_verse,
                              strip_think, teacher_prompt)
 
-        records = [record for record in self.ds.records
-                   if record.get("answer_text")][:limit]
+        records = self._failure_guard(
+            "uncensored_control_preparation",
+            lambda: [record for record in self.ds.records
+                     if record.get("answer_text")][:limit])
         if not records:
-            if self.is_writer:
-                self.log.log(
+            self._failure_guard(
+                "uncensored_control_skipped_log",
+                lambda: self.log.log(
                     kind="vllm_uncensored_autoregressive_control_skipped",
                     epoch=epoch,
                     reason="no_records_with_vllm_answer_text")
+                if self.is_writer else None)
             return
-        prompts = [teacher_prompt(record) for record in records]
-        references = [record["answer_text"] for record in records]
+        prompts, references = self._failure_guard(
+            "uncensored_control_prompts",
+            lambda: ([teacher_prompt(record) for record in records],
+                     [record["answer_text"] for record in records]))
         ref_lengths = self.token_lengths(
             self.tokenizer, references, add_special_tokens=False)
         budgets = [length + int(
@@ -905,7 +1067,9 @@ class DistributedBattery:
             return exact_text, exact_tokens, cer_sum, rows
 
         scored = self._failure_guard("uncensored_control_scoring", score)
-        if self.is_writer:
+        def log_control():
+            if not self.is_writer:
+                return
             exact_text, exact_tokens, cer_sum, rows = scored
             self.log.log(
                 kind="vllm_uncensored_autoregressive_control",
@@ -927,6 +1091,7 @@ class DistributedBattery:
                 mean_character_error_rate=cer_sum / max(len(records), 1),
                 per_example=rows,
             )
+        self._failure_guard("uncensored_control_logging", log_control)
         self.timings["uncensored_vllm_generation_seconds"] = (
             time.perf_counter() - started)
 
@@ -940,11 +1105,24 @@ class DistributedBattery:
         total_started = time.perf_counter()
         self.dist.barrier(group=self.group)
         self._verify_entry(epoch)
-        self._failure_guard("gpu_ownership_at_entry", self._assert_own_gpu_only)
+        gpu_entry = self._failure_guard(
+            "gpu_ownership_at_entry", self._assert_own_gpu_only)
         adapter_before = self._failure_guard(
             "pre_adapter_fingerprint", self._owned_adapter_digest)
         vocab_before = self._failure_guard(
-            "pre_vocabulary_fingerprint", self._vocab_vector).clone()
+            "pre_vocabulary_fingerprint", self._frozen_vocab_digest)
+        rotation_before = None
+        if self.rotator is not None:
+            def rotation_entry():
+                if self.rotator._staged or self.rotator._inflight:
+                    raise RuntimeError(
+                        "distributed battery requires a quiescent rotator at "
+                        f"the epoch boundary; staged={sorted(self.rotator._staged)} "
+                        f"inflight={sorted(self.rotator._inflight)}")
+                return (self.rotator.stall_seconds,
+                        self.rotator.h2d_bytes, self.rotator.pages)
+            rotation_before = self._failure_guard(
+                "rotation_entry", rotation_entry)
 
         def switch_to_eval():
             before = {module: bool(module.training)
@@ -998,6 +1176,22 @@ class DistributedBattery:
             except BaseException as exc:
                 if evaluation_error is None:
                     evaluation_error = exc
+            if self.rotator is not None:
+                try:
+                    self.rotator.quiesce()
+                    stall0, bytes0, pages0 = rotation_before
+                    self.timings["rotation_stall_seconds"] = (
+                        self.rotator.stall_seconds - stall0)
+                    self.timings["rotation_h2d_gb"] = (
+                        self.rotator.h2d_bytes - bytes0) / 2**30
+                    self.timings["rotation_pages"] = (
+                        self.rotator.pages - pages0)
+                    self.rotator.stall_seconds = stall0
+                    self.rotator.h2d_bytes = bytes0
+                    self.rotator.pages = pages0
+                except BaseException as exc:
+                    if evaluation_error is None:
+                        evaluation_error = exc
         self._failure_guard(
             "evaluation_body",
             lambda: (_ for _ in ()).throw(evaluation_error)
@@ -1007,20 +1201,28 @@ class DistributedBattery:
         try:
             if self._owned_adapter_digest() != adapter_before:
                 raise RuntimeError("trainable adapter mutated during evaluation")
-            if not torch.equal(self._vocab_vector(), vocab_before):
+            if self._frozen_vocab_digest() != vocab_before:
                 raise RuntimeError("frozen vocabulary mutated during evaluation")
             if any(module.training != training
                    for module, training in mode_before.items()):
                 raise RuntimeError("module train/eval mode was not restored exactly")
+            if self.rotator is not None:
+                if self.rotator._staged or self.rotator._inflight:
+                    raise RuntimeError(
+                        "rotator was not quiescent after evaluation")
         except BaseException as exc:
             mutation_error = exc
         self._failure_guard(
             "postcondition", lambda: (_ for _ in ()).throw(mutation_error)
             if mutation_error is not None else None)
-        self._failure_guard("gpu_ownership", self._assert_own_gpu_only)
+        gpu_exit = self._failure_guard(
+            "gpu_ownership", self._assert_own_gpu_only)
         self.dist.barrier(group=self.group)
         total = time.perf_counter() - total_started
-        if self.is_writer:
+        def log_summary():
+            if not self.is_writer:
+                return
+            verified = gpu_entry is True and gpu_exit is True
             self.log.log(
                 kind="distributed_battery",
                 epoch=epoch,
@@ -1042,10 +1244,26 @@ class DistributedBattery:
                 frozen_vocabulary_unchanged=True,
                 every_layer_executed_exactly_once_per_forward=True,
                 cache_state_retained_for_owned_layers_only=True,
+                shared_kv_transport=(
+                    "nccl_transient_full_length_side_channel"
+                    if any(self.stack.is_kv_shared_layer(layer)
+                           for layer in range(1, self.stack.n_layers + 1))
+                    else "not_present"),
+                rotary_weight_residency=(
+                    "page_owned_block_per_forward"
+                    if self.rotator is not None else "resident"),
+                rotation_stall_seconds=round(
+                    self.timings.get("rotation_stall_seconds", 0.0), 3),
+                rotation_h2d_gb=round(
+                    self.timings.get("rotation_h2d_gb", 0.0), 3),
+                rotation_pages=int(self.timings.get("rotation_pages", 0)),
                 live_adapter_sha256_by_stage=self.adapter_digests,
-                no_foreign_gpu_context=True,
+                no_foreign_gpu_context=(True if verified else None),
+                foreign_gpu_context_verification=(
+                    "verified_no_foreign_context" if verified else "unverified"),
                 **timing_detail,
             )
+        self._failure_guard("distributed_battery_log", log_summary)
         return baseline
 
     def finalize(self) -> None:

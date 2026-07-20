@@ -10,7 +10,7 @@ model:
   device: cuda:0
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   epochs: 1
   v4_teacher_source: online

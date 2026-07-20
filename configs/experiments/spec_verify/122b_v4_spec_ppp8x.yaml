@@ -14,7 +14,7 @@ mask:
   compaction: flow_mask
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   v4_stage_splits: [6, 12, 18, 24, 30, 36, 42]
   v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]

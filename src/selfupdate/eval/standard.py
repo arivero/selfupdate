@@ -138,12 +138,17 @@ def evaluate_task(model, tok, task: str, limit: int | None, batch_size: int,
                   device: str, *, keep_examples: bool = True,
                   backend=None) -> dict:
     """Score one fixed multiple-choice subset by option likelihood."""
-    examples = task_examples(task, limit)
-    flat, owners = [], []
-    for ex_i, ex in enumerate(examples):
-        for choice_i, choice in enumerate(ex["choices"]):
-            flat.append((ex["prompt"], choice))
-            owners.append((ex_i, choice_i))
+    def prepare():
+        examples = task_examples(task, limit)
+        flat, owners = [], []
+        for ex_i, ex in enumerate(examples):
+            for choice_i, choice in enumerate(ex["choices"]):
+                flat.append((ex["prompt"], choice))
+                owners.append((ex_i, choice_i))
+        return examples, flat, owners
+    examples, flat, owners = (
+        backend.guard_phase(f"standard_{task}_preparation", prepare)
+        if backend is not None else prepare())
 
     scores_by_example = [[-math.inf] * len(ex["choices"]) for ex in examples]
     for batch, owner_batch in zip(_chunks(flat, batch_size), _chunks(owners, batch_size)):
@@ -152,25 +157,28 @@ def evaluate_task(model, tok, task: str, limit: int | None, batch_size: int,
         for (ex_i, choice_i), score in zip(owner_batch, scores):
             scores_by_example[ex_i][choice_i] = score
 
-    correct = 0
-    per_example = []
-    for ex, scores in zip(examples, scores_by_example):
-        pred = max(range(len(scores)), key=lambda i: scores[i])
-        ok = pred == ex["target"]
-        correct += int(ok)
+    def finish():
+        correct = 0
+        per_example = []
+        for ex, scores in zip(examples, scores_by_example):
+            pred = max(range(len(scores)), key=lambda i: scores[i])
+            ok = pred == ex["target"]
+            correct += int(ok)
+            if keep_examples:
+                per_example.append({
+                    "id": ex["id"], "target": ex["target"], "pred": pred,
+                    "correct": ok, "scores": scores,
+                })
+        result = {
+            "task": task,
+            "n": len(examples),
+            "accuracy": correct / len(examples) if examples else float("nan"),
+        }
         if keep_examples:
-            per_example.append({
-                "id": ex["id"], "target": ex["target"], "pred": pred,
-                "correct": ok, "scores": scores,
-            })
-    result = {
-        "task": task,
-        "n": len(examples),
-        "accuracy": correct / len(examples) if examples else float("nan"),
-    }
-    if keep_examples:
-        result["per_example"] = per_example
-    return result
+            result["per_example"] = per_example
+        return result
+    return (backend.guard_phase(f"standard_{task}_postprocess", finish)
+            if backend is not None else finish())
 
 
 def evaluate_standard(model, tok, *, tasks: tuple[str, ...] = STANDARD_TASKS,
@@ -193,15 +201,18 @@ def evaluate_standard(model, tok, *, tasks: tuple[str, ...] = STANDARD_TASKS,
     finally:
         if backend is None and was_training:
             model.train()
-    accs = [r["accuracy"] for r in results.values()]
-    return {
-        "tasks": results,
-        "macro_accuracy": sum(accs) / len(accs) if accs else float("nan"),
-        "limit": limit,
-        "batch_size": batch_size,
-        "benchmark_revisions": {
-            "arc_easy": "data/eval/arc_easy_v1.json",
-            "arc_challenge": "data/eval/arc_challenge_v1.json",
-            "hellaswag": "data/eval/hellaswag_v1.json",
-        },
-    }
+    def finish():
+        accs = [r["accuracy"] for r in results.values()]
+        return {
+            "tasks": results,
+            "macro_accuracy": sum(accs) / len(accs) if accs else float("nan"),
+            "limit": limit,
+            "batch_size": batch_size,
+            "benchmark_revisions": {
+                "arc_easy": "data/eval/arc_easy_v1.json",
+                "arc_challenge": "data/eval/arc_challenge_v1.json",
+                "hellaswag": "data/eval/hellaswag_v1.json",
+            },
+        }
+    return (backend.guard_phase("standard_suite_postprocess", finish)
+            if backend is not None else finish())

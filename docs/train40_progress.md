@@ -549,3 +549,18 @@ cards idle. Commits `52d8b25`/`8db5e7b` add an opt-in live-PPP evaluator;
 independent audit accepts its happy-path CPU math but found rank-asymmetric
 failure handling and fingerprint completeness gaps. Keep subprocess as the
 campaign default until those fixes and disposable multi-GPU parity pass.
+
+### 2026-07-20 v4.6 evaluator correction
+
+The preceding recommendation records the v4.5 review frontier. v4.6 fixes the
+identified protocol gaps and removes the reconstructed path rather than
+keeping it as a default: decode, postprocess, tokenizer restoration, and
+durable logging are rank-symmetric guarded phases; complete expected live
+trainable keys and byte-exact frozen-vocabulary surfaces are checked; and
+unavailable GPU ownership evidence is reported as unverified. Rotary PPP1/2,
+Gemma shared-KV transport across stage cuts and decode steps, frozen shared-KV
+local/store context, per-layer token inputs, hybrid cache lengths, and mHC
+boundary tails now use the live owners. The CPU protocol gate covers these
+contracts, including shared-KV sliding decode and stranded-rank injection.
+Disposable multi-GPU parity is still required before campaign adoption; it is
+no longer implemented as an alternate runtime path.

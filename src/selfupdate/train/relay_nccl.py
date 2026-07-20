@@ -5,18 +5,18 @@ Owner decision 2026-07-18: after measuring the fabric (dual HDR-200 at
 and a history of Lustre metadata/page-fault stalls, the BULK relay
 payloads move over NCCL — which speaks IB verbs natively (the broken
 node-to-node IPoIB layer is irrelevant) and moves tensors GPU-to-GPU
-(NVLink within a node). Boundary tensors ride the main NCCL communicator.
-For a cross-node subprocess battery, adapter publications ride a separate
-NCCL communicator, while the final scalar success/failure status uses the
-launch-scoped TCPStore: each node's file relay is deliberately node-local
-/dev/shm, so neither payload nor acknowledgement can cross hosts there.
-Same-node control and the store-fill audit trail remain on the file relay.
+(NVLink within a node). Boundary tensors and explicit shared-KV side channels
+ride the main relay communicator. The synchronous live-owner battery uses its
+own all-rank NCCL group. Same-node control and the store-fill audit trail
+remain on the file relay.
 
 Design facts this module leans on:
 
 * Shapes are DERIVABLE by the receiver: stage k+1 holds the same cohort
   objects as stage k, so a boundary for cohort idx has the locally known
-  shape [B, T(, hc_mult), H] — no per-message header, no pickling.
+  hidden shape [B, T(, hc_mult), H]. The loaded block topology also derives
+  which shared-KV types exist at each cut and their [B, n_kv, T, head_dim]
+  shapes — no per-message header, no pickling.
 * NCCL send/recv pairs match by ORDER per (src, dst) rank pair (the
   backend has no tags): one epoch relays at a time per pair and cohorts
   go in index order, so ordering is the addressing.
@@ -105,7 +105,11 @@ class NcclBoundaryRelay:
                 "stale stage process joined the rendezvous")
         _dbg("post all_gather; NcclBoundaryRelay ready")
         self._out: list[tuple[object, torch.Tensor]] = []
-        self._in: dict[int, list[tuple[object, torch.Tensor]]] = {}
+        self._in: dict[int, list[dict]] = {}
+        self._shared_in_types: tuple[str, ...] = ()
+        self._shared_out_types: tuple[str, ...] = ()
+        self._shared_heads = 0
+        self._shared_head_dim = 0
 
         # Out-of-band readiness gate (fix, 2026-07-20; issues.md "OPEN --
         # DeepSeek-V4-Flash PPP8 cross-node NCCL hang", repro in
@@ -146,13 +150,6 @@ class NcclBoundaryRelay:
             world_size=self.stages, is_master=(self.stage == 0),
             timeout=timeout, wait_for_workers=True)
         self._relay_ready_marked = False
-        # Created lazily by the first subprocess battery. It MUST be a
-        # distinct communicator: the boundary communicator has ordered,
-        # potentially in-flight point-to-point traffic, and inserting a
-        # collective into that sequence can cross-match or deadlock it.
-        self._battery_group = None
-        self._group_timeout = timeout
-        self._battery_status_timeout_s = max(timeout.total_seconds(), 3600.0)
         _dbg("post ready-gate TCPStore; NcclBoundaryRelay fully ready")
 
     def mark_relay_ready(self) -> None:
@@ -187,18 +184,40 @@ class NcclBoundaryRelay:
         self._dims = tuple(dims)
         self._dtype = dtype
 
+    def set_shared_kv_contract(self, *, incoming_types, outgoing_types,
+                               num_key_value_heads: int,
+                               head_dim: int) -> None:
+        self._shared_in_types = tuple(sorted(incoming_types))
+        self._shared_out_types = tuple(sorted(outgoing_types))
+        self._shared_heads = int(num_key_value_heads)
+        self._shared_head_dim = int(head_dim)
+
+    def _shared_shape(self, cohort) -> tuple:
+        return (len(cohort.indices), self._shared_heads, cohort.T,
+                self._shared_head_dim)
+
+    @staticmethod
+    def _split_payload(payload):
+        if torch.is_tensor(payload):
+            return payload, {}
+        return payload["h"], payload.get("shared_kv", {})
+
     # -- producer side ---------------------------------------------------
 
     def send_boundaries(self, epoch: int, out: dict) -> None:
         """isend every cohort boundary to stage+1 in index order; tensors
         are parked until the requests complete (reap_sent)."""
         for idx in range(len(self.cohorts)):
-            t = out[idx]
-            if t.device.type != "cuda":
-                t = t.to(self.device, non_blocking=False)
-            t = t.contiguous()
-            req = self.dist.isend(t, dst=self.stage + 1)
-            self._out.append((req, t))
+            hidden, shared = self._split_payload(out[idx])
+            self.isend_one(hidden, dst=self.stage + 1)
+            for layer_type in self._shared_out_types:
+                if layer_type not in shared:
+                    raise RuntimeError(
+                        f"missing outgoing shared KV {layer_type!r} at "
+                        f"stage {self.stage} cohort {idx}")
+                key, value = shared[layer_type]
+                self.isend_one(key, dst=self.stage + 1)
+                self.isend_one(value, dst=self.stage + 1)
         self.reap_sent(block=False)
 
     def reap_sent(self, block: bool) -> None:
@@ -215,28 +234,49 @@ class NcclBoundaryRelay:
     def post_recv(self, epoch: int) -> None:
         """Post irecvs for one epoch's boundaries from stage-1 (shapes
         derived locally)."""
-        reqs = []
+        payloads = []
         for cohort in self.cohorts:
-            t = torch.empty(self._boundary_shape(cohort),
-                            dtype=self._dtype, device=self.device)
-            reqs.append((self.dist.irecv(t, src=self.stage - 1), t))
-        self._in[epoch] = reqs
+            request, hidden = self.irecv_one(
+                self._boundary_shape(cohort), src=self.stage - 1)
+            shared = {}
+            requests = [(request, hidden)]
+            for layer_type in self._shared_in_types:
+                key_request, key = self.irecv_one(
+                    self._shared_shape(cohort), src=self.stage - 1)
+                value_request, value = self.irecv_one(
+                    self._shared_shape(cohort), src=self.stage - 1)
+                requests.extend(((key_request, key),
+                                 (value_request, value)))
+                shared[layer_type] = (key, value)
+            payloads.append({"requests": requests, "h": hidden,
+                             "shared_kv": shared})
+        self._in[epoch] = payloads
 
     def ready(self, epoch: int) -> bool:
-        reqs = self._in.get(epoch)
-        return reqs is not None and all(r.is_completed() for r, _ in reqs)
+        payloads = self._in.get(epoch)
+        return (payloads is not None
+                and all(request.is_completed()
+                        for payload in payloads
+                        for request, _ in payload["requests"]))
 
     def take(self, epoch: int, block: bool) -> dict | None:
-        reqs = self._in.get(epoch)
-        if reqs is None:
+        payloads = self._in.get(epoch)
+        if payloads is None:
             return None
         if block:
-            for r, _ in reqs:
-                r.wait()
-        elif not all(r.is_completed() for r, _ in reqs):
+            for payload in payloads:
+                for request, _ in payload["requests"]:
+                    request.wait()
+        elif not all(request.is_completed()
+                     for payload in payloads
+                     for request, _ in payload["requests"]):
             return None
         del self._in[epoch]
-        return {idx: t for idx, (_, t) in enumerate(reqs)}
+        return {
+            idx: {"h": payload["h"],
+                  "shared_kv": payload["shared_kv"]}
+            for idx, payload in enumerate(payloads)
+        }
 
     # -- per-cohort (store-fill) and loop-back (eval) point-to-point --------
     # The store fill sends boundaries one cohort at a time in index order; the
@@ -263,106 +303,6 @@ class NcclBoundaryRelay:
         t = torch.empty((batch,), dtype=torch.long, device=self.device)
         self.dist.recv(t, src=src)
         return t
-
-    # -- cross-node subprocess-battery exchange -------------------------
-
-    def _get_battery_group(self):
-        """Collectively create a communicator isolated from boundary P2P."""
-        if self._battery_group is None:
-            self._battery_group = self.dist.new_group(
-                ranks=list(range(self.stages)), backend="nccl",
-                timeout=self._group_timeout)
-        return self._battery_group
-
-    def collect_battery_adapters(self, epoch: int, rf) -> None:
-        """Materialize every stage's adapter file in stage 0's local shm.
-
-        Each source broadcasts its already-enveloped safetensors file as one
-        byte tensor. Sequential broadcasts bound temporary device memory to
-        the largest single stage shard. Only rank 0 persists remote shards;
-        its child then consumes the ordinary `_RelayFiles` contract.
-        """
-        group = self._get_battery_group()
-        own_path = rf.path(epoch, f"adapters_stage{self.stage}.st")
-        try:
-            own_bytes = own_path.read_bytes()
-        except OSError:
-            # Publish length zero below so every rank observes and raises the
-            # same failure instead of one source leaving peers in a collective.
-            own_bytes = b""
-        prep_error = None
-        for src in range(self.stages):
-            length = torch.tensor(
-                [len(own_bytes) if self.stage == src else 0],
-                dtype=torch.long, device=self.device)
-            self.dist.broadcast(length, src=src, group=group)
-            nbytes = int(length.item())
-            if nbytes <= 0:
-                raise RuntimeError(
-                    f"stage {src} published an empty battery adapter file "
-                    f"at epoch {epoch}")
-            if self.stage == src:
-                # bytearray supplies the writable buffer required by
-                # torch.frombuffer without warning or undefined mutation.
-                payload = torch.frombuffer(
-                    bytearray(own_bytes), dtype=torch.uint8).to(self.device)
-            else:
-                payload = torch.empty(
-                    nbytes, dtype=torch.uint8, device=self.device)
-            self.dist.broadcast(payload, src=src, group=group)
-            if self.stage == 0 and src != 0:
-                try:
-                    dst = rf.path(epoch, f"adapters_stage{src}.st")
-                    dst.parent.mkdir(parents=True, exist_ok=True)
-                    tmp = dst.with_name(dst.name + ".xnode.tmp")
-                    tmp.write_bytes(payload.cpu().numpy().tobytes())
-                    tmp.replace(dst)
-                    # Detect a stale/wrong publication before child launch.
-                    rf.read(dst, expect_epoch=epoch, as_stage=0,
-                            expect_stage=src)
-                except Exception as exc:
-                    # Keep participating in all remaining broadcasts; an
-                    # early rank-0 raise would strand every peer in NCCL.
-                    prep_error = prep_error or repr(exc)
-            del payload
-        failed = torch.tensor(
-            [int(prep_error is not None) if self.stage == 0 else 0],
-            dtype=torch.int32, device=self.device)
-        self.dist.broadcast(failed, src=0, group=group)
-        if int(failed.item()):
-            detail = prep_error if self.stage == 0 else "reported by stage 0"
-            raise RuntimeError(
-                f"cross-node battery adapter materialization failed: {detail}")
-
-    def exchange_battery_status(self, epoch: int, status: int) -> int:
-        """Publish/wait for stage 0's result without a long NCCL operation.
-
-        A 122B battery can keep stage 0 in its child for many minutes. Remote
-        ranks therefore poll the already-established launch TCPStore instead
-        of posting a broadcast that can trip ProcessGroupNCCL's watchdog while
-        the child owns stage 0's GPUs.
-        """
-        key = f"battery_status_e{epoch:04d}"
-        if self.stage == 0:
-            self._ready_store.set(key, str(int(status)))
-            return int(status)
-        from .stop import stop_requested
-        deadline = time.monotonic() + self._battery_status_timeout_s
-        while not self._ready_store.check([key]):
-            if stop_requested():
-                raise RuntimeError(
-                    f"stopped while waiting for stage 0 battery epoch {epoch}")
-            if time.monotonic() > deadline:
-                raise RuntimeError(
-                    f"battery status timeout after "
-                    f"{self._battery_status_timeout_s:.0f}s at epoch {epoch}; "
-                    "stage 0 died or stalled")
-            time.sleep(2.0)
-        value = self._ready_store.get(key)
-        if isinstance(value, bytes):
-            value = value.decode()
-        return int(value)
-
 
 def parse_stage_hosts() -> list:
     """Stage -> short hostname map from the launcher (already resolved: no
@@ -396,6 +336,8 @@ class BoundaryTransport:
         self.hosts = parse_stage_hosts()
         self.transport = resolve_relay_transport(cfg)
         self.nccl = None
+        self._shared_in_types: tuple[str, ...] = ()
+        self._shared_out_types: tuple[str, ...] = ()
         # Shared with the readiness-gate poll below (recv_forward): the same
         # budget the main NCCL group already uses, so one knob still governs
         # "how long do we tolerate a stalled peer" everywhere.
@@ -424,6 +366,44 @@ class BoundaryTransport:
         if self.nccl is not None:
             self.nccl.set_hidden_dims(dims, dtype)
 
+    def set_shared_kv_contract(self, *, incoming_types, outgoing_types,
+                               num_key_value_heads: int,
+                               head_dim: int) -> None:
+        self._shared_in_types = tuple(sorted(incoming_types))
+        self._shared_out_types = tuple(sorted(outgoing_types))
+        if self.nccl is not None:
+            self.nccl.set_shared_kv_contract(
+                incoming_types=incoming_types,
+                outgoing_types=outgoing_types,
+                num_key_value_heads=num_key_value_heads,
+                head_dim=head_dim)
+
+    @staticmethod
+    def _split_payload(payload):
+        if torch.is_tensor(payload):
+            return payload, {}
+        return payload["h"], payload.get("shared_kv", {})
+
+    @classmethod
+    def _flatten_payload(cls, prefix: str, payload) -> dict:
+        hidden, shared = cls._split_payload(payload)
+        flat = {f"{prefix}h": hidden.detach().cpu()}
+        for layer_type, (key, value) in sorted(shared.items()):
+            flat[f"{prefix}kv.{layer_type}.k"] = key.detach().cpu()
+            flat[f"{prefix}kv.{layer_type}.v"] = value.detach().cpu()
+        return flat
+
+    @staticmethod
+    def _unflatten_payload(loaded: dict, prefix: str) -> dict:
+        shared = {}
+        marker = f"{prefix}kv."
+        for key in loaded:
+            if key.startswith(marker) and key.endswith(".k"):
+                layer_type = key[len(marker):-2]
+                shared[layer_type] = (
+                    loaded[key], loaded[f"{marker}{layer_type}.v"])
+        return {"h": loaded[f"{prefix}h"], "shared_kv": shared}
+
     def mark_relay_ready(self) -> None:
         """Announce that every store-fill send this stage will ever issue
         toward stage+1 (or, if store-fill never ran, that there was never
@@ -448,17 +428,6 @@ class BoundaryTransport:
             self.nccl.reap_sent(block=True)   # flush any parked isends first
             self.nccl.dist.barrier()
 
-    def collect_battery_adapters(self, epoch: int) -> None:
-        """Cross-node adapter exchange; same-node batteries use shm files."""
-        if self.nccl is not None:
-            self.nccl.collect_battery_adapters(epoch, self.rf)
-
-    def exchange_battery_status(self, epoch: int, status: int) -> int:
-        """Cross-node battery result; pass through for file transport."""
-        if self.nccl is None:
-            return int(status)
-        return self.nccl.exchange_battery_status(epoch, status)
-
     # -- forward pipe: epoch relay (all cohorts per epoch) ---------------
     def send_forward(self, epoch: int, out: dict) -> None:
         """out: {idx: boundary tensor on device}. Cross-node -> NCCL, else
@@ -466,9 +435,13 @@ class BoundaryTransport:
         if self.fwd_remote():
             self.nccl.send_boundaries(epoch, out)
         else:
+            tensors = {}
+            for idx, payload in out.items():
+                tensors.update(self._flatten_payload(
+                    f"c{idx}.", payload))
             self.rf.write(
                 self.rf.path(epoch, f"stage{self.stage}.st"),
-                {f"c{idx}": t.detach().cpu() for idx, t in out.items()},
+                tensors,
                 stage=self.stage, epoch=epoch, to_stage=self.stage + 1)
 
     def recv_forward(self, epoch: int, block: bool) -> dict | None:
@@ -503,7 +476,12 @@ class BoundaryTransport:
         path.unlink(missing_ok=True)
         with contextlib.suppress(OSError):
             path.parent.rmdir()
-        return {int(k[1:]): v for k, v in loaded.items()}
+        indices = sorted({
+            int(key.split(".", 1)[0][1:]) for key in loaded
+            if key.startswith("c") and "." in key
+        })
+        return {idx: self._unflatten_payload(loaded, f"c{idx}.")
+                for idx in indices}
 
     def _wait_predecessor_relay_ready(self, pred_stage: int,
                                       poll_s: float = 2.0) -> None:
@@ -551,27 +529,46 @@ class BoundaryTransport:
         self.nccl.reap_sent(block=False)
 
     # -- forward pipe: store-fill (one cohort at a time, index order) ----
-    def send_fill_one(self, idx: int, t: torch.Tensor, epoch: int = 0) -> None:
+    def send_fill_one(self, idx: int, t, epoch: int = 0) -> None:
         if self.fwd_remote():
-            self.nccl.isend_one(t, dst=self.stage + 1)
+            hidden, shared = self._split_payload(t)
+            self.nccl.isend_one(hidden, dst=self.stage + 1)
+            for layer_type in self._shared_out_types:
+                if layer_type not in shared:
+                    raise RuntimeError(
+                        f"missing outgoing shared KV {layer_type!r} at "
+                        f"stage {self.stage} cohort {idx}")
+                key, value = shared[layer_type]
+                self.nccl.isend_one(key, dst=self.stage + 1)
+                self.nccl.isend_one(value, dst=self.stage + 1)
         else:
             self.rf.write(
                 self.rf.path(epoch, f"capture_c{idx:04d}_stage{self.stage}.st"),
-                {"h": t.detach().cpu()}, stage=self.stage, epoch=epoch,
+                self._flatten_payload("", t),
+                stage=self.stage, epoch=epoch,
                 to_stage=self.stage + 1)
 
-    def recv_fill_one(self, idx: int, cohort, epoch: int = 0) -> torch.Tensor:
+    def recv_fill_one(self, idx: int, cohort, epoch: int = 0):
         if self.up_remote():
-            req, t = self.nccl.irecv_one(
+            req, hidden = self.nccl.irecv_one(
                 self.nccl._boundary_shape(cohort), src=self.stage - 1)
             req.wait()
-            return t
+            shared = {}
+            for layer_type in self._shared_in_types:
+                key_req, key = self.nccl.irecv_one(
+                    self.nccl._shared_shape(cohort), src=self.stage - 1)
+                value_req, value = self.nccl.irecv_one(
+                    self.nccl._shared_shape(cohort), src=self.stage - 1)
+                key_req.wait()
+                value_req.wait()
+                shared[layer_type] = (key, value)
+            return {"h": hidden, "shared_kv": shared}
         path = self.rf.wait(self.rf.path(
             epoch, f"capture_c{idx:04d}_stage{self.stage - 1}.st"))
         loaded = self.rf.read(path, expect_epoch=epoch, as_stage=self.stage,
                               expect_stage=self.stage - 1)
         path.unlink(missing_ok=True)
-        return loaded["h"]
+        return self._unflatten_payload(loaded, "")
 
     # -- eval token loop-back (last stage N-1 -> stage 0) ----------------
     def send_token_home(self, tok: torch.Tensor) -> None:

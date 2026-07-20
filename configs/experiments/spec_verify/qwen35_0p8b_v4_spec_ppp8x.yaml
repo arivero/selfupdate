@@ -12,7 +12,7 @@ model:
   device: cuda
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   batching: bucketed
   v4_teacher_source: online
   v4_stage_splits: [3, 6, 9, 12, 15, 18, 21]

@@ -8,7 +8,7 @@ cache:
   store_full_teacher_inputs: true
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   epochs: 1
   seed: 17
   hidden_loss: delta_cosine
@@ -20,7 +20,6 @@ train:
   v4_teacher_residency: auto
   v4_stage_scoped: true
   v4_weight_residency: auto
-  v4_battery_mode: subprocess
   v4_stage_splits: [14]
   v4_stage_devices: [0, 1]
 eval:

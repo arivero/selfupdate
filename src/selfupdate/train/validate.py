@@ -1,4 +1,4 @@
-"""Dispatch-time validation for the v4.5 trainer.
+"""Dispatch-time validation for the v4.6 trainer.
 
 The objective is structural, not an optional schedule: teacher ``h[L-1]`` is
 the input to block L and teacher ``h[L]`` is its target.  Old pipeline and
@@ -28,10 +28,10 @@ def validate_knob_schedule(cfg) -> None:
 
     if train.pipeline_version != 4:
         raise ValueError(
-            "this repository is v4.5-only: train.pipeline_version must be 4; "
+            "this repository is v4.6-only: train.pipeline_version must be 4; "
             "student-trajectory training pipelines were removed")
-    if train.pipeline_revision not in ("", "4.0", "4.5"):
-        bad.append("pipeline_revision must be 4.0 (legacy) or 4.5")
+    if train.pipeline_revision != "4.6":
+        bad.append("pipeline_revision must be 4.6")
     if cfg.model.pipeline_split or cfg.model.pipeline_splits:
         bad.append("model.pipeline_split(s) are obsolete; use v4_stage_splits")
 
@@ -135,26 +135,12 @@ def validate_knob_schedule(cfg) -> None:
         if train.v4_loop_order != "layer_major":
             bad.append("weight rotation requires layer_major")
 
-    if train.v4_battery_mode not in ("distributed", "graft", "subprocess"):
-        bad.append("v4_battery_mode must be distributed, graft or subprocess")
-    if (train.v4_battery_mode == "subprocess" and train.v4_stage < 0
-            and not train.v4_stage_scoped):
-        bad.append("resident single-process evaluation must use graft mode")
-    if train.v4_battery_mode == "distributed" and train.v4_stage < 0:
-        bad.append("distributed battery mode requires a staged launch")
-    if (train.v4_battery_mode == "distributed"
-            and train.pipeline_revision != "4.5"):
-        bad.append("distributed live-student evaluation requires revision 4.5")
-    if train.v4_battery_mode == "distributed" and not train.lora.enabled:
-        bad.append("distributed battery a/b certification requires LoRA")
+    if train.v4_stage >= 0 and not train.lora.enabled:
+        bad.append("staged v4.6 a/b evaluation requires LoRA")
     if (cfg.eval.vllm_uncensored_generation_limit < 0
             or cfg.eval.vllm_uncensored_max_extra_tokens < 0):
         bad.append("vLLM uncensored evaluation limits must be non-negative")
     if train.v4_stage_scoped:
-        if train.v4_battery_mode not in ("distributed", "subprocess"):
-            bad.append(
-                "stage-scoped evaluation requires distributed or "
-                "subprocess mode")
         if (train.v4_stage < 0
                 and train.v4_weight_residency not in ("rotate", "auto")):
             bad.append("single-process stage-scoped mode is the rotary PPP1 lane")

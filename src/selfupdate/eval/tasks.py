@@ -196,6 +196,138 @@ def score(reference: str, answer: str) -> dict:
     }
 
 
+def _finish_generated_tasks(items, questions, answers, completion, *, seed,
+                            n_per_task, generation_batch, scope,
+                            context_pad_random, context_wrong,
+                            rag_system_prompt, rag_tool_prompt,
+                            context_window_lines, keep_examples):
+    """Pure rank-local scoring phase, guarded by distributed backends."""
+    from .recite import strip_think
+
+    agg: dict[str, list[dict]] = {}
+    examples = []
+    for it, q, raw, meta in zip(items, questions, answers, completion):
+        answer = strip_think(raw)
+        s = score(it["reference"], answer)
+        s["n_deleted"] = it["n"]
+        agg.setdefault(it["task"], []).append(s)
+        if len(examples) < keep_examples:
+            examples.append({"kind": it["kind"], "q": q,
+                             "reference": it["reference"],
+                             "answer": answer.strip()[:200], **meta, **s})
+    result = {"seed": seed, "n_per_task": n_per_task,
+              "generation_batch": generation_batch,
+              "with_context": scope or False,
+              "context_pad_random": context_pad_random,
+              "context_wrong": context_wrong,
+              "prompt_regime": ("rag_system" if rag_system_prompt
+                                else "rag_tool" if rag_tool_prompt
+                                else "plain_user"),
+              **({"context_window_lines": context_window_lines}
+                 if scope == "window" else {}),
+              "tasks": {}}
+    for task, rows in agg.items():
+        result["tasks"][task] = {
+            "n": len(rows),
+            "exact": sum(r["exact"] for r in rows) / len(rows),
+            "word_acc": sum(r["word_acc"] for r in rows) / len(rows),
+        }
+    if "cloze" in agg:
+        by_n: dict[int, list] = {}
+        for row in agg["cloze"]:
+            by_n.setdefault(row["n_deleted"], []).append(row["word_acc"])
+        result["tasks"]["cloze"]["by_deletions"] = {
+            str(n): sum(v) / len(v) for n, v in sorted(by_n.items())}
+    all_rows = [row for rows in agg.values() for row in rows]
+    result["overall_word_acc"] = (
+        sum(row["word_acc"] for row in all_rows) / max(1, len(all_rows)))
+    unbounded = {"start_block", "end_block"}
+    bounded = [c for item, c in zip(items, completion)
+               if item["kind"] not in unbounded]
+    result["generation"] = {
+        "n": len(completion),
+        "mean_generated_tokens": (sum(x["generated_tokens"] for x in completion)
+                                  / max(1, len(completion))),
+        "mean_budget_tokens": (sum(x["budget_tokens"] for x in completion)
+                               / max(1, len(completion))),
+        "stopped_fraction": (sum(x["stopped"] for x in completion)
+                             / max(1, len(completion))),
+        "hard_cut_fraction": (sum(x["hard_cut"] for x in completion)
+                              / max(1, len(completion))),
+        "n_bounded": len(bounded),
+        "hard_cut_fraction_bounded": (sum(x["hard_cut"] for x in bounded)
+                                      / max(1, len(bounded))),
+    }
+    result["examples"] = examples
+    return result
+
+
+def _prepare_generated_tasks(tokenizer, poem_path, *, seed, n_per_task,
+                             with_context, context_window_lines,
+                             context_pad_random, context_wrong,
+                             rag_system_prompt, rag_tool_prompt):
+    """Build deterministic prompts before the first backend collective."""
+    from ..masking import random_fill_ids
+
+    items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
+    scope = {False: None, True: "full"}.get(with_context, with_context)
+    if scope not in (None, "full", "window", "chapter"):
+        raise ValueError(f"unknown with_context scope {with_context!r}")
+    contexts = None
+    if scope == "full":
+        with open(poem_path, encoding="utf-8") as handle:
+            contexts = [handle.read()] * len(items)
+    elif scope == "window":
+        lines = [line for block in corpus_blocks(poem_path) for line in block]
+        contexts = [retrieve_window(lines, item["block"],
+                                    pad=context_window_lines)
+                    for item in items]
+    elif scope == "chapter":
+        contexts = [retrieve_chapter(poem_path, item["block"])
+                    for item in items]
+    if context_pad_random and context_wrong:
+        raise ValueError("context_pad_random and context_wrong are exclusive")
+    if context_pad_random:
+        if contexts is None:
+            raise ValueError("context_pad_random needs a retrieved context")
+        contexts = [
+            tokenizer.decode(random_fill_ids(
+                tokenizer, f"evalfloor-{seed}-{i}",
+                len(tokenizer.encode(text, add_special_tokens=False))))
+            for i, text in enumerate(contexts)
+        ]
+    elif context_wrong:
+        if not contexts:
+            raise ValueError("context_wrong needs retrieved context")
+        offset = len(contexts) // 2
+        contexts = contexts[offset:] + contexts[:offset]
+
+    questions, prompts, basis_texts = [], [], []
+    for i, item in enumerate(items):
+        question = QUESTIONS[item["kind"]].format(x=item["x"], n=item["n"])
+        questions.append(question)
+        context = contexts[i] if contexts is not None else ""
+        if rag_system_prompt:
+            from ..masking import render_rag_system
+            ex = render_rag_system(f"eval-{i}", question, context,
+                                   answer="", open_answer=True)
+            prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
+        elif rag_tool_prompt:
+            from ..masking import render_rag_tool
+            ex = render_rag_tool(f"eval-{i}", question, context,
+                                 answer="", open_answer=True)
+            prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
+        else:
+            content = (f"{question}\n\nDocumento recuperado:\n{context}"
+                       if contexts is not None else question)
+            prompts.append(tokenizer.apply_chat_template(
+                [{"role": "user", "content": content}], tokenize=False,
+                add_generation_prompt=True, enable_thinking=False))
+        basis_texts.append(contexts[i] if contexts is not None
+                           else item["reference"])
+    return items, scope, questions, prompts, basis_texts
+
+
 @torch.no_grad()
 def _generate_answers_batched(model, tokenizer, prompts: list[str],
                               budgets: list[int], eos: int,
@@ -332,8 +464,7 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     ``generation_batch``: 1 (default) keeps the historical per-item greedy
     loop bit-for-bit; >1 decodes in left-padded batches — measured 2026-07-11
     because per-epoch B=1 eval was 42-56%% of loss-grid arm wall time."""
-    from ..masking import random_fill_ids
-    from .recite import greedy_generate_positions, strip_think
+    from .recite import greedy_generate_positions
 
     # This public evaluator is called directly by scripts as well as between
     # epochs by the trainer.  Dropout must never contaminate an evaluation,
@@ -342,46 +473,18 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     if generation_backend is None:
         model.eval()
     try:
-        items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
-        scope = {False: None, True: "full"}.get(with_context, with_context)
-        if scope not in (None, "full", "window", "chapter"):
-            raise ValueError(f"unknown with_context scope {with_context!r}")
-        contexts = None
-        if scope == "full":
-            with open(poem_path, encoding="utf-8") as f:
-                contexts = [f.read()] * len(items)
-        elif scope == "window":
-            lines = [l for b in corpus_blocks(poem_path) for l in b]
-            contexts = [retrieve_window(lines, it["block"],
-                                        pad=context_window_lines)
-                        for it in items]
-        elif scope == "chapter":
-            contexts = [retrieve_chapter(poem_path, it["block"])
-                        for it in items]
-        if context_pad_random and context_wrong:
-            raise ValueError("context_pad_random and context_wrong are exclusive")
-        if context_pad_random:
-            if contexts is None:
-                raise ValueError(
-                    "context_pad_random needs with_context to size the fill "
-                    "(the paired floor matches its ceiling's scope)")
-            contexts = [
-                tokenizer.decode(random_fill_ids(
-                    tokenizer, f"evalfloor-{seed}-{i}",
-                    len(tokenizer.encode(c, add_special_tokens=False))))
-                for i, c in enumerate(contexts)
-            ]
-        elif context_wrong:
-            if not contexts:
-                raise ValueError("context_wrong needs retrieved context")
-            # A real but wrong passage is a stronger counterfactual than
-            # random filler: rotate it between deterministic task items.
-            # Rotate by HALF the list, never by one: adjacent items sit on
-            # adjacent corpus blocks, so a ``next`` item's answer is
-            # literally the head of the neighboring window (rotate-by-1
-            # measured 0.74 vs 0.25 word_acc, 0.6B probe 2026-07-12).
-            k = len(contexts) // 2
-            contexts = contexts[k:] + contexts[:k]
+        prepare = lambda: _prepare_generated_tasks(
+            tokenizer, poem_path, seed=seed, n_per_task=n_per_task,
+            with_context=with_context,
+            context_window_lines=context_window_lines,
+            context_pad_random=context_pad_random,
+            context_wrong=context_wrong,
+            rag_system_prompt=rag_system_prompt,
+            rag_tool_prompt=rag_tool_prompt)
+        prepared = (generation_backend.guard_phase(
+                        "recall_prompt_preparation", prepare)
+                    if generation_backend is not None else prepare())
+        items, scope, questions, prompts, basis_texts = prepared
         # ``convert_tokens_to_ids('<|im_end|>')`` returns the unknown token id
         # on SentencePiece models such as Mistral.  chatfmt knows whether a
         # model actually has a single-token turn closer and otherwise returns
@@ -391,40 +494,6 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                else stop_token_id(tokenizer))
         device = (next(model.parameters()).device
                   if generation_backend is None else None)
-        questions, prompts, basis_texts = [], [], []
-        for i, it in enumerate(items):
-            q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
-            questions.append(q)
-            if rag_system_prompt:
-                # exact v5rs conversation: passage evoked in the system turn
-                # as memory framing, no tool vocabulary (masking.RAG_SYSTEM_WRAP)
-                from ..masking import render_rag_system
-                ex = render_rag_system(f"eval-{i}", q,
-                                       contexts[i] if contexts is not None else "",
-                                       answer="", open_answer=True)
-                prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
-            elif rag_tool_prompt:
-                from ..masking import render_rag_tool
-                ex = render_rag_tool(f"eval-{i}", q,
-                                     contexts[i] if contexts is not None else "",
-                                     answer="", open_answer=True)
-                prompts.append(ex.shared_prefix + ex.privileged + ex.shared_mid)
-            else:
-                content = (f"{q}\n\nDocumento recuperado:\n{contexts[i]}"
-                           if contexts is not None else q)
-                prompts.append(tokenizer.apply_chat_template(
-                    [{"role": "user", "content": content}], tokenize=False,
-                    add_generation_prompt=True, enable_thinking=False))
-            # Budget basis: the RAG passage length when a context is given,
-            # not the reference/answer length. Measured 2026-07-12: with a
-            # generous budget, Qwen3-1.7B naturally stops on EVERY
-            # next_line/end_block Quijote item (no genuinely unbounded
-            # generation) — but it may unwind up to ~70% of a long
-            # window-scope passage (643-836 tokens) before doing so, far
-            # more than a one-line answer's own length. A safe stop budget
-            # is sized to the RAG input, not the answer (owner directive).
-            basis_texts.append(contexts[i] if contexts is not None
-                               else it["reference"])
         if generation_backend is not None:
             basis_lengths = generation_backend.token_lengths(
                 tokenizer, basis_texts, add_special_tokens=True)
@@ -457,69 +526,17 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                     "stopped": stopped,
                     "hard_cut": len(out) >= budget and not stopped,
                 })
-        agg: dict[str, list[dict]] = {}
-        examples = []
-        for it, q, raw, meta in zip(items, questions, answers, completion):
-            answer = strip_think(raw)
-            s = score(it["reference"], answer)
-            s["n_deleted"] = it["n"]
-            agg.setdefault(it["task"], []).append(s)
-            if len(examples) < keep_examples:
-                examples.append({"kind": it["kind"], "q": q,
-                                 "reference": it["reference"],
-                                 "answer": answer.strip()[:200], **meta, **s})
-        result = {"seed": seed, "n_per_task": n_per_task,
-                  "generation_batch": generation_batch,
-                  "with_context": scope or False,
-                  "context_pad_random": context_pad_random,
-                  "context_wrong": context_wrong,
-                  "prompt_regime": ("rag_system" if rag_system_prompt
-                                    else "rag_tool" if rag_tool_prompt
-                                    else "plain_user"),
-                  **({"context_window_lines": context_window_lines}
-                     if scope == "window" else {}),
-                  "tasks": {}}
-        for task, rows in agg.items():
-            result["tasks"][task] = {
-                "n": len(rows),
-                "exact": sum(r["exact"] for r in rows) / len(rows),
-                "word_acc": sum(r["word_acc"] for r in rows) / len(rows),
-            }
-        if "cloze" in agg:
-            by_n: dict[int, list] = {}
-            for r in agg["cloze"]:
-                by_n.setdefault(r["n_deleted"], []).append(r["word_acc"])
-            result["tasks"]["cloze"]["by_deletions"] = {
-                str(n): sum(v) / len(v) for n, v in sorted(by_n.items())}
-        result["overall_word_acc"] = (sum(r["word_acc"] for rows in agg.values()
-                                          for r in rows)
-                                      / max(1, sum(len(r) for r in agg.values())))
-        # start_block/end_block ask the model to "finish"/"begin" a paragraph
-        # with no length bound; a teacher that never emits EOS there is
-        # imitable teacher behavior (the student clones it), not a
-        # completion defect — Quijote's long unbounded prose paragraphs
-        # saturate ANY fixed budget (measured 100% budget consumption on
-        # every end_block item regardless of size, 2026-07-12). Certifying
-        # completion is only meaningful for length-bounded answer kinds.
-        UNBOUNDED_KINDS = {"start_block", "end_block"}
-        bounded = [c for it, c in zip(items, completion)
-                  if it["kind"] not in UNBOUNDED_KINDS]
-        result["generation"] = {
-            "n": len(completion),
-            "mean_generated_tokens": (sum(x["generated_tokens"] for x in completion)
-                                      / max(1, len(completion))),
-            "mean_budget_tokens": (sum(x["budget_tokens"] for x in completion)
-                                   / max(1, len(completion))),
-            "stopped_fraction": (sum(x["stopped"] for x in completion)
-                                 / max(1, len(completion))),
-            "hard_cut_fraction": (sum(x["hard_cut"] for x in completion)
-                                  / max(1, len(completion))),
-            "n_bounded": len(bounded),
-            "hard_cut_fraction_bounded": (sum(x["hard_cut"] for x in bounded)
-                                          / max(1, len(bounded))),
-        }
-        result["examples"] = examples
-        return result
+        finish = lambda: _finish_generated_tasks(
+            items, questions, answers, completion, seed=seed,
+            n_per_task=n_per_task, generation_batch=generation_batch,
+            scope=scope, context_pad_random=context_pad_random,
+            context_wrong=context_wrong, rag_system_prompt=rag_system_prompt,
+            rag_tool_prompt=rag_tool_prompt,
+            context_window_lines=context_window_lines,
+            keep_examples=keep_examples)
+        return (generation_backend.guard_phase(
+                    "recall_metric_postprocess", finish)
+                if generation_backend is not None else finish())
     finally:
         if generation_backend is None and was_training:
             model.train()

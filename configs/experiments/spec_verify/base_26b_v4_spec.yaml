@@ -46,7 +46,7 @@ cache:
 # the comparison goal). Do NOT infer or set an item-count limit from these.
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   expert_routing_source: black_box
   method: layerwise
   run_class: open

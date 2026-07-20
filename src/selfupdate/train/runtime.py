@@ -34,13 +34,20 @@ def load_causal_lm(src, **kw):
 
 
 def vocab_signature(stack) -> tuple:
-    """Cheap exact fingerprint of the frozen vocabulary tensors (embedding,
-    final norm, head). Computed at trainer start and re-checked before
-    save: NO learning of any kind may modify these — they are the fixed
-    basis of every lens and every cached teacher target."""
+    """Cheap exact fingerprint of every frozen token/vocabulary tensor.
+
+    Besides embedding, final norm and head, this includes architecture-owned
+    token-identity inputs (Gemma PLE) and the mHC collapse head.  They are all
+    part of the immutable mapping from token ids to vocabulary logits.
+    """
     sig = []
     seen: set[int] = set()
-    for m in (stack.embed_tokens, stack.final_norm, stack.lm_head):
+    modules = [stack.embed_tokens, stack.final_norm, stack.lm_head,
+               getattr(stack, "hc_head", None)]
+    modules.extend(getattr(stack, "frozen_input_modules", []))
+    for m in modules:
+        if m is None:
+            continue
         for p in m.parameters():
             # tied-embedding models (Qwen3 <=1.7B): embed IS lm_head — one
             # pass over the shared tensor, not two (only compared within-run)

@@ -12,7 +12,7 @@ python scripts/compare_v4_shard_numerics.py \
 ```
 
 The comparison is exact by default; pass `--rtol` only when the experiment
-deliberately changes numerical placement. The v4.5 trainer-owned distributed
+deliberately changes numerical placement. The v4.6 trainer-owned distributed
 battery is the stage-coordinated token-prediction validation path, not a
-training objective or a stored certification fixture. Unsupported models use
-the trainer's private reconstructed fallback automatically.
+training objective or a stored certification fixture. It uses only the live
+stage owners; no reconstructed-model fallback exists.

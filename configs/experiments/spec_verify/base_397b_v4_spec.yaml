@@ -49,7 +49,7 @@ cache:
 # only by data.examples_path (the full 2071-item file).
 train:
   pipeline_version: 4
-  pipeline_revision: "4.0"
+  pipeline_revision: "4.6"
   expert_routing_source: black_box
   method: layerwise
   run_class: open
@@ -71,7 +71,6 @@ train:
   v4_teacher_source: store
   v4_stage_scoped: true
   v4_weight_residency: rotate
-  v4_battery_mode: subprocess
   v4_stage_splits: []
   v4_stage_devices: []
   v4_stage: -1

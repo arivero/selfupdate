@@ -216,6 +216,18 @@ class BlockRotator:
             self.pool.give(buf)
         self._moments_to(L, torch.device("cpu"))
 
+    def quiesce(self) -> None:
+        """Finish and evict every staged/in-flight evaluation page.
+
+        Epoch-boundary evaluation enters with an empty rotator. This cleanup is
+        the failure-path complement: even when a block forward raises after the
+        next prefetch was started, no staged CUDA weight survives into teardown.
+        """
+        for layer in list(self._inflight):
+            self.activate(layer)
+        for layer in list(self._staged):
+            self.evict(layer)
+
     def take_counters(self) -> dict:
         out = {"rotation_stall_seconds": round(self.stall_seconds, 3),
                "rotation_h2d_gb": round(self.h2d_bytes / 2**30, 2),
