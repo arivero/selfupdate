@@ -280,3 +280,27 @@ old reports are repaired on regeneration.  Future battery children reconstruct
 the telemetry baseline from the durable epoch-zero row and fail loudly if it
 is missing or malformed.  The current 16-item probe remains a noisy campaign
 gate; the separate 100-item endpoint battery is still required.
+
+### 13:40 CEST live checkpoint
+
+The 31B admission reproduced its epoch-1 pinned whole-set values bit-for-bit:
+cross-entropy (log loss) against the reference answer is
+`0.007980257367392954` and teacher-to-student KL is
+`0.005322228000664364`.  All four stages completed the first training epoch in
+466--470 seconds without errors; epochs 2--3 and the live-store certificate
+remain the admission gate before the 40-epoch arm starts.
+
+The cosine arm has completed all 12 training epochs and is draining its final
+battery/certification work.  Its endpoint is already scientifically
+unattractive, pending the final certificate and recall row.  From epoch 1 to
+12, mean local cosine distance falls about 5.0%, but the median is essentially
+unchanged (`0.00366453` to `0.00366331`), so the gain is dominated by a few
+outlier layers.  Whole-set output distance does not benefit: cross-entropy is
+effectively flat (-0.034%) and KL is slightly worse (+0.014%).  At the matched
+`1e-6` immediate-SGD setting, its final effective-LoRA RMS delta is
+`1.75e-4`, 4.28x the short Huber reference (`4.10e-5`), while its maximum
+layer gradient grows from 559 to 1154 (Huber: 362 to 402).  Absolute-state
+cosine therefore spends substantially more parameter movement on increasingly
+concentrated gradients without improving the composed output.  Do not promote
+it; the residual-update (`delta_cosine`) gate remains the higher-value loss
+test because it directly removes the block-input identity component.
