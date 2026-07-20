@@ -866,6 +866,22 @@ config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
 | answer_token_count | 101091 | 101091 | exact |
 | epoch_seconds | 263.63 | 96.64 (PPP4 stage0) | PPP1 slower (rotate overhead, largest model) |
 
+### gemma-4-31B PPP1 (clean recipe) — COMPLETE, BIT-EXACT
+
+Source: `runs/spec_31b_v4_ppp1_e1/stage0/metrics.jsonl` (verified on disk;
+config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
+
+| metric | PPP1 (clean) | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9992767415302627 | 0.9992767415302627 | bit-exact |
+| teacher_exact_seq_rate | 0.9744084983099952 | 0.9744084983099952 | bit-exact |
+| exact_seq_match_answers | 2018 | 2018 | exact |
+| answer_token_count | 78810 | 78810 | exact |
+| epoch_seconds | 167.26 | 140.137 (PPP4 stage0) | PPP1 slower (rotate overhead) |
+
+4 of 5 models now bit-exact on PPP1 (35B, 26B, 122B, 31B). Only 27B
+remains.
+
 **27B PPP1 crashed** on agpuh02 (host pinned-memory OOM inside
 `put_linear`'s `full_inputs.cpu().pin_memory()`, not a GPU OOM) while
 running concurrently with 35B and 122B — three simultaneous PPP1 jobs each
