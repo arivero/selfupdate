@@ -35,6 +35,7 @@ import contextlib
 import datetime
 import hashlib
 import os
+import time
 
 import torch
 
@@ -103,6 +104,65 @@ class NcclBoundaryRelay:
         _dbg("post all_gather; NcclBoundaryRelay ready")
         self._out: list[tuple[object, torch.Tensor]] = []
         self._in: dict[int, list[tuple[object, torch.Tensor]]] = {}
+
+        # Out-of-band readiness gate (fix, 2026-07-20; issues.md "OPEN --
+        # DeepSeek-V4-Flash PPP8 cross-node NCCL hang", repro in
+        # scripts/relay_nccl_hang_repro.py). Store-fill and epoch-relay
+        # traffic share this ONE ordered, untagged channel per adjacent
+        # pair, and NCCL matches send/recv strictly by call order. The
+        # original diagnosis read the symptom as "irecv blocks waiting for
+        # the peer's isend"; the repro shows the primitive does NOT block --
+        # every post_recv/is_completed poll returns in milliseconds
+        # regardless of the peer's state. The REAL hazard is a silent
+        # ORDER-BASED MISMATCH: if a successor posts its epoch-relay irecv
+        # burst (post_recv, below) before its predecessor has issued every
+        # one of its own store-fill sends, those irecvs get satisfied by
+        # LEFTOVER store-fill tensors, not the real boundary -- confirmed by
+        # the repro's controlled A/B (interleaved store-fill traffic during
+        # the predecessor's stall reliably produces a data mismatch;
+        # removing it does not). When a predecessor is stuck for a genuinely
+        # long time -- the real DeepSeek PPP8 crash -- the resulting
+        # backlog of never-matched irecvs is what eventually trips the NCCL
+        # watchdog timeout, which is what reads as "hung" from the outside.
+        # Fix: a TINY second TCPStore (never the file relay, which is
+        # node-local /dev/shm and invisible cross-node; never the main NCCL
+        # group, which is exactly the channel this needs to stay out of)
+        # carrying one boolean per stage: "every store-fill send I will ever
+        # issue toward stage+1 has been issued." A successor checks (or, for
+        # a blocking drain, waits on) its predecessor's flag before ever
+        # calling post_recv. is_master mirrors the main rendezvous: stage
+        # 0's host is already the leader (MASTER_ADDR).
+        # `or` (not `.get(key, default)`): the launcher forwards several of
+        # these as explicitly-empty-string env vars when unset
+        # (`VAR=${VAR:-}`), which `.get` would NOT treat as absent.
+        master_port = int(os.environ.get("MASTER_PORT") or "29517")
+        ready_port = int(os.environ.get("SELFUPDATE_V4_READY_PORT")
+                         or str(master_port + 1))
+        _dbg(f"pre ready-gate TCPStore on port {ready_port}")
+        self._ready_store = dist.TCPStore(
+            os.environ.get("MASTER_ADDR") or "127.0.0.1", ready_port,
+            world_size=self.stages, is_master=(self.stage == 0),
+            timeout=timeout, wait_for_workers=True)
+        self._relay_ready_marked = False
+        _dbg("post ready-gate TCPStore; NcclBoundaryRelay fully ready")
+
+    def mark_relay_ready(self) -> None:
+        """Announce: every store-fill send this rank will ever issue toward
+        stage+1 has been issued (or, if store-fill never ran, that there was
+        never any such traffic) -- safe for the successor to post its
+        epoch-relay irecv burst without risking the order-based mismatch
+        this gate exists to prevent. Idempotent."""
+        if not self._relay_ready_marked:
+            self._ready_store.set(f"relay_ready_{self.stage}", "1")
+            self._relay_ready_marked = True
+
+    def predecessor_relay_ready(self, pred_stage: int) -> bool:
+        """Non-blocking (returns immediately either way): has stage
+        ``pred_stage`` marked itself ready? Safe to call before every new
+        epoch's first post_recv -- once true it stays true (store-fill runs
+        at most once), so later epochs pay one cheap TCPStore round-trip
+        and nothing else."""
+        return self._ready_store.check([f"relay_ready_{pred_stage}"])
 
     def _boundary_shape(self, cohort) -> tuple:
         hidden = self._hidden_dims
@@ -228,6 +288,10 @@ class BoundaryTransport:
         self.hosts = parse_stage_hosts()
         self.transport = resolve_relay_transport(cfg)
         self.nccl = None
+        # Shared with the readiness-gate poll below (recv_forward): the same
+        # budget the main NCCL group already uses, so one knob still governs
+        # "how long do we tolerate a stalled peer" everywhere.
+        self._ready_timeout_s = int(cfg.train.v4_nccl_timeout_s)
         if self.transport == "nccl":
             self.nccl = NcclBoundaryRelay(cfg, cohorts, device, launch_id)
 
@@ -251,6 +315,18 @@ class BoundaryTransport:
     def set_hidden_dims(self, dims: tuple, dtype) -> None:
         if self.nccl is not None:
             self.nccl.set_hidden_dims(dims, dtype)
+
+    def mark_relay_ready(self) -> None:
+        """Announce that every store-fill send this stage will ever issue
+        toward stage+1 (or, if store-fill never ran, that there was never
+        any such traffic) is done -- safe for stage+1 to post its
+        epoch-relay irecv burst. Call once, right after store-fill returns
+        (or, when there is no store-fill, at the same point the epoch loop
+        would otherwise begin). No-op for the same-node file transport: its
+        consumer polls file existence, which carries no order-based
+        mismatch risk. See NcclBoundaryRelay.mark_relay_ready."""
+        if self.nccl is not None:
+            self.nccl.mark_relay_ready()
 
     def barrier(self) -> None:
         """Synchronize ALL ranks before run teardown. Without this a fast
@@ -281,6 +357,21 @@ class BoundaryTransport:
         boundary has not arrived yet."""
         if self.up_remote():
             if epoch not in self.nccl._in:
+                # Readiness gate (2026-07-20 fix): never post_recv (the
+                # irecv burst) until the predecessor has confirmed every one
+                # of its store-fill sends toward us is already issued --
+                # otherwise these irecvs can be satisfied by LEFTOVER
+                # store-fill data instead of the real boundary (order-based
+                # mismatch on the one shared, untagged channel; see
+                # NcclBoundaryRelay.mark_relay_ready and the repro in
+                # scripts/relay_nccl_hang_repro.py). Non-blocking callers
+                # just see "not ready yet" and retry later, exactly like an
+                # unarrived boundary; a blocking drain really waits for the
+                # predecessor instead of posting early.
+                if not self.nccl.predecessor_relay_ready(self.stage - 1):
+                    if not block:
+                        return None
+                    self._wait_predecessor_relay_ready(self.stage - 1)
                 self.nccl.post_recv(epoch)
             return self.nccl.take(epoch, block=block)
         path = self.rf.path(epoch, f"stage{self.stage - 1}.st")
@@ -293,6 +384,34 @@ class BoundaryTransport:
         with contextlib.suppress(OSError):
             path.parent.rmdir()
         return {int(k[1:]): v for k, v in loaded.items()}
+
+    def _wait_predecessor_relay_ready(self, pred_stage: int,
+                                      poll_s: float = 2.0) -> None:
+        """Blocking counterpart to the readiness gate, for a drain(): really
+        wait for the predecessor rather than posting our irecvs early. Polls
+        the (non-blocking) check in a loop instead of a raw
+        ``TCPStore.wait()`` -- a raw wait would block the FULL
+        v4_nccl_timeout_s (up to 1800s) with no chance to notice a
+        sibling's cooperative stop, exactly the failure class drain()
+        exists to survive (the 2026-07-18 e500 finale: a blocked wait that
+        outlived a stopped sibling cost three stages their checkpoints).
+        Mirrors _RelayFiles.wait()'s own stop-aware polling so both halves
+        of the boundary transport honor a stop the same way."""
+        from .online_v4 import _RelayStopped
+        from .stop import stop_requested
+        deadline = time.monotonic() + self._ready_timeout_s
+        while not self.nccl.predecessor_relay_ready(pred_stage):
+            if stop_requested() or (self.rf is not None
+                                    and self.rf.stop_seen()):
+                raise _RelayStopped(
+                    f"waiting for stage {pred_stage} relay-ready")
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"relay-ready timeout after {self._ready_timeout_s:.0f}s"
+                    f" waiting for stage {pred_stage} to mark its "
+                    "store-fill sends done; it may have crashed or "
+                    "stalled -- inspect its log")
+            time.sleep(poll_s)
 
     def reap_forward(self, block: bool) -> None:
         if self.nccl is not None:
