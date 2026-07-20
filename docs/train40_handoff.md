@@ -206,6 +206,28 @@ model artifacts.  GPUs were immediately backfilled with the larger probes;
 the endpoint resolver is under a fail-loud offline staging audit.  Do not
 enable network or bypass required model-file checks as a workaround.
 
+Continuation 2026-07-20 16:56 CEST: the endpoint defects are repaired on
+local HEAD (offline required-artifact validation, live-copy protection,
+fresh-model grace, and internal-name Qwen adapter attachment).  Strict
+100-item endpoints now pass for all five completed primary runs.  Macro
+epoch-zero -> checkpoint accuracy is: g31 0.3200->0.3200, q35
+0.6367->0.6333, q27 0.6633->0.6633, g26-SGD 0.3000->0.3067, and g26-Adam
+0.3000->0.3233.  Individual 27-page reports and the 10-page grouped report
+were regenerated and visually checked.  Q27/G26 still name missing signal
+attribution rather than silently claiming complete coverage.
+
+The explicit legal-A repair is committed and running full-size on agpuh01:
+`campaign40_g31b_context_repair_huber_e1` uses detached adapters-off,
+flow-censored teacher h_c[L-1] for BOTH query and frozen K/V, with uncensored
+teacher h_u[L] as target; its epoch-zero battery completed and its complete
+2,071-item epoch is active.  The historical source remains opt-in and
+unchanged.  The requested frozen vocabulary product is separately implemented
+as `vocab_cycle_mse`, measuring `h W_out.T W_in`; direct tied/untied tests and
+local-gradient checks pass.  Its 26B PPP4 config is ready behind the lens arm,
+but both new objectives require gradient-scale attribution and must not be
+presented as cures for the legacy context mismatch without repaired-context
+evidence.
+
 Completed: `campaign40_g26b_sgd` (full report generated and hand-verified).
 Running or queued at write time: `campaign40_q27b` (27B primary, just
 launched), `campaign40_g26b_adam` (26B confirmatory, just launched);
