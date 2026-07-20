@@ -43,7 +43,18 @@ def main():
         out = run_dir / "eval" / "weight_deltas.csv"
         if not ckpt.exists() or (out.exists() and not args.force):
             continue
-        cfg = yaml.safe_load((run_dir / "config.yaml").read_text())
+        # Stage-scoped v4 runs keep the merged checkpoint at run root but the
+        # immutable config snapshot under each stage.  Stage 0 is sufficient:
+        # only stage-local placement/ownership differs and model identity does
+        # not.  Refuse a genuinely missing snapshot instead of silently using
+        # the historical 0.6B default.
+        cfg_path = run_dir / "config.yaml"
+        if not cfg_path.is_file():
+            cfg_path = run_dir / "stage0" / "config.yaml"
+        if not cfg_path.is_file():
+            raise FileNotFoundError(
+                f"no config.yaml or stage0/config.yaml under {run_dir}")
+        cfg = yaml.safe_load(cfg_path.read_text())
         model_name = cfg.get("model", {}).get("name", "Qwen/Qwen3-0.6B")
         if model_name not in base_cache:
             base_cache[model_name] = load_state(base_snapshot(model_name))

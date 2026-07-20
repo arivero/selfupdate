@@ -40,6 +40,15 @@ of truth.
 - Campaign40 was not recognized by the group-report classifier, and grouped
   elapsed-time/pending discovery assumed flat runs.  Those are reporting bugs,
   not scientific exceptions; both are corrected with stage-aware discovery.
+- The required final checkpoint delta tool also assumed a flat run-level
+  `config.yaml`; PPP runs keep the snapshot under `stage0/`.  Its lookup is now
+  stage-aware.  The completed 26B SGD report was rebuilt in the required order
+  (layer-loss plots, final effective LoRA delta profile, individual report/PDF)
+  and visually checked through its temporal delta, damage, and frontier assets.
+  The effective-delta calculation independently confirms layers 24, 30, and
+  18 as the three largest movers (RMS relative deltas 0.0011, 0.0007, 0.0007).
+  The report continues to show the honest missing locality/signal certificate
+  and 100-item endpoint battery rather than promoting either gap to evidence.
 
 ## Loss-family extension requested 2026-07-20
 
