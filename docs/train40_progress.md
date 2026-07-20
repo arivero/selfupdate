@@ -171,3 +171,17 @@ than showing the Gemma-wide decline.  If this remains true at epoch 40, the
 first cross-architecture conclusion should be that one global LR is not a
 matched-update comparison: calibrate future loss/model arms by early LoRA
 delta or gradient scale, not the nominal optimizer LR alone.
+
+### Standard-damage delta repair
+
+The staged subprocess battery's raw per-task standard accuracies were correct,
+but each fresh child passed `baseline=None` at nonzero epochs.  Consequently
+the redundant derived fields `standard_epoch0_delta` and
+`standard_worst_delta` were falsely zero in all historical subprocess rows.
+This does not lose evidence: epoch-zero and every checkpoint's three task
+accuracies are durable in the same rows.  `report_v2.py` now always recomputes
+macro, epoch-zero delta, worst task, and worst delta from those raw scores, so
+old reports are repaired on regeneration.  Future battery children reconstruct
+the telemetry baseline from the durable epoch-zero row and fail loudly if it
+is missing or malformed.  The current 16-item probe remains a noisy campaign
+gate; the separate 100-item endpoint battery is still required.

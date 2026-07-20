@@ -514,7 +514,33 @@ def _eval_frames(rows: list[dict]) -> tuple[pd.DataFrame, pd.DataFrame]:
                 **{f"accuracy_{k}": v
                    for k, v in (row.get("standard_tasks") or {}).items()},
             })
-    return pd.DataFrame(recall), pd.DataFrame(standard)
+    standard_frame = pd.DataFrame(standard)
+    # Subprocess batteries are fresh processes. Historical rows therefore
+    # carried correct per-task accuracies but sometimes zeroed the derived
+    # epoch-zero/worst deltas by losing their in-memory baseline. Recompute all
+    # derived damage fields from the durable epoch-zero task scores so reports
+    # remain correct for both historical and repaired runs.
+    if not standard_frame.empty and 0 in set(standard_frame["epoch"]):
+        task_columns = sorted(
+            column for column in standard_frame.columns
+            if column.startswith("accuracy_"))
+        base = standard_frame[standard_frame["epoch"] == 0].iloc[-1]
+        for idx, row in standard_frame.iterrows():
+            common = [column for column in task_columns
+                      if pd.notna(base[column]) and pd.notna(row[column])]
+            if not common:
+                continue
+            deltas = {column: float(row[column]) - float(base[column])
+                      for column in common}
+            worst = min(deltas, key=deltas.get)
+            standard_frame.at[idx, "macro_accuracy"] = (
+                sum(float(row[column]) for column in common) / len(common))
+            standard_frame.at[idx, "epoch0_delta"] = (
+                sum(deltas.values()) / len(deltas))
+            standard_frame.at[idx, "worst_task"] = worst.removeprefix(
+                "accuracy_")
+            standard_frame.at[idx, "worst_delta"] = deltas[worst]
+    return pd.DataFrame(recall), standard_frame
 
 
 def _learning_summary(recall: pd.DataFrame) -> tuple[pd.DataFrame, int | None]:

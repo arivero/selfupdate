@@ -14,12 +14,50 @@ online_v4._subprocess_battery owns the GPU handoff.
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
+
+
+def _load_epoch_zero_standard_baseline(run_dir: Path) -> dict:
+    """Rebuild telemetry.py's baseline shape from the durable epoch-0 row.
+
+    Each staged battery is a fresh process, so an in-memory baseline cannot be
+    carried from the epoch-zero child.  The raw task accuracies are the durable
+    source of truth; refusing a missing/malformed row is safer than silently
+    recording every later damage delta as zero.
+    """
+    path = run_dir / "metrics.jsonl"
+    candidates = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("kind") == "standard_eval" and row.get("epoch") == 0:
+                candidates.append(row)
+    if not candidates:
+        raise RuntimeError(
+            f"missing epoch-zero standard_eval baseline in {path}; refusing "
+            "to emit false zero damage deltas")
+    row = candidates[-1]
+    scores = row.get("standard_tasks")
+    if not isinstance(scores, dict) or not scores:
+        raise RuntimeError(f"malformed epoch-zero standard_tasks in {path}")
+    return {
+        "tasks": {
+            task: {"accuracy": float(accuracy)}
+            for task, accuracy in scores.items()
+        },
+        "macro_accuracy": float(row["standard_macro_accuracy"]),
+        "limit": int(row["standard_limit"]),
+        "benchmark_revisions": dict(row.get("benchmark_revisions", {})),
+    }
 
 
 def main() -> None:
@@ -129,8 +167,14 @@ def main() -> None:
     if args.epoch == 0:
         _epoch_zero_telemetry(cfg, stack, tok, log, started)
     else:
+        baseline = None
+        if cfg.eval.standard_damage_every_epochs:
+            baseline = _load_epoch_zero_standard_baseline(run_dir)
+            log.log(kind="v4_battery_baseline_recovered", epoch=args.epoch,
+                    source="stage0_metrics_epoch0_standard_eval",
+                    standard_limit=baseline["limit"])
         _epoch_end_telemetry(cfg, stack, tok, log, epoch=args.epoch - 1,
-                             baseline=None, started_at=started)
+                             baseline=baseline, started_at=started)
     log.log(kind="v4_battery_subprocess", epoch=args.epoch,
             grafted_tensors=grafted, stages=args.stages,
             seconds=round(time.time() - started, 3))
