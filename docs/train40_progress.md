@@ -509,3 +509,43 @@ gradient norm by layer.  Do not queue further loss variants until this probe
 establishes whether context leakage, rather than loss geometry, dominates.
 The active 26B delta arm still completes its matched >12,000-item budget; its
 interpretation is explicitly conditional on this audit.
+
+### 2026-07-20 loss/evaluator update
+
+The uncensored-context 26B `lens_kl` screen completed and is rejected as a
+scale failure. Three-corpus mean recall collapsed from `0.148388` at epoch
+zero to `0.001987` at epoch 12, while the 16-item standard macro fell from
+`0.3125` to `0.1667`. Layer 2 alone reached an effective LoRA delta 2.844
+times its base-weight norm. The whole-set teacher-forced CE/KL diagnostics
+barely changed, demonstrating again that those local/fixed-sequence metrics
+are not evidence of successful autoregressive student behavior. Its 22-page
+report includes all 30 stage-owned layers and strict locality PASS; the
+mandatory 100-item standard endpoint remains explicitly missing/queued.
+
+The matched 26B `vocab_mse` arm is much better scaled. At epoch 3 its maximum
+relative LoRA delta was `5.04e-4`, recall moved only `0.14837 -> 0.14560`, and
+the small standard monitor moved `0.3125 -> 0.3333`. By epoch 6 recall had
+returned to `0.14714` and standard macro to `0.3125`. Teacher-forced CE/KL
+remained essentially flat, so this is stability evidence, not yet a learning
+claim. Preserve the epoch-12 endpoint before deciding promotion.
+
+A profiling regression was also removed after the repaired-context runs
+exposed burst/idle execution. Phase timing had inserted two full-device CUDA
+synchronizations plus one NVML query per layer/cohort write: 248,520 drains
+and 124,260 utilization queries per 60-layer/2,071-item epoch. Commit
+`b35058b` removes those drains and samples NVML at most once per second. On
+the live 26B vocabulary arm, steady epochs now take 11.3--14.6 seconds at
+87--91% utilization, versus 21--25 seconds in the immediately preceding
+synchronized 26B lens run. This is a provisional 1.7--1.9x steady-state
+recovery; final locality/numerics gates still apply.
+
+Student-evaluation terminology is now explicit. `teacher_output_eval` is a
+block-local teacher-forced surrogate; the asynchronous
+`student_trajectory_eval` is a complete fixed-sequence student walk but may
+be serviced at different adapter frontiers; only the recall battery performs
+autoregressive generation. The historical subprocess battery genuinely
+reconstructs all requested-epoch adapters, but pauses PPP and leaves three
+cards idle. Commits `52d8b25`/`8db5e7b` add an opt-in live-PPP evaluator;
+independent audit accepts its happy-path CPU math but found rank-asymmetric
+failure handling and fingerprint completeness gaps. Keep subprocess as the
+campaign default until those fixes and disposable multi-GPU parity pass.
