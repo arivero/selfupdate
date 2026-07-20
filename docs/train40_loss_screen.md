@@ -167,3 +167,13 @@ The legacy-context 26B lens SGD arm already showed an effective layer-2 LoRA
 delta 2.49 times the epoch-zero base-weight norm by epoch 3. It is therefore
 provisionally a scale failure; preserve its endpoint evidence and do not call
 the large parameter motion learning.
+
+The completed 12-epoch endpoint confirms that diagnosis. Mean recall across
+the three corpora fell from 0.1484 at epoch zero to 0.0020 at
+epoch 12 (Machado 0.00, Quijote chapter 1 0.00, chapter 4 0.01). The fixed
+16-item-per-task standard macro accuracy fell from 0.3125 to 0.1667
+(`standard_epoch0_delta: -0.1458`), with ARC-Challenge the worst task at
+-0.1875. Intermediate behavior had already worsened at epoch 3 (recall
+0.1310, standard 0.2292) and epoch 6 (standard 0.2083). This arm is rejected:
+its depth-uniform objective produced radically non-uniform effective movement,
+dominated by layer 2, and destroyed both recall and general capability.
