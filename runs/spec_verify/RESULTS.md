@@ -455,6 +455,32 @@ Commit `609d9d1`; purely additive, sanity-checked on synthetic data before
 touching any GPU. Since exact-seq is a pure function of the same per-token
 match booleans already shown bit-identical across parallelism degrees
 (table above), only one fresh re-run per model is needed to backfill it —
-not a full campaign repeat. Validation (bit-exact reproduction of the
-already-recorded `teacher_argmax_acceptance` on a real GPU run, PPP4 and
-PPP2 both, for 26B) is in flight; results to follow in this section.
+not a full campaign repeat.
+
+**Validation PASSED (26B PPP4, 2026-07-20).** Re-ran
+`scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_26b_v4_spec.yaml
+configs/experiments/spec_verify/26b_v4_spec_ppp4.yaml` with the instrumented
+code (backup of the pre-fix run preserved at
+`runs/spec_26b_v4_ppp4_e1.pre_exactseq_backup/`). `teacher_argmax_acceptance`
+reproduced **bit-for-bit**: `0.9952869328553885` on both the pre-fix and
+post-fix runs (Python `==` on the parsed floats) — the code change is
+confirmed numerically inert on the existing metric. `answer_token_count`
+also matched exactly (90387). `epoch_seconds` 71.12s vs the original 71.16s
+(same run, second independent timing sample — consistent).
+
+**First real exact-seq number, from the actual PPPn tool:**
+
+**gemma-4-26B-A4B, PPP4, full 2071-item epoch: teacher_exact_seq_rate =
+0.8570738773539353** — 1775 of 2071 answers (85.71%) had EVERY teacher-
+argmax token match vLLM's chosen token, versus 99.53% at the per-token
+level. The gap is expected, not a red flag: compounding a 99.53% per-token
+rate over ~44 tokens/answer (90387/2071) predicts roughly
+0.9953^43.6 ≈ 84.2%, close to the observed 85.71% — a sanity-consistent
+result, not an anomaly. Source:
+`runs/spec_26b_v4_ppp4_e1/stage3/metrics.jsonl`, `teacher_output_eval`,
+epoch 1 (`exact_seq_answer_count: 2071` confirms whole-corpus coverage).
+
+PPP2 cross-architecture check for the same model (does exact-seq also match
+across parallelism degrees, not just teacher_argmax_acceptance) is in
+flight; fan-out to 27B/31B/35B/122B (via their proven PPP4 configs) and
+397B (via PPP8x, with the borrowed-answer caveat) follows once that lands.
