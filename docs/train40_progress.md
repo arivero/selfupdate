@@ -150,3 +150,24 @@ the new inline locality certificate before the 40-epoch arm is admitted.
 - Apparent cross-stage epoch skew is not treated as failure: subprocess
   batteries intentionally offload and synchronize stages.  Worker PID/GPU
   liveness and fresh boundary/battery rows were checked on the owning hosts.
+
+### Provisional scientific read (not an endpoint claim)
+
+At epoch 30, Gemma-26B Adam (`3e-7`, betas 0.9/0.999) has reduced whole-set
+teacher-forced cross-entropy from 0.022696 at epoch 1 to 0.022295 (-1.77%) and
+teacher-to-student KL from 0.007521 to 0.007109 (-5.48%).  This is more movement
+than same-model SGD had accumulated by epoch 30 (-1.25% / -2.88%), despite the
+10x smaller numeric learning rate.  The behavioral tradeoff seen in the short
+screen is also repeating: Adam's three-corpus mean recall is 0.1485 at epoch
+zero and 0.1371 at epoch 25 (-7.7%), with Machado and Quijote chapter 4 down
+while chapter 1 is noisy/up.  The 8-item-per-task battery is too small for a
+final damage claim, but the direction is replicated evidence against treating
+the extra loss movement as a free gain.
+
+Qwen-27B SGD is qualitatively different through epoch 15: whole-set CE/KL are
+essentially flat (CE 0.013652 to 0.013657, KL 0.0004620 to 0.0004630), while
+the three-corpus mean recall oscillates around its epoch-zero level rather
+than showing the Gemma-wide decline.  If this remains true at epoch 40, the
+first cross-architecture conclusion should be that one global LR is not a
+matched-update comparison: calibrate future loss/model arms by early LoRA
+delta or gradient scale, not the nominal optimizer LR alone.
