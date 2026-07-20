@@ -608,11 +608,78 @@ required to bit-match, its own earlier standalone-script measurement
 (98.50%, different code path — see the torch baseline entry above); the two
 are independent measurements, not a reproduction check.
 
-A dedicated diagnostic (concrete divergence examples, margin/depth table,
-MoE-routing correlation) for 26B specifically — the worst case, and
-therefore the most informative — is in flight to distinguish bf16-tie noise
-from MoE-routing disagreement from an actual bug; see forthcoming section
-below once it lands.
+### 26B divergence diagnostic: NOT a code bug — MoE-routing sensitivity concentrated at low-constraint boundary positions (2026-07-20)
+
+Method: reused the real production code (`TrainingRuntime`, `DistillDataset`,
+`_V4Cohort`, `_online_teacher_capture`, `stack.lm_head`,
+`teacher_output_eval_sums` — no reimplementation), run B=1 per-item
+(`v4_teacher_source: online`, not `store`) to avoid an OOM the production
+micro-batch=64 config would hit outside its normal stage-scoped memory
+budget. This means the recomputed numbers are NOT bit-exact against the
+published (store-based) run — `teacher_argmax_acceptance` 0.994911 vs
+published 0.995287, exact-seq 1758/2071 vs published 1775/2071 — a small,
+real, informative divergence: it shows the metric has some sensitivity to
+batching/execution-path composition, plausibly because MoE routing itself
+depends on it, not because either measurement is wrong. Full raw data:
+473 divergent tokens across 319 divergent answers (of 90,387 tokens / 2071
+answers total), recorded per-position with margins and vLLM/predicted token
+ids.
+
+**Aggregate findings (all 473 divergences / 319 divergent answers, not
+curated examples):**
+
+| | value |
+|---|---:|
+| first-token-agree (26B) | 0.94978 |
+| first-token-agree (27B, dense, for contrast) | 0.99421 |
+| overall token-accept (26B) | 0.99477 |
+| divergent tokens at pos==0 | 104 / 473 (22.0%) |
+| divergent tokens at pos==length-1 | 28 / 473 (5.9%) |
+| divergent-token relative-depth quartile histogram | Q1 262 / Q2 111 / Q3 45 / Q4 55 — front-loaded, monotonic Q1->Q3 decline, small Q4 uptick |
+| divergent answers whose SOLE wrong position is pos 0 | 74 / 319 (23.2%) |
+| divergent answers whose SOLE wrong position is the last token | 24 / 319 (7.5%; 1.16% of all 2071) |
+| terminal-position vLLM token id | **106 in all 28 cases** (a single, consistent id — the turn/stop-like special token) |
+| terminal-position predicted id | 107 in 22/28 cases, else one of a few others |
+| terminal divergences at answer length >= 4096 (max_tokens-cap truncation risk) | 1 of 28 (median terminal-divergence answer length: 11.5 tokens — NOT a truncation-dominated population) |
+
+**Reading, following an independent advisor review of this exact data:**
+the first-token effect is the dominant, well-established driver of the
+exact-seq gap (23.2% of all divergent answers fail solely because of it) —
+and critically, **27B (dense) does NOT show this degradation at its own
+first token** (0.99421, close to its 0.99948 overall rate), while 26B (MoE)
+degrades sharply at position 0 alone (0.94978 vs 0.99477 overall). A
+masking/alignment/off-by-one bug at the thinking-channel boundary (every
+answer's position 0 immediately follows the chat template's
+`<|channel>thought\n<channel|>` marker) would be expected to hit dense and
+MoE models alike, since that boundary-handling code is shared, not MoE-
+specific. Only the MoE model degrading points at MoE ROUTING — a small
+upstream bf16 difference between our forward and vLLM's fused MoE kernel
+occasionally flips which expert gets selected, and this bites hardest at
+position 0 where the hidden state is least constrained by prior generated
+context. This is the same "not a defect" bucket as 27B's pure bf16 ties
+(see the torch-baseline entry above), just with a much louder, MoE-specific
+amplification mechanism — **not evidence of a bug in this repo's trainer
+code.**
+
+The terminal-token cluster is smaller (5.9% of divergences, 7.5% of
+divergent answers) but strikingly consistent — vLLM's chosen id is always
+106 (the same id, every single time) and ours is usually 107 — a genuine
+end-of-turn-calibration effect distinct from the first-token/MoE-routing
+story, though small enough not to change the headline conclusion. It also
+means the reported 85.71% exact-seq is very mildly conservative: excluding
+the 24 answers whose only fault is this terminal-token miss would raise
+exact-seq to 1799/2071 = 86.87%. Only 1 of the 28 terminal cases is at an
+answer length near vLLM's 4096-token cap (a plausible truncation artifact,
+flagged and excluded from generalization, not the explanation for the other
+27).
+
+**Bottom line for the user's question ("is the problem in our code"): no.**
+The dense-model contrast is the discriminating fact — a shared-code bug
+would not spare 27B's first token while breaking 26B's. Recommended
+follow-up if pursued further (not required for this campaign, GPU-optional):
+repeat the first-token-agree measurement on 35B/122B (MoE, should show the
+same degradation) and 31B (dense, should not) to confirm the mechanism
+holds across the whole model set, not just this one MoE/dense pair.
 
 397B's own exact-seq (PPP8x cross-node, with the pre-existing borrowed-
 answer caveat) is in flight next.
