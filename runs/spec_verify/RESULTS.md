@@ -733,3 +733,20 @@ Both teacher-side identity metrics bit-exact against PPP4 — extends the
 now-established parallelism-invariance finding (including exact-seq, not
 just the older per-token metric) to 27B. 31B and 122B PPP2 in flight next
 to complete this sweep for all 5 models.
+
+## PHASE 3 — PPP2 sweep progress: gemma-4-31B (2026-07-20)
+
+Same command pattern on agpuh02, run in parallel with 27B's PPP2 on
+agpuh01. Source: `runs/spec_31b_v4_ppp2_e1/stage1/metrics.jsonl`.
+
+| metric | PPP2 | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9992767415302627 | 0.9992767415302627 | bit-exact |
+| teacher_exact_seq_rate | 0.9744084983099952 | 0.9744084983099952 | bit-exact |
+| exact_seq_match_answers | 2018 | 2018 | exact |
+| answer_token_count | 78810 | 78810 | exact |
+| epoch_seconds (stage1/top) | 126.37 | 83.26 (PPP4 stage0) | PPP2 slower, same pattern |
+
+Bit-exact on both teacher-side identity metrics. 4 of 5 models now confirm
+exact-seq is parallelism-invariant (26B/27B/31B/35B); 122B PPP2 in flight
+to complete the sweep.
