@@ -2,7 +2,8 @@
 
 This screen asks whether the weak movement and gentle recall decline of the
 40-epoch Gemma-4-26B-A4B Huber run are properties of the optimizer recipe or
-of the local metric. It adds four 12-epoch PPP4 arms:
+of the local metric. It adds five 12-epoch PPP4 arms (the fifth was explicitly
+requested after the original four-arm screen was written):
 
 | Run | Local objective | Hypothesis |
 |---|---|---|
@@ -10,6 +11,14 @@ of the local metric. It adds four 12-epoch PPP4 arms:
 | `campaign40_loss_delta_cosine_g26b` | cosine distance between the owned block's student and teacher residual increments | Matching what block L adds, rather than the full residual state dominated by its shared input, may expose a stronger learning signal. |
 | `campaign40_loss_vocab_mse_g26b` | MSE in the frozen full-vocabulary metric | The frozen head's geometry may prioritize behaviorally relevant hidden directions without training vocabulary parameters. |
 | `campaign40_loss_lens_kl_g26b` | KL between full-vocabulary frozen-logit-lens distributions | Teacher probability geometry may be a sharper local behavioral metric, with the known risk of concentrated gradients and intrusion. |
+| `campaign40_loss_vocab_cycle_g26b` | normalized MSE after the frozen round trip `h W_out.T W_in` | The embedder/unembedder product may expose vocabulary directions missed by the single-head Gram metric; its squared singular spectrum may also be badly concentrated. |
+
+All five configs currently use the historical uncensored teacher-local context
+and must be labelled **legacy-context/confounded** in reports.  The context
+audit proved that this input diverges sharply from the censored deployment
+trajectory after layer 1.  These arms compare loss geometry under a fixed
+legacy context; none is evidence that changing the loss repairs censorship.
+The separately named repaired-context arm must establish that point.
 
 The delta objective is strictly block-local. For block L it compares
 `student_h[L] - stop_gradient(teacher_h[L-1])` with
@@ -22,7 +31,7 @@ Its launch remains gated until the `delta_cosine` implementation passes
 ## Fixed controls and interpretation
 
 Every overlay must be loaded on
-`configs/experiments/h100_smoke/base_gemma4_26b_v4_full.yaml`. The four arms
+`configs/experiments/h100_smoke/base_gemma4_26b_v4_full.yaml`. The five arms
 pin the proven campaign40 recipe: Gemma-4-26B-A4B, PPP4 cuts `[8,16,23]` on
 devices `[0,1,2,3]`, fill-once teacher store, stage-scoped auto residency,
 layer-major traversal, relay cadence 3, bucketed micro-batch 16, capture
@@ -52,7 +61,8 @@ was four epochs, so only epoch 0 and epoch 12 are endpoint-matched.
 
 ## Full-vocabulary admission and OOM fallback
 
-`vocab_mse` and `lens_kl` are admitted first in their full-vocabulary forms.
+`vocab_mse`, `vocab_cycle_mse`, and `lens_kl` are admitted first in their
+full-vocabulary forms.
 Do not pre-emptively replace either, reduce its scientific budget, or call a
 sampled approximation the same arm. If a full-vocabulary arm fails, retain
 the failed run and log, record the exact command, stage/layer/cohort, CUDA OOM
@@ -89,18 +99,18 @@ a new `campaign40_loss_*_e40` run name. A sampled-vocabulary fallback may be
 promoted only under its sampled name and with the full-vocabulary failure
 carried into the final coverage record.
 
-## Deferred objective ideas (do not widen the first screen)
+## Additional objective ideas
 
-Owner addition, 2026-07-20: after the censorship/context probe, add a
-separately named frozen vocabulary round-trip arm.  This is not the existing
+Owner addition, 2026-07-20: a separately named frozen vocabulary round-trip
+arm was requested and implemented.  This is not the existing
 `vocab_mse`: that objective measures with `W_out.T @ W_out` and coincides with
 an embedding/unembedding product only for tied weights.  The requested map is
 `C = W_in.T @ W_out` (vocabulary logits decoded back through the frozen input
 embedding), with a normalized MSE between `C h_student` and `C h_teacher` at
 every layer.  Keep both matrices frozen, apply the final norm with the same
 depth-uniform convention as the other vocabulary metrics, and give the loss
-and run an explicit `vocab_cycle_*` name.  Audit matrix orientation and tied
-versus untied weights before implementation; report its gradient scale rather
+and uses the explicit `vocab_cycle_*` name.  Matrix orientation and tied
+versus untied direct equivalence are CPU-certified; report its gradient scale rather
 than treating the raw coefficient as matched to `vocab_mse` or `lens_kl`.
 
 The first screen is intentionally factorial enough to identify whether the
