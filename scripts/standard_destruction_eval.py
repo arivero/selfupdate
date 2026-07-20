@@ -318,7 +318,21 @@ def _load_model(args):
             device_map=device_map,
             **load_kw,
         )
-        model = PeftModel.from_pretrained(base, src)
+        # These adapters were trained and saved against the already-converted
+        # in-memory Transformers module names.  PEFT 0.19 otherwise tries to
+        # apply the Transformers-v5 checkpoint conversion a second time for
+        # Qwen3.6 MoE, and its converter is API-incompatible with the pinned
+        # Transformers 5.12 WeightConverter (``distributed_operation``).
+        # Suppress only that external-checkpoint conversion during adapter
+        # attachment; restore the real model identity immediately afterward.
+        model_type = getattr(base.config, "model_type", None)
+        if model_type is not None:
+            base.config.model_type = f"selfupdate_internal_{model_type}"
+        try:
+            model = PeftModel.from_pretrained(base, src)
+        finally:
+            if model_type is not None:
+                base.config.model_type = model_type
     else:
         tok = AutoTokenizer.from_pretrained(src)
         model = AutoModelForCausalLM.from_pretrained(
