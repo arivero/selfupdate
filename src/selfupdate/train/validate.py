@@ -39,8 +39,12 @@ def validate_knob_schedule(cfg) -> None:
         raise ValueError(
             f"train.hidden_loss={train.hidden_loss!r} is evaluation-only and "
             "can never enter backward")
-    if train.hidden_loss.startswith("delta_") or train.hidden_loss == "multi_delta_nmse":
-        bad.append("v4 supports absolute local hidden losses only")
+    if ((train.hidden_loss.startswith("delta_")
+         and train.hidden_loss != "delta_cosine")
+            or train.hidden_loss.startswith("multi_delta_")):
+        bad.append(
+            "v4 admits only delta_cosine with a detached teacher anchor; "
+            "all other delta/connected-trajectory losses are forbidden")
 
     if train.v4_teacher_source not in ("cache", "online", "store"):
         bad.append("v4_teacher_source must be cache, online, or store")

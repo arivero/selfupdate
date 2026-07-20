@@ -6,10 +6,14 @@ tokens ``[s0+1, s0+A)`` — the caller passes tensors already sliced to the
 aligned span, so here row i of the student always corresponds to row i of the
 cached teacher.
 
-Three families of hidden-match kinds:
+Four families of hidden-match kinds:
 
 - geometric (``nmse``, ``l2mse``, ``cosine``, ``huber``): compare hidden
   vectors directly, in the residual-stream metric.
+- local-increment (``delta_cosine``): compare the current student block's
+  update ``student_h - teacher_input`` with the same teacher block's update
+  ``teacher_h - teacher_input``.  The input is the detached teacher anchor,
+  never a previous student block's output.
 - vocabulary-metric (``vocab_mse``, ``vocab_cosine_sampled``, ``lens_kl``, ``lens_js``, ``tuned_lens_kl``): compare hidden vectors as
   the FROZEN vocabulary sees them (docs/hidden_loss.md, Frozen-Vocabulary
   Principle). ``vocab_mse`` is MSE in logit space, computed cheaply through
@@ -38,6 +42,7 @@ from ..eval.teacher_output import EVALUATION_ONLY_OUTPUT_NAMES
 
 GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
                    "clipped_nmse", "contrastive", "relational_state", "zero")
+LOCAL_INCREMENT_KINDS = ("delta_cosine",)
 VOCAB_KINDS = ("vocab_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
                "tuned_lens_kl", "vocab_fisher")
 SPECIAL_KINDS = ("embedding_mse", "mahalanobis")
@@ -123,8 +128,10 @@ class HiddenLoss:
     kinds apply it here so every layer is measured in the decode geometry.
     The norm and head are frozen, so gradients through them still reach only
     the student block that produced ``student_h`` — locality is untouched.
-    Increment kinds expose :meth:`delta` for raw interior updates; calling an
-    increment kind at a cache boundary selects its documented state fallback.
+    ``delta_cosine`` additionally receives the aligned, detached teacher block
+    input.  At the final block it uses absolute cosine because the stored
+    target and ``loss_view`` are post-final-norm while the anchor is pre-norm;
+    subtracting them would not define a same-coordinate block update.
     """
 
     @classmethod
@@ -149,7 +156,8 @@ class HiddenLoss:
             raise ValueError(
                 f"{kind} is an evaluation-only full-training-set metric and "
                 "is NEVER a training objective")
-        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
+        if kind not in (GEOMETRIC_KINDS + LOCAL_INCREMENT_KINDS + VOCAB_KINDS
+                        + JACOBIAN_KINDS + SPECIAL_KINDS):
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
@@ -278,10 +286,25 @@ class HiddenLoss:
         return self._sampled_vocab
 
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
-                 normed: bool = False, layer: int | None = None) -> torch.Tensor:
+                 normed: bool = False, layer: int | None = None,
+                 aligned_input: torch.Tensor | None = None) -> torch.Tensor:
         # Teacher targets may be streamed from CPU or a stage-local store.
         teacher_h = teacher_h.to(student_h.device)
         kind = self.kind
+        if kind == "delta_cosine":
+            if normed:
+                # Final-layer targets/views are post-final-norm, whereas x is
+                # pre-norm. Absolute cosine is the explicit, typed fallback.
+                return hidden_match(student_h, teacher_h.detach(), "cosine")
+            if aligned_input is None:
+                raise ValueError(
+                    "delta_cosine needs the aligned detached teacher block input")
+            anchor = aligned_input.detach().to(student_h.device).float()
+            student_delta = student_h.float() - anchor
+            with torch.no_grad():
+                teacher_delta = teacher_h.float() - anchor
+            return 1.0 - F.cosine_similarity(
+                student_delta, teacher_delta, dim=-1, eps=1e-8).mean()
         if kind in JACOBIAN_KINDS:
             if layer is None:
                 raise ValueError(f"{kind} needs a 1-based layer index")

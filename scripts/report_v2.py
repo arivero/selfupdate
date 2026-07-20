@@ -160,10 +160,24 @@ def _loss_name(kind: str) -> str:
     return {
         "huber": "Huber robust loss against teacher hidden states",
         "cosine": "cosine-direction loss against teacher hidden states",
-        "delta_cosine": "cosine loss on successive teacher block increments",
+        "delta_cosine": (
+            "teacher-anchored local block-update cosine, with absolute "
+            "cosine at the post-norm final block"),
         "lens_kl": ("Kullback–Leibler divergence from teacher to student "
                     "through the frozen vocabulary head as a local metric"),
     }.get(kind, kind.replace("_", " "))
+
+
+def _optimizer_identity(train: dict) -> str:
+    """Render every optimizer knob that distinguishes campaign arms."""
+    optimizer = str(train.get("v4_optimizer", "immediate_sgd"))
+    identity = f"{optimizer}; lr={train.get('lr', 'missing')}"
+    if optimizer == "adam":
+        identity += (
+            f"; betas={train.get('v4_adam_betas', 'missing')}"
+            f"; eps={train.get('v4_adam_eps', 'missing')}"
+        )
+    return identity
 
 
 def _loss_measure_label(metrics: RunMetrics) -> str:
@@ -1074,7 +1088,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          f"- Training extent: {final_epoch} complete dataset epoch(s)."),
         f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
-        f"- Optimizer / LR rule / history: `{train.get('v4_optimizer', 'immediate_sgd')}` / "
+        f"- Optimizer / LR / Adam inertia: `{_optimizer_identity(train)}`; rule / history: "
         f"`{train.get('lr_rule', 'fixed')}` / `{train.get('history_policy', 'not_applicable')}`",
         f"- Backward / write dispatch: `{train.get('backward_dispatch', 'per_block')}` / "
         f"`{train.get('online_write_dispatch', 'after_backward')}`; stale-gradient "
@@ -1268,8 +1282,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              f"frozen-config value {configured_run_class})."),
             f"Update geometry/aggregation: {update_identity}",
             f"Realized update geometry: {realized_identity}",
-            ("Optimizer / LR rule / history: "
-             f"{train.get('v4_optimizer', 'immediate_sgd')} / "
+            ("Optimizer / LR / Adam inertia: "
+             f"{_optimizer_identity(train)}; rule / history: "
              f"{train.get('lr_rule', 'fixed')} / "
              f"{train.get('history_policy', 'not_applicable')}."),
             ("Batching: "
@@ -1317,11 +1331,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         figures=figures,
     )
     manifest = {
-        "schema_version": 5,
+        "schema_version": 6,
         "run": run_dir.name,
         "campaign": (
             "layerwise34_timing"
             if run_dir.name.startswith("layerwise34_timing_") else
+            "campaign40" if run_dir.name.startswith("campaign40_") else
             "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
             "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None),
         "complete": complete,
@@ -1349,6 +1364,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "realized": realized_geometry,
         },
         "optimizer": train.get("v4_optimizer", "immediate_sgd"),
+        "lr": train.get("lr"),
+        "v4_adam_betas": (train.get("v4_adam_betas")
+                           if train.get("v4_optimizer") == "adam" else None),
+        "v4_adam_eps": (train.get("v4_adam_eps")
+                         if train.get("v4_optimizer") == "adam" else None),
         "lr_rule": train.get("lr_rule"),
         "history_policy": train.get("history_policy"),
         "backward_dispatch": train.get("backward_dispatch", "per_block"),

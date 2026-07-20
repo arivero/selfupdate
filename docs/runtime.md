@@ -45,8 +45,10 @@ head, teacher tensor, or frozen context.
 The student's own hidden trajectory is never a training input. A "student
 step" means the block's trainable weights are enabled; it does not mean that
 its input came from a preceding student block. `validate_knob_schedule`
-enforces `pipeline_version: 4`, `trajectory_source: teacher_hidden`, an
-absolute local hidden loss, and `conn_window <= 1`.
+enforces `pipeline_version: 4`, `trajectory_source: teacher_hidden`, a
+block-local hidden loss, and `conn_window <= 1`. The sole increment variant,
+`delta_cosine`, is anchored on the same detached teacher block input; it never
+consumes a preceding student block's output.
 
 ## Teacher tensor production and residency
 

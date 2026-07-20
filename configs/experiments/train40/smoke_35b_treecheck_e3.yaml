@@ -1,0 +1,33 @@
+# Tree-regression smoke check (2026-07-20): this overlay's YAML payload is
+# byte-identical to the current, post-cleanup form of the proven pre-cleanup
+# configs/experiments/h100_smoke/qwen36_35b_v4_ppp4_evalin.yaml except for
+# run_name. Compare stage3 teacher_output_eval epoch-by-epoch against
+# runs/h100_g35b_v4_ppp4_evalin (source commit 458daa5, config SHA256
+# 86218f81c83ffb1defb78fbf865caee268d5bb064b8b770fb2529e0254114570):
+# epoch 1 CE 0.023721730122800735 / KL 0.006665818600548147;
+# epoch 2 CE 0.023710511926950516 / KL 0.006658009799057498;
+# epoch 3 CE 0.02369437886786111  / KL 0.006651691141007171.
+# Do not promote this file into the campaign -- it is 3-epoch smoke only.
+run_name: smoke_35b_treecheck_e3
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  batching: bucketed
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [10, 20, 30]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1

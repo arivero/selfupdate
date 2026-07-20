@@ -15,6 +15,12 @@ i_L = teacher h[L-1]   (cached, full sequence:  cache.store_full_teacher_inputs)
 h_L = teacher h[L]     (cached, aligned span)
 ```
 
+For `delta_cosine` only, the interior-block comparison is between
+`block_L^student(i_L)-i_L` and `h_L-i_L`, with `i_L` detached. The final
+block uses absolute hidden cosine because its stored/computed loss view is
+post-final-norm while `i_L` is pre-norm. No student trajectory or connected
+window is introduced.
+
 - **No training loss touches the student's own trajectory.** Student hiddens
   are still computed — but only for the two validation losses (CE-eval /
   KL-eval via the relay, M3) and the generation probes.

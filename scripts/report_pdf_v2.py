@@ -20,6 +20,8 @@ def _cell(value) -> str:
     if value is None or pd.isna(value):
         return ""
     if isinstance(value, float):
+        if value and abs(value) < 1e-3:
+            return f"{value:.2e}"
         return f"{value:.4f}"
     return str(value)
 
@@ -172,6 +174,54 @@ def write_individual_pdf(
         _table_pages(pdf, "Most-modified layers (final checkpoint)", delta,
                      ["layer", "relative_l2"])
         _text_page(pdf, "Coverage and provenance", coverage)
+        for figure_title, image in figures:
+            _image_page(pdf, figure_title, image)
+    tmp.replace(path)
+    return path
+
+
+def write_grouped_pdf(
+    path: Path,
+    *,
+    title: str,
+    inclusion: list[str],
+    eligible: pd.DataFrame,
+    coverage: pd.DataFrame,
+    notes: list[str],
+    figures: list[tuple[str, Path]],
+) -> Path:
+    """Write a compact grouped report without widening scientific inclusion.
+
+    ``eligible`` is the strictly local evidence table.  ``coverage`` is a
+    provenance roster only and may contain incomplete or uncertified runs.
+    Keeping the two inputs separate prevents report-pending checkpoints from
+    silently becoming frontier evidence.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    if tmp.exists():
+        tmp.unlink()
+    with PdfPages(tmp) as pdf:
+        info = pdf.infodict()
+        info["Title"] = title
+        info["Author"] = "selfupdate layerwise reporting"
+        _text_page(pdf, title, inclusion)
+        _table_pages(
+            pdf,
+            "Eligible strictly local runs",
+            eligible,
+            ["run", "model", "loss", "optimizer", "lr", "final_recall",
+             "standard_damage", "elapsed_minutes"],
+            rows_per_page=14,
+        )
+        _table_pages(
+            pdf,
+            "All discovered campaign runs (provenance only)",
+            coverage,
+            ["run", "status", "model", "loss", "optimizer", "lr"],
+            rows_per_page=20,
+        )
+        _text_page(pdf, "Missing artifacts and certification", notes)
         for figure_title, image in figures:
             _image_page(pdf, figure_title, image)
     tmp.replace(path)

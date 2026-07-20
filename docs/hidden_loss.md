@@ -35,9 +35,37 @@ metrics pass `s` and `t` through the frozen final norm/head (or a frozen
 sample/sketch) as a measurement device.  `lens_kl`/`lens_js` likewise compare
 local distributions while leaving the vocabulary stack unchanged.
 
-Successive-state delta losses and connected-window objectives belonged to
-student-trajectory protocols and are rejected by the v4 validator.  A loss
-may not create credit across blocks or apply depth-increasing weighting.
+## Teacher-anchored local increment cosine
+
+`delta_cosine` is the sole admitted increment objective.  For every
+non-final block it uses the same detached teacher input already consumed by
+the v4 block step:
+
+```text
+x_L       = stopgrad(teacher h[L-1])
+delta_s,L = student_block_L(x_L) - x_L
+delta_t,L = stopgrad(teacher h[L] - x_L)
+loss_L    = 1 - cosine(delta_s,L, delta_t,L)
+```
+
+This is not the historical successive-student-state loss: neither increment
+contains a student output from block `L-1`. Since both `x_L` and
+`delta_t,L` are detached constants, `delta_s,L` depends only on `theta_L`, so
+
+```text
+d loss_L / d theta_j = 0,  j != L.
+```
+
+At the final block, cached `teacher h[n]` and `BlockStack.loss_view` are
+post-final-norm, while `x_n` is the pre-norm block input (and for mHC models
+may also precede the frozen stream-collapse head). Those tensors do not
+describe an increment in one coordinate space. The final block therefore
+uses the explicit fallback `1 - cosine(student_postnorm, teacher_postnorm)`;
+it does not subtract `x_n`.
+
+Every other historical `delta_*` / `multi_delta_*` objective and all
+connected-window machinery remain rejected. A loss may not create credit
+across blocks or apply depth-increasing weighting.
 
 ## Output metrics are evaluation only
 

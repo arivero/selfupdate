@@ -1218,7 +1218,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
 
     log.log(
         kind="pipeline_v4_contract",
-        objective="student_block_L(teacher_h[L-1]) vs teacher_h[L]",
+        hidden_loss=cfg.train.hidden_loss,
+        objective=(
+            "cos(student_block_L(x)-x, teacher_h[L]-x), "
+            "x=detached_teacher_h[L-1]"
+            if cfg.train.hidden_loss == "delta_cosine" else
+            "student_block_L(teacher_h[L-1]) vs teacher_h[L]"),
+        final_block_loss=(
+            "absolute_postnorm_cosine_fallback"
+            if cfg.train.hidden_loss == "delta_cosine" else
+            "configured_hidden_loss"),
         attention_context="frozen_teacher_kv_full_sequence",
         linear_attention_rule=(
             "full_sequence_teacher_forced_own_recurrence_flow_censored"),
@@ -1375,6 +1384,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         layer_type = _v4_layer_type(stack, layer)
         moe_step = moe_ctrl is not None and layer in moe_ctrl.adapters
         router_extra = None
+        aligned_input = None
         prep_started = time.perf_counter()
         entry = build_layer_cohort(layer, cohort_idx, capture)
         if layer_type == "linear_attention":
@@ -1404,6 +1414,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     router_extra = pending_router_loss()
             out = cohort.gather_query_inputs(out_full)
             del out_full
+            if loss_fn.kind == "delta_cosine":
+                aligned_input = cohort.gather_query_inputs(full_inputs)
         else:
             kv, inputs_q, targets = tensors.staged(entry)
             rope_q = stack.rope(inputs_q, cohort.qpos_dev)
@@ -1452,13 +1464,18 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     prepared_attention_mask=mask, input_ids=input_ids_q)
                 if moe_step:
                     router_extra = pending_router_loss()
+            if loss_fn.kind == "delta_cosine":
+                aligned_input = inputs_q
         view = stack.loss_view(layer, out)
         target = targets.to(view.dtype)
         valid = cohort.loss_valid_dev
         flat_view = view[valid]
         flat_target = target[valid]
+        flat_input = (None if aligned_input is None
+                      else aligned_input[valid])
         mean_loss = loss_fn(flat_view, flat_target,
-                            normed=(layer == n), layer=layer)
+                            normed=(layer == n), layer=layer,
+                            aligned_input=flat_input)
         summed = mean_loss * flat_view.shape[0]
         if router_extra is not None:
             # router_aligned only: the pre-weighted KL(teacher||student)
@@ -2005,6 +2022,7 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                 full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
                 targets = cohort.gather_targets(cache, layer).to(device)
             layer_type = _v4_layer_type(stack, layer)
+            aligned_input = None
             if layer_type == "linear_attention":
                 # Same routing as the walk: recurrent mixers take the full
                 # teacher-forced sequence, no KV object.
@@ -2015,6 +2033,8 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                     position_ids=pos, flow_keep=cohort.keep.to(device),
                     causal_length=cohort.T)
                 out = cohort.gather_query_inputs(out_full)
+                if loss_fn.kind == "delta_cosine":
+                    aligned_input = cohort.gather_query_inputs(full_inputs)
             elif getattr(stack, "needs_deepseek_masks", False):
                 # Same record/serve procedure as the training walk.
                 pos = torch.arange(cohort.T, device=device)[None]
@@ -2049,6 +2069,8 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                     past_key_values=frozen, use_cache=False,
                     prepared_attention_mask=mask,
                     input_ids=ids_full.gather(1, cohort.qpos_dev))
+                if loss_fn.kind == "delta_cosine":
+                    aligned_input = inputs_q
             else:
                 kv = _FrozenKV()
                 pos = torch.arange(cohort.T, device=device)[None]
@@ -2073,10 +2095,15 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                     layer, inputs_q, rope_q, position_ids=cohort.qpos_dev,
                     past_key_values=kv, use_cache=False,
                     prepared_attention_mask=mask)
+                if loss_fn.kind == "delta_cosine":
+                    aligned_input = inputs_q
             view = stack.loss_view(layer, out)
             valid = cohort.loss_valid_dev
+            flat_input = (None if aligned_input is None
+                          else aligned_input[valid])
             loss = loss_fn(view[valid], targets.to(view.dtype)[valid],
-                           normed=(layer == n), layer=layer)
+                           normed=(layer == n), layer=layer,
+                           aligned_input=flat_input)
             (loss * int(valid.sum())).backward()
             for p in stack.block_params(layer):
                 if p.grad is not None:
