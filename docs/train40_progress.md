@@ -145,8 +145,8 @@ node-local `/dev/shm`, while cross-node tensor transport is NCCL/IB.
 At 12:00 CEST the full-arm overlay was corrected to pin the intended
 `micro_batch: 16` and `v4_capture_micro_batch: 2`, and a separate three-epoch
 PPP8 admission overlay (`smoke_122b_xnode_e3.yaml`) was added.  The launcher
-comment now states the actual no-disk communication law.  These preparation
-At 12:10 CEST commit `e086ba6` implemented remote adapter publication on a
+comment now states the actual no-disk communication law.  At 12:10 CEST commit
+`e086ba6` implemented remote adapter publication on a
 separate NCCL communicator: stage 0 validates and materializes the enveloped
 shards in its own `/dev/shm` for the unchanged battery child.  Long-running
 battery status uses the already established launch TCPStore so ranks do not
@@ -192,6 +192,15 @@ on agpuh02 as `v4-20260720130000-4153872` (PIDs 4153925, 4154007, 4154056,
 cosine`, and expected ownership `[1,8]`, `[9,16]`, `[17,23]`, `[24,30]`.
 The primary 35B 40-epoch arm is the next successor on that host if cosine
 completes and certifies cleanly.
+
+Qwen-27B completed all four stage checkpoints/done rows at 13:14 CEST.  Its
+historical-runtime locality rows remain explicit skipped debt, not evidence.
+The four adapter shards were merged and layer-loss plotting completed; the
+dense 64-layer effective-LoRA delta calculation is in progress.  The 31B
+tree/locality smoke took over agpuh01 at 13:15 CEST as
+`v4-20260720131525-2979448` (PIDs 2979528, 2979639, 2979682, 2979725), with
+clean source `77baef7` and physical GPUs 0--3.  A passing exact-reference and
+inline-certificate gate promotes directly to the primary 31B 40-epoch arm.
 
 ### Provisional scientific read (not an endpoint claim)
 
