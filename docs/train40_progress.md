@@ -158,6 +158,19 @@ This lifts the gate only for the three-epoch cross-node smoke.  It must
 complete all eight stages, four battery points (epoch zero through three), and
 the new inline locality certificate before the 40-epoch arm is admitted.
 
+The 14:20 CEST two-node recheck leaves that smoke in GO state once both
+primary arms release their GPUs.  Both hosts have H100 80GB x4, driver
+565.57.01, torch 2.11/cu128 and identical pinned Python packages.  Their 122B
+snapshots resolve the same revision `dc4d3484`, contain all 39 shards (about
+233 GiB), and have matching config/index/tokenizer hashes.  Each node's
+fill-once teacher index is READY with 2,071 examples and identical
+`index.json` SHA256 `5ae6e031...`; dataset and response identities also match.
+Bidirectional batch SSH, management-network ping, and both 200G InfiniBand
+links pass.  There are no stale smoke/full run, lease, relay, log, or process
+identities.  Resolved dispatch has eight unique `(host, device)` owners at the
+intended 16/2 shape.  Current 31B/35B GPU occupancy is the only blocker; do
+not preempt either primary arm.
+
 ## 2026-07-20 12:00 CEST — live utilization
 
 - `campaign40_g26b_adam` is healthy on agpuh02 at approximately epoch 25 on
