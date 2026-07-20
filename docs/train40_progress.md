@@ -326,3 +326,29 @@ substantially more parameter movement on increasingly concentrated gradients
 without improving the composed output.  Do not promote it; the residual-update
 (`delta_cosine`) gate remains the higher-value loss test because it directly
 removes the block-input identity component.
+
+### 14:02 CEST primary-arm handoff
+
+The 31B admission passed all three exact historical-reference pairs
+bit-for-bit.  Its final whole-training-set cross-entropy/KL pair is
+`0.0079734707257338` / `0.005322737489728979`.  All four
+`live_fill_once_store` locality certificates passed over the exact L1--15,
+L16--30, L31--45, and L46--60 ownership partition, followed by four
+checkpoints and done rows.  The primary 40-epoch run `campaign40_g31b` then
+launched on agpuh01 as `v4-20260720140218-2987015`; its four clean contracts
+record source `4ebb958`, `runtime_dirty=false`, and physical GPUs 0--3.
+
+The 35B primary `campaign40_q35b` is simultaneously training on agpuh02.  It
+launched as `v4-20260720134246-4156328` after the certified cosine arm and has
+clean source `6952b21`, exact L1--10/L11--20/L21--30/L31--40 ownership, and
+physical GPUs 0--3.  Thus both H100 nodes have moved from admission work into
+their remaining single-node primary arms.
+
+The missing full-size standard-benchmark step is now a reproducible campaign
+operation rather than a report footnote.  `scripts/evaluate_train40_full_standard.sh`
+validates each merged adapter, evaluates the matching untrained base and final
+checkpoint on all three vendored tasks at 100 items per task, manages
+node-local staging, and writes the canonical `runs/standard_damage` identities
+that `report_v2.py` consumes.  Run it only on an otherwise idle node; endpoint
+jobs remain queued behind active training and will be followed by report
+regeneration.
