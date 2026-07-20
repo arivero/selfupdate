@@ -100,9 +100,10 @@ layers exactly cover its declared ownership; historical skipped rows remain
 uncertified.  CPU contract checks pass; the 31B/35B tree-regression smokes are
 the first GPU admission gate before this change is used by a full arm.
 
-## 122B cross-node preflight — NO-GO as of 2026-07-20 11:50 CEST
+## 122B cross-node preflight — smoke-only GO as of 2026-07-20 12:10 CEST
 
-Do not launch `campaign40_q122b` yet.  Read-only preflight found two technical
+Do not launch the 40-epoch `campaign40_q122b` arm yet.  Read-only preflight
+found two technical
 blockers hidden by the earlier handoff:
 
 - Cross-node subprocess-battery acknowledgement/done files are under each
@@ -121,3 +122,31 @@ Both nodes otherwise have matching 122B model snapshots and byte-identical
 `/dev/shm`, and no 122B lease or run directory.  Correct stale launcher/config
 comments that still claim a shared-Lustre relay: the real file relay is
 node-local `/dev/shm`, while cross-node tensor transport is NCCL/IB.
+
+At 12:00 CEST the full-arm overlay was corrected to pin the intended
+`micro_batch: 16` and `v4_capture_micro_batch: 2`, and a separate three-epoch
+PPP8 admission overlay (`smoke_122b_xnode_e3.yaml`) was added.  The launcher
+comment now states the actual no-disk communication law.  These preparation
+At 12:10 CEST commit `e086ba6` implemented remote adapter publication on a
+separate NCCL communicator: stage 0 validates and materializes the enveloped
+shards in its own `/dev/shm` for the unchanged battery child.  Long-running
+battery status uses the already established launch TCPStore so ranks do not
+hold an NCCL collective while the child owns stage 0's GPUs; nonzero child
+status reaches every rank.  The CPU protocol check, both locality/report
+self-checks, Python compilation, config validation, and diff check pass.
+
+This lifts the gate only for the three-epoch cross-node smoke.  It must
+complete all eight stages, four battery points (epoch zero through three), and
+the new inline locality certificate before the 40-epoch arm is admitted.
+
+## 2026-07-20 12:00 CEST — live utilization
+
+- `campaign40_g26b_adam` is healthy on agpuh02 at approximately epoch 25 on
+  all four stages; every GPU is active.  The cosine loss-screen arm is staged
+  as the immediate successor on that node.
+- `campaign40_q27b` is healthy on agpuh01 at approximately epoch 14 (the last
+  stage temporarily trails during battery work); every GPU is active.  The
+  three-epoch 31B tree/locality smoke is staged as its immediate successor.
+- Apparent cross-stage epoch skew is not treated as failure: subprocess
+  batteries intentionally offload and synchronize stages.  Worker PID/GPU
+  liveness and fresh boundary/battery rows were checked on the owning hosts.

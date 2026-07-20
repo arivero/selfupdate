@@ -16,6 +16,10 @@ train:
   pipeline_version: 4
   pipeline_revision: "4.0"
   batching: bucketed
+  # Explicitly pin the measured PPP8 shape.  The base currently defaults to
+  # 32/0, which has OOMed the stage-7 backward and is not the campaign recipe.
+  micro_batch: 16
+  v4_capture_micro_batch: 2
   epochs: 40
   seed: 17
   v4_teacher_source: store

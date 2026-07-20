@@ -88,3 +88,32 @@ seed, changes only `epochs: 40` and both evaluation cadences to 5, and receives
 a new `campaign40_loss_*_e40` run name. A sampled-vocabulary fallback may be
 promoted only under its sampled name and with the full-vocabulary failure
 carried into the final coverage record.
+
+## Deferred objective ideas (do not widen the first screen)
+
+The first screen is intentionally factorial enough to identify whether the
+useful signal lives in absolute hidden geometry, the residual update, or the
+frozen vocabulary measurement.  Two follow-ups are scientifically stronger
+than simply adding more uncalibrated names now:
+
+1. **Delta direction plus log-magnitude.** Pure `delta_cosine` discards the
+   size of the teacher block update and is poorly conditioned when either
+   update is near zero.  A local composite can add a depth-uniform smooth-L1
+   penalty on
+   `log(||delta_student|| + epsilon) - log(||delta_teacher|| + epsilon)`.
+   Report direction and magnitude gradient shares separately; choose their
+   coefficient from a short gradient-scale calibration, never from endpoint
+   recall.
+2. **Teacher-scale-normalized delta Huber.** Apply Huber to
+   `(delta_student - delta_teacher) / stop_gradient(rms(delta_teacher)+eps)`.
+   This preserves magnitude information while preventing blocks with naturally
+   large updates from owning the global comparison.  The denominator must be
+   per item/token (or a provenance-pinned frozen statistic), not a learned
+   cross-block normalizer.
+
+A token-centered or whitened residual objective is also plausible, but it
+couples examples/tokens through batch statistics and makes results sensitive
+to bucket composition.  It should remain behind the two strictly pointwise
+forms above.  None of these deferred ideas is queued until the four-arm screen
+establishes gradient scale, update-norm distributions, and whether pure
+direction matching has a nonzero behavioral benefit.
