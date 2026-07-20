@@ -68,18 +68,19 @@ Then require exact placement numerics (do not relax tolerance pre-emptively):
 ```bash
 $PY scripts/compare_v4_shard_numerics.py \
   runs/h100_admit_delta_cosine_0p6b_store_ppp1_e1 \
-  runs/h100_admit_delta_cosine_0p6b_store_ppp2_e1
+  runs/h100_admit_delta_cosine_0p6b_store_ppp2_e1 \
+  --strict-current
 ```
 
-The comparator should report 28 checked `(epoch, layer)` cells, worst relative
-delta `0.000e+00`, and PASS. If it does not, diagnose the first mismatching
-layer before considering any tolerance.
+The comparator should report 28 loss cells, 28 gradient cells, worst relative
+delta `0.000e+00`, and PASS. Strict mode also rejects a dirty/different source
+tree, a different loss kind, incomplete/overlapping/extra stage ownership, and
+missing/skipped/failed or wrongly scoped locality certificates. If it does not
+pass, diagnose the first mismatch before considering any tolerance.
 
-## Known instrumentation gap
+## Historical mode
 
-`compare_v4_shard_numerics.py` currently compares only `v4_epoch.layer_losses`.
-Its docstring says gradient norms agree, but no gradient-norm field exists in a
-`v4_epoch` row, and the script does not inspect locality certificates, loss
-kind, source commit, or duplicated/extra stage ownership. The manual evidence
-checks above are therefore part of this admission. Do not mistake the
-comparator alone for the full gate.
+Without `--strict-current`, `compare_v4_shard_numerics.py` retains its original
+loss-only behavior for historical artifacts that predate gradient rows or the
+current locality certificate. That compatibility mode is archaeology, not an
+admission gate.
