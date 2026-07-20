@@ -711,3 +711,25 @@ fidelity finding, per the standing caveat.
 COMPLETE for all genuinely-testable models (26B/27B/31B/35B/122B); 397B is
 recorded with its caveat; DeepSeek remains excluded pending its separate
 PPP8 NCCL fix (owner-authorized follow-up, not required for this closure).
+
+## PHASE 3 — PPP2 sweep progress: Qwen3.6-27B (2026-07-20)
+
+`scripts/launch_v4_stages.sh configs/experiments/spec_verify/base_27b_v4_spec.yaml
+configs/experiments/spec_verify/27b_v4_spec_ppp2.yaml`, 2 stages,
+`v4_stage_devices: [0, 1]` on agpuh01, run in parallel with 31B's PPP2 on
+agpuh02 (no contention, different hosts). Source:
+`runs/spec_27b_v4_ppp2_e1/stage1/metrics.jsonl` (stage1 owns the vocab
+head).
+
+| metric | PPP2 | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9995056985891225 | 0.9995056985891225 | bit-exact |
+| teacher_exact_seq_rate | 0.9859971028488653 | 0.9859971028488653 | bit-exact |
+| exact_seq_match_answers | 2042 | 2042 | exact |
+| answer_token_count | 70807 | 70807 | exact |
+| epoch_seconds (stage1/top) | 159.09 | 109.06 (PPP4 stage3) | PPP2 slower — fewer stages, less pipeline overlap, same pattern already seen on 26B/35B |
+
+Both teacher-side identity metrics bit-exact against PPP4 — extends the
+now-established parallelism-invariance finding (including exact-seq, not
+just the older per-token metric) to 27B. 31B and 122B PPP2 in flight next
+to complete this sweep for all 5 models.
