@@ -1,0 +1,179 @@
+path,language,category,user_facing,lines,bytes,standalone_file_tokens,entrypoint_logic_tokens,purpose
+analysis/code_genealogy.py,Python,catalog/build infrastructure,no,301,10473,2619,2619,Build reproducible code-genealogy artifacts for defactorised scripts.
+analysis/generate_script_catalog.py,Python,catalog/build infrastructure,no,272,10457,2615,2615,Generate the reproducible inventory of defactorised executable sources.
+attention_probe.py,Python,Python entry point,yes,184,343330,85833,1418,"Head taxonomy: which attention heads are grammar, which carry content?"
+audit_configs.py,Python,Python entry point,yes,263,345163,86291,1877,Audit active configs for branch-law violations.
+base_general.py,Python,Python entry point,yes,68,338192,84548,134,General CE of an epoch-zero teacher.
+benchmark_hidden_transfer.py,Python,Python entry point,yes,105,3996,999,999,Measure GPU-to-CPU egress for one cache token across every transformer layer.
+benchmark_ppn_transport.py,Python,Python entry point,yes,120,340226,85057,642,Measure exact PPn boundary-copy candidates outside the training hot loop.
+benchmark_vllm_generation.py,Python,Python entry point,yes,499,362483,90621,6207,Greedy V5 teacher-generation benchmark with vLLM.
+build_coverage_queue.py,Python,Python entry point,yes,127,4776,1194,1194,Build the one-off 2026-07-10 checkpoint coverage queue.
+build_dataset.py,Python,Python entry point,yes,255,346008,86502,2088,Build data/poem/examples.jsonl: rendered SegmentedExamples for one mask mode.
+build_deciepoch_subset.py,Python,Python entry point,yes,97,3819,955,955,Build the fixed 100-question Layerwise 3.4 timing traversal.
+build_mahalanobis.py,Python,Python entry point,yes,111,4466,1117,1117,Build a frozen per-layer diagonal Mahalanobis metric on generic text.
+build_score_filtered_dataset.py,Python,Python entry point,yes,110,4134,1034,1034,Materialize a v5 subset selected by task-aware teacher-answer score.
+build_teacher_cache.py,Python,Python entry point,yes,1264,399544,99886,15472,Precompute the frozen-teacher hidden-state cache for every example.
+cache_generation_gate.py,Python,Python entry point,yes,110,339746,84937,522,Block training on a v5 cache whose own teacher answers were hard-cut.
+cache_null_probe.py,Python,Python entry point,yes,287,347124,86781,2367,Compare disk-cache targets with a same-process intact online teacher.
+chain_ppp8_when_ready.sh,Bash,shell orchestration,yes,25,1376,344,344,Chain: wait for 122B staged on agpuh02 -> build its index-only teacher cache -> launch 122B PPP8 cross-node.
+compare_lora_checkpoints.py,Python,Python entry point,yes,82,2432,608,608,Compare two LoRA checkpoints without loading their base model.
+compare_v3_deltas.py,Python,Python entry point,yes,81,2659,665,665,Compare exact trainable-parameter deltas from two v3 smoke probes.
+compare_v4_shard_numerics.py,Python,Python entry point,yes,78,2799,700,700,Compare pipeline-v4 per-layer numerics: single-process vs layer-sharded.
+conclusion_check.py,Python,Python entry point,yes,78,2834,709,709,Validate runs/conclusions.yaml against runs/corpus.csv.
+convert_deepseek_native_to_hf.py,Python,Python entry point,yes,346,15640,3910,3910,Convert a native DeepSeek-V4-Flash checkpoint to HF ``DeepseekV4ForCausalLM`` tensor names + structure.
+convert_responses_tokenizer.py,Python,Python entry point,yes,143,341513,85379,964,Re-tokenize a generation-responses JSONL for a different tokenizer.
+cpu_watch.sh,Bash,shell orchestration,yes,34,1756,439,439,Lightweight CPU-oversubscription logger.
+delta_profiles.py,Python,Python entry point,yes,124,340213,85054,639,Per-layer weight-delta profiles for finished runs: which layers moved?
+demo_35b_answers.sh,Bash,shell orchestration,yes,22,1222,306,306,"35B-A3B vLLM answer generation on ONE H100 (TP1, GPU1) — the front gate for its speed-table row."
+demo_deepseek_bf16.sh,Bash,shell orchestration,yes,25,1432,358,358,DeepSeek-V4-Flash answer generation on the BF16 dequant snapshot (TP4).
+demo_deepseek_retry.sh,Bash,shell orchestration,yes,21,1158,290,290,One-shot DeepSeek-V4-Flash vLLM demo retry (chatfmt fallback in 4958e67).
+demos/ppn_demo.sh,Bash,teaching demo,yes,137,4254,1064,1064,Readable CPU-only PPn wavefront orchestration demo.
+demos/ppn_partition_demo.py,Python,teaching demo,yes,132,4628,1157,1157,Turn a measured block-cost profile into one readable four-stage PPn plan.
+demos/ppn_partition_readable.py,Python,teaching demo,yes,390,15982,3996,3996,"Readable, single-file PPn cost partitioning demo."
+demos/ppn_stage_demo.py,Python,teaching demo,yes,128,4840,1210,1210,"One CPU-safe PPn stage, with explicit detached boundary handoffs."
+demos/ppp_demo.sh,Bash,teaching demo,yes,118,3831,958,958,Readable pipeline-v4 PPP independent-stage demo.
+demos/ppp_independent_stage_demo.py,Python,teaching demo,yes,80,3045,762,762,One synthetic pipeline-v4 PPP worker: train only this stage's block shard.
+dequantize_snapshot.py,Python,Python entry point,yes,182,7079,1770,1770,Shard-streaming fp8/mxfp4 -> bf16 snapshot dequantizer (task #16).
+destruct_eval.py,Python,Python entry point,yes,194,344189,86048,1633,Destruction battery for a checkpoint (or base control).
+download_mlt2.sh,Bash,shell orchestration,yes,36,1804,451,451,Sequential frontier-model downloads for the agpuh02 lanes (2026-07-06).
+evaluate.py,Python,Python entry point,yes,423,354723,88681,4267,Full recitation eval of a trained checkpoint (or the base model as control).
+evaluate_v31_4b_full_standard.sh,Bash,shell orchestration,yes,42,1557,390,390,Evaluate the Qwen3.5-4B base and named v3.1 checkpoints on all three 100-item standard-damage tasks.
+evaluate_vllm_mixed_result.py,Python,Python entry point,yes,172,8031,2008,2008,Validate one mixed-budget result and compare it with the documented row.
+fetch_poem.py,Python,Python entry point,yes,79,2440,610,610,Download and normalize 'La tierra de Alvargonzález (poema)' from es.wikisource.
+fetch_quijote.py,Python,Python entry point,yes,174,6190,1548,1548,Fetch Don Quijote (Part I) and segment it into the corpus format.
+forget_curves.py,Python,Python entry point,yes,155,5498,1375,1375,"Remembering vs forgetting as epochs evolve, per run."
+frontier_recall.py,Python,Python entry point,yes,105,339671,84918,504,Epoch-0 recall of a too-large-to-train frontier release (experimental lane).
+fuse_experts_snapshot.py,Python,Python entry point,yes,190,7223,1806,1806,Fuse unfused per-expert MoE weights into the HF stacked layout.
+gen_pareto_v2_screen.py,Python,Python entry point,yes,110,4524,1131,1131,Generate the explicit strict-local Qwen3.5-4B finite-tile screen.
+generate.py,Python,catalog/build infrastructure,no,341,12891,3223,2775,Generate standalone copies of every tracked ``scripts/*.py`` entry point.
+gpu_health.sh,Bash,shell orchestration,yes,41,1963,491,491,"AUTHORITATIVE GPU health (owner, 2026-07-18: ""always check with nvidia-smi, it doesn't coincide with your usual analysis"")."
+gpu_lease.sh,Bash,shell orchestration,yes,344,12811,3203,3203,"Shared, filesystem-backed GPU leases for gpu_scheduler.sh."
+gpu_scheduler.sh,Bash,shell orchestration,yes,300,11501,2876,2876,Shared-pool VRAM-aware GPU scheduler.
+gpu_speed_backfill.sh,Bash,shell orchestration,yes,67,1919,480,480,Continuously launch monitored speed checks when configured GPUs are sufficiently idle and have enough free memory.
+gpu_util_monitor.sh,Bash,shell orchestration,yes,22,618,155,155,"Periodically append utilization, memory, and power telemetry for configured GPUs to CSV."
+gpu_watchdog.sh,Bash,shell orchestration,yes,36,1597,400,400,"GPU watchdog v2: every 3 min, if utilization < 50% and a backlog item's VRAM requirement fits in free memory, launch it — even alongside one running job (at most 2 concurrent GPU processes)."
+grid_tile_bench.py,Python,Python entry point,yes,352,349057,87265,2850,Time constant-area answer x token tiles through the real forward layer walk.
+group_reports_v2.py,Python,Python entry point,yes,244,9695,2424,2424,Synthesize typed groupings from atomic pipeline-v2 individual reports.
+hourly_evidence_check.sh,Bash,shell orchestration,yes,90,3070,768,768,Hourly non-GPU evidence monitor.
+l40s_exec.sh,Bash,shell orchestration,yes,89,4112,1028,1028,Driver-560 L40S runtime: reuse the existing cu126 venv and shadow only the pure-Python trainer packages from a node-local layer.
+l40s_setup.sh,Bash,shell orchestration,yes,23,1031,258,258,Create the thin node-local dependency layer used by l40s_exec.sh.
+l40s_train_v3.sh,Bash,shell orchestration,yes,52,1412,353,353,"Idempotent pipeline-v3 launch: one process materializes the node-local epoch-zero cache; concurrent launchers wait/reuse it, then begin training."
+l40s_vllm_teacher_campaign.sh,Bash,shell orchestration,yes,118,5350,1338,1338,V5RS L40S campaign: external vLLM answer generation followed by the in-repo exact-token hidden-state cache pass.
+launch_dsflash_ppp8x.sh,Bash,shell orchestration,yes,14,803,201,201,"DeepSeek-V4-Flash PPP8 cross-node launch (agpuh01 GPUs 0-3 + agpuh02 GPUs 0-3), from agpuh01."
+launch_g31b_ppp5x.sh,Bash,shell orchestration,yes,11,547,137,137,PPP5 cross-node launch (agpuh01 GPU3 + agpuh02 GPUs 0-3).
+launch_g31b_ppp8x.sh,Bash,shell orchestration,yes,9,491,123,123,gemma-4-31B PPP8 cross-node (agpuh01 GPU0-3 + agpuh02 GPU0-3).
+launch_g31b_v4.sh,Bash,shell orchestration,yes,9,450,113,113,"One-shot gemma-4-31B-it PPP4 launch (micro_batch 16 fix, 3927eea)."
+launch_q0p6b_ppp2x_test.sh,Bash,shell orchestration,yes,12,664,166,166,"Qwen3-0.6B PPP2 CROSS-NODE relay TEST (owner 2026-07-19): stage 0 on agpuh01, stage 1 on agpuh02."
+launch_q0p6b_ppp3x_test.sh,Bash,shell orchestration,yes,11,584,146,146,"Qwen3-0.6B PPP3 cross-node relay-drain bench (#24): stage 0,1 on agpuh01, stage 2 on agpuh02."
+launch_q122b_ppp8x.sh,Bash,shell orchestration,yes,11,597,150,150,122B PPP8 cross-node launch (agpuh01 GPUs 0-3 + agpuh02 GPUs 0-3).
+launch_q122b_ppp8x_adam.sh,Bash,shell orchestration,yes,11,599,150,150,"122B PPP8 cross-node launch, ADAM variant (agpuh01 GPUs 0-3 + agpuh02 GPUs 0-3)."
+launch_q122b_ppp8x_evalin.sh,Bash,shell orchestration,yes,8,419,105,105,122B PPP8 cross-node EVAL-IN (agpuh01 GPU0-3 + agpuh02 GPU0-3).
+launch_q397b_ppp8x.sh,Bash,shell orchestration,yes,11,604,151,151,"397B PPP8 cross-node launch (agpuh01 GPUs 0-3 + agpuh02 GPUs 0-3), from agpuh01."
+launch_q397b_ppp8x_adam.sh,Bash,shell orchestration,yes,11,613,154,154,"397B PPP8 cross-node launch, ADAM variant (agpuh01 GPUs 0-3 + agpuh02 GPUs 0-3), from agpuh01."
+launch_v32r_score100_campaign.sh,Bash,shell orchestration,yes,44,2114,529,529,Launch the eight fixed GPU placements in the reduced-score v3.2 campaign.
+launch_v4_stages.sh,Bash,shell orchestration,yes,240,12312,3078,3078,"Launch every pipeline-v4 layer-shard stage of one experiment, one detached process per stage."
+layer_delta_timeline.py,Python,Python entry point,yes,202,342813,85704,1289,Layer-modification timelines from epoch checkpoints.
+layer_loss_plots.py,Python,Python entry point,yes,197,7750,1938,1938,"Per-layer training-loss dynamics, one figure per run."
+layer_swap.py,Python,Python entry point,yes,121,340038,85010,595,Graft/ablate localization curves for a trained run (M4).
+logit_lens.py,Python,Python entry point,yes,154,341214,85304,889,Logit-lens depth profiles for base vs trained checkpoints (M4).
+lossgrid_health_monitor.sh,Bash,shell orchestration,yes,83,3539,885,885,Read-only 30-minute health record for the active 1.7B loss grid.
+lossgrid_report.py,Python,Python entry point,yes,215,8859,2215,2215,"Live, corpus-separated scorecard for the 1.7B layerwise loss grid."
+lossgrid_visuals.py,Python,Python entry point,yes,113,4843,1211,1211,Campaign-scoped visuals for the July-11 1.7B loss grid.
+memory_plan.py,Python,Python entry point,yes,223,9867,2467,2467,"Memory-budget planner: measure block footprints WITHOUT loading the model, then recommend micro-batch, window size, optimizer placement, and pipeline partition points for a per-device VRAM budget."
+merge_v4_adapters.py,Python,Python entry point,yes,95,3649,913,913,Merge pipeline-v4 per-stage LoRA adapter shards into one checkpoint.
+model_matrix.py,Python,Python entry point,yes,121,4181,1046,1046,Cross-model comparison matrix from runs/corpus.csv.
+moe_router_probe.py,Python,Python entry point,yes,189,342984,85746,1332,MoE router probe: do distinct experts fire for novel content vs syntax?
+overnight_27b_online.sh,Bash,shell orchestration,yes,53,2187,547,547,"Overnight chain (2026-07-17): once the vLLM exact-ids generation finishes, build the index-only cache and launch the infinite 27B PPP4 online run."
+parallel_bench.py,Python,Python entry point,yes,252,346150,86538,2123,"Three-way parallelism timing: single-card vs PP2 (device_map pipeline) vs TP2 (torch tensor parallel), on the layerwise training workload."
+pipeline_tail.sh,Bash,shell orchestration,yes,12,437,110,110,Readable scheduler evidence: progress bars are useful in worker logs but drown live supervision in token-heavy carriage-return updates.
+ppn_partition.py,Python,Python entry point,yes,132,340778,85195,780,Choose and persist a measured-cost PPn partition.
+premise_gate.py,Python,Python entry point,yes,18,730,183,183,Premise gate: exit 0 iff the base model does NOT already recite the corpus.
+qualitative_chat_review.py,Python,Python entry point,yes,360,349068,87267,2853,Qualitative chat review for checkpoints with source text in context.
+rag_generation_gate.py,Python,Python entry point,yes,105,5270,1318,1318,Certify a RAG teacher before its generated targets can enter a campaign.
+recite_long.py,Python,Python entry point,yes,160,341714,85429,1014,Chained full-poem recitation — the Pierre Menard test.
+refresh_report_v2_index.py,Python,Python entry point,yes,8,253,64,64,Refresh completion-ordered symlinks to individual report-v2 PDFs.
+refresh_v31_0p8b_full_damage_reports.sh,Bash,shell orchestration,yes,42,1443,361,361,Regenerate report-v2 artifacts for the fixed v3.1 0.8B B256K16 cohort under an interprocess lock.
+refresh_v31_reports.sh,Bash,shell orchestration,yes,39,1167,292,292,Regenerate report-v2 artifacts for named runs under an interprocess lock and retain compact diagnostics.
+render_programmer_walkthrough.py,Python,Python entry point,yes,201,7471,1868,1868,Render the codebase walkthrough Markdown as an offline-readable PDF.
+report_pdf_v2.py,Python,Python entry point,yes,178,6864,1716,1716,"Small, dependency-light PDF renderer for report-v2 artifacts."
+report_shipper.sh,Bash,shell orchestration,yes,19,803,201,201,"Ship the auto-generated reports to DEST every 15 min while the scheduler lives (companion of results_refresher.sh, which regenerates them), plus a final shipment when it exits."
+report_v2.py,Python,Python entry point,yes,1339,66222,16556,16556,Generate the atomic v2-format report for one completed training.
+results_refresher.sh,Bash,shell orchestration,yes,21,989,248,248,"Publish any pending individual reports and grouped pipeline-v2 views every 15 minutes while the scheduler lives, then once more after it exits."
+retention_eval.py,Python,Python entry point,yes,797,369170,92293,7878,Fast retention + recall battery for the final cross-checkout report.
+run_m1_legs.sh,Bash,shell orchestration,yes,74,2921,731,731,"M1 sequencer (task #6): waits for the resident leg (m1a), runs store -> store+adam -> store+rotate (m1b/c/d) on the same devices, then writes the numerics verdict."
+run_speed_check_monitored.sh,Bash,shell orchestration,yes,37,1030,258,258,Run a layerwise training-speed probe while recording GPU utilization.
+sample_gpu_telemetry.sh,Bash,shell orchestration,yes,58,1686,422,422,Sample physical-card saturation for one named trainer.
+sample_process_telemetry.sh,Bash,shell orchestration,yes,118,3666,917,917,Sample one exact trainer's host-side activity without touching Lustre trees.
+sanity_chat.py,Python,Python entry point,yes,145,341133,85284,869,Qualitative forgetting probe: a few trivial general-knowledge questions.
+shell_helpers.py,Python,catalog/build infrastructure,no,104,339573,84894,479,Standalone replacements for shell heredocs which imported selfupdate.
+signal_attribution.py,Python,Python entry point,yes,124,340210,85053,638,Certify and quantify strictly block-local training gradients.
+slurm_h100.sbatch,Bash/Slurm,Slurm launcher,yes,41,1969,493,493,"H100 lane: same shared-Lustre repo, own queue file + per-node scheduler state (AGENTS.md ""Multi-node"")."
+smoke_family.py,Python,Python entry point,yes,227,344699,86175,1761,Family smoke harness: can this model family drive the layerwise machinery?
+spec_verify_122b.sbatch,Bash/Slurm,Slurm launcher,yes,24,1239,310,310,"subset+configs via the matrix helper's steps 1-2 (PPP1 build), then staged PPP4:"
+spec_verify_batch.sbatch,Bash/Slurm,Slurm launcher,yes,22,854,214,214,Autonomous continuation of the vLLM-reproduction matrix (owner goal 2026-07-19): trainer-native PPP1 rows for the remaining single-node models.
+spec_verify_matrix.sh,Bash,shell orchestration,yes,83,4880,1220,1220,"Trainer-native vLLM-acceptance matrix (owner goal 2026-07-19; owner correction 2026-07-19 ~19:10: ""2071 is the comparison goal"" — the FULL dataset, not a dev-cycle subset)."
+speed_check.py,Python,Python entry point,yes,328,349065,87267,2852,Authentic layerwise speed checks with minibatches.
+stage_hf_cache.sh,Bash,shell orchestration,yes,46,1328,332,332,Stage selected Hugging Face snapshots from the account cache to node-local /tmp or RAM-backed /dev/shm.
+stage_teacher_cache_shm.sh,Bash,shell orchestration,yes,29,1142,286,286,Stage selected immutable teacher-cache directories into node-local tmpfs.
+standard_destruction_eval.py,Python,Python entry point,yes,465,352818,88205,3790,Standard benchmark destruction check for checkpoints.
+stop_g31b_at25.sh,Bash,shell orchestration,yes,18,721,181,181,Owner instruction 2026-07-18: pause the 31B memorization test at epoch 25 for a results check (graceful TERM at the boundary; checkpoints publish).
+stop_v32r_score100_campaign.sh,Bash,shell orchestration,yes,28,709,178,178,Request cooperative checkpoint-and-stop from the reduced-score campaign.
+summarize_standard_destruction.py,Python,Python entry point,yes,108,3486,872,872,Summarize standard destruction benchmark JSON files.
+surprise_probe.py,Python,Python entry point,yes,300,348613,87154,2739,Surprise decomposition: is a high-surprise token a knowledge gap or a misdirected-attention error?
+tasks_report.py,Python,Python entry point,yes,316,13805,3452,3452,Corpus-aware recall and standard-capability report.
+teacher_ceiling.py,Python,Python entry point,yes,375,352441,88111,3696,Epoch-zero RAG censorship evaluation through programmatic vLLM.
+train.py,Python,Python entry point,yes,117,340057,85015,600,Train a student with layerwise forward distillation.
+train_and_report.py,Python,Python entry point,yes,108,339480,84870,456,"Idempotent campaign entry point: train, certify, then report immediately."
+train_batch_bench.py,Python,Python entry point,yes,375,350572,87643,3229,Benchmark the real summed trainer path without saving a checkpoint.
+train_certify.py,Python,Python entry point,yes,444,354853,88714,4299,"End-to-end trainer certification: run the REAL train_layerwise on tiny variants of every schedule/batching/window/optimizer path and fingerprint the result — per-step losses, a per-tensor checkpoint signature, and peak allocated/reserved..."
+train_oom_backoff.py,Python,Python entry point,yes,128,340664,85166,752,"Run one training arm, retrying CUDA-OOM failures at smaller micro-batches."
+train_tuned_lens.py,Python,Python entry point,yes,168,342014,85504,1089,Train tuned-lens translators for a (frozen) base model.
+v31_bk_cohort_probe.py,Python,Python entry point,yes,325,348886,87222,2807,Exercise one worst full cohort through the production v3.1 B x K path.
+v31_bk_smoke.py,Python,Python entry point,yes,339,349210,87303,2888,One-tile v3.1 simultaneous-user B×K GPU benchmark.
+v3_smoke.py,Python,Python entry point,yes,407,352388,88097,3683,On-demand one-token GPU smoke for pipeline v3 (no checkpoint/report).
+v4_battery.py,Python,Python entry point,yes,192,343988,85997,1583,Pause-and-eval battery subprocess for stage-scoped pipeline-v4 (plan B6).
+v4_stage_reaper.sh,Bash,shell orchestration,yes,55,2258,565,565,Watch one v4 PPP launch (its lease file of stage pids).
+variants/_forward.py,Python,catalog/build infrastructure,no,27,951,238,238,Small launcher shared by the purpose-specific defactorised entry points.
+variants/build_teacher_cache_answers.py,Python,fixed-option variant,yes,3,125,32,32,Purpose-specific launcher for build_teacher_cache.py with --generation-only.
+variants/build_teacher_cache_full.py,Python,fixed-option variant,yes,3,105,27,27,Purpose-specific build teacher cache full launcher for build_teacher_cache.py; it adds no fixed CLI flags.
+variants/build_teacher_cache_index.py,Python,fixed-option variant,yes,3,120,30,30,Purpose-specific launcher for build_teacher_cache.py with --index-only.
+variants/destruct_base_fast.py,Python,fixed-option variant,yes,3,107,27,27,Purpose-specific launcher for destruct_eval.py with --base.
+variants/destruct_base_full.py,Python,fixed-option variant,yes,3,116,29,29,Purpose-specific launcher for destruct_eval.py with --base --full.
+variants/destruct_checkpoint_fast.py,Python,fixed-option variant,yes,3,82,21,21,Purpose-specific destruct checkpoint fast launcher for destruct_eval.py; it adds no fixed CLI flags.
+variants/destruct_checkpoint_full.py,Python,fixed-option variant,yes,3,91,23,23,Purpose-specific launcher for destruct_eval.py with --full.
+variants/evaluate_base.py,Python,fixed-option variant,yes,3,113,29,29,Purpose-specific launcher for evaluate.py with --base.
+variants/evaluate_checkpoint.py,Python,fixed-option variant,yes,3,88,22,22,Purpose-specific evaluate checkpoint launcher for evaluate.py; it adds no fixed CLI flags.
+variants/evaluate_layer_residuals.py,Python,fixed-option variant,yes,3,108,27,27,Purpose-specific launcher for evaluate.py with --layer-residuals.
+variants/logit_lens_raw.py,Python,fixed-option variant,yes,3,85,22,22,Purpose-specific launcher for logit_lens.py with --lens raw.
+variants/logit_lens_tuned.py,Python,fixed-option variant,yes,3,87,22,22,Purpose-specific launcher for logit_lens.py with --lens tuned.
+variants/parallel_bench_pipeline_2gpu.py,Python,fixed-option variant,yes,3,89,23,23,Purpose-specific launcher for parallel_bench.py with --mode pp2.
+variants/parallel_bench_single.py,Python,fixed-option variant,yes,3,92,23,23,Purpose-specific launcher for parallel_bench.py with --mode single.
+variants/parallel_bench_tensor_2gpu.py,Python,fixed-option variant,yes,3,89,23,23,Purpose-specific launcher for parallel_bench.py with --mode tp2.
+variants/smoke_family_all.py,Python,fixed-option variant,yes,3,89,23,23,Purpose-specific launcher for smoke_family.py with --all.
+variants/smoke_family_default.py,Python,fixed-option variant,yes,3,81,21,21,Purpose-specific smoke family default launcher for smoke_family.py; it adds no fixed CLI flags.
+variants/smoke_family_selected.py,Python,fixed-option variant,yes,3,71,18,18,Purpose-specific smoke family selected launcher for smoke_family.py; it adds no fixed CLI flags.
+variants/standard_destruction_base.py,Python,fixed-option variant,yes,3,109,28,28,Purpose-specific launcher for standard_destruction_eval.py with --base.
+variants/standard_destruction_checkpoint.py,Python,fixed-option variant,yes,3,85,22,22,Purpose-specific standard destruction checkpoint launcher for standard_destruction_eval.py; it adds no fixed CLI flags.
+variants/teacher_ceiling_chapter_context.py,Python,fixed-option variant,yes,3,112,28,28,Purpose-specific launcher for teacher_ceiling.py with --context-scope chapter.
+variants/teacher_ceiling_full_context.py,Python,fixed-option variant,yes,3,109,28,28,Purpose-specific launcher for teacher_ceiling.py with --context-scope full.
+variants/teacher_ceiling_no_context.py,Python,fixed-option variant,yes,3,109,28,28,Purpose-specific launcher for teacher_ceiling.py with --context-scope none.
+variants/teacher_ceiling_window_context.py,Python,fixed-option variant,yes,3,111,28,28,Purpose-specific launcher for teacher_ceiling.py with --context-scope window.
+variants/train_certify_all.py,Python,fixed-option variant,yes,3,102,26,26,Purpose-specific launcher for train_certify.py with --all.
+variants/train_certify_list.py,Python,fixed-option variant,yes,3,103,26,26,Purpose-specific launcher for train_certify.py with --list.
+variants/train_certify_selected.py,Python,fixed-option variant,yes,3,81,21,21,Purpose-specific train certify selected launcher for train_certify.py; it adds no fixed CLI flags.
+vendor_standard_eval.py,Python,Python entry point,yes,121,339819,84955,541,Vendor deterministic standard-eval subsets at their pinned Hub revisions.
+venv_check.sh,Bash,shell orchestration,yes,103,3782,946,946,"Verify the node-local venv actually works on THIS node, before a campaign spends GPU-minutes discovering it does not."
+venv_setup.sh,Bash,shell orchestration,yes,100,4868,1217,1217,"Build the node-local Python runtime for this checkout, fast."
+verify_vllm_teacher_forced.py,Python,Python entry point,yes,312,349523,87381,2967,Speculative-decoding verification: does our TRAINING STACK reproduce vLLM?
+vllm_2node_smoke.py,Python,Python entry point,yes,177,9576,2394,2394,"2-node vLLM smoke test (owner 2026-07-19/20): does our vLLM 0.25 build serve a model split across agpuh01+agpuh02 at all, before attempting DeepSeek-V4-Flash bf16 (543 GB) or Qwen3.5-397B-A17B bf16 (752 GB)?"
+vllm_h100_eager_shared_queue.sh,Bash,shell orchestration,yes,76,2773,694,694,Shared one-card eager queue: the first free DEV0/DEV1 worker takes the next job.
+vllm_h100_mixed_budget_campaign.sh,Bash,shell orchestration,yes,159,6525,1632,1632,Full V5RS benchmark of the mixed-per-request-budget driver introduced at 1f28029.
+vllm_h100_overnight_queue.sh,Bash,shell orchestration,yes,126,6049,1513,1513,Sequential H100 vLLM ladder.
+vllm_h100_qwen06_32k_capacity.sh,Bash,shell orchestration,yes,20,1490,373,373,Qwen3-0.6B 32k context capacity controls: one fresh engine per global batch so max_num_seqs equals the measured batch.
+vllm_h100_qwen35_shared_queue.sh,Bash,shell orchestration,yes,39,2186,547,547,Shared queue for Qwen3.5 0.8B/2B/4B/9B graph and eager baselines.
+vllm_h100_rest_of_day.sh,Bash,shell orchestration,yes,14,837,210,210,Chain the already-running eager shared queue into the remaining H100 work.
+vllm_longdraft.py,Python,Python entry point,yes,98,4445,1112,1112,Fixed-length greedy vLLM drafts (ignore_eos) for the depth-decay probe.
+vllm_prefill_verify.py,Python,Python entry point,yes,267,14355,3589,3589,vLLM's NATIVE teacher-forced verification: symmetric speed comparator.
+vram_guard.sh,Bash,shell orchestration,yes,32,1328,332,332,"Run an ad-hoc check pinned to the least-loaded GPU, self-aborting if that GPU's memory use crosses THRESHOLD_PCT — checks must never squeeze the scheduler's campaign jobs (their VRAM reservations are launch-time checks, not leases; an ev..."
+wait_m1_then_g26b_e500.sh,Bash,shell orchestration,yes,26,1172,293,293,"Overnight chain (2026-07-18): once the M1 sequencer finishes (verdict file closed), launch the 500-epoch gemma-26B memorization test on the freed agpuh01 GPUs."
+warm_python_runtime.sh,Bash,shell orchestration,yes,64,2631,658,658,Warm a Lustre-hosted Python runtime into this node's VFS/page cache.
