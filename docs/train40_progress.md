@@ -465,3 +465,47 @@ same live locality certificate and reporting requirements as the other loss
 screen arms.  It launched on agpuh02 at 16:02 CEST as
 `v4-20260720160230-4162849`, clean source `4a5c897`, exact ownership
 L1--8/L9--16/L17--23/L24--30, and physical GPUs 0--3.
+
+### RAG-censorship audit: locator passes, hidden-state leakage is the lead diagnosis
+
+The owner's concern that weak learning could come from censoring the wrong RAG
+tokens triggered a complete read-only audit over all 2,071 current records.
+For both Gemma-4 and Qwen3.6 tokenizers, segmented concatenation equals
+one-shot tokenization exactly, every privileged interval is nonempty, cache
+`t0/A` matches, and the interval is precisely
+`[encode(shared_prefix), t0)`.  It contains the full
+`Recuerdas literalmente...` wrapper and passage, but no system closer,
+question, assistant opener, or answer.  Example `mach-v5-nx1-0000` is
+Gemma `[24,84)` and Qwen `[23,85)`; the next token begins the user turn.
+`online_v4.py` sets `keep=false` on exactly those columns.  There is no
+off-by-one/BOS/chat-boundary evidence against the locator.
+
+The audit instead found a high-severity train/deployment mismatch inherent in
+the current v4 law.  For layer L>=2, the differentiable block query input is
+cached uncensored teacher `h[L-1]`, and frozen K/V at every *ordinary*
+post-RAG position are also projected from uncensored teacher `h[L-1]`.
+Question and answer states have already absorbed the passage through earlier
+teacher layers.  Removing the raw privileged K/V columns therefore does not
+remove retrieval information carried inside the remaining query and K/V
+states.  Only L1 starts from embeddings where direct-column censorship is a
+true no-RAG context.  The deployment evaluation walk, by contrast, propagates
+the censored student trajectory from embeddings through every layer.  This
+can make the local objective artificially easy with depth and directly
+explains why local loss falls without reliable composed recall.
+
+A separate medium confound exists in foreign-template adaptation:
+`adapt_records` calls `system_memory_pieces` with its default poetry system
+payload, so Gemma Quijote records silently change `literatura española` to
+`poesía española`; Qwen's identity rendering preserves both corpus-specific
+instructions.  This does not move the privileged interval, but future rebuilt
+caches must preserve the per-record system payload.
+
+Before changing the publication runtime, run a fixed 32-example depth probe
+comparing (A) the present teacher-state local context, (B) its identical
+direct-key-mask control, (C) query/KV harvested from the fully censored student
+trajectory with the same teacher target, and (D) uncensored teacher context.
+Report `||h_teacher[L-1]-h_censored[L-1]||`, target residual, local loss, and
+gradient norm by layer.  Do not queue further loss variants until this probe
+establishes whether context leakage, rather than loss geometry, dominates.
+The active 26B delta arm still completes its matched >12,000-item budget; its
+interpretation is explicitly conditional on this audit.
