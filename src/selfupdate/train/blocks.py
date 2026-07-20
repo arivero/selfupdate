@@ -32,14 +32,6 @@ def _is_text_stack(value) -> bool:
     return all(hasattr(value, attr) for attr in ("embed_tokens", "layers", "norm"))
 
 
-def _named_parameters_all(module):
-    """Preserve tied-weight aliases when the framework supports it."""
-    try:
-        return module.named_parameters(remove_duplicate=False)
-    except TypeError:  # older torch/Transformers compatibility
-        return module.named_parameters()
-
-
 def _resolve_text_stack(model):
     """Resolve a decoder text tower in text-only and multimodal composites.
 
@@ -97,7 +89,7 @@ def _resolve_text_stack(model):
 
 
 class BlockStack:
-    def __init__(self, model, hook_free_walk: bool = False):
+    def __init__(self, model):
         self.model = model
         inner = _resolve_text_stack(model)
         # This module layout is shared by the Qwen/Llama/DeepSeek/GLM HF
@@ -167,52 +159,10 @@ class BlockStack:
         self.final_norm = inner.norm
         self.lm_head = lm_head_owner.lm_head
         self.n_layers = len(self.blocks)
-        # Hook-free walk (explicit pipeline placement only): call each
-        # block's pre-hook forward and do the boundary moves ourselves —
-        # accelerate's per-call dispatch is ~8% of the PP2 walk (issues.md
-        # 2026-07-10). Full-model forwards (evals, generate) keep their
-        # hooks and are unaffected. Never engaged when a hook offloads
-        # WEIGHTS (device_map=auto spill), where dispatch is load-bearing,
-        # nor for per-layer-rope bundles (gemma4-style), which recompute
-        # rope per block anyway.
-        self.hook_free_walk = False
-        self.block_devices = None
-        self._block_calls = self.blocks
-        self._pe_src = None
-        self._pe_map: dict = {}
         # Fallback for architectures that accept shared_kv_states without a
         # per-layer rotary bundle. Gemma4 supplies a fresh mapping in rope();
         # this path is latent on the current models but must still initialize.
         self._shared_kv_states = None
-        if hook_free_walk and not self.rotary_needs_layer_type:
-            devices, calls, plain = [], [], True
-            for b in self.blocks:
-                p = next(b.parameters(), None)
-                devices.append(p.device if p is not None else torch.device("cpu"))
-                hook = getattr(b, "_hf_hook", None)
-                if hook is not None and getattr(hook, "offload", False):
-                    plain = False
-                calls.append(getattr(b, "_old_forward", None) or b)
-            if plain:
-                self.hook_free_walk = True
-                self.block_devices = devices
-                self._block_calls = calls
-
-    def _pos_emb_on(self, pe, dev):
-        """Per-device cache of the rope tensors for the CURRENT positional
-        context (keyed by identity; a new rope() output resets the map, and
-        the held reference makes id-reuse impossible while cached)."""
-        if pe is None or not isinstance(pe, tuple):
-            return pe
-        if pe is not self._pe_src:
-            self._pe_src = pe
-            self._pe_map = {}
-        got = self._pe_map.get(dev)
-        if got is None:
-            got = tuple(t.to(dev, non_blocking=True) if t.device != dev else t
-                        for t in pe)
-            self._pe_map[dev] = got
-        return got
 
     def freeze_non_blocks(self) -> None:
         """Embedding, final norm and lm_head stay at init: block-only training
@@ -344,13 +294,6 @@ class BlockStack:
                 with torch.no_grad():
                     position_embeddings = self.rotary_emb(
                         hidden, position_ids, layer_type=layer_type)
-        if self.hook_free_walk:
-            dev = self.block_devices[L - 1]
-            if hidden.device != dev:
-                hidden = hidden.to(dev, non_blocking=True)
-            position_embeddings = self._pos_emb_on(position_embeddings, dev)
-            if torch.is_tensor(position_ids) and position_ids.device != dev:
-                position_ids = position_ids.to(dev, non_blocking=True)
         local_keep = None
         keep_bcast = None
         if flow_keep is not None:
@@ -458,9 +401,9 @@ class BlockStack:
             # choke point, so no call site can forget it).
             with torch.autocast(device_type=hidden.device.type,
                                 dtype=torch.bfloat16):
-                out = self._block_calls[L - 1](hidden, **kwargs)
+                out = self.blocks[L - 1](hidden, **kwargs)
         else:
-            out = self._block_calls[L - 1](hidden, **kwargs)
+            out = self.blocks[L - 1](hidden, **kwargs)
         if keep_bcast is not None:
             out = out * keep_bcast
         return out
@@ -481,74 +424,3 @@ class BlockStack:
             # the shared final norm, mirroring DeepseekV4Model.forward.
             block_out = self.hc_head(block_out)
         return self.final_norm(block_out)
-
-    # -- PPn model-adapter surface ---------------------------------------
-
-    @property
-    def ordered_text_blocks(self):
-        """The complete ordered text-block list owned by this stack."""
-        return tuple(self.blocks)
-
-    def legal_cut_positions(self) -> tuple[int, ...]:
-        """Return conservative contiguous cuts for arbitrary-stage PP.
-
-        A model exposing shared KV state has an undeclared cross-layer edge;
-        until its adapter supplies a dependency-aware state transport, no
-        cut is legal.  Ordinary full/linear Qwen blocks are private and may
-        be cut at every block boundary.
-        """
-        if any(getattr(self, "_accepts_shared_kv_states", ())):
-            return ()
-        return tuple(range(1, self.n_layers))
-
-    def new_causal_state(self, *, max_cache_len: int | None = None):
-        """Construct a state object for adapter users without importing v3."""
-        from transformers import DynamicCache, StaticCache
-
-        if max_cache_len is None:
-            return DynamicCache(config=self.text_config)
-        return StaticCache(config=self.text_config, max_cache_len=max_cache_len)
-
-    def detach_causal_state(self, state) -> None:
-        """Detach state tensors recursively after a stage-local tile write."""
-        def detach(value):
-            if torch.is_tensor(value):
-                return value.detach()
-            if isinstance(value, tuple):
-                return tuple(detach(item) for item in value)
-            if isinstance(value, list):
-                return [detach(item) for item in value]
-            if isinstance(value, dict):
-                return {key: detach(item) for key, item in value.items()}
-            return value
-
-        for layer in getattr(state, "layers", ()):
-            for name, value in vars(layer).items():
-                detached = detach(value)
-                if detached is not value:
-                    setattr(layer, name, detached)
-
-    def parameter_ownership(self) -> dict[str, str]:
-        """Map every named parameter to one block or a frozen owner."""
-        block_ids = {
-            id(parameter): index
-            for index, block in enumerate(self.blocks, start=1)
-            for parameter in block.parameters()
-        }
-        result = {}
-        for name, parameter in _named_parameters_all(self.model):
-            index = block_ids.get(id(parameter))
-            result[name] = f"block:{index}" if index is not None else "frozen_vocabulary_or_input"
-        return result
-
-    def checkpoint_ownership(self) -> dict[str, object]:
-        """Describe stage-owned tensors and tied frozen-vocabulary aliases."""
-        aliases: dict[int, list[str]] = {}
-        for name, parameter in _named_parameters_all(self.model):
-            aliases.setdefault(id(parameter), []).append(name)
-        return {
-            "parameter_ownership": self.parameter_ownership(),
-            "tied_weight_aliases": [names for names in aliases.values()
-                                    if len(names) > 1],
-            "frozen_modules": ["embed_tokens", "final_norm", "lm_head"],
-        }

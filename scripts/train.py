@@ -43,10 +43,11 @@ def main() -> None:
 
     if cfg.train.method != "layerwise":
         sys.exit(f"unsupported train.method {cfg.train.method!r}; use 'layerwise'")
-
+    if cfg.train.pipeline_version != 4:
+        sys.exit(
+            "this checkout is pipeline-v4 only; set "
+            "train.pipeline_version=4")
     if args.v4_stage is not None:
-        if cfg.train.pipeline_version != 4:
-            sys.exit("--v4-stage requires train.pipeline_version=4")
         cfg.train.v4_stage = args.v4_stage
         stages = len(cfg.train.v4_stage_splits or []) + 1
         devices = list(cfg.train.v4_stage_devices or range(stages))

@@ -42,39 +42,17 @@ cache:
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
-  pp_execution: serial
-  partition_profile_id: ""
-  partition_profile_path: ""
-  update_granularity: online
-  answers_per_update: 0
-  tokens_per_answer_update: 0
-  update_reduction: ""
-  trajectory_source: teacher_hidden
-  attention_source: student_attention
   expert_routing_source: black_box
   method: layerwise
   run_class: open
-  schedule: summed
   epochs: 1
   max_steps: 0
   seed: 17
   lr: 1.0e-6
-  online_optimizer: immediate_sgd
-  online_write_dispatch: after_backward
-  stale_gradient_window: 1
-  lr_rule: fixed
-  backward_dispatch: per_block
-  history_policy: causal_bk
   micro_batch: 64
-  grad_accum: 1
   batching: bucketed
   hidden_loss: huber
-  conn_window: 1
-  conn_stride: 0
-  window_dedup: false
-  window_hidden_weight: 1.0
   moe_mode: dense_or_black_box
-  offload_adam: false
   v4_kv_source: teacher_frozen
   v4_kv_refresh_epochs: 0
   v4_optimizer: immediate_sgd

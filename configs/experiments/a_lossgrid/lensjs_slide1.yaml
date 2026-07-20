@@ -1,7 +1,0 @@
-run_name: a_lossgrid_1p7b_combined_slide1_lensjs
-train:
-  # Bounded symmetric teacher/student vocabulary divergence.  This is a
-  # loss-safety control, not a broad KL-family sweep.
-  hidden_loss: lens_js
-eval:
-  recall_corpora: [machado, quijote_ch1, quijote_ch4]

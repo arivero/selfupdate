@@ -1,5 +1,10 @@
 # Training pipeline v2
 
+> **Historical protocol.** Pipeline v2 and its student-hidden training inputs
+> are obsolete on this v4-only branch. This document is retained to interpret
+> old configs, runs, and reports; it is not implementation or launch guidance.
+> The active contract is [`training_pipeline_v4.md`](training_pipeline_v4.md).
+
 Pipeline v2 is the training runtime for the dataset-v5 Pareto-frontier
 campaign. Pipeline-v1 checkpoints remain historical mechanics evidence but
 are not mixed into v2 reports or comparisons.

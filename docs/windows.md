@@ -1,5 +1,10 @@
 # Connected Windows: Precise Semantics
 
+> **Historical protocol.** Connected-window and student-stream training are
+> not active in the v4-only repository. This specification remains as an
+> archaeology aid for old experiments and must not be used to add a window or
+> student-hidden input to pipeline v4.
+
 *(Owner specification, 2026-07-04. This document exists because "forward
 then backward" can be misread as classical backpropagation that merely
 uses a window to manage GPU memory — gradient checkpointing. That is NOT

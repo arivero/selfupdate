@@ -4,6 +4,10 @@
 entry points, plus a small hand-curated teaching layer. It serves two different
 uses which should not be confused:
 
+This collection is a **frozen pre-v4-cleanup teaching snapshot**. The live
+`src/` tree now contains only the v4 teacher-input protocol; historical v2/v3
+programs remain here intentionally for genealogy and demonstrations.
+
 1. **Archival standalones.** Each tracked Python entry point under `scripts/`
    has a same-named copy which does not load code from `src/selfupdate` at run
    time. If the original imports `selfupdate`, its copy embeds a compressed

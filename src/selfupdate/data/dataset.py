@@ -231,8 +231,8 @@ class DistillDataset(Dataset):
             raise ValueError(
                 "need_layers requires a teacher cache; online-teacher "
                 "datasets must pass need_layers=[] (targets come per step)")
-        # the sequential schedule swaps layers per stage: drop memoized
-        # items so stale hidden targets are neither served nor retained
+        # A caller may change the owned/needed layer set between phases: drop
+        # memoized items so stale hidden targets are neither served nor kept.
         self._need_layers = layers
         self._item_cache.clear()
 

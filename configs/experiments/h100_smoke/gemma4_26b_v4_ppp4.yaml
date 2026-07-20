@@ -9,10 +9,6 @@ cache:
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
-  trajectory_source: teacher_hidden
-  update_granularity: online
-  schedule: summed
-  grad_accum: 1
   batching: bucketed
   # B=32 OOMs an 80 GB card: the full-attention training forward of the first
   # owned block peaks ~78 GiB alongside the ~52 GB resident model (capture and

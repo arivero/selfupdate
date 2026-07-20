@@ -1,8 +1,0 @@
-run_name: lw_summed_lora_0p6b_rag
-train:
-  method: layerwise
-  schedule: summed
-  epochs: 10
-  online_teacher: true
-  lora:
-    enabled: true

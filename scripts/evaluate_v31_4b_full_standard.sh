@@ -15,7 +15,7 @@ if [[ ! -s "$base_out" ]]; then
     printf 'START %s base\n' "$(date --iso-8601=seconds)"
     printf 'COMMAND full-standard Qwen3.5-4B base n=100/task\n'
     scripts/l40s_exec.sh scripts/standard_destruction_eval.py \
-        --config configs/experiments/pareto_v3/base_qwen35_4b.yaml \
+        --config configs/experiments/h100_smoke/base_qwen35_4b_v4_lora.yaml \
         --base --out "$base_out" \
         --tasks arc_easy arc_challenge hellaswag --limit 100 --batch-size 16
     rc=$?

@@ -1,5 +1,0 @@
-run_name: a_lossgrid_1p7b_combined_slide1_vocabfisher
-train:
-  hidden_loss: vocab_fisher
-eval:
-  recall_corpora: [machado, quijote_ch1, quijote_ch4]

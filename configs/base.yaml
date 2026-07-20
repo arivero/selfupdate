@@ -14,17 +14,19 @@ data:
   context_pad: 4
 mask:
   mode: rag
+  compaction: flow_mask
 cache:
   root: caches
   shard_size: 128
+  store_full_teacher_inputs: true
 train:
-  pp_execution: serial
+  pipeline_version: 4
+  pipeline_revision: "4.0"
   method: layerwise
-  schedule: summed
   lr: 1.0e-5
   epochs: 10
   micro_batch: 1
-  grad_accum: 8
+  batching: bucketed
   seed: 17
 eval:
   recite_lines: 20

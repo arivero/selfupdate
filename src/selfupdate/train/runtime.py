@@ -1,31 +1,14 @@
-"""Training runtime: device placement, optimizer policy, memory accounting.
+"""Pipeline-v4 model loading, cache access, invariants, and publication.
 
-Separates HOW training executes (model/teacher placement, optimizer state
-location, paging, synchronization, VRAM accounting) from WHAT is trained
-(the schedule loops in ``layerwise.py``). Schedule code receives a built
-``TrainingRuntime`` and never touches ``from_pretrained``, device maps, or
-optimizer construction — the "PP2 failure" class of bug (an execution knob
-silently forking an experiment) stays confined to this module.
-
-Optimizer policy is explicit rather than implied by booleans:
-
-- ``lora_fused``     adapters only; one AdamW, foreach stepping (the extra
-                     tensor-list intermediates are negligible at LoRA size).
-- ``full_resident``  full-FT, moments on GPU; one AdamW, non-foreach (peak
-                     memory wins over step latency at model scale).
-- ``full_offload``   full-FT, moments on CPU; per-block AdamW so paging
-                     stays block-granular (``train.offload_adam``).
-
-All three preserve the historical PER-BLOCK gradient clipping norm: clipping
-is part of the experiment, not of the execution policy.
+Each v4 process owns one physical device.  It either loads a complete model
+on that device or materializes only its stage-owned blocks for the rotation
+lane.  Layer-local optimizer construction remains in :mod:`online_v4`.
 """
 
 from __future__ import annotations
 
 import shutil
 import tempfile
-import json
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -33,7 +16,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from ..teacher.cache import TeacherCache, resolve_cache_dir
 from .blocks import BlockStack
-from .ppn import ModelAdapter, partition_from_config
 
 
 def load_causal_lm(src, **kw):
@@ -49,113 +31,6 @@ def load_causal_lm(src, **kw):
         from transformers import AutoModelForImageTextToText
 
         return AutoModelForImageTextToText.from_pretrained(src, **kw)
-
-
-def pp_device_map(cfg) -> dict:
-    """Pipeline map: embedding on the first configured stage; decoder blocks partitioned by
-    ``pipeline_split`` (2 GPUs) or ``pipeline_splits`` (N GPUs). The final
-    norm/head live on the last card for untied models, so the top readout
-    window stays colocated with logits."""
-    from transformers import AutoConfig
-
-    mc = AutoConfig.from_pretrained(cfg.model.name)
-    text_cfg = getattr(mc, "text_config", mc)
-    n = text_cfg.num_hidden_layers
-    splits = list(cfg.model.pipeline_splits or [])
-    if splits:
-        if any(left >= right for left, right in zip(splits, splits[1:])):
-            raise ValueError(
-                f"pipeline_splits must be strictly increasing: {splits}")
-        if torch.cuda.device_count() < len(splits) + 1:
-            raise ValueError(
-                f"pipeline_splits {splits} needs {len(splits) + 1} visible GPUs"
-            )
-        if splits != sorted(splits) or splits[0] <= 0 or splits[-1] >= n:
-            raise ValueError(f"pipeline_splits {splits} outside 1..{n - 1}")
-    else:
-        if torch.cuda.device_count() < 2:
-            raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
-        split = cfg.model.pipeline_split
-        if not 0 < split < n:
-            raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
-        splits = [split]
-    devices = list(getattr(cfg.model, "pipeline_devices", []) or [])
-    if devices and len(devices) != len(splits) + 1:
-        raise ValueError(
-            "model.pipeline_devices must contain one physical id per stage")
-    if len(set(devices)) != len(devices):
-        raise ValueError("model.pipeline_devices must contain unique ids")
-    if not devices:
-        devices = list(range(len(splits) + 1))
-    if any(device < 0 or device >= torch.cuda.device_count()
-           for device in devices):
-        raise ValueError(
-            f"model.pipeline_devices {devices} are not visible on this host")
-    # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
-    # live on two cards, so the whole vocabulary stack stays on cuda:0 and
-    # readout-window loss calls hop back (an [A,H] transfer per call). Untied
-    # models put norm+head on cuda:1 with the readout window.
-    tied = getattr(mc, "tie_word_embeddings",
-                   getattr(text_cfg, "tie_word_embeddings", False))
-    last_dev = devices[-1]
-    first_dev = devices[0]
-    vocab_dev = first_dev if tied else last_dev
-    model_type = getattr(mc, "model_type", "")
-    # Select the topology of the class registered under AutoModelForCausalLM,
-    # not merely the metadata carried by the repository config. Qwen3.5
-    # advertises vision/audio sub-configs, but its causal-LM registration is
-    # the text-only model with ``model.layers``. Treating metadata presence as
-    # proof of a composite produced a completely invalid
-    # ``model.language_model.*`` device map. Qwen3.6 multimodal releases are
-    # explicit composites and retain the language-tower prefix.
-    composite = model_type in (
-        "qwen3_6", "qwen3_6_vl", "gemma4", "mistral3")
-    prefix = "model.language_model" if composite else "model"
-    dm = {f"{prefix}.embed_tokens": first_dev,
-          f"{prefix}.rotary_emb": first_dev,
-          # Final hidden loss belongs to the final stage even when the
-          # checkpoint ties the vocabulary head to the stage-0 embedding.
-          f"{prefix}.norm": last_dev, "lm_head": vocab_dev}
-    if prefix != "model":
-        dm["model.vision_tower"] = first_dev
-        dm["model.embed_vision"] = first_dev
-    for i in range(n):
-        dev = 0
-        while dev < len(splits) and i >= splits[dev]:
-            dev += 1
-        dm[f"{prefix}.layers.{i}"] = devices[dev]
-    return dm
-
-
-def _replicate_frozen_output_head_for_pp(stack: BlockStack) -> None:
-    """Keep tied-checkpoint output evaluation local to the final PP stage.
-
-    A tied embedding/head parameter cannot be placed on two devices by
-    Accelerate.  The checkpoint alias remains untouched on stage 0, while the
-    training stack receives an exact frozen replica beside the final norm.
-    The replica is evaluation-only and is never serialized as an independent
-    trainable tensor; checkpoint metadata continues to record the real alias.
-    """
-    norm_parameter = next(stack.final_norm.parameters(), None)
-    head_weight = getattr(stack.lm_head, "weight", None)
-    if (norm_parameter is None or head_weight is None
-            or head_weight.device == norm_parameter.device):
-        return
-    bias = getattr(stack.lm_head, "bias", None)
-    replica = torch.nn.Linear(
-        head_weight.shape[1], head_weight.shape[0], bias=bias is not None,
-        device=norm_parameter.device, dtype=head_weight.dtype)
-    with torch.no_grad():
-        replica.weight.copy_(head_weight.detach().to(norm_parameter.device))
-        if bias is not None:
-            replica.bias.copy_(bias.detach().to(norm_parameter.device))
-    replica.requires_grad_(False)
-    stack.lm_head = replica
-    stack.pp_frozen_output_head_replica = True
-
-
-def uses_pipeline_map(cfg) -> bool:
-    return cfg.model.pipeline_split > 0 or bool(cfg.model.pipeline_splits)
 
 
 def vocab_signature(stack) -> tuple:
@@ -183,231 +58,33 @@ def vocab_signature(stack) -> tuple:
     return tuple(sig)
 
 
-def _move_opt_state(opt, device) -> None:
-    """Page an optimizer's per-param state tensors between devices (Adam
-    moments dominate full-FT memory at 8 B/param). Moving "back" targets
-    each PARAM's own device — under pipeline parallel the blocks live on
-    different cards and a global device string would silently migrate
-    moments to the wrong one."""
-    to_cpu = torch.device(device).type == "cpu"
-    for group in opt.param_groups:
-        for p in group["params"]:
-            st = opt.state.get(p)
-            if not st:
-                continue
-            tgt = torch.device("cpu") if to_cpu else p.device
-            for k, v in st.items():
-                if torch.is_tensor(v) and v.device != tgt:
-                    st[k] = v.to(tgt)
-
-
-@dataclass
-class OptimizerPlan:
-    """Explicit optimizer policy: state placement + stepping strategy.
-
-    ``step()`` preserves the historical per-block clip norm in every policy —
-    combining AdamW instances changes speed, global clipping would change
-    the experiment.
-
-    ``full_offload`` keeps the Adam moments in PERMANENT pinned host buffers
-    (allocated once — repeated pin_memory() was measured slower than the
-    copies it hides) and pages them through the GPU block by block: the next
-    block's H2D prefetch is issued on a side stream while the current block
-    steps, and the writeback D2H overlaps the following block. The math is
-    identical to the resident step — same tensors, same kernels, different
-    transport.
-    """
-
-    kind: str  # 'lora_fused' | 'full_resident' | 'full_offload'
-    foreach: bool
-    block_params: dict[int, list[torch.nn.Parameter]]
-    optimizers: list[torch.optim.Optimizer]
-
-    @classmethod
-    def build(cls, stack, cfg, blocks: range | None = None) -> "OptimizerPlan":
-        """Resolve the policy table for this config. ``blocks`` restricts to a
-        subset (the sequential schedule optimizes one block per stage)."""
-        offload = cfg.train.offload_adam
-        if cfg.train.lora.enabled and not offload:
-            kind, foreach = "lora_fused", True
-        elif offload:
-            kind, foreach = "full_offload", False
-        else:
-            # Foreach's extra tensor-list intermediates are negligible for
-            # LoRA and expensive for full-FT: large-model memory wins.
-            kind, foreach = "full_resident", False
-        blocks = blocks if blocks is not None else range(1, stack.n_layers + 1)
-        block_params = {
-            L: [p for p in stack.block_params(L) if p.requires_grad]
-            for L in blocks
-        }
-        if kind == "full_offload":
-            optimizers = [torch.optim.AdamW(params, lr=cfg.train.lr, foreach=False)
-                          for params in block_params.values()]
-        else:
-            all_params = [p for params in block_params.values() for p in params]
-            optimizers = [torch.optim.AdamW(all_params, lr=cfg.train.lr,
-                                            foreach=foreach)]
-        return cls(kind=kind, foreach=foreach, block_params=block_params,
-                   optimizers=optimizers)
-
-    def step(self) -> None:
-        for params in self.block_params.values():
-            torch.nn.utils.clip_grad_norm_(params, 1.0, foreach=self.foreach)
-        if self.kind == "full_offload":
-            self._step_offload()
-            return
-        for opt in self.optimizers:
-            opt.step()
-            opt.zero_grad(set_to_none=True)
-
-    # -- streamed offload ---------------------------------------------------
-
-    def _moment_entries(self, opt) -> tuple[list, torch.device | None]:
-        """(state_dict, key, tensor) triples for the block's Adam moments.
-        The 0-dim 'step' counter stays on CPU (capturable=False contract)."""
-        entries, dev = [], None
-        for group in opt.param_groups:
-            for p in group["params"]:
-                st = opt.state.get(p)
-                if not st:
-                    continue
-                dev = p.device
-                for k, v in st.items():
-                    if torch.is_tensor(v) and v.dim() > 0:
-                        entries.append((st, k, v))
-        return entries, dev
-
-    def _stream_for(self, dev: torch.device) -> torch.cuda.Stream:
-        streams = getattr(self, "_offload_streams", None)
-        if streams is None:
-            streams = self._offload_streams = {}
-        if dev not in streams:
-            streams[dev] = torch.cuda.Stream(dev)
-        return streams[dev]
-
-    def _pinned_for(self, st: dict, k: str, like: torch.Tensor) -> torch.Tensor:
-        pool = getattr(self, "_pinned_pool", None)
-        if pool is None:
-            pool = self._pinned_pool = {}
-        key = (id(st), k)
-        buf = pool.get(key)
-        if buf is None or buf.shape != like.shape or buf.dtype != like.dtype:
-            buf = pool[key] = torch.empty(
-                like.shape, dtype=like.dtype, pin_memory=True)
-        return buf
-
-    def _stage_in(self, i: int, staged: dict) -> None:
-        """Issue the async pinned->device copy of block i's moments."""
-        if i >= len(self.optimizers) or i in staged:
-            return
-        entries, dev = self._moment_entries(self.optimizers[i])
-        host = [(st, k, v) for st, k, v in entries if v.device.type == "cpu"]
-        if dev is None or not host:
-            staged[i] = ([], None)  # first step: state not created yet
-            return
-        side = self._stream_for(dev)
-        moved = []
-        with torch.cuda.stream(side):
-            for st, k, v in host:
-                g = torch.empty(v.shape, dtype=v.dtype, device=dev)
-                g.copy_(v, non_blocking=True)
-                moved.append((st, k, g))
-        ev = torch.cuda.Event()
-        ev.record(side)
-        staged[i] = (moved, ev)
-
-    def _step_offload(self) -> None:
-        """Page moments through the GPU one block at a time: H2D prefetch of
-        block i+1 rides a side stream under block i's step kernels; the D2H
-        writeback is issued behind the step and overlaps block i+1."""
-        staged: dict[int, tuple] = {}
-        self._stage_in(0, staged)
-        for i, opt in enumerate(self.optimizers):
-            self._stage_in(i + 1, staged)
-            moved, ev = staged.pop(i)
-            if moved:
-                dev = moved[0][2].device
-                cur = torch.cuda.current_stream(dev)
-                cur.wait_event(ev)
-                for st, k, g in moved:
-                    g.record_stream(cur)  # allocated under the side stream
-                    st[k] = g
-            opt.step()  # creates device state on the first call
-            opt.zero_grad(set_to_none=True)
-            entries, dev = self._moment_entries(opt)
-            if dev is None or dev.type != "cuda":
-                continue
-            side = self._stream_for(dev)
-            side.wait_stream(torch.cuda.current_stream(dev))
-            with torch.cuda.stream(side):
-                for st, k, v in entries:
-                    if v.device.type != "cuda":
-                        continue
-                    pinned = self._pinned_for(st, k, v)
-                    pinned.copy_(v, non_blocking=True)
-                    v.record_stream(side)  # device buf lives until copy lands
-                    st[k] = pinned
-        # pinned buffers must be consistent before any host-side reader; one
-        # short wait (~last block's D2H) per optimizer step
-        for s in getattr(self, "_offload_streams", {}).values():
-            s.synchronize()
-
-
 class TrainingRuntime:
-    """Owns the executable side of a run: student model + placement, LoRA,
-    teacher source, disk cache, frozen-vocabulary tripwire, VRAM accounting.
-
-    Construction order matches the historical trainer exactly (load → LoRA →
-    train() → freeze → signature → teacher → cache); RNG-consuming steps see
-    the same global-seed state as before the extraction."""
+    """Own one v4 process's model, cache, invariants, and publication."""
 
     def __init__(self, cfg):
         self.cfg = cfg
-        if uses_pipeline_map(cfg) and cfg.model.device_map:
+        if getattr(cfg.model, "device_map", ""):
             raise ValueError(
-                "model.pipeline_split(s) and model.device_map are mutually exclusive")
-        if cfg.model.device_map not in ("", "auto"):
-            raise ValueError("model.device_map must be empty or 'auto'")
-        self.pp_map = pp_device_map(cfg) if uses_pipeline_map(cfg) else None
-        if self.pp_map is not None:
-            # Sparse PP placement is physical, not CUDA_VISIBLE_DEVICES
-            # relative: a [1, 3] run must not create its default allocator,
-            # streams, or transient model-load tensors on a busy cuda:0.
-            splits = list(cfg.model.pipeline_splits or [])
-            stage_devices = list(cfg.model.pipeline_devices or [])
-            if not stage_devices:
-                stage_devices = list(range(len(splits) + 1))
-            self.owned_devices = tuple(stage_devices)
-            self.device = torch.device("cuda", self.owned_devices[0])
+                "pipeline-v4 runtime is one process per physical device; "
+                "model.device_map must be empty")
+        self.device = torch.device(cfg.model.device)
+        if self.device.type == "cuda":
+            # Pin the default device: deviceless CUDA Events/Streams/tensors
+            # must not create a context on a different stage's card.
             torch.cuda.set_device(self.device)
+            index = (self.device.index if self.device.index is not None
+                     else torch.cuda.current_device())
+            self.owned_devices = (index,)
         else:
-            self.owned_devices = tuple(range(torch.cuda.device_count()))
-            self.device = torch.device(cfg.model.device)
-            if self.device.type == "cuda":
-                # Pin the DEFAULT device too (owner defect, 2026-07-18):
-                # without this, every deviceless CUDA op — Events, Streams,
-                # bare .cuda(), 'cuda' tensors — creates a ~500 MB context
-                # on cuda:0, colliding with whatever run owns that card.
-                torch.cuda.set_device(self.device)
-        self.auto_map = cfg.model.device_map == "auto"
-        # bf16 base for LoRA (frozen weights) AND for the sequential
-        # schedules: only actively-training blocks need fp32 master weights
-        # (cast per stage / per window); summed full-FT trains all blocks
-        # every step and keeps fp32 masters throughout.
-        full_ft_all_blocks = (not cfg.train.lora.enabled
-                              and cfg.train.schedule != "sequential")
-        self.base_dtype = torch.float32 if full_ft_all_blocks else torch.bfloat16
-        # warm-start: student weights from a prior run's checkpoint; the
-        # teacher (cache identity / frozen copy / adapters-off) stays
-        # cfg.model.name
+            self.owned_devices = ()
+        self.base_dtype = (torch.bfloat16 if cfg.train.lora.enabled
+                           else torch.float32)
         self.student_src = (str(Path("runs") / cfg.train.init_from / "checkpoint")
                             if cfg.train.init_from else cfg.model.name)
         self.tokenizer = AutoTokenizer.from_pretrained(cfg.model.name)
         self.model = None
         self.peft_model = None
         self.stack = None
-        self.teacher = None
         self.cache = None
         self.cache_manifest = None
         self._vocab_sig0 = None
@@ -415,10 +92,6 @@ class TrainingRuntime:
     # -- construction ------------------------------------------------------
 
     def _load_placed(self, src, dtype, **kw):
-        if self.pp_map is not None:
-            return load_causal_lm(src, dtype=dtype, device_map=self.pp_map, **kw)
-        if self.auto_map:
-            return load_causal_lm(src, dtype=dtype, device_map="auto", **kw)
         model = load_causal_lm(src, dtype=dtype, **kw)
         model.to(self.device)
         return model
@@ -498,13 +171,7 @@ class TrainingRuntime:
                 self.peft_model = attach_lora(self.model, self.cfg.train.lora)
                 self.model = self.peft_model.get_base_model()
         self.model.train()
-        # explicit pipeline placement runs the walk hook-free: BlockStack
-        # moves activations at partition boundaries itself (issues.md
-        # 2026-07-10 PP2 hook measurement); evals keep the model's hooks
-        self.stack = BlockStack(self.model,
-                                hook_free_walk=self.pp_map is not None)
-        if self.pp_map is not None:
-            _replicate_frozen_output_head_for_pp(self.stack)
+        self.stack = BlockStack(self.model)
         self.stack.freeze_non_blocks()
         self._vocab_sig0 = vocab_signature(self.stack)
         self.assert_own_gpu_only("post_load")
@@ -514,13 +181,11 @@ class TrainingRuntime:
         """Owner defect-hunt 2026-07-18 ("catch it definitely"): raise if
         THIS process holds memory on any CUDA device other than its
         assigned one. Uses nvidia-smi because a bare ~518 MB CUDA context
-        is invisible to torch's allocator counters. Skipped for
-        deliberately multi-GPU placements (device_map=auto, PPn maps)."""
+        is invisible to torch's allocator counters."""
         import os
         import subprocess
 
-        if (self.device.type != "cuda" or self.auto_map
-                or self.pp_map is not None):
+        if self.device.type != "cuda":
             return
         try:
             apps = subprocess.run(
@@ -543,33 +208,12 @@ class TrainingRuntime:
             (tuple(part.strip() for part in line.split(","))
              for line in apps.strip().splitlines() if line.strip())
             if pid.isdigit() and int(pid) == me
-            and index_of.get(uuid) not in (None, self.device.index)})
+            and index_of.get(uuid) not in (None, self.owned_devices[0])})
         if foreign:
             raise RuntimeError(
                 f"stray CUDA context: pid {me} holds memory on "
                 f"cuda:{foreign} while pinned to {self.device} "
                 f"(phase={phase}) — a deviceless CUDA call ran off-card")
-
-    def load_teacher(self, moe_load_kw: dict | None = None):
-        """Online teacher (adapters-off LoRA base, or a resident frozen bf16
-        copy for full-FT) — None when targets come from the disk cache."""
-        from .teacher_source import OnlineTeacherSource
-
-        cfg = self.cfg
-        if cfg.train.online_teacher and self.peft_model is None:
-            raise ValueError("train.online_teacher requires train.lora.enabled")
-        if cfg.train.online_teacher:
-            self.teacher = OnlineTeacherSource(self.stack,
-                                               peft_model=self.peft_model)
-        elif cfg.train.frozen_teacher_copy:
-            t_model = self._load_placed(cfg.model.name, torch.bfloat16,
-                                        **(moe_load_kw or {}))
-            t_model.eval().requires_grad_(False)
-            self.teacher = OnlineTeacherSource(
-                self.stack,
-                frozen_stack=BlockStack(
-                    t_model, hook_free_walk=self.pp_map is not None))
-        return self.teacher
 
     def load_cache(self):
         cache_root, chash = resolve_cache_dir(self.cfg)
@@ -587,31 +231,6 @@ class TrainingRuntime:
         self.cache = TeacherCache(cache_root, expect_hash=chash)
         return self.cache
 
-    def release_teacher(self) -> None:
-        """Drop a frozen teacher once its one-time targets are materialized.
-
-        Summed full-FT cache runs may request ``frozen_teacher_copy`` solely
-        for anchor precomputation.  Keeping that copy after the anchor bank is
-        built both defeats the disk-cache execution path and needlessly holds
-        a second base model in VRAM.  Online-LoRA and teacher-stream schedules
-        never call this method: they require the teacher every batch.
-        """
-        if self.teacher is None:
-            return
-        self.teacher = None
-        # CUDA allocations are otherwise reusable by this process, but
-        # returning idle teacher blocks here makes the post-anchor footprint
-        # visible to the allocator and prevents a false OOM at first batch.
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    @property
-    def online(self) -> bool:
-        return self.teacher is not None
-
-    def optimizer_plan(self, blocks: range | None = None) -> OptimizerPlan:
-        return OptimizerPlan.build(self.stack, self.cfg, blocks=blocks)
-
     # -- invariants & accounting --------------------------------------------
 
     def check_vocab_frozen(self) -> None:
@@ -624,16 +243,17 @@ class TrainingRuntime:
     def memory_summary(self) -> dict:
         devices = self.owned_devices
         return {
-            # Include only this run's declared PP stages. Sparse placement
-            # deliberately leaves other visible physical GPUs to other jobs.
+            # Each v4 process accounts only for its assigned physical GPU.
             "vram_gb": round(sum(torch.cuda.max_memory_allocated(d)
                                  for d in devices) / 2**30, 2),
             # reserved = what the allocator actually holds from the device —
             # the honest footprint for "does it fit on this card" claims
             "vram_reserved_gb": round(sum(torch.cuda.max_memory_reserved(d)
                                           for d in devices) / 2**30, 2),
-            "vram_per_device_gb": [round(torch.cuda.max_memory_reserved(d) / 2**30, 2)
-                                   for d in devices],
+            "vram_per_device_gb": [
+                round(torch.cuda.max_memory_reserved(d) / 2**30, 2)
+                for d in devices
+            ],
             "vram_physical_devices": list(devices),
         }
 
@@ -662,7 +282,8 @@ class TrainingRuntime:
                 raise FileExistsError(
                     "refusing to replace existing checkpoint publication: "
                     f"{target}")
-        staging = Path(tempfile.mkdtemp(prefix=".checkpoint.incomplete-", dir=run_dir))
+        staging = Path(tempfile.mkdtemp(
+            prefix=".checkpoint.incomplete-", dir=run_dir))
         try:
             if self.peft_model is not None:
                 self.peft_model.save_pretrained(staging)
@@ -670,28 +291,6 @@ class TrainingRuntime:
                 self.model.to(torch.bfloat16)
                 self.model.save_pretrained(staging)
             self.tokenizer.save_pretrained(staging)
-            # The model files remain in the Transformers format for backward
-            # compatibility.  PPn metadata is additive and records complete
-            # parameter ownership, legal stage ranges, physical mapping, and
-            # tied vocabulary aliases so a future sharded loader can reload
-            # without assembling a second model on rank 0.
-            adapter = ModelAdapter.from_stack(
-                self.stack, model_identity=self.cfg.model.name)
-            partition = partition_from_config(
-                self.cfg, num_blocks=self.stack.n_layers)
-            (staging / "partition_manifest.json").write_text(
-                json.dumps({
-                    **partition.manifest(),
-                    "pp_execution": self.cfg.train.pp_execution,
-                    "partition_profile_id": self.cfg.train.partition_profile_id,
-                    "checkpoint_storage": "transformers_atomic_with_ppn_ownership",
-                    "checkpoint_ownership": adapter.stack.checkpoint_ownership(),
-                    "legal_cut_positions": list(adapter.legal_cut_positions()),
-                    "frozen_vocabulary_requirements": (
-                        adapter.frozen_vocabulary_requirements()),
-                    "stage_shard_publication": "not_applicable_single_process_runtime",
-                    "tied_weight_aliases": adapter.tied_weight_aliases(),
-                }, indent=2) + "\n")
             if fold_in is not None:
                 shutil.move(str(fold_in), str(staging / "adam_moments.pt"))
                 target.rmdir()  # now empty; rename can claim the name

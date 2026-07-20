@@ -1,2 +1,0 @@
-# QUEUE FROZEN 2026-07-03 ~17:00 — evals of existing checkpoints only.
-runs/lw_tc_lora_14b_rag/eval/recite.json	32000	runs/lw_tc_lora_14b_rag/checkpoint	.venv/bin/python scripts/evaluate.py --experiment configs/experiments/lw_tc_lora_14b_rag.yaml --checkpoint runs/lw_tc_lora_14b_rag/checkpoint

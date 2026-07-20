@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,6 +94,15 @@ def audit_one(path: Path, base: Path = BASE) -> list[Issue]:
         issues.append(Issue(
             path, "train keys match banned-concept patterns (ce/label/gold) "
                   "and need explicit review: " + ", ".join(shaped)))
+    # Data/eval fragments and v4 placement overlays are deliberately merged
+    # onto a self-contained campaign base by their launcher. Validating them
+    # against configs/base.yaml invents missing LoRA/model/source settings.
+    # Their final merged config is validated again at every train entry point.
+    if path != base and (
+            "train" not in raw
+            or train.get("run_class") == "teacher_reference"
+            or not (raw.get("model", {}) or {}).get("name")):
+        return issues
     try:
         cfg = load_config(base, None if path == base else path)
     except Exception as e:  # noqa: BLE001
@@ -168,7 +178,13 @@ def audit_queue_snapshots(experiments: Path = EXPERIMENTS,
 
 
 def audit_all(base: Path = BASE, experiments: Path = EXPERIMENTS) -> list[Issue]:
-    paths = [base] + sorted(experiments.rglob("*.yaml"))
+    tracked = subprocess.run(
+        ["git", "ls-files", "configs/experiments/**/*.yaml",
+         "configs/experiments/*.yaml"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
+    ).stdout.splitlines()
+    paths = [base] + sorted(
+        ROOT / item for item in set(tracked) if (ROOT / item).is_file())
     issues: list[Issue] = []
     run_names: dict[str, list[Path]] = {}
     for path in paths:

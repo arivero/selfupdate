@@ -11,10 +11,6 @@ cache:
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
-  trajectory_source: teacher_hidden
-  update_granularity: online
-  schedule: summed
-  grad_accum: 1
   batching: bucketed
   # micro_batch 2: DeepSeek's CSA attention uses EAGER (the sparse lightning
   # indexer can't use flash/SDPA), so eager_attention_forward materializes the

@@ -16,9 +16,6 @@ Three families of hidden-match kinds:
   the precomputed Gram matrix M = WᵀW of the unembedding — the local
   (Gaussian) approximation of ``lens_kl``, which is full KL between the
   teacher's and student's logit-lens distributions.
-- increment (``delta_nmse``, ``delta_cosine``, ``delta_vocab_cos``): compare
-  the raw residual update made by an interior block rather than its inherited
-  absolute state. Cache boundaries use the paired absolute-state metric.
 - Jacobian-pullback (``jacobian_nmse``, ``jacobian_vocab_mse``,
   ``jacobian_lens_kl``): first transport each layer through a frozen,
   corpus-fitted downstream Jacobian. ``jacobian_nmse`` is the pure induced
@@ -43,14 +40,7 @@ GEOMETRIC_KINDS = ("nmse", "l2mse", "cosine", "huber", "charbonnier",
                    "clipped_nmse", "contrastive", "relational_state", "zero")
 VOCAB_KINDS = ("vocab_mse", "vocab_cosine_sampled", "lens_kl", "lens_js",
                "tuned_lens_kl", "vocab_fisher")
-# Match what a block *adds* rather than repeatedly charging it for inherited
-# state error.  The trainer applies these only to interior raw block outputs
-# (2 <= L < n); L=1 and h_n use the paired state fallback below because the
-# disk cache has no h0 and h_n is post-final-norm.
-DELTA_KINDS = ("delta_nmse", "delta_cosine", "delta_vocab_cos", "flow_nmse",
-               "state_delta_nmse", "state_delta_charbonnier")
-SPECIAL_KINDS = ("embedding_mse", "mahalanobis", "multi_delta_nmse",
-                 "component_nmse")
+SPECIAL_KINDS = ("embedding_mse", "mahalanobis")
 JACOBIAN_KINDS = ("jacobian_nmse", "jacobian_vocab_mse", "jacobian_cosine",
                   "jacobian_lens_kl")
 JACOBIAN_STATE_FALLBACKS = {
@@ -58,14 +48,6 @@ JACOBIAN_STATE_FALLBACKS = {
     "jacobian_vocab_mse": "vocab_mse",
     "jacobian_cosine": "cosine",
     "jacobian_lens_kl": "lens_kl",
-}
-DELTA_STATE_FALLBACKS = {
-    "delta_nmse": "nmse",
-    "delta_cosine": "cosine",
-    "delta_vocab_cos": "vocab_mse",
-    "flow_nmse": "nmse",
-    "state_delta_nmse": "nmse",
-    "state_delta_charbonnier": "charbonnier",
 }
 
 FISHER_TOPK = 64
@@ -155,28 +137,24 @@ class HiddenLoss:
                    jacobian_lens_path=train_cfg.jacobian_lens_path,
                    input_embedding=stack.embed_tokens,
                    mahalanobis_path=train_cfg.mahalanobis_path,
-                   multi_delta_scales=tuple(train_cfg.multi_delta_scales),
                    vocab_cosine_samples=train_cfg.vocab_cosine_samples,
                    vocab_cosine_seed=train_cfg.vocab_cosine_seed)
 
     def __init__(self, kind: str, final_norm=None, lm_head=None,
                  tuned_lens_path: str = "", jacobian_lens_path: str = "",
                  input_embedding=None, mahalanobis_path: str = "",
-                 multi_delta_scales: tuple[int, ...] = (1,),
                  vocab_cosine_samples: int = 0,
                  vocab_cosine_seed: int = 17):
         if kind in EVALUATION_ONLY_OUTPUT_NAMES:
             raise ValueError(
                 f"{kind} is an evaluation-only full-training-set metric and "
                 "is NEVER a training objective")
-        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + DELTA_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
+        if kind not in GEOMETRIC_KINDS + VOCAB_KINDS + JACOBIAN_KINDS + SPECIAL_KINDS:
             raise ValueError(f"unknown hidden loss kind {kind!r}")
         if kind in VOCAB_KINDS + ("jacobian_vocab_mse", "jacobian_lens_kl") and (final_norm is None or lm_head is None):
             raise ValueError(f"hidden loss {kind!r} needs final_norm and lm_head")
         if kind == "jacobian_nmse" and lm_head is None:
             raise ValueError("hidden loss 'jacobian_nmse' needs lm_head for width validation")
-        if kind == "delta_vocab_cos" and (final_norm is None or lm_head is None):
-            raise ValueError("hidden loss 'delta_vocab_cos' needs final_norm and lm_head")
         if kind == "tuned_lens_kl" and not tuned_lens_path:
             raise ValueError("hidden loss 'tuned_lens_kl' needs train.tuned_lens_path")
         if kind in JACOBIAN_KINDS and not jacobian_lens_path:
@@ -189,13 +167,9 @@ class HiddenLoss:
         self.final_norm = final_norm
         self.lm_head = lm_head
         self.input_embedding = input_embedding
-        self.multi_delta_scales = tuple(sorted(set(int(k) for k in multi_delta_scales)))
-        if not self.multi_delta_scales or self.multi_delta_scales[0] < 1:
-            raise ValueError("multi_delta_scales must contain positive offsets")
         self._precision_cpu: dict[int, torch.Tensor] = {}
         self._precision_cache: dict[tuple[int, torch.device], torch.Tensor] = {}
         self._gram: torch.Tensor | None = None
-        self._centered_gram: torch.Tensor | None = None
         self.vocab_cosine_samples = int(vocab_cosine_samples)
         self.vocab_cosine_seed = int(vocab_cosine_seed)
         self._sampled_vocab: torch.Tensor | None = None
@@ -281,22 +255,6 @@ class HiddenLoss:
             self._gram = M
         return self._gram
 
-    def _centered_gram_matrix(self) -> torch.Tensor:
-        """``Wᵀ C W`` for vocabulary-mean-centred scores.
-
-        ``C = I - 11ᵀ/V`` removes an otherwise arbitrary vocabulary-wide
-        score offset.  We form it from the existing unembedding Gram instead
-        of materialising a [positions, vocab] logit tensor.
-        """
-        if self._centered_gram is None:
-            W = self.lm_head.weight.detach()
-            with torch.autocast(W.device.type, enabled=False):
-                mean = W.float().sum(dim=0)
-                self._centered_gram = (
-                    self._gram_matrix() - torch.outer(mean, mean) / W.shape[0]
-                )
-        return self._centered_gram
-
     def _sampled_vocab_matrix(self) -> torch.Tensor:
         """Deterministic centred rows of the frozen unembedding.
 
@@ -319,26 +277,11 @@ class HiddenLoss:
                 ).contiguous()
         return self._sampled_vocab
 
-    @property
-    def is_delta(self) -> bool:
-        return self.kind in DELTA_KINDS
-
-    @property
-    def is_multiscale(self) -> bool:
-        return self.kind == "multi_delta_nmse"
-
-    @property
-    def state_fallback_kind(self) -> str:
-        """Absolute-state metric used where a raw adjacent difference is
-        unavailable (the embedding boundary and cached post-norm endpoint)."""
-        return DELTA_STATE_FALLBACKS.get(self.kind, self.kind)
-
     def __call__(self, student_h: torch.Tensor, teacher_h: torch.Tensor,
                  normed: bool = False, layer: int | None = None) -> torch.Tensor:
-        # pipeline-parallel guard: targets are produced on the item device
-        # (cuda:0) while upper blocks live on cuda:1; .to() is differentiable
+        # Teacher targets may be streamed from CPU or a stage-local store.
         teacher_h = teacher_h.to(student_h.device)
-        kind = self.state_fallback_kind
+        kind = self.kind
         if kind in JACOBIAN_KINDS:
             if layer is None:
                 raise ValueError(f"{kind} needs a 1-based layer index")
@@ -484,76 +427,3 @@ class HiddenLoss:
                 if key not in self._jacobian_trace_cache:
                     self._jacobian_trace_cache[key] = Jf.pow(2).sum().detach()
             return numerator / (teacher_energy * self._jacobian_trace_cache[key].clamp_min(1e-8))
-
-    def delta(self, student_h: torch.Tensor, student_prev: torch.Tensor,
-              teacher_h: torch.Tensor, teacher_prev: torch.Tensor) -> torch.Tensor:
-        """Compare raw successive block contributions.
-
-        The preceding student state is explicitly stop-gradient.  In a
-        connected window the normal path through ``student_h`` may still give
-        credit to earlier blocks inside that sanctioned window, but this loss
-        never creates a second direct gradient through the subtraction.
-        Final norm and LM-head bias are intentionally absent: this is a
-        residual-update measurement, not a decode of an absolute state.
-        """
-        if not self.is_delta:
-            raise ValueError(f"hidden loss {self.kind!r} has no delta form")
-        student_prev = student_prev.detach().to(student_h.device)
-        teacher_h = teacher_h.to(student_h.device)
-        teacher_prev = teacher_prev.to(student_h.device)
-        if self.kind == "delta_nmse":
-            return hidden_match(student_h - student_prev,
-                                teacher_h - teacher_prev, "nmse")
-        if self.kind == "delta_cosine":
-            return hidden_match(student_h - student_prev,
-                                teacher_h - teacher_prev, "cosine")
-        if self.kind == "flow_nmse":
-            # Cross-layer token flow: relation between the preceding and new
-            # token geometry, not either state in isolation.
-            sp = F.normalize(student_prev.float(), dim=-1)
-            so = F.normalize(student_h.float(), dim=-1)
-            tp = F.normalize(teacher_prev.float(), dim=-1)
-            to = F.normalize(teacher_h.float(), dim=-1)
-            return F.mse_loss(sp @ so.T, tp @ to.T)
-        if self.kind == "state_delta_nmse":
-            return 0.5 * (
-                hidden_match(student_h, teacher_h, "nmse")
-                + hidden_match(student_h - student_prev,
-                               teacher_h - teacher_prev, "nmse"))
-        if self.kind == "state_delta_charbonnier":
-            return 0.5 * (
-                hidden_match(student_h, teacher_h, "charbonnier")
-                + hidden_match(student_h - student_prev,
-                               teacher_h - teacher_prev, "charbonnier"))
-
-        # ``delta_vocab_cos``: cosine of *centred* frozen-vocabulary score
-        # changes.  Wᵀ C W avoids a V-wide score tensor while exactly matching
-        # ``cos(C W d_s, C W d_t)`` up to fp32 matmul rounding.
-        head_dev = self.lm_head.weight.device
-        with torch.autocast(head_dev.type, enabled=False):
-            ds = (student_h.to(head_dev).float()
-                  - student_prev.to(head_dev).float())
-            dt = (teacher_h.to(head_dev).float()
-                  - teacher_prev.to(head_dev).float())
-            M = self._centered_gram_matrix()
-            ds_M = ds @ M
-            dt_M = dt @ M
-            dot = (ds_M * dt).sum(-1)
-            ds_norm = (ds_M * ds).sum(-1).clamp_min(0).sqrt()
-            dt_norm = (dt_M * dt).sum(-1).clamp_min(0).sqrt()
-            return 1.0 - (dot / (ds_norm * dt_norm).clamp_min(1e-8)).mean()
-
-    def multiscale_delta(self, student_h: torch.Tensor, student_history: dict[int, torch.Tensor],
-                         teacher_h: torch.Tensor, teacher_history: dict[int, torch.Tensor],
-                         layer: int) -> torch.Tensor:
-        """Uniform average of available raw k-layer displacements."""
-        losses = []
-        for k in self.multi_delta_scales:
-            anchor = layer - k
-            if anchor not in student_history or anchor not in teacher_history:
-                continue
-            losses.append(hidden_match(student_h - student_history[anchor].detach().to(student_h.device),
-                                       teacher_h - teacher_history[anchor].to(student_h.device), "nmse"))
-        if not losses:
-            return hidden_match(student_h, teacher_h, "nmse")
-        return torch.stack(losses).mean()

@@ -7,10 +7,6 @@ cache:
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
-  trajectory_source: teacher_hidden
-  update_granularity: online
-  schedule: summed
-  grad_accum: 1
   batching: bucketed
   v4_stage_splits: [16, 32, 48]
   v4_stage_devices: [0, 1, 2, 3]

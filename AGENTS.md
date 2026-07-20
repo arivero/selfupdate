@@ -101,21 +101,20 @@ point `HF_HOME` at the stage. Keep TorchInductor/Triton caches node-local
 Full bring-up recipe, including the teacher-cache bootstrap and the traps that
 cost a session, is in `docs/h100_bringup.md`.
 
-## Training Runtime & Certification (2026-07-10 refactor)
+## Training Runtime & Certification (v4-only, 2026-07-20)
 
-Execution concerns live in `src/selfupdate/train/runtime.py`
-(TrainingRuntime: loading/placement/teacher/tripwire/save; OptimizerPlan:
-`lora_fused` / `full_resident` / `full_offload` with streamed pinned-CPU
-paging). Schedule loops in `layerwise.py` never construct models or
-optimizers. Since the 2026-07-11 factorisation the trainer package is one
-module per concern — schedules (`layerwise.py`), step primitives
-(`steps.py`), knob validation (`validate.py`), telemetry (`telemetry.py`),
-teacher states (`teacher_source.py`), anchor (`anchor.py`) — module map in
-docs/runtime.md; `layerwise.py` re-exports the historical names.
-One batched walk: `batching: item` is a B=1 padded batch,
-bit-exact vs the historical item loop. Read `docs/runtime.md` before
-touching execution machinery, and note the measured NEGATIVE results in
-issues.md (async target prefetch; PP2 throughput) before "optimizing".
+`src/selfupdate/train/layerwise.py` is a thin v4 entry point;
+`online_v4.py` owns the teacher-hidden block steps and validation relay;
+`runtime.py` owns loading/cache/frozen-vocabulary/save; `v4_store.py` owns the
+fill-once teacher store; `rotation.py`/`shard_load.py` own scaling transport;
+and `validate.py` rejects every non-v4 training configuration. Read
+`docs/runtime.md` before touching execution machinery.
+
+The training law is structural: block L consumes detached teacher h[L-1]; the
+trainable student block produces its local output with gradients through its
+own weights; that output is matched to teacher h[L]. What exists only in the
+no-grad validation/generation path is the student's end-to-end trajectory.
+Never feed one student block's output into a later training block.
 
 There is NO stored test or certification gate (owner decision 2026-07-11:
 tests and stored fingerprints act as specifications that agents ossify
@@ -125,37 +124,19 @@ in this file plus the RUNTIME enforcement in the code: `_validate_knob_schedule`
 raises at dispatch, the frozen-vocab fingerprint tripwire at save, the
 graph-leak/MoE tripwires in the walk, `scripts/audit_configs.py`.
 
-For a trainer change that is INTENDED to be numerics-preserving, use
-`scripts/train_certify.py` as an on-demand numerical-regression instrument —
-record fresh fingerprints on current HEAD, apply the change, compare, discard:
+For a numerics-preserving trainer change, mint fresh single-process and PPP
+artifacts on current HEAD and compare them with
+`scripts/compare_v4_shard_numerics.py`; then run the ordinary token-prediction
+battery with `scripts/v4_battery.py`. References are disposable and never
+stored as a frozen specification. See `certs/README.md`.
 
-```bash
-python scripts/train_certify.py --all --out-dir /tmp/$USER/certify_head
-# ... apply the change ...
-python scripts/train_certify.py --all --reference-dir /tmp/$USER/certify_head
-```
+## Branch Focus (current, 2026-07-20)
 
-References are always minted from HEAD, never stored in the repo — there
-is no frozen numerics doctrine, only a per-diff "did this change anything?"
-measurement (~minutes; 13 tiny variants; semantic config hash excludes
-placement knobs, so `--override model.pipeline_split=14` compares PP
-against the same single-device fingerprints; calibration in
-`certs/README.md`). `scripts/memory_plan.py` (meta-device + one measured
-block) recommends micro-batch/window/optimizer-placement/splits BEFORE
-loading weights — advisory only.
-
-## Branch Focus (current, 2026-07-14)
-
-This branch is for strict block-local forward distillation only. Active
-training methods are in `src/selfupdate/train/layerwise.py`:
-
-- `summed`
-- `sequential`
-- `teacher_censored`
-- `mixed`
-- local hidden objectives, including `lens_kl`, evaluated through the frozen
-  vocabulary head as a metric for the intended block only
-- `conn_window: 1` for Pareto bases; no objective may cross block boundaries
+This branch is pipeline-v4 only: teacher h[L-1] -> owned block L -> teacher
+h[L], with frozen teacher attention context and no cross-block training graph.
+PPP means independent block-owner processes, not activation pipelining.
+Local hidden objectives including `lens_kl` remain permitted through the
+frozen vocabulary measurement stack.
 
 Behavioral readout and final-logit training are not active methods. The
 readout runtime has been deleted; the old implementation remains recoverable
@@ -166,10 +147,11 @@ Do not reintroduce non-layerwise training configs, queues, docs, or dispatch.
 
 ## Publication-Critical Constraints (current policy)
 
-- Every optimizer objective is block-local: its input is detached, its loss
-  targets the current block's cached teacher state, and its backward pass may
-  update only that block's trainable parameters. `conn_window: 1` is the
-  Pareto baseline; connected multi-block credit is not a current method.
+- Every optimizer objective is block-local: its input is detached teacher
+  h[L-1], its target is teacher h[L], and backward may update only block L's
+  trainable parameters. End-to-end student trajectory states are
+  validation-only; the local student block output is the differentiable side
+  of every v4 training loss.
 - `lens_kl` is permitted only as a local metric through the frozen final norm
   and LM head. The head, embedding, and logits matrix never receive updates,
   and the metric must not create a graph across blocks.
@@ -381,14 +363,11 @@ interpreted without silently promoting them to frontier evidence.
   ready marker makes `scripts/l40s_exec.sh` export
   `SELFUPDATE_TEACHER_CACHE_ROOT` for subsequent workers. Never copy the whole
   historical root (943 GB measured 2026-07-14); Qwen3.5-4B alone is ~35 GB.
-  That copy-based path is for v1/v2 and historical reproduction. Pipeline v3
-  uses `scripts/l40s_train_v3.sh`: one launcher per host/cache identity wins
-  an atomic lease, regenerates uncensored hidden targets from the fixed answer
-  IDs with the local runtime into
-  `/dev/shm/$USER/selfupdate-teacher-cache-v3`, and atomically publishes a
-  checked ready manifest. Concurrent launchers wait before loading weights;
-  later launchers on the same host skip epoch zero. `/dev/shm` is node-local,
-  so every participating host materializes its own numerically local copy.
+  The copy-based path is historical. Pipeline v4 uses its configured
+  `cache.runtime_policy` plus `v4_teacher_source` (`cache`, `online`, or the
+  fill-once `store`). Multi-stage launches go through
+  `scripts/launch_v4_stages.sh`; `/dev/shm` is node-local, so every host must
+  publish or fill its own numerically local teacher material before training.
 - No nvcc on PATH by default; CUDA modules exist but pip wheels normally bundle
   runtime libraries.
 - Native CPU thread pools are uncapped by default and can oversubscribe the
@@ -564,26 +543,22 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - Run outputs land in `runs/<run_name>/`.
 - Long work runs detached via `nohup setsid ... >> runs/pipeline*.log 2>&1 &`.
 - After changes touching masking, aligned spans, cache layer-index conventions,
-  or detach discipline in `train/layerwise.py`, run `scripts/audit_configs.py`
-  and use `scripts/train_certify.py` as an on-demand numerical-regression
-  instrument; stored
-  tests and certification fingerprints were intentionally deleted.
+  or detach discipline, run `scripts/audit_configs.py`, compare single-process
+  and PPP artifacts with `scripts/compare_v4_shard_numerics.py`, and run
+  `scripts/v4_battery.py`; stored fingerprints remain intentionally absent.
 
 ## Hardware Ladder
 
-- 0.6B: mechanics, locality tests, strict-vs-tail ablations.
-- 1.7B/4B/8B: strict local-loss scaling, geometry, and memory curve.
-- 14B/32B: online-teacher LoRA, sharding where needed.
-- MoE/120B-class: streamed blocks, post-combine hidden matching, Don Quijote.
+- 0.6B/4B: v4 mechanics, locality, and single-vs-PPP numerics.
+- 27B/35B: teacher-store and resident/rotary scaling.
+- 122B/397B/MoE: stage-scoped PPP, rotating weights, and Don Quijote.
 
 ## Current Pointer
 
-Current campaign guidance is the strict block-local policy above. Pareto v2
-uses frozen teacher hidden-state caches, `conn_window: 1`, no behavioral
-readout/final-logit training, and immediate per-run reports. The final
-synthesis may group those atomic reports by campaign, model, loss,
-censorship, and update geometry; it must exclude archived readout-bearing
-diagnostics from frontier claims.
+Current campaign guidance is pipeline v4 and `docs/training_pipeline_v4.md`.
+The final synthesis may group atomic reports by campaign, model, loss,
+censorship, teacher source/residency, and PPP ownership; it must exclude
+archived v1-v3/readout diagnostics from frontier claims.
 
 The following pointer is historical campaign context, not a current method
 recommendation:

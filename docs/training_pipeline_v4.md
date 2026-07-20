@@ -157,10 +157,9 @@ comfortable configuration (~390 GB/node of masters) while PPP4 single-node
 
 Every `v4_kv_refresh_epochs` epochs the per-(layer, cohort) tensors are
 invalidated and the K/V prefill reruns with adapters ENABLED (still no
-gradient through K/V; block inputs stay teacher states). A full
-student-trajectory KV — where the *inputs* to the projections also come from
-the student's own run — would additionally need a relay-style sequential
-pass and is the documented further step, not this knob.
+gradient through K/V). Both the K/V projection inputs and the block residual
+inputs remain teacher hidden states. Despite its historical name,
+`student_refresh` is not a student-trajectory training mode.
 
 ## Evaluation
 

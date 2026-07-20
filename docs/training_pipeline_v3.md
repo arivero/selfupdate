@@ -1,5 +1,11 @@
 # Training pipeline v3: online local writes
 
+> **Historical protocol.** Pipeline v3 and its student-hidden online training
+> path are obsolete on this v4-only branch. This document preserves campaign
+> semantics and measurements only; source references may name code recoverable
+> from Git history. Use [`training_pipeline_v4.md`](training_pipeline_v4.md)
+> for the active trainer.
+
 Pipeline v3 is the online-learning limit of the dataset-v5 layerwise
 experiment. Its atomic event is one aligned token from one answer. The model
 walks blocks in forward order; each block computes its own hidden-state loss

@@ -46,14 +46,79 @@ from .deepseek_ctx import (DeepseekRecorder, FrozenDeepseekCtx,
                            extended_additive_mask, gather_topk_at_qpos)
 from .losses import HiddenLoss
 from .moe import pending_router_loss
-from .online_v3 import (_bk_bucketed_cohorts, _bk_layer_type,
-                        _clear_block_grads, _immediate_sgd)
 from .stop import stop_requested
 from .telemetry import (
     ParameterDeltaTracker,
     _epoch_end_telemetry,
     _epoch_zero_telemetry,
 )
+
+
+def _v4_layer_type(stack, layer: int) -> str:
+    """Return the attention implementation used by one v4-owned block."""
+    if layer - 1 < len(stack.layer_types):
+        return stack.layer_types[layer - 1]
+    block = stack.blocks[layer - 1]
+    return (getattr(block, "layer_type", None)
+            or getattr(getattr(block, "self_attn", None), "layer_type", None)
+            or "full_attention")
+
+
+def _v4_bucketed_cohorts(ds, width: int, seed: int):
+    """Build length-tight fixed cohorts and deterministically shuffle them."""
+    ordered = sorted(
+        range(len(ds)), key=lambda index: len(ds.pairs[index].student_ids))
+    cohorts = [ordered[start:start + width]
+               for start in range(0, len(ordered), width)]
+    rng = random.Random(seed)
+    for cohort in cohorts:
+        rng.shuffle(cohort)
+    rng.shuffle(cohorts)
+    return cohorts
+
+
+def _v4_clear_block_grads(stack, layer: int) -> list[torch.nn.Parameter]:
+    """Clear and return the trainable parameters owned by one v4 block."""
+    cache = getattr(stack, "_v4_trainable_block_params", None)
+    if cache is None:
+        cache = [
+            [p for p in stack.block_params(index) if p.requires_grad]
+            for index in range(1, stack.n_layers + 1)
+        ]
+        stack._v4_trainable_block_params = cache
+    params = cache[layer - 1]
+    for param in params:
+        param.grad = None
+    return params
+
+
+@torch.no_grad()
+def _v4_immediate_sgd(params: list[torch.nn.Parameter],
+                      lr: float) -> torch.Tensor:
+    """Apply one state-free v4 block write and release its gradients."""
+    if not params:
+        raise RuntimeError(
+            "pipeline-v4 reached a block with no trainable parameters")
+    groups = {}
+    for param in params:
+        grad = param.grad
+        if grad is None:
+            continue
+        key = (param.device, param.dtype, grad.dtype)
+        group = groups.setdefault(key, ([], []))
+        group[0].append(param)
+        group[1].append(grad.detach())
+    if not groups:
+        raise RuntimeError("pipeline-v4 local loss produced no block gradient")
+    dev = params[0].device
+    grad_sq = torch.zeros((), dtype=torch.float32, device=dev)
+    for (_, _, _), (group_params, grads) in groups.items():
+        norms = torch._foreach_norm(grads, 2)
+        grad_sq.add_(torch.stack(norms).float().square().sum().to(dev))
+        torch._foreach_add_(group_params, grads, alpha=-lr)
+    for param in params:
+        param.grad = None
+    return grad_sq.sqrt()
 
 
 class _FrozenKV:
@@ -131,7 +196,7 @@ class _V4Cohort:
     Everything here is teacher-coordinate.  ``qpos`` holds the query rows:
     the union of the training loss positions and the answer-predictor rows
     the CE/KL evaluation needs (the ``answer_offset - 1`` convention of
-    ``_bk_answer_eval_coordinates``, so every teacher-realized answer token
+    the v4 answer-evaluation coordinates, so every teacher-realized answer token
     is counted exactly once per epoch).  ``loss_valid`` marks the training
     subset; ``eval_rows``/``eval_ids`` the evaluation subset.
     """
@@ -1071,7 +1136,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     # per epoch.  Within-cohort order is irrelevant to numerics here — the
     # update is one summed write per block per cohort — and a fixed
     # composition is what lets frozen per-cohort KV persist across epochs.
-    cohort_indices = _bk_bucketed_cohorts(ds, B, cfg.train.seed)
+    cohort_indices = _v4_bucketed_cohorts(ds, B, cfg.train.seed)
     cohorts = [
         _V4Cohort(cfg, ds, indices, device) for indices in cohort_indices]
     residency = _resolve_residency(cfg, cohorts, ds, stack, owned)
@@ -1184,7 +1249,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 f"{cohort_idx} — the store-fill relay must prefill every "
                 "(owned layer, cohort) pair; a dropped entry means the "
                 "residency policy evicted fill-once store data")
-        layer_type = _bk_layer_type(stack, layer)
+        layer_type = _v4_layer_type(stack, layer)
         if capture is not None:
             # Teacher-forward inputs may live on host (memory-lean offload path);
             # stream the one needed owned layer back to the card. .to(device)
@@ -1307,7 +1372,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                           epoch_lr: float, capture: dict | None = None
                           ) -> None:
         cohort = cohorts[cohort_idx]
-        layer_type = _bk_layer_type(stack, layer)
+        layer_type = _v4_layer_type(stack, layer)
         moe_step = moe_ctrl is not None and layer in moe_ctrl.adapters
         router_extra = None
         prep_started = time.perf_counter()
@@ -1400,7 +1465,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # regularizer joins THIS step's backward (drained inside the
             # phase so the graph never leaks across steps).
             summed = summed + router_extra
-        params = _clear_block_grads(stack, layer)
+        params = _v4_clear_block_grads(stack, layer)
         summed.backward()
         if cfg.train.v4_optimizer == "adam":
             opt = optimizers[layer]
@@ -1419,7 +1484,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             opt.step()
             opt.zero_grad(set_to_none=True)
         else:
-            grad_norm = _immediate_sgd(params, epoch_lr)
+            grad_norm = _v4_immediate_sgd(params, epoch_lr)
         torch.cuda.synchronize(device)
         epoch_state["_exec_s"] = (epoch_state.get("_exec_s", 0.0)
                                   + time.perf_counter() - exec_started)
@@ -1929,7 +1994,7 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
             else:
                 full_inputs = cohort.gather_full_inputs(cache, layer).to(device)
                 targets = cohort.gather_targets(cache, layer).to(device)
-            layer_type = _bk_layer_type(stack, layer)
+            layer_type = _v4_layer_type(stack, layer)
             if layer_type == "linear_attention":
                 # Same routing as the walk: recurrent mixers take the full
                 # teacher-forced sequence, no KV object.

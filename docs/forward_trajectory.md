@@ -1,5 +1,10 @@
 # Layerwise Distillation As Forward-Only Trajectory Matching
 
+> **Historical theory note.** This text describes the pre-v4 student-trajectory
+> regime and its 2026-07-03/04 evidence. Pipeline v4 instead trains every block
+> from teacher `h[L-1]` to teacher `h[L]`; the student's full trajectory is
+> evaluation-only. See [`training_pipeline_v4.md`](training_pipeline_v4.md).
+
 A theory note positioning this branch's training regime, with the
 2026-07-03/04 campaign evidence. The user's framing: "not a lot of
 research uses layerwise loss — it is a sort of forward!"

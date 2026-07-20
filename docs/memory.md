@@ -1,5 +1,26 @@
 # Training Memory Vs Parameter Count
 
+## Current v4 law
+
+Pipeline v4 holds a differentiable graph for one owned student block applied
+to detached teacher inputs.  It never retains an end-to-end student training
+trajectory.  Memory is therefore the owned frozen weights (or one rotated
+block), LoRA/optimizer state, one block's activations, and the selected teacher
+store residency. Independent PPP processes split block ownership; no training
+activation is transferred between them.
+
+Traditional mixed-precision AdamW full fine-tuning is roughly 16 bytes per
+parameter before full-depth activations. V4 instead freezes base/vocabulary
+weights, trains block-local adapters, and can rotate an owned block when even
+the shard is larger than a card. Report per-stage reserved VRAM, host-master
+bytes, teacher-store bytes, and rotation stall separately.
+
+The remainder of this document is a dated v1–v3 measurement ledger. It is
+retained as historical evidence, not current executable guidance; references
+to removed schedules and scripts resolve through Git history.
+
+## Historical v1–v3 ledger
+
 The claim under test: layerwise forward distillation can train a model with
 memory governed by one block or a small tail window, instead of by full-depth
 activation storage.

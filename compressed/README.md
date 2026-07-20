@@ -4,6 +4,10 @@ This directory mirrors every executable Python, shell, and Slurm script below
 `defactorised/`.  It is the shorter, faster-to-load companion to that explicit
 teaching collection; `defactorised/` remains the readable standalone baseline.
 
+Like its source collection, this is a **frozen pre-v4-cleanup teaching
+snapshot**. Historical v2/v3 programs remain here intentionally for genealogy;
+they are not executable training methods in the cleaned live `src/` tree.
+
 Python scripts store the embedded `selfupdate` package once in
 `_selfupdate_bundle.zip`.  `_shared_bundle.py` checks the archive digest and
 installs an in-memory importer, so compressed entry points never read the

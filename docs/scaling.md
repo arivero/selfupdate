@@ -1,63 +1,57 @@
-# Scaling Plan
+# Pipeline-v4 scaling
 
-The small-model code paths are chosen to map onto 4xH100 and 120B-class
-training without changing the masking or loss abstractions.
+Scaling preserves the same local computation at every model size:
 
-## Teacher Products
+```text
+detached teacher h[L-1] -> trainable student block L -> teacher h[L]
+```
 
-| teacher product | backend |
-|---|---|
-| `<think>` traces | vLLM/sglang generation client |
-| per-layer hidden states at aligned spans | layer-streamed Hugging Face forward |
+The local student output is differentiable through block L.  It is never
+forwarded into block L+1 during training, so depth creates neither an
+activation graph nor a training dependency.
 
-Inference engines are useful for trace harvesting. They do not expose the
-internal residual streams needed for hidden-state targets, so large hidden
-caches require a streamed model forward.
+## Teacher products
 
-## Layer-Streamed Teacher Forward
+Inference engines may generate answer token ids, but teacher hidden states and
+attention context come from this repository's model stack.  A run selects one
+teacher source:
 
-Keep activations for one layer, load one block's weights, advance all
-examples, write the aligned-span slice, and repeat. This mirrors
-`StudentActCache.advance` in the sequential trainer.
+- `cache`: full teacher inputs/targets from a compatible cache;
+- `online`: one adapters-off teacher forward per cohort;
+- `store`: a one-time relayed teacher pass fills each PPP stage's local store.
 
-Approximate fp16 hidden-cache size per 1k examples x 512 aligned tokens:
+Residency is independent of source: keep the active corpus slice on GPU,
+stream it from pinned CPU/RAM-backed storage, or recompute when explicitly
+configured.  Store-fill and per-epoch training times are reported separately.
 
-| model class | all layers | one layer |
-|---|---|---|
-| Qwen3-0.6B | ~29 GB | ~1 GB |
-| Qwen3-4B | ~94 GB | ~2.6 GB |
-| 30B-A3B MoE | ~100 GB | ~2 GB |
-| 120B-class | ~450 GB | ~7 GB |
+## PPP: independent block owners
 
-Sequential training reads one layer at a time. Online-teacher LoRA avoids the
-cache entirely when the teacher can be represented as adapters-off.
+`v4_stage_splits` partitions the ordered blocks and `v4_stage_devices` maps
+owners to physical GPUs.  Each OS process loads or materializes its owned
+range, trains it from teacher tensors, and publishes a stage checkpoint.
+There is no student activation boundary and no training wavefront.  Cross-node
+mail exists for store-fill coordination and the separate validation relay.
 
-## Training Regimes At Scale
+Because ownership changes placement only, equal-seed single-process and PPP
+runs must agree per block.  `scripts/compare_v4_shard_numerics.py` checks this
+before a scaling result is treated as evidence.
 
-- `sequential`: one active block, exact one-block backward.
-- `summed`: one-block backwards, but optimizer states for all blocks are live
-  unless streamed.
-- `teacher_censored`: independent blocks; natural multi-GPU parallelism.
-- `tail_ce`: bounded top-window backward; memory grows with `k`, not depth.
+## Beyond resident weights
 
-## MoE Notes
+Stage-scoped loading leaves foreign blocks on meta.  If an owned frozen shard
+still exceeds a card, `v4_weight_residency: rotate` pages one block from its
+host master while the previous block computes.  LoRA parameters and, for Adam,
+the matching moments travel with their owned block.  Rotation is transport,
+not an objective change; report `rotation_stall` and certify its numerics.
 
-Black-box MoE is valid method evidence for the block-output layerwise claim:
-the router and experts sit inside the decoder block, and the hidden loss
-matches the post-MoE-combine block output. Its limitation is narrower but
-important: expert-mechanism claims require router agreement evidence.
+## MoE
 
-For MoE-specific claims, report the mode explicitly:
+`dense_or_black_box` matches the post-combine block output and supports the
+block-distillation claim without claiming router agreement.  Teacher-forced
+or router-aligned claims require online teacher recording and must report
+per-layer routing overlap.  DeepSeek compressed-context layers retain
+teacher-recorded key-side decisions.
 
-- `dense_or_black_box`: ordinary post-combine hidden matching. Valid method
-  evidence for layerwise block distillation; router agreement unproven.
-- `teacher_forced`: replay the teacher's top-k expert choices during training,
-  so hidden matching updates the same expert subnetwork the teacher used.
-- `router_aligned`: train or regularize the student router toward the teacher
-  router distribution/top-k set, and report top-k overlap by layer/token.
-
-The innovation path is teacher-forced expert replay plus a router-alignment
-training lane, because a student that routes to expert 7 while the teacher
-routed to expert 19 can otherwise train the wrong expert to imitate the right
-one. Router agreement and per-expert delta norms should sit next to recall,
-forgetting, and destruction metrics for MoE runs.
+Measured envelope results and provenance live in
+[training_pipeline_v4.md](training_pipeline_v4.md); historical v1–v3 scaling
+plans remain in Git history and dated reports only.

@@ -1,6 +1,0 @@
-run_name: a_lossgrid_1p7b_combined_slide2_lensjs
-train:
-  # Same bounded Jensen-Shannon control under the k=2 connected window.
-  hidden_loss: lens_js
-eval:
-  recall_corpora: [machado, quijote_ch1, quijote_ch4]

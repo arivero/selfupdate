@@ -57,8 +57,8 @@ class DataConfig:
     corpus_style: str = "verse"  # verse | prose_quijote (question phrasing + system prompt)
     # -- v5 question-only datasets (owner, 2026-07-12) ----------------------
     # The jsonl carries questions + master-RAG passages, NO answers: the
-    # teacher generates the answer at the teacher stage and the student
-    # trains on its forward hidden states (src/selfupdate/data/questions.py).
+    # teacher generates the answer at the teacher stage; v4 trains each block
+    # on teacher h[L-1] -> teacher h[L].
     question_set: str = "legacy"  # legacy | v5
     # multi-corpus emission: [{poem_path, corpus_style, prefix}, ...];
     # empty = single corpus from poem_path/corpus_style above
@@ -76,7 +76,8 @@ class DataConfig:
 class MaskConfig:
     mode: str = "rag"  # rag | rag_tool | rag_system | thinking | thinking_selective
     max_think_tokens: int = 512
-    # how the student's side compacts the privileged block:
+    # how validation censors the privileged block (training uses teacher
+    # coordinates with the corresponding v4 attention mask):
     #   remove     — block deleted outright (zero size)
     #   stub       — replaced by a short uninformative placeholder token
     #   stub_gap   — stub + position-id gap so RoPE geometry matches the teacher
@@ -99,11 +100,11 @@ class MaskConfig:
     #   flow_mask  — length- and token-preserving information-flow censor:
     #                privileged rows stay in the sequence but are zeroed at
     #                every block boundary and excluded from attention/state
-    #                writes.  This is pipeline-v3's architecture-generic
-    #                censorship control.
+    #                writes. This is the architecture-generic censorship
+    #                control used by v4 validation.
     #   intact     — diagnostic control: student sees the original privileged
     #                block, so student_ids == teacher_ids exactly.
-    compaction: str = "remove"
+    compaction: str = "flow_mask"
 
 
 @dataclass
@@ -114,7 +115,7 @@ class CacheConfig:
     # numerically local cache generated once per host and atomically published
     # in node-local shared memory; all later arms on that host memory-map it.
     runtime_policy: str = "durable"  # durable | node_epoch0
-    node_root: str = "/dev/shm/$USER/selfupdate-teacher-cache-v3"
+    node_root: str = "/dev/shm/$USER/selfupdate-teacher-cache-v4"
     # Optional student-view-independent cache selector.  Teacher hidden states
     # and generated answer ids do not depend on how the privileged RAG block
     # is censored for the student.  Setting this to (for example) ``remove``
@@ -127,7 +128,7 @@ class CacheConfig:
     # frozen-teacher input directly.  This is a distinct, larger cache
     # identity: i{L}=h[L-1] over the full teacher sequence.  Ordinary caches
     # remain aligned-target-only.
-    store_full_teacher_inputs: bool = False
+    store_full_teacher_inputs: bool = True
     full_input_shard_size: int = 1
     # Bound Python-owned teacher tensors. Safetensors already mmap the durable
     # cache, so evicted rows remain available through the kernel page cache
@@ -188,105 +189,21 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
-    # Pipeline 1 is historical. Pipeline 2 requires an explicit gradient
-    # aggregation strategy. Pipeline 3.0 is single-user online learning;
-    # pipeline 3.1 adds B independent simultaneous-user lanes while K remains
-    # the within-answer lookahead/staleness coordinate.
-    pipeline_version: int = 1
-    pipeline_revision: str = ""
-    # Project identity is deliberately separate from the preserved pipeline
-    # protocol.  3.4 is the arbitrary-stage executor; the BxK contract stays
-    # pipeline-v3.2.
-    pp_execution: str = "serial"  # serial | wavefront | independent
-    partition_profile_id: str = ""
-    partition_profile_path: str = ""
-    partition_safety_margin: float = 0.80
-    auto_partition: bool = False
-    update_granularity: str = "legacy_answer_sum"  # legacy_answer_sum | answer | token | grid | online
-    # Pipeline-v2 grid geometry.  ``grid`` is an optimizer tile in the
-    # answer x aligned-token plane followed by the mandatory forward layer
-    # walk 1..n.  Zero tokens means all remaining aligned tokens in each
-    # answer.  The legacy answer/token values above remain readable so old
-    # configs retain their exact meaning; new experiments should use grid.
-    answers_per_update: int = 0
-    tokens_per_answer_update: int = 0
-    update_reduction: str = ""  # answer_mean | token_mean (grid only)
-    trajectory_source: str = "student_hidden"      # student_hidden | teacher_hidden (v3)
-    # teacher_hidden only: online recomputes full inputs with the frozen
-    # teacher; cached modes read the explicit full-prefix cache and permit
-    # stages to execute without activation boundaries. gpu_cache means only
-    # the active BxK targets are cached on each owning card, never a complete
-    # cohort or a full-depth cache on GPU0.
-    teacher_hidden_source: str = "online"  # online | cpu_cache | gpu_cache
-    attention_source: str = "student_attention"    # future: teacher_attention
+    # This checkout exposes only pipeline-v4 teacher-hidden training.
+    pipeline_version: int = 4
+    pipeline_revision: str = "4.0"
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"
     # method | teacher_reference | ablation | control | legacy_archive | confounded | open
     run_class: str = "method"
-    # summed | sequential | teacher_censored | mixed
-    schedule: str = "summed"
-    # mixed schedule: probability an item routes through the teacher-stream
-    # (censored) branch, linear from start (epoch 0) to end (last epoch)
-    mix_teacher_start: float = 1.0
-    mix_teacher_end: float = 0.0
     lr: float = 1e-5
-    # Pipeline-v3 execution contract. ``immediate_sgd`` has no momentum,
-    # moments, weight decay, clipping, or accumulation state. ``fixed`` uses
-    # ``lr`` unchanged. ``epoch_piecewise`` is a v3.1 BxK-only rule and
-    # multiplies ``lr`` by the explicitly pinned value for each epoch; it
-    # changes no within-epoch update/aggregation semantics.
-    online_optimizer: str = "adamw"  # adamw (v1/v2) | immediate_sgd (v3)
-    lr_rule: str = "fixed"            # fixed | epoch_piecewise (v3.1 BxK)
-    lr_epoch_multipliers: list[float] = field(default_factory=list)
-    # after_backward uses a fused multi-tensor block write. grad_ready uses
-    # post-accumulate autograd hooks to write and clear each tensor as soon as
-    # its gradient is materialized; both implement state-free immediate SGD.
-    online_write_dispatch: str = "after_backward"  # after_backward | grad_ready
-    # Known-answer tokens evaluated at one frozen weight snapshot. 1 is exact
-    # online SGD; values >1 are an explicit stale-gradient approximation and
-    # 0 means the whole remaining answer. Gradients are summed, never averaged:
-    # one fused write is exactly sequential replay of gradients precomputed at
-    # the same snapshot under state-free SGD.
-    stale_gradient_window: int = 1
-    # Pipeline-v3.1+ B×K activation-memory shard. A positive value splits
-    # transient forwards/backwards into that many fixed user lanes while
-    # accumulating all shard gradients before the one required block write.
-    # It therefore changes memory/dispatch, never the logical B×K geometry,
-    # averaging law, or optimizer-update count.
-    # Zero is rejected by causal_bk: silently restoring an unsharded B=256
-    # walk caused deterministic late-cohort OOM retries in v3.1.
-    activation_shard_users: int = 0
-    # Read-only prompt prefill can pipeline independent activation shards
-    # across PP stages. One preserves historical serial preparation.
-    prefill_parallel_shards: int = 1
-    # Static-cache prefill is query-chunked so its additive attention mask is
-    # O(B * chunk * total_length), not O(B * prompt_length**2).
-    prefill_query_chunk: int = 64
-    # per_block: backward/write immediately after each block (minimum graph
-    # memory). per_token_disconnected: retain the B=1,K=1 block-local graphs
-    # for one token, invoke autograd once over their disconnected loss roots,
-    # then write every block before the next token. No gradients mix because
-    # all inter-block edges remain detached; this is a dispatch optimization,
-    # not accumulation or a wider update tile.
-    # answer_wavefront_disconnected exploits a known answer exactly: cells on
-    # the same layer+token anti-diagonal have satisfied both dependencies
-    # (previous layer, same token; same layer, previous token) and may share
-    # one disconnected autograd dispatch. It is not stale/chunked training.
-    # answer_pipeline_lanes executes the same grid with one bounded causal
-    # CUDA lane per block, exposing actual cross-diagonal concurrency.
-    backward_dispatch: str = "per_block"  # see v3 dispatch modes in docs
-    # recompute_prefix: exact current-weight prefix on every token.
-    # causal_frozen_history: prompt/earlier-token cache is immutable within
-    # the current answer and rebuilt for the next answer/epoch.
-    history_policy: str = "recompute_prefix"
     epochs: int = 10
     micro_batch: int = 1
-    grad_accum: int = 8
     # item: historical path, loops over examples one by one even when
     # micro_batch > 1. padded: one block forward/backward over a right-padded
     # batch. bucketed: same padded path, but randomized length buckets reduce
     # pad waste without globally sorting the corpus.
-    batching: str = "item"  # item | padded | bucketed
+    batching: str = "bucketed"  # cohort construction, not a training trajectory
     length_bucket_width: int = 128
     # MoE handling:
     # dense_or_black_box = ordinary block-output layerwise distillation. For
@@ -311,9 +228,7 @@ class TrainConfig:
     # | jacobian_nmse (pure frozen JᵀJ transport metric)
     # | jacobian_vocab_mse | jacobian_lens_kl (frozen downstream transport,
     # then the corresponding vocabulary metric; all need jacobian_lens_path)
-    # | delta_nmse | delta_cosine | delta_vocab_cos (successive raw block
-    # increments; L=1/h_n use the paired state fallback because the cache has
-    # no h0 and h_n is post-final-norm).  See losses.py / docs/hidden_loss.md.
+    # See losses.py / docs/hidden_loss.md.
     hidden_loss: str = "nmse"
     # Deterministic frozen-vocabulary score sketch used only by
     # vocab_cosine_sampled. Rows are sampled from the frozen unembedding and
@@ -324,63 +239,6 @@ class TrainConfig:
     jacobian_lens_path: str = ""
     # Frozen offline per-layer precision matrices for mahalanobis hidden loss.
     mahalanobis_path: str = ""
-    # Raw multi-layer displacement offsets; legal only inside a faithful
-    # connected window and averaged uniformly across eligible offsets.
-    multi_delta_scales: list[int] = field(default_factory=lambda: [1, 2, 4])
-    # Hidden-loss weight inside a connected window. Method arms keep this 1.0;
-    # zero or reduced values are ablations only.
-    window_hidden_weight: float = 1.0
-    # sliding k-connected windows over the hidden-state trajectory:
-    # every layer gets k-deep credit assignment, peak activation graph
-    # stays k blocks. 0/1 = classic block-local.  There is no behavioral
-    # readout or final-logit training path on this branch.
-    conn_window: int = 0
-    # 0 = DISJOINT windows (detach every k blocks; walk compute unchanged;
-    # credit depth depends on position inside the window). 1 = FAITHFUL
-    # sliding windows: every body layer's target is matched as the ENDPOINT
-    # of a k-deep window that updates ALL covered blocks — uniform k-deep
-    # credit everywhere, at ~k x body compute.
-    conn_stride: int = 0
-    # forward-deduplicated faithful sliding windows: identical window/credit
-    # semantics (every block still receives W backward passes), but each block
-    # is grad-forwarded ONCE from its detached trajectory root and windows
-    # chain backward through the stored per-block graphs, instead of
-    # re-forwarding the whole window per endpoint (~1.3-1.5x on window arms,
-    # same peak graph memory). Gradients agree up to autocast replay rounding
-    # (exact in fp32; see tests/test_window_dedup.py), so this is a PINNED
-    # knob, default off: flipping it mid-campaign would fork queued arms.
-    # Memory price of this and every 2026-07-06 speed fix: docs/memory.md
-    # "Speed/Memory Ledger" (this one is zero; batching is the VRAM dial).
-    window_dedup: bool = False
-    # Depth-uniform, block-local preservation of frozen-base hidden states on
-    # generic anchor fragments.
-    anchor_hidden_weight: float = 0.0
-    anchor_path: str = "data/anchors_es.txt"
-    # sequential schedule
-    plateau_patience: int = 3
-    stage_max_steps: int = 500
-    # LoRA-only: compute teacher targets per step by disabling the adapters
-    # (student = base + adapters, so the frozen teacher is already resident).
-    # Replaces the disk cache entirely — the choice at 120B scale.
-    online_teacher: bool = False
-    # full-FT counterpart: keep a resident frozen bf16 copy of the base model
-    # as online teacher (~1.2 GB at 0.6B). Needed by schedules that consume
-    # full-sequence teacher states (teacher_censored, mixed) without LoRA.
-    # Explicit rather than automatic so a run's VRAM footprint is never a
-    # surprise (see AGENTS.md VRAM lessons).
-    frozen_teacher_copy: bool = False
-    # summed full-FT: page each block's Adam moments to CPU between its
-    # steps. Blocks step one at a time, so resident optimizer state drops
-    # from all-blocks (8 B/param, the largest full-FT term) to one block's.
-    # Costs PCIe traffic per optimizer step — pair with grad_accum. This is
-    # what lets true full-FT summed fit at 4B on one 46 GB card.
-    offload_adam: bool = False
-    # AUDIT knob: permute which layer's teacher state each layer is trained
-    # toward (fixed seeded permutation). Destroys trajectory structure while
-    # preserving marginal statistics, data, CE and budget. If recall
-    # survives, states were not carrying layer-structured signal; expected:
-    # collapse toward the label-only (kd-SFT) level. Ablation-only.
-    scramble_targets: bool = False
     # warm-start: load student weights from runs/<init_from>/checkpoint
     # (teacher stays the base model — cache identity is untouched)
     init_from: str = ""
@@ -439,16 +297,16 @@ class TrainConfig:
     # must tolerate that lag; DeepSeek PPP8 hit the old 600 s exactly.
     v4_nccl_timeout_s: int = 1800
     v4_kv_refresh_epochs: int = 0
-    # immediate_sgd keeps the v3 state-free one-write-per-block-per-cohort
-    # law. adam gives each owned block its own AdamW (more memory; pairs
+    # immediate_sgd performs one state-free write per block and cohort.
+    # adam gives each owned block its own AdamW (more memory; pairs
     # naturally with layer_major, which keeps one block's moments hot).
     v4_optimizer: str = "immediate_sgd"  # immediate_sgd | adam
     # layer_major: for each owned layer, traverse every cohort (teacher
     # tensors and optimizer state stay hot per layer). item_major: for each
-    # cohort, walk the owned layers (v3-like order; streaming-friendly).
+    # cohort, walk the owned layers (streaming-friendly).
     v4_loop_order: str = "layer_major"  # layer_major | item_major
     # Which teacher-coordinate positions carry the training loss. answer =
-    # teacher-realized answer tokens (v3 law). aligned = the whole cached
+    # teacher-realized answer tokens. aligned = the whole cached
     # aligned span (shared_mid + answer; everything non-censored the cache
     # carries targets for). thinking_answer is reserved: it needs per-record
     # thinking-span metadata the dataset does not expose yet, so dispatch
@@ -478,7 +336,7 @@ class TrainConfig:
     # behaviour). Only affects the no-grad teacher forward, never the training step.
     v4_capture_micro_batch: int = 0
     # Layer-ownership partition for multi-process v4. Deliberately SEPARATE
-    # from model.pipeline_split(s): those drive the PP device_map loader,
+    # from model.pipeline_split(s): those are teacher-cache loading controls,
     # while every v4 process loads the full model on ONE card and trains only
     # its owned contiguous block range. Cuts use pipeline_splits semantics
     # (blocks 1..n; cut c means the next stage starts at block c+1). Empty =
@@ -550,6 +408,8 @@ class EvalConfig:
 @dataclass
 class ExperimentConfig:
     run_name: str = "dev"
+    # Historical project label retained in run identity; the only executable
+    # training protocol in this checkout is pipeline v4.
     layerwise_project_version: str = "3.4"
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)

@@ -1,233 +1,51 @@
-# Hidden-Layer Loss And Locality
+# Hidden losses in pipeline v4
 
-## Setting
+For block `L`, let `x = stopgrad(teacher h[L-1])`,
+`s = student_block_L(x)`, and `t = teacher h[L]`.  The optimizer minimizes a
+local distance `D(s, t)`.  Gradients flow through the student block that
+produces `s`; they do not flow into `x`, `t`, another block, or the teacher.
 
-Teacher and student are the same architecture with the same initial weights.
-The teacher runs on the context-bearing input. The student runs on the
-context-free input. For each layer `L`, the student block output at the
-aligned span is trained toward the teacher's cached `h{L}` at the matching
-teacher span.
+This is the essential distinction:
 
-Layer indices are 1-based. `h{n}` is post-final-RMSNorm, matching the
-Hugging Face `output_hidden_states` convention and the cache round-trip test.
+- the local student block output `s` is differentiable and is what trains the
+  student's weights;
+- an end-to-end student trajectory is never a training input.  It is computed
+  separately for ordinary full-forward token validation.
 
-## Losses
+## Locality proof
 
-`nmse`:
-
-```text
-mse(H_student, H_teacher) / mean(H_teacher^2)
-```
-
-This keeps layers with different residual-stream scales comparable.
-
-`l2mse`:
+With parameters partitioned by block, `s` depends only on `theta_L` because
+`x` is detached and teacher-fixed. Therefore
 
 ```text
-mse(normalize(H_student), normalize(H_teacher))
+d D(s,t) / d theta_j = 0,  j != L.
 ```
 
-This matches direction only and ignores magnitude.
+The embedding, final norm, and vocabulary head are frozen.  Training-end
+`certify_locality_v4` measures rather than assumes this: every foreign-block
+and vocabulary-stack gradient must be exactly zero, while every owned block
+must show local signal before checkpoint publication.
 
-`cosine`: `1 - mean(cos(h_s, h_t))` — direction only, linear near optimum.
+## Absolute local metrics
 
-`huber`: smooth-L1 on `H / rms(H_teacher)` — scale-comparable across layers
-like nmse, robust to heavy-tailed residual rows.
+`HiddenLoss` supports geometric distances such as normalized MSE, MSE,
+cosine, Huber, Charbonnier, clipped NMSE, contrastive/relational controls,
+and frozen-artifact Mahalanobis/Jacobian variants.  Vocabulary-coordinate
+metrics pass `s` and `t` through the frozen final norm/head (or a frozen
+sample/sketch) as a measurement device.  `lens_kl`/`lens_js` likewise compare
+local distributions while leaving the vocabulary stack unchanged.
 
-Vocabulary-metric kinds measure the difference as the **frozen vocabulary**
-sees it (both apply the frozen final norm first, except at `h{n}` which is
-already post-norm):
+Successive-state delta losses and connected-window objectives belonged to
+student-trajectory protocols and are rejected by the v4 validator.  A loss
+may not create credit across blocks or apply depth-increasing weighting.
 
-`vocab_mse`: `||W·Δh||² / ||W·h_t||²` with `W` the frozen unembedding —
-MSE in logit space, computed through the precomputed Gram matrix
-`M = WᵀW` ([H,H], one 4 MB buffer). Equivalently: `Δhᵀ M Δh`.
+## Output metrics are evaluation only
 
-`vocab_cosine_sampled`: cosine distance between teacher and student scores on
-a deterministic sample of centred rows from the frozen unembedding. With
-sample matrix `W_S - mean_vocab(W)`, the loss is
-`1 - cos((W_S-mean(W))h_s, (W_S-mean(W))h_t)`. It approximates centred
-full-vocabulary score cosine without a vocabulary-wide logits tensor or an
-`H×H` multiply per position. Sample count and seed are mandatory config and
-telemetry fields; the sampled vocabulary matrix is frozen.
+Cross-entropy and KL at the token output are not hidden training losses.
+Teacher-forced output evaluation measures final-block fidelity on teacher
+inputs; the deployment-matched validation relay performs the ordinary
+censored student full forward and predicts tokens. Both carry
+`used_for_backward=false` and `optimizer_weight=0.0`.
 
-`lens_kl`: `KL(lens(h_t) ‖ lens(h_s))` through the frozen norm + head. It is a
-local metric for the current block, not a behavioral readout: the head is
-frozen, no logits are trained, and the graph is detached at both block
-boundaries.
-`vocab_mse` is the flat local approximation of `lens_kl` (the exact local
-metric of KL is the Fisher pullback `Wᵀ(diag(p) - ppᵀ)W`). Wave H's failed
-lens-KL was a *behavioral auxiliary without tail-CE*; that historical result
-does not define the current Pareto method.
-
-Both vocab kinds depend on the Frozen-Vocabulary Principle below: the
-metric is only meaningful because the vocabulary never moves.
-
-### Successive block-increment kinds
-
-The `delta_*` kinds target what a block writes, rather than recharging it for
-an inherited absolute-state error:
-
-```text
-d_s,L = h_s,L - stopgrad(h_s,L-1)
-d_t,L = h_t,L - h_t,L-1
-```
-
-`delta_nmse` applies normalized MSE to these updates; `delta_cosine` applies
-one minus their per-position cosine. `delta_vocab_cos` is the most semantic
-form: it applies the frozen unembedding to each update, removes the
-vocabulary-wide score mean, then takes cosine:
-
-```text
-1 - mean(cos(C W d_s,L, C W d_t,L))
-```
-
-`W` is the frozen unembedding, `C = I - 11^T/V` centres vocabulary scores,
-and the LM-head bias is omitted because a vector contribution has no bias.
-The implementation evaluates this exactly through `W^T C W`, so it never
-materializes a vocabulary-sized tensor.
-
-Cache convention makes the boundaries intentionally different: no teacher
-`h0` is cached, and `h{n}` is post-final-RMSNorm rather than the raw final
-block output. Thus delta kinds apply only at interior layers `2 <= L < n`.
-At layer 1 and layer n they use the paired absolute-state fallback
-(`nmse`, `cosine`, or `vocab_mse` respectively). This prevents the final
-normalization from being mistaken for a transformer-block update. A future
-state+delta objective needs an explicit, matched-update-norm coefficient; it
-is not silently folded into these kinds.
-
-There is no behavioral readout term in the current branch. Final-logit
-training, `readout_*` configuration, and teacher-KL readout are retired. A
-frozen-head `lens_kl` measurement is allowed only as the local loss for the
-intended block; it does not update the head or cross blocks. Reference-text
-cross-entropy is not a training objective on this branch.
-
-### Output evaluation is not a hidden loss
-
-`CE-eval-loss` (student final-output cross-entropy against the teacher's
-realized answer token) and `KL-eval-loss` (`KL(teacher || student)` at the
-final output) are deliberately absent from `HiddenLoss`. They are computed
-under `torch.no_grad` from detached final states through the frozen vocabulary
-head. The trainer measures every teacher-realized answer token in the whole
-training-set traversal once per completed epoch—not a validation subset—and
-reports token-weighted means. They NEVER contribute to backward, gradient
-accumulation, parameter writes, learning-rate selection, or an optimizer;
-their optimizer weight is always zero. `KL-eval-loss` is not `lens_kl`: the
-latter is a permitted depth-uniform block-local training metric, whereas the
-former measures the final output and is evaluation only.
-
-## The Frozen-Vocabulary Principle
-
-The embedding and LM head are the system's vocabulary, not part of the
-network being trained. They are never trained, under any schedule or
-auxiliary:
-
-- They define the fixed basis every lens decodes through. A lens whose
-  vocabulary drifts during training measures nothing.
-- Teacher targets (`h{n}` post-norm, cached or online) are expressed in the
-  initial norm/head geometry; training the head would decalibrate every
-  stored target.
-- Qwen3-0.6B/1.7B/4B tie `lm_head` to `embed_tokens`
-  (`tie_word_embeddings=true`); training the head there silently retrains
-  the input embedding as well. 8B and up are untied.
-
-`BlockStack.freeze_non_blocks()` enforces this structurally, and the
-locality tests assert no gradient reaches embedding, final norm, or head.
-Lenses may include *learned per-layer translators* (tuned-lens style); the
-translator is scaffolding and is trained or discarded freely — the
-vocabulary piece it decodes through stays frozen.
-
-## Why The Backward Is Local
-
-For a strict block step:
-
-```text
-h_out = block_L(h_in.detach())
-loss = hidden_match(h_out[s0:s0+A], target_L)
-loss.backward()
-next_input = h_out.detach()
-```
-
-The graph starts at block `L`'s detached input and ends at block `L`'s
-parameters. No gradient reaches any other block, the embedding, final norm, or
-LM head. Runtime tripwires and the on-demand certification instrument enforce:
-
-- block gradients are confined to the intended block/window
-- isolated single-block replay matches the in-trainer gradient
-- pure state-space hidden-matching steps do not invoke logits; local `lens_kl`
-  uses the frozen head only as a no-gradient metric
-
-The former top teacher-KL readout was a connected-window locality concession;
-that runtime is being deleted and is recoverable from Git history only. The
-current path has no such concession: `conn_window: 1`, detached inputs, and a
-backward pass confined to one block.
-
-## Schedules
-
-- `summed`: each block consumes the student's stream and receives a local loss
-  on every item.
-- `sequential`: one block trains at a time; earlier blocks are frozen and their
-  outputs are cached.
-- `teacher_censored`: each block consumes the teacher stream with privileged
-  rows removed, making layers independent and stationary.
-
-## Historical Mechanistic Picture (2026-07-04 campaign-final)
-
-Everything in this section is readout-era evidence. It is preserved for
-interpreting historical checkpoints, but it is not a current training recipe
-or Pareto-frontier evidence.
-
-Storage and readout dissociate, causally:
-
-- **storage**: distributed and REDUNDANT across the upper-middle stack
-  (delta mass peaks at ~80% fractional depth at 0.6B and 1.7B alike;
-  single-layer ablations below the tail are harmless). Best written by
-  `vocab_mse` — measuring hidden error through the frozen vocabulary's
-  Gram matrix — whose format is PORTABLE: foreign readouts decode it
-  (chimera transplants), and a readout trained post-hoc on a frozen
-  strict body beats joint training (`[expunged]`, 0.008 vs 0.024).
-- **readout**: a fragile, co-adapted circuit in the top k blocks where
-  every pathology lives. It is template-locked (recitation-trained
-  readouts collapse 0.024 -> 0.92 under dialogue framing; cured by
-  maieutic elicitation-diverse data), intrusion-prone ("catastrophic
-  remembering": damage concentrates on neighbor-genre Spanish poetry,
-  halved-to-thirded by anchor-KL to the base model, WORSENED by naive
-  anchor-CE), and capacity-limited (k=4 serves any two of trigger
-  diversity / anchor discipline / full 715-verse chain depth, not all
-  three).
-- Context enters the computation near L7 (`teacher_censored` increments);
-  content is written at ~80% depth; behavior is decoded at the top.
-- Reasoning-tuned families (Phi-4-mini, gpt-oss) resist the recipe:
-  their output routes through think/analysis channels the readout never
-  trains. Non-reasoning families (Qwen3, Mistral, Llama) all train.
-
-Final recipe and closing table: EXPERIMENTS.md. The 0.6B one-phase
-champion recites the full 715-verse romance self-chained, first error at
-verse 708.
-
-## Historical reader/writer distinction (owner challenge, 2026-07-05)
-
-Worry: the teacher FAILS the task behaviorally (ceiling 0.52-0.67 across
-0.6-4B) while students succeed (0.013) — is the student then trained on
-the goal task, not on the teacher?
-
-Resolution: the ceiling measures the teacher as a WRITER (greedy
-generation: locate + produce). Training targets are TEACHER-FORCED
-states — the teacher as a READER of the reference text with the passage in
-hand. Reading quality is high even where writing fails; we distill the
-reading. The information source is (reference text + context) expressed as
-states, never the teacher's decoded behavior.
-
-Bracketing controls: strict arms (no CE) store → trajectories carry
-signal alone. lensonly (CE everywhere, no trajectories) fails both
-recall and stability → labels alone insufficient, even per-layer.
-Classical full-backprop SFT on identical reference (../selfupdate_kd:
-kd_ce* = CER 0.082-0.109) is 6x worse than trajectory training at
-matched budgets → the states add signal beyond labels + backprop.
-
-Corollary (owner): the student absorbs MORE than the graded RAG — the
-teacher-forced states are conditioned on the whole padded passage
-(neighbor verses, adjacency, global order). Evidence: whole-poem
-self-chaining from windowed items; elicitation generality. Priced
-downside: the same surplus near the readout is the intrusion trigger
-(mimicry law C2-22) — accept the surplus in the body, refuse it in the
-readout window.
+See [training_pipeline_v4.md](training_pipeline_v4.md) for teacher-context
+construction and [runtime.md](runtime.md) for the executable enforcement.

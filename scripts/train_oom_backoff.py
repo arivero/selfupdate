@@ -1,8 +1,8 @@
-"""Run one training arm, retrying CUDA-OOM failures at smaller micro-batches.
+"""Run one v4 training arm, retrying CUDA-OOM failures with smaller cohorts.
 
-The effective optimizer batch stays constant: each halving of micro_batch
-doubles grad_accum.  The retry overlay is written below the run directory so
-the exact recovery decision is auditable.  Non-OOM failures are never retried.
+V4 has no gradient accumulation: each block/cohort write is an atomic local
+update.  A retry therefore changes ``micro_batch`` openly and records that
+scientific protocol change.  Non-OOM failures are never retried.
 """
 
 import argparse
@@ -31,26 +31,23 @@ def main() -> int:
     cfg = load_config(args.config, args.experiment)
     run_name = cfg.run_name
     original_micro = cfg.train.micro_batch
-    original_accum = cfg.train.grad_accum
     original_overlay = yaml.safe_load(Path(args.experiment).read_text()) or {}
     state_dir = root / "runs" / run_name / ".oom_backoff"
     state_dir.mkdir(parents=True, exist_ok=True)
 
     for attempt in range(args.max_retries + 1):
         micro = max(1, original_micro // (2 ** attempt))
-        accum = original_accum * (original_micro // micro)
         experiment = Path(args.experiment)
         if attempt:
             overlay = dict(original_overlay)
             train = dict(overlay.get("train") or {})
-            train.update({"micro_batch": micro, "grad_accum": accum})
+            train.update({"micro_batch": micro})
             overlay["train"] = train
             experiment = state_dir / f"attempt_{attempt}_mb{micro}.yaml"
             experiment.write_text(yaml.safe_dump(overlay, sort_keys=False))
         command = [sys.executable, "scripts/train.py", "--config", args.config,
                    "--experiment", str(experiment)]
-        print(f"oom-backoff: attempt={attempt} micro_batch={micro} "
-              f"grad_accum={accum}", flush=True)
+        print(f"oom-backoff: attempt={attempt} micro_batch={micro}", flush=True)
         proc = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True,
                                 bufsize=1)
@@ -66,7 +63,7 @@ def main() -> int:
             return rc
         state = {"failed_attempt": attempt, "failed_micro_batch": micro,
                  "next_micro_batch": max(1, micro // 2),
-                 "next_grad_accum": accum * 2, "reason": "cuda_oom"}
+                 "reason": "cuda_oom"}
         (state_dir / "last_oom.json").write_text(json.dumps(state, indent=2) + "\n")
         print("oom-backoff: CUDA OOM detected; retrying with a halved micro-batch", flush=True)
     return 1

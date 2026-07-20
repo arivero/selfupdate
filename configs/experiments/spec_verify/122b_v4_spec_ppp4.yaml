@@ -10,10 +10,6 @@ mask:
 train:
   pipeline_version: 4
   pipeline_revision: "4.0"
-  trajectory_source: teacher_hidden
-  update_granularity: online
-  schedule: summed
-  grad_accum: 1
   batching: bucketed
   v4_teacher_source: store
   v4_loop_order: layer_major

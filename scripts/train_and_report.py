@@ -25,6 +25,10 @@ def main() -> None:
     ap.add_argument("--experiment", required=True)
     args = ap.parse_args()
     cfg = load_config(args.config, args.experiment)
+    if cfg.train.pipeline_version != 4:
+        raise SystemExit(
+            "this checkout is pipeline-v4 only; set "
+            "train.pipeline_version=4")
     run_dir = ROOT / "runs" / cfg.run_name
     checkpoint = run_dir / "checkpoint"
     manifest = run_dir / "report_manifest.json"
@@ -42,11 +46,6 @@ def main() -> None:
     if not checkpoint.is_dir():
         run_dir = train_layerwise(cfg).resolve()
     else:
-        locality = run_dir / "eval" / "signal_attribution.json"
-        if not locality.is_file():
-            raise RuntimeError(
-                f"{checkpoint} exists without model-resident locality evidence; "
-                "refusing to publish a strict-local report")
         print(f"checkpoint already complete; retrying report only: {cfg.run_name}")
     report = generate(run_dir)
     print(f"run complete with individual report: {report}")
