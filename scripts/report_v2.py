@@ -15,7 +15,7 @@ import json
 import math
 import os
 import statistics
-from collections import defaultdict
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +30,11 @@ from matplotlib import cm, colors
 from report_pdf_v2 import write_individual_pdf
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from selfupdate.eval.run_metrics import (RunMetrics, is_stage_scoped,
+                                          representative_config_path)
+
 RUNS = ROOT / "runs"
 REPORT_INDEX = RUNS / "report_v2_index"
 
@@ -52,6 +57,13 @@ def _completed_at(run_dir: Path) -> float | None:
     metrics = run_dir / "metrics.jsonl"
     if metrics.is_file():
         done = [float(row["t"]) for row in _rows(metrics)
+                if row.get("kind") == "done" and row.get("t") is not None]
+        if done:
+            return max(done)
+    elif is_stage_scoped(run_dir):
+        # Stage-scoped (pipeline-v4 PPP-N) runs have no top-level
+        # metrics.jsonl; every stageK/metrics.jsonl logs its own "done" row.
+        done = [float(row["t"]) for row in RunMetrics(run_dir).rows
                 if row.get("kind") == "done" and row.get("t") is not None]
         if done:
             return max(done)
@@ -154,57 +166,82 @@ def _loss_name(kind: str) -> str:
     }.get(kind, kind.replace("_", " "))
 
 
-def _layer_loss_frame(rows: list[dict]) -> tuple[pd.DataFrame, str]:
-    grouped: dict[int, list[list[float]]] = defaultdict(list)
+def _loss_measure_label(metrics: RunMetrics) -> str:
+    """Describe the logged per-layer loss measure across whichever schema(s)
+    contributed rows. Legacy ``train`` rows carry an explicit
+    ``loss_measure`` field; v4 rows do not, so the label is built from the
+    real logged ``loss_kind``/``v4_loss_positions`` fields on the run's own
+    ``pipeline_v4_contract`` row rather than guessed.
+    """
     measures = set()
-    for row in rows:
-        if row.get("kind") != "train" or not row.get("per_layer"):
-            continue
-        epoch = int(row.get("epoch", 0)) + 1
-        grouped[epoch].append(row["per_layer"])
-        measures.add(row.get("loss_measure", "historical_answer_mean"))
-    out = []
-    for epoch in sorted(grouped):
-        n_layers = max(map(len, grouped[epoch]))
-        for layer in range(n_layers):
-            vals = [x[layer] for x in grouped[epoch]
-                    if len(x) > layer and math.isfinite(float(x[layer]))]
-            out.append({"epoch": epoch, "layer": layer + 1,
-                        "loss": _finite_mean(vals), "n_rows": len(vals)})
-    measure = ", ".join(sorted(measures)) if measures else "missing"
-    return pd.DataFrame(out), measure
+    for row in metrics.rows:
+        if row.get("kind") == "train" and row.get("per_layer"):
+            measures.add(row.get("loss_measure", "historical_answer_mean"))
+        elif row.get("kind") == "pipeline_v4_contract":
+            measures.add(
+                f"v4_online_{row.get('loss_kind', 'missing')}_"
+                f"{row.get('v4_loss_positions', 'missing')}_mean_per_layer")
+    return ", ".join(sorted(measures)) if measures else "missing"
 
 
-def _delta_frame(rows: list[dict]) -> tuple[pd.DataFrame, str]:
-    out, representations = [], set()
-    for row in rows:
-        if row.get("kind") != "parameter_delta":
-            continue
-        representations.add(row.get("representation", "unknown"))
-        absolute = row.get("per_layer_absolute_l2", [])
-        relative = row.get("per_layer_relative_l2", [])
-        counts = row.get("per_layer_parameter_count", [])
-        for i, rel in enumerate(relative):
-            out.append({
-                "epoch": int(row["epoch"]), "layer": i + 1,
-                "absolute_l2": absolute[i], "relative_l2": rel,
-                "parameter_count": counts[i] if i < len(counts) else None,
-            })
-    return pd.DataFrame(out), ", ".join(sorted(representations)) or "missing"
+def _layer_loss_frame(metrics: RunMetrics) -> tuple[pd.DataFrame, str]:
+    """Per-layer training loss, GLOBAL layer, merged across schema/stages.
+
+    Legacy ``kind=="train"``/``per_layer`` (list, local index == global
+    layer, single-stage only) and pipeline-v4 ``kind=="v4_epoch"``/
+    ``layer_losses`` (dict keyed by global layer, one row per stage per
+    epoch) are both handled by ``RunMetrics.loss_rows()``, which also
+    resolves each v4 stage's contribution to its correct global layer via
+    that stage's ``owned_blocks`` contract. A stage-scoped run's per-epoch
+    duplicate-free (epoch, layer) pairs from disjoint stages simply
+    concatenate; legacy multi-flush-per-epoch rows are epoch/layer-averaged
+    exactly as before.
+    """
+    per_layer = metrics.loss_rows()
+    if not per_layer:
+        return pd.DataFrame(), "missing"
+    df = pd.DataFrame(per_layer)
+    df = df[df["loss"].apply(lambda v: math.isfinite(float(v)))]
+    out = (df.groupby(["epoch", "layer"], as_index=False)
+             .agg(loss=("loss", "mean"), n_rows=("loss", "size"))
+             .sort_values(["epoch", "layer"]).reset_index(drop=True))
+    return out, _loss_measure_label(metrics)
 
 
-def _v3_gradient_frame(rows: list[dict]) -> pd.DataFrame:
-    out = []
-    for row in rows:
-        if row.get("kind") != "v3_gradient_norm":
-            continue
-        for i, value in enumerate(row.get("per_layer_mean", [])):
-            out.append({
-                "epoch": int(row.get("epoch", 0)),
-                "layer": i + 1,
-                "gradient_l2": float(value),
-            })
-    return pd.DataFrame(out)
+def _delta_frame(metrics: RunMetrics) -> tuple[pd.DataFrame, str]:
+    """Per-layer parameter delta, GLOBAL layer.
+
+    ``kind=="parameter_delta"`` is shared by legacy and v4 pipelines
+    (``telemetry.py``). ``RunMetrics.parameter_delta_rows()`` places every
+    stage's contribution at its correct global 1-based layer via that
+    stage's ``owned_blocks`` contract rather than assuming the local array
+    index already equals the global layer number (correct only for a
+    single-stage/PPP1 run — see run_metrics.py docstring for the
+    multi-stage failure mode this replaces).
+    """
+    rows = metrics.parameter_delta_rows()
+    if not rows:
+        return pd.DataFrame(), "missing"
+    df = pd.DataFrame(rows)
+    representations = sorted(
+        r for r in df["representation"].dropna().unique() if r)
+    df = df.drop(columns=["representation"]).sort_values(
+        ["epoch", "layer"]).reset_index(drop=True)
+    return df, (", ".join(representations) if representations else "missing")
+
+
+def _gradient_frame(metrics: RunMetrics) -> pd.DataFrame:
+    """Per-layer immediate-gradient norm, GLOBAL layer.
+
+    Legacy ``kind=="v3_gradient_norm"``/``per_layer_mean`` (list, single
+    stage) and pipeline-v4 ``kind=="v4_gradient_norm"``/``grad_norms``
+    (dict keyed by global layer) are both handled by
+    ``RunMetrics.gradient_rows()``.
+    """
+    rows = metrics.gradient_rows()
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values(["epoch", "layer"]).reset_index(drop=True)
 
 
 def _teacher_output_eval_frame(rows: list[dict]) -> pd.DataFrame:
@@ -703,11 +740,19 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     # ``runs/...`` paths.  Normalize once so artifact paths in the manifest are
     # independent of the caller.
     run_dir = run_dir.resolve()
-    config_path, metrics_path = run_dir / "config.yaml", run_dir / "metrics.jsonl"
-    if not config_path.exists() or not metrics_path.exists():
-        raise FileNotFoundError("report v2 requires config.yaml and metrics.jsonl")
-    rows = _rows(metrics_path)
-    complete = (run_dir / "checkpoint").exists() and any(
+    # Flat (single-process) runs keep config.yaml/metrics.jsonl directly in
+    # run_dir. Stage-scoped pipeline-v4 PPP-N runs (N > 1) shard both across
+    # run_dir/stageK/ subdirectories with no top-level metrics.jsonl at all;
+    # RunMetrics detects and merges either layout (see run_metrics.py).
+    config_path = representative_config_path(run_dir)
+    metrics = RunMetrics(run_dir)
+    if config_path is None or not metrics.rows:
+        raise FileNotFoundError(
+            "report v2 requires a config.yaml (flat run_dir or run_dir/"
+            "stage0) and at least one metrics.jsonl row (flat run_dir or "
+            "run_dir/stageK)")
+    rows = metrics.rows
+    complete = metrics.has_checkpoint() and any(
         row.get("kind") == "done" for row in rows)
     if not complete and not allow_incomplete:
         raise RuntimeError("report v2 is generated only after training completes")
@@ -717,9 +762,9 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     out_dir = run_dir / "eval" / "report_v2"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    loss, loss_measure = _layer_loss_frame(rows)
-    delta, delta_representation = _delta_frame(rows)
-    gradients = _v3_gradient_frame(rows)
+    loss, loss_measure = _layer_loss_frame(metrics)
+    delta, delta_representation = _delta_frame(metrics)
+    gradients = _gradient_frame(metrics)
     output_eval = _teacher_output_eval_frame(rows)
     recall, standard = _eval_frames(rows)
     learning, best_overall_epoch = _learning_summary(recall)
@@ -734,8 +779,17 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         8 if any(row.get("kind") == "eval" and row.get("recall")
                  for row in rows) else None,
     )
-    final_epoch = max((int(row.get("epoch", -1)) + 1 for row in rows
-                       if row.get("kind") == "train"), default=0)
+    # Legacy "train" rows log a 0-based epoch (+1 = completed count); v4
+    # "v4_epoch" rows already log the completed count directly (see
+    # run_metrics.py docstring / online_v4.py `epoch=epoch + 1` at the log
+    # call site) -- counting only "train" here left v4 runs showing 0
+    # complete epochs regardless of how many actually ran.
+    final_epoch = max(
+        [int(row.get("epoch", -1)) + 1 for row in rows
+         if row.get("kind") == "train"]
+        + [int(row.get("epoch", 0)) for row in rows
+           if row.get("kind") == "v4_epoch"],
+        default=0)
     if delta.empty:
         delta, delta_representation = _final_delta_csv(
             run_dir / "eval" / "weight_deltas.csv", final_epoch)
@@ -978,7 +1032,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"macro={float(endpoint.macro_accuracy):.4f}; "
             f"delta vs base={float(endpoint.epoch0_delta):+.4f}."
         )
-    top_delta = (delta.sort_values("relative_l2", ascending=False)
+    # Pre-existing bug this fix made newly visible: sorting the WHOLE
+    # multi-epoch delta frame put a monotonically-growing layer's last
+    # several epochs in the "final checkpoint" top-12 instead of one row
+    # per layer at the actual final epoch. Restrict to the final epoch
+    # first so "most-modified layers (final checkpoint)" means what it says.
+    top_delta = (delta[delta["epoch"] == delta["epoch"].max()]
+                 .sort_values("relative_l2", ascending=False)
                  .loc[:, ["layer", "relative_l2"]].head(12)
                  if not delta.empty else pd.DataFrame())
     md = [
@@ -1141,8 +1201,16 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     md += [
         "", "## Artifact index", "",
         "- Printable individual report: [`report.pdf`](report.pdf)",
-        f"- Raw metrics: [`metrics.jsonl`](metrics.jsonl)",
-        f"- Frozen config: [`config.yaml`](config.yaml)",
+        (f"- Raw metrics: {len(metrics.stage_dirs)} stage-scoped "
+         + ", ".join(f"[`{d.name}/metrics.jsonl`]({d.name}/metrics.jsonl)"
+                      for d in metrics.stage_dirs)
+         if metrics.stage_scoped else
+         "- Raw metrics: [`metrics.jsonl`](metrics.jsonl)"),
+        (f"- Frozen config: representative snapshot "
+         f"[`{config_path.relative_to(run_dir)}`]({config_path.relative_to(run_dir)}) "
+         "(stage0; all stages share experiment-level knobs)"
+         if metrics.stage_scoped else
+         f"- Frozen config: [`config.yaml`](config.yaml)"),
         f"- Report assets: [`eval/report_v2/`](eval/report_v2/)",
         "- Future collective reports select this run-local evidence by typed identity; "
         "they do not reconstruct a second source of truth.", "",
@@ -1239,8 +1307,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              f"cache hash: {signal.get('teacher_cache_hash', 'missing')}"),
             "Missing evidence:" if missing else "All mandatory epoch telemetry is present.",
             *[f"- {item}" for item in missing],
-            ("Source artifacts: report.md, config.yaml, metrics.jsonl, "
-             "eval/report_v2/, and eval/signal_attribution.json when present."),
+            ("Source artifacts: report.md, "
+             + (f"{len(metrics.stage_dirs)} stage-scoped stageK/config.yaml + "
+                "stageK/metrics.jsonl (stage0's config used as the "
+                "representative snapshot), "
+                if metrics.stage_scoped else "config.yaml, metrics.jsonl, ")
+             + "eval/report_v2/, and eval/signal_attribution.json when present."),
         ],
         figures=figures,
     )
