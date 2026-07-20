@@ -23,20 +23,34 @@ export TRANSFORMERS_VERBOSITY=error
 mkdir -p runs/standard_damage
 
 complete_result() {
-    "$PY" - "$1" <<'PY'
+    "$PY" - "$1" "$2" "$3" "${4:-}" <<'PY'
 import json
+import math
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+expected_model, expected_role, expected_checkpoint = sys.argv[2:5]
 try:
     payload = json.loads(path.read_text(encoding="utf-8"))
 except (OSError, json.JSONDecodeError):
     raise SystemExit(1)
 tasks = payload.get("tasks") or {}
 required = ("arc_easy", "arc_challenge", "hellaswag")
-ok = all(task in tasks and int(tasks[task].get("n", 0)) >= 100
-         and tasks[task].get("accuracy") is not None for task in required)
+def valid_task(task):
+    try:
+        return (int(tasks[task]["n"]) >= 100
+                and math.isfinite(float(tasks[task]["accuracy"])))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+ok = all(valid_task(task) for task in required)
+ok = ok and payload.get("model") == expected_model
+ok = ok and payload.get("teacher_reference_kind") == expected_role
+if expected_role == "epoch_zero":
+    ok = ok and payload.get("checkpoint") is None
+else:
+    ok = ok and payload.get("checkpoint") == expected_checkpoint
 raise SystemExit(0 if ok else 1)
 PY
 }
@@ -69,12 +83,12 @@ PY
         echo "MISSING $run model_identity" >&2
         exit 4
     fi
-    base_out="runs/standard_damage/teacher_${model//\//_}.json"
+    base_out="runs/standard_damage/epoch0_${model//\//_}.json"
     checkpoint_out="runs/standard_damage/$run.json"
 
     # The first evaluation for a new model reaps expired node-local staging
     # before publishing that model.  The paired checkpoint then reuses it.
-    if ! complete_result "$base_out"; then
+    if ! complete_result "$base_out" "$model" epoch_zero; then
         echo "START $(date --iso-8601=seconds) $run epoch-zero n=100/task"
         echo "COMMAND standard_destruction_eval model=$model base tasks=arc_easy,arc_challenge,hellaswag limit=100"
         SELFUPDATE_EVAL_STAGE_TTL_DAYS=0 "$PY" scripts/standard_destruction_eval.py \
@@ -85,7 +99,7 @@ PY
         last_model=$model
     fi
 
-    if complete_result "$checkpoint_out"; then
+    if complete_result "$checkpoint_out" "$model" checkpoint "$checkpoint"; then
         echo "SKIP $run complete_checkpoint_endpoint"
         last_model=$model
         continue
@@ -101,6 +115,6 @@ PY
         --out "$checkpoint_out" --tasks arc_easy arc_challenge hellaswag \
         --limit 100 --batch-size 16 --stage-to-local "${auto_args[@]}"
     echo "EXIT $(date --iso-8601=seconds) $run checkpoint 0"
-    complete_result "$checkpoint_out"
+    complete_result "$checkpoint_out" "$model" checkpoint "$checkpoint"
     last_model=$model
 done

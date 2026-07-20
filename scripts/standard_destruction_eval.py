@@ -49,6 +49,7 @@ from selfupdate.eval.standard import (BENCHMARK_REVISIONS, STANDARD_TASKS,
 
 TASKS = ("wikitext2_ppl", *STANDARD_TASKS)
 STAGE_LOCK_STALE_SECONDS = 15 * 60
+_SWEPT_STAGE_ROOTS: set[Path] = set()
 
 
 def _safe_name(value: str) -> str:
@@ -132,7 +133,15 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
     root = Path(os.environ.get(
         "SELFUPDATE_EVAL_STAGE", f"/tmp/{os.environ.get('USER', 'user')}/selfupdate-eval-stage"))
     root.mkdir(parents=True, exist_ok=True)
-    _sweep_stage_root(root)
+    # An adapter evaluation stages two sources in one process: its shared base
+    # followed by its unique adapter.  With a zero-day TTL, sweeping on both
+    # calls deleted the base that the first call had just published.  Sweep
+    # once per resolved root/process; later source stages in the same job must
+    # not reap one another.
+    resolved_root = root.resolve()
+    if resolved_root not in _SWEPT_STAGE_ROOTS:
+        _sweep_stage_root(root)
+        _SWEPT_STAGE_ROOTS.add(resolved_root)
     if shared:
         dest = root / "models" / _safe_name(label)
         lock = dest.with_name(dest.name + ".lock")
@@ -387,7 +396,7 @@ def main() -> int:
         "kind": "standard_destruction_eval",
         "model": cfg.model.name,
         "checkpoint": None if args.base else args.checkpoint,
-        "teacher_reference_kind": "teacher_epoch0_native_no_rag" if args.base else "checkpoint",
+        "teacher_reference_kind": "epoch_zero" if args.base else "checkpoint",
         "tasks": results,
         "macro_accuracy": (
             sum(r["accuracy"] for r in results.values() if "accuracy" in r)

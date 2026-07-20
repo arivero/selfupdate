@@ -337,27 +337,50 @@ def _historical_standard(run_name: str, final_epoch: int) -> pd.DataFrame:
         return pd.DataFrame()
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     model = str(checkpoint.get("model", ""))
-    base_name = "teacher_" + model.replace("/", "_") + ".json"
-    base_path = damage_root / base_name
+    safe_model = model.replace("/", "_")
+    base_path = damage_root / f"epoch0_{safe_model}.json"
+    if not base_path.is_file():
+        # Historical compatibility only. New evaluations use the explicitly
+        # typed epoch0_ identity so this condition is not confused with the
+        # separate intact-RAG teacher reference/control.
+        base_path = damage_root / f"teacher_{safe_model}.json"
     if not base_path.is_file():
         return pd.DataFrame()
     base = json.loads(base_path.read_text(encoding="utf-8"))
-    common = sorted(set(base.get("tasks", {})) & set(checkpoint.get("tasks", {})))
-    common = [task for task in common
-              if base["tasks"][task].get("accuracy") is not None
-              and checkpoint["tasks"][task].get("accuracy") is not None]
-    if not common:
+    required = ("arc_easy", "arc_challenge", "hellaswag")
+    base_model = str(base.get("model", ""))
+    base_role = base.get("teacher_reference_kind")
+    checkpoint_role = checkpoint.get("teacher_reference_kind")
+    if (not model or base_model != model
+            or base_role not in ("epoch_zero", "teacher_epoch0_native_no_rag")
+            or base.get("checkpoint") is not None
+            or checkpoint_role != "checkpoint"
+            or not checkpoint.get("checkpoint")):
+        return pd.DataFrame()
+
+    def valid_task(payload: dict, task: str) -> bool:
+        row = (payload.get("tasks") or {}).get(task) or {}
+        try:
+            accuracy = float(row["accuracy"])
+            n = int(row["n"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return math.isfinite(accuracy) and n >= 100
+
+    if not all(valid_task(base, task) and valid_task(checkpoint, task)
+               for task in required):
         return pd.DataFrame()
 
     def scores(payload: dict) -> dict[str, float]:
         return {task: float(payload["tasks"][task]["accuracy"])
-                for task in common}
+                for task in required}
 
     base_scores, checkpoint_scores = scores(base), scores(checkpoint)
-    item_counts = [int(checkpoint["tasks"][task].get("n", 0) or 0)
-                   for task in common]
+    item_counts = [int(payload["tasks"][task]["n"])
+                   for payload in (base, checkpoint) for task in required]
     items_per_task = min(item_counts) if item_counts else 0
-    deltas = {task: checkpoint_scores[task] - base_scores[task] for task in common}
+    deltas = {task: checkpoint_scores[task] - base_scores[task]
+              for task in required}
     worst = min(deltas, key=deltas.get)
     base_macro = sum(base_scores.values()) / len(base_scores)
     checkpoint_macro = sum(checkpoint_scores.values()) / len(checkpoint_scores)
