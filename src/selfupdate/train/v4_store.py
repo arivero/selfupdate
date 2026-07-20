@@ -76,7 +76,7 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                         moe_ctrl=None, moe_routing=None,
                         teacher_eval_rows=None, rotator=None,
                         transport=None) -> None:
-    from .online_v4 import _FrozenKV, _RelayFiles, _bk_layer_type
+    from .online_v4 import _FrozenKV, _RelayFiles, _v4_layer_type
 
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
@@ -146,7 +146,7 @@ def capture_relay_store(cfg, stack, ds, cohorts, tensors, adapters_off,
                     h, view = _fill_deepseek_layer(
                         stack, cohort, idx, layer, n, h, pe, pos, ids_dev,
                         tensors)
-                elif _bk_layer_type(stack, layer) == "linear_attention":
+                elif _v4_layer_type(stack, layer) == "linear_attention":
                     h_in = h
                     h = stack.run_block(layer, h, pe, position_ids=pos)
                     view = h if layer < n else stack.final_norm(h)
@@ -221,7 +221,7 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
     (~0.5 GB/cohort at 397B, so K=8 fits comfortably beside the 43 GB
     working set). Numerics are identical to cohort-outer — only the visit
     order changes, and no store entry accumulates across entries."""
-    from .online_v4 import _FrozenKV, _bk_layer_type
+    from .online_v4 import _FrozenKV, _v4_layer_type
 
     n = n_layers
     first = stage <= 0
@@ -250,7 +250,7 @@ def _staged_chunk_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
                 rotator.activate(layer)
                 if pos_i + 1 < len(owned):
                     rotator.prefetch(owned[pos_i + 1])
-                ltype = _bk_layer_type(stack, layer)
+                ltype = _v4_layer_type(stack, layer)
                 for idx in chunk:
                     cohort = cohorts[idx]
                     h = hs[idx]
@@ -343,7 +343,7 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
     run every cohort through it before evicting. Boundary hiddens and the
     per-cohort rope bundles (which carry gemma's shared-KV side channel
     across the whole sweep) stay resident for the duration."""
-    from .online_v4 import _FrozenKV, _bk_layer_type
+    from .online_v4 import _FrozenKV, _v4_layer_type
 
     n = n_layers
     entries = 0
@@ -358,7 +358,7 @@ def _capture_layer_outer(cfg, stack, cohorts, tensors, adapters_off,
             rotator.activate(layer)
             if pos_i + 1 < len(owned):
                 rotator.prefetch(owned[pos_i + 1])
-            ltype = _bk_layer_type(stack, layer)
+            ltype = _v4_layer_type(stack, layer)
             for idx, cohort in enumerate(cohorts):
                 h = hs[idx]
                 ctx_a = (adapters_off() if adapters_off is not None
