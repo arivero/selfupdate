@@ -399,3 +399,25 @@ weights do not imply depth-uniform effective training when architecture-scale
 outliers dominate.  The high-value follow-up is per-layer update/gradient
 normalization (and residual-update geometry), not a larger global learning
 rate.  This is a live checkpoint, not the 40-epoch conclusion.
+
+### 31B epoch-5 scientific checkpoint
+
+Gemma-31B begins more favorably at the output than either Qwen arm.  From
+epoch 1 to 5 its whole-set cross-entropy improves 0.41%
+(`0.00796195` to `0.00792946`) and KL improves 0.69%
+(`0.00530913` to `0.00527257`).  Mean three-corpus recall is slightly above
+epoch zero (`0.16859` versus `0.16761`): Machado and Quijote chapter 1 rise,
+while chapter 4 falls slightly.  The 16-item standard macro is one
+item-equivalent lower (`0.3125` to `0.2917`) and remains too small for an
+endpoint claim.
+
+Yet the local intervention is highly nonuniform.  Mean Huber loss falls only
+1.51% and its median is unchanged.  Loss/gradient mass clusters at L30, L36,
+L42, L48, L54, and L60; at epoch 5 L60's gradient norm is `538` while the
+60-layer median is `2.93`.  Effective-LoRA RMS is `2.68e-5`, but the median
+layer delta is only `7.90e-7`.  Together with Qwen's four-layer periodicity,
+Gemma-31B's six-layer periodicity shows that architectural layer families,
+not simple depth, are setting the effective loss scale.  A future normalizer
+should be calibrated by layer type/update scale and still applied without
+depth bias.  The encouraging output/recall direction must survive epoch 40
+and the 100-item endpoint before promotion.
