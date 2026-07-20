@@ -516,7 +516,35 @@ result, not an anomaly. Source:
 `runs/spec_26b_v4_ppp4_e1/stage3/metrics.jsonl`, `teacher_output_eval`,
 epoch 1 (`exact_seq_answer_count: 2071` confirms whole-corpus coverage).
 
-PPP2 cross-architecture check for the same model (does exact-seq also match
-across parallelism degrees, not just teacher_argmax_acceptance) is in
-flight; fan-out to 27B/31B/35B/122B (via their proven PPP4 configs) and
-397B (via PPP8x, with the borrowed-answer caveat) follows once that lands.
+**PPP2 cross-architecture check PASSED (26B, 2026-07-20).** Re-ran
+`26b_v4_spec_ppp2.yaml` the same way (backup preserved at
+`runs/spec_26b_v4_ppp2_e1.pre_exactseq_backup/`). All teacher-side fields
+are **bit-identical** to the fresh PPP4 run above: `teacher_argmax_acceptance
+0.9952869328553885`, `teacher_exact_seq_rate 0.8570738773539353`,
+`exact_seq_match_answers 1775`, `answer_token_count 90387` — exact-seq is
+confirmed parallelism-invariant, not just assumed by analogy to the
+already-proven token-level invariance. `epoch_seconds` 83.14s (PPP2) vs
+71.12s (PPP4) — consistent second timing samples vs the originals (83.73s /
+71.16s).
+
+One real, non-contradictory wrinkle the validation surfaced: `CE_eval_loss`,
+`KL_eval_loss`, and `student_argmax_acceptance` do NOT match bit-for-bit
+between PPP2 and PPP4 (e.g. CE 0.022729954704824796 vs 0.02272467034655475).
+Confirmed this predates commit `609d9d1` — the pre-fix backups show the
+identical discrepancy, so it is orthogonal to the exact-seq fix. Read as
+expected rather than alarming: those three fields depend on the STUDENT's
+own trained state, which accumulates through per-block online SGD updates
+whose floating-point order differs slightly across stage splits (non-
+associative float addition + different cohort/rotation boundaries per
+split) — a real but tiny numerical-order effect on trained-state-dependent
+quantities. The TEACHER-side quantities this campaign's core claim rests on
+(`teacher_argmax_acceptance`, now `teacher_exact_seq_rate`) are pure
+functions of frozen teacher hidden states through the frozen vocab head, so
+they carry no such dependency and stay exactly reproducible. The "PPP1=PPP2
+=PPP4 bit-identity" claim in this campaign has only ever been about the
+teacher-reproduction metrics, not student-side training telemetry — this
+finding doesn't move that claim, but is worth keeping in mind before ever
+citing CE/KL_eval_loss or student_argmax_acceptance as split-invariant.
+
+Fan-out to 27B/31B/35B/122B (via their proven PPP4 configs) and 397B (via
+PPP8x, with the borrowed-answer caveat) is next.
