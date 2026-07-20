@@ -184,6 +184,23 @@ subprocess), so these epoch_seconds numbers are clean training-only times.
 vLLM4 (TP4) prefill-verify timing for the SAME 2071-item set: in flight
 (27B first), to give the direct wall-clock comparator requested.
 
+**TABLE CORRECTION (2026-07-20, caught during the exact-seq fan-out — the
+"CORRECTION" section below fixed these numbers in prose on 2026-07-19 ~21:10
+but never actually edited this table; leaving the original row values above
+untouched as the historical record and correcting here instead):** these are
+`stage0`'s `epoch_seconds`, not necessarily representative of every stage
+(different stages own different layer counts and stage3 additionally runs
+the `teacher_output_eval` pass, so per-stage times spread — e.g. 122B's
+stage0-3 span 96.5-109.0s in one single run). 27B was 109.2 and 122B was ALSO
+109.2 — a copy-paste duplicate, not two models genuinely tied — and 31B's
+143.1 was never real. Correct `stage0` values, verified twice now (original
+2026-07-19 measurement, and a second independent sample from the 2026-07-20
+exact-seq fan-out re-run, both agreeing to within ~0.5s): Qwen3.6-27B
+**106.31** (fresh: 106.74), gemma-4-31B **83.04** (fresh: 83.26),
+Qwen3.6-35B-A3B **71.07** (fresh: 71.23), gemma-4-26B **68.95** (fresh:
+69.01), Qwen3.5-122B-A10B **96.64** (fresh: 96.55, missing from the original
+table entirely).
+
 ## Qwen3.5-122B-A10B — PPP4 trainer-native, FULL 2071-item epoch (2026-07-19 19:56)
 
 **teacher_argmax_acceptance = 0.9966268015946029** (101,091 answer tokens,
@@ -549,29 +566,53 @@ citing CE/KL_eval_loss or student_argmax_acceptance as split-invariant.
 Fan-out to 27B/31B/35B/122B (via their proven PPP4 configs) and 397B (via
 PPP8x, with the borrowed-answer caveat) is next.
 
-### Fan-out results so far (2026-07-20)
+### Fan-out results, ALL 5 MODELS COMPLETE (2026-07-20)
 
-| model | arch | teacher_argmax_acceptance | bit-exact vs pre-fix | teacher_exact_seq_rate | matched/2071 | epoch_seconds (new vs old) |
+epoch_seconds columns are `stage0` vs `stage0` (apples-to-apples; stage3
+runs slower because it also carries `teacher_output_eval` — see the
+epoch_seconds table correction above; an earlier version of this table
+compared fresh-stage3 against the stale/uncorrected scoreboard values and
+is fixed here):
+
+| model | arch | teacher_argmax_acceptance | bit-exact vs pre-fix | teacher_exact_seq_rate | matched/2071 | stage0 epoch_seconds (new vs corrected-old) |
 |---|---|---:|---|---:|---:|---|
-| gemma-4-26B-A4B | MoE (A4B) | 0.9952869328553885 | yes | 0.8570738773539353 | 1775 | 71.12 vs 71.16 |
-| Qwen3.6-27B | dense | 0.9995056985891225 | yes | 0.9859971028488653 | 2042 | 109.06 vs 109.2 |
-| Qwen3.6-35B-A3B | MoE (A3B) | 0.997829486626402 | yes | 0.9261226460647031 | 1918 | 71.87 vs 71.7 |
-| gemma-4-31B | dense | pending re-run | — | — | — | — |
-| Qwen3.5-122B-A10B | MoE (A10B) | pending | — | — | — | — |
+| gemma-4-26B-A4B | MoE (A4B) | 0.9952869328553885 | yes | 0.8570738773539353 | 1775 | 69.01 vs 68.95 |
+| Qwen3.6-27B | dense | 0.9995056985891225 | yes | 0.9859971028488653 | 2042 | 106.74 vs 106.31 |
+| gemma-4-31B | dense | 0.9992767415302627 | yes | 0.9744084983099952 | 2018 | 83.26 vs 83.04 |
+| Qwen3.6-35B-A3B | MoE (A3B) | 0.997829486626402 | yes | 0.9261226460647031 | 1918 | 71.23 vs 71.07 |
+| Qwen3.5-122B-A10B | MoE (A10B) | 0.9966268015946029 | yes | 0.8947368421052632 | 1853 | 96.55 vs 96.64 |
 
-**Emerging pattern, not yet conclusive**: the two dense-vs-MoE points collected
-so far are directionally consistent with the dense/MoE split an advisor
-flagged in per-token acceptance (27B/31B dense >> 26B/35B/122B MoE by
-~10x) — 27B (dense) has by far the highest exact-seq (98.60%), while both
-MoE models measured so far are lower (26B 85.71%, 35B 92.61%). Note this
-is NOT a clean binary: 35B (MoE) is noticeably better than 26B (MoE), so
-if the mechanism is MoE-routing-driven, its severity varies by model/expert
-count, not a uniform dense-vs-MoE cliff. 27B's exact-seq via the real tool
-(98.60%) is close to but not required to bit-match its own earlier
-standalone-script measurement (98.50%, different code path — see the torch
-baseline entry above); the two are independent measurements, not a
-reproduction check. A dedicated diagnostic (concrete divergence examples,
-margin/depth table, MoE-routing correlation) for 26B specifically is in
-flight to distinguish bf16-tie noise from MoE-routing disagreement from an
-actual bug — see forthcoming section below. 31B and 122B will complete this
-table's dense/MoE picture.
+All 5 pass the bit-exact reproduction gate; all 5 timing samples agree with
+their corrected originals to within ~0.5s — the instrumentation is confirmed
+inert everywhere, not just at 26B.
+
+**Dense/MoE split confirmed, and it is NOT a clean binary:**
+
+| model | arch | teacher_argmax_acceptance (per-token) | teacher_exact_seq_rate (per-answer) |
+|---|---|---:|---:|
+| Qwen3.6-27B | dense | 0.99951 | 0.98600 |
+| gemma-4-31B | dense | 0.99928 | 0.97441 |
+| Qwen3.6-35B-A3B | MoE | 0.99783 | 0.92612 |
+| Qwen3.5-122B-A10B | MoE | 0.99663 | 0.89474 |
+| gemma-4-26B-A4B | MoE | 0.99529 | 0.85707 |
+
+Both dense models cluster at the top (97.4-98.6% exact-seq); all three MoE
+models sit below them (85.7-92.6%), confirming the advisor-flagged ~10x
+per-token gap carries through to a real gap in the per-answer metric this
+campaign actually cares about. Within MoE, severity varies with model
+(122B and 35B noticeably better than 26B) rather than a uniform cliff —
+consistent with a routing-disagreement mechanism whose frequency depends on
+each model's own expert count/routing sensitivity, not a single shared
+defect. 27B's exact-seq via the real tool (98.60%) sits close to, but is not
+required to bit-match, its own earlier standalone-script measurement
+(98.50%, different code path — see the torch baseline entry above); the two
+are independent measurements, not a reproduction check.
+
+A dedicated diagnostic (concrete divergence examples, margin/depth table,
+MoE-routing correlation) for 26B specifically — the worst case, and
+therefore the most informative — is in flight to distinguish bf16-tie noise
+from MoE-routing disagreement from an actual bug; see forthcoming section
+below once it lands.
+
+397B's own exact-seq (PPP8x cross-node, with the pre-existing borrowed-
+answer caveat) is in flight next.
