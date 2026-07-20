@@ -1,0 +1,35 @@
+# Campaign40 primary arm: gemma-4-26B-A4B-it PPP4, 40 epochs.
+# Identical mechanics to the proven runs/h100_g26b_v4_ppp4_e40 recipe
+# (store lane, stage-scoped, bucketed batching, huber hidden loss,
+# conn_window 1, LoRA r16/alpha32) EXCEPT lr: 3.0e-6 instead of 1.0e-6 --
+# the winning arm of the train_sweep 5-arm LR x optimizer screen
+# (configs/experiments/train_sweep/train_sweep_26b_sgd_lr3e6.yaml, HEAD
+# f2178ac). v4_optimizer stays immediate_sgd (unchanged from e40 default).
+# New run_name (campaign40_*) so it does not collide with the existing
+# h100_g26b_v4_ppp4_e40 (lr=1e-6) reference run kept for comparison.
+run_name: campaign40_g26b_sgd
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 40
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5

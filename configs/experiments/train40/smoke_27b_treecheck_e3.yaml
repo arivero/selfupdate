@@ -1,0 +1,36 @@
+# Tree-regression smoke check (owner-directed correction, 2026-07-20): the
+# 22,985-deletion cleanup commit ef07ba9 + the _bk_layer_type rename
+# (acd9fdb) have only been exercised end-to-end via 26B (Gemma MoE) so far
+# -- the train_sweep screen matched e40's epoch-1 CE/KL to 5 sig figs on
+# 26B only. This config is byte-identical to
+# configs/experiments/h100_smoke/qwen36_27b_v4_ppp4_evalin.yaml (a dense
+# Qwen architecture, the opposite code path from 26B's MoE) except for
+# run_name, so its epoch-3 CE_eval_loss/KL_eval_loss can be diffed directly
+# against the existing runs/h100_q27b_v4_ppp4_evalin reference (commit
+# 458daa5, predates ef07ba9): CE 2.2279099346660143 / KL 2.1898275537501752.
+# Do not promote this file into the campaign -- it is 3-epoch smoke only,
+# not a campaign40 arm.
+run_name: smoke_27b_treecheck_e3
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 3
+  seed: 17
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: [16, 32, 48]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 1
