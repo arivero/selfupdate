@@ -1,0 +1,72 @@
+# ROTARY-PPP1 fix for 26B (Phase 3 relaunch, 2026-07-20), replacing
+# 26b_v4_spec_ppp1_agpuh01dev2.yaml (that config is left untouched as crash
+# evidence; its two launches both OOM'd inside `_online_teacher_capture` at
+# ~75.85 GiB/79.20 GiB with v4_teacher_source: online + v4_stage_scoped:
+# false — ALL 24 blocks' weights resident on one card simultaneously plus
+# capture activations; see runs/spec_26b_v4_ppp1_e1.log.attempt1_oom and
+# runs/spec_26b_v4_ppp1_e1_stage0.log.attempt2_oom).
+#
+# FIX: v4_teacher_source: store + v4_stage_scoped: true + v4_weight_residency
+# : rotate (only ONE block's weights resident at a time, others meta/CPU-
+# mastered) + v4_teacher_residency: cpu_stream (pinned explicitly, not auto:
+# auto's 0.3x-MemAvailable rule can refuse when sibling PPP1 stores are
+# running concurrently and shrink host RAM headroom, per the corrected
+# 122b_v4_spec_ppp1.yaml precedent) + v4_loop_order: layer_major (validate.py
+# requires layer_major whenever weight rotation is used). This is the SAME
+# family already proven end-to-end for this exact model in
+# configs/experiments/h100_smoke/gemma4_26b_v4_ppp1_rotate.yaml, and the same
+# store/layer_major/stage_scoped/rotate/battery_mode knobs the already-
+# working 26b_v4_spec_ppp2.yaml uses, just with one stage instead of two.
+#
+# DELIBERATELY UNCHANGED from PPP2/PPP4 (owner instruction, Phase 3):
+# micro_batch and v4_optimizer are NOT set here — they inherit micro_batch:
+# 64 and v4_optimizer: immediate_sgd from base_26b_v4_spec.yaml, exactly
+# matching PPP2/PPP4. v4_teacher_source: store is NOT a static cache read:
+# it still does a live forward capture through the model at whatever
+# micro_batch is configured (the store cache only holds vLLM's answer-token
+# ids, not full hidden states) — online_v4.py's `online_source =
+# v4_teacher_source in ("online","store")` treats them identically for this
+# purpose. Empirical evidence elsewhere in this campaign (26B online-vs-store
+# diagnostic, 0.99491 vs 0.99529) shows batch-shape-dependent bf16 GEMM
+# numerics are real, so changing micro_batch/optimizer here on TOP of the
+# parallelism-degree change would confound whether any acceptance/exact-seq
+# delta vs PPP2/PPP4 is a genuine PPP1 effect or a batch-shape artifact.
+# Memory reasoning for why 64 should still fit: rotate frees ~all of the
+# ~50GB+ full-model weight residency that consumed the failed attempts'
+# budget, leaving abundant room for the (weight-residency-independent)
+# per-owned-layer capture activations that scale with layer COUNT, not with
+# whichever weight-residency mode is active. If this still OOMs at 64, STOP
+# and report rather than silently reducing (owner instruction).
+#
+# DEVICE: v4_stage_devices: [2] is the actual placement lever, NOT
+# model.device — train.py's --v4-stage codepath (which launch_v4_stages.sh
+# always uses) unconditionally recomputes cfg.model.device from
+# v4_stage_devices per scripts/train.py:52-57. model.device is set to match
+# only for readability, per the original agpuh01dev2/dev3 configs' own note.
+run_name: spec_26b_v4_ppp1_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+model:
+  device: cuda:2
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  trajectory_source: teacher_hidden
+  update_granularity: online
+  schedule: summed
+  grad_accum: 1
+  batching: bucketed
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_teacher_residency: cpu_stream
+  v4_stage_scoped: true
+  v4_weight_residency: rotate
+  v4_battery_mode: subprocess
+  v4_stage_splits: []
+  v4_stage_devices: [2]
+  v4_stage: -1
+eval:
+  every_epochs: 100

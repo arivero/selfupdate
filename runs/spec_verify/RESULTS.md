@@ -770,3 +770,51 @@ extending the 0.8B-scale finding to real scale across dense and MoE
 architectures alike, for both the token-level and answer-level metric.
 PPP1 (single-GPU, all blocks) sweep is the remaining Phase 3 piece, in
 flight next across all 5 models in parallel.
+
+## PHASE 3 — PPP1 sweep: architectural blocker, fix, and a confound finding (2026-07-20)
+
+PPP1's original definition for every model's config (`v4_teacher_source:
+online` + `v4_stage_scoped: false`, all blocks resident on one GPU)
+genuinely does not fit 26B/27B/31B/35B/122B on one 80GB H100 at
+`micro_batch: 64` — confirmed CUDA OOM for every model attempted, inside
+`_online_teacher_capture` (26B: "Tried to allocate 3.29 GiB... 75.85 GiB in
+use"; 31B: "Tried to allocate 32.00 MiB... 78.37 GiB in use"; same pattern
+for 27B/35B/122B). This is a real capacity ceiling, not a bug: all-blocks-
+resident plus online capture activations at 64 items does not fit.
+
+**Fix:** every model's PPP1 config now uses `v4_teacher_source: store` +
+`v4_stage_scoped: true` + `v4_weight_residency: rotate` (only ONE block's
+weights resident at a time) + `v4_teacher_residency: cpu_stream` (pinned
+explicitly, not `auto`, since several PPP1 stores running concurrently
+shrink host `MemAvailable`) + `v4_loop_order: layer_major` — the same
+family PPP2/PPP4 already use, just with `v4_stage_splits: []` (one stage
+owns the whole model) instead of a mid-model cut. This is not a redefinition
+of PPP1; it is PPP2/PPP4's already-working recipe with the stage count set
+to 1.
+
+**A real confound, caught empirically, not just in principle:** `store`
+mode is not a static cache read — `online_v4.py`'s
+`online_source = v4_teacher_source in ("online", "store")` treats both the
+same way; the store cache only holds vLLM's answer-token ids, so
+teacher-hidden is still a LIVE forward capture at whatever `micro_batch` is
+set. An initial 35B PPP1 attempt mirrored an older demo config's smaller
+`micro_batch: 16` + `v4_optimizer: adam` (instead of PPP2/PPP4's inherited
+`micro_batch: 64` + `immediate_sgd`) and came back **close but NOT
+bit-exact**:
+
+| metric | PPP1 (confounded: mb=16, adam) | PPP4 reference | delta |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9977890422778257 | 0.997829486626402 | -0.00004 |
+| teacher_exact_seq_rate | 0.9251569290197972 | 0.9261226460647031 | -0.00097 |
+
+Preserved as `runs/spec_35b_v4_ppp1_e1.confounded_microbatch16_adam` (not
+overwritten) — this is direct evidence that batch-shape-dependent bf16
+GEMM numerics are real at this scale (consistent with the 26B
+online-vs-store diagnostic's 0.99491 vs 0.99529 finding earlier in Phase 3),
+and that holding `micro_batch`/`v4_optimizer` fixed at PPP2/PPP4's values is
+load-bearing for a clean "only stage count differs" comparison, not
+methodological pedantry. Every model's PPP1 config has been corrected to
+drop these overrides and inherit `micro_batch: 64` / `immediate_sgd` from
+its `base_*_v4_spec.yaml`, exactly matching PPP2/PPP4. Relaunched for all 5
+models (26B/31B on agpuh01 cuda:2/cuda:3, 27B/35B/122B on agpuh02
+cuda:0/cuda:1/cuda:2); results pending.
