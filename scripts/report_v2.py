@@ -873,6 +873,23 @@ def _signal_asset(frame: pd.DataFrame, out_dir: Path) -> Path | None:
     return path
 
 
+def _artifact_ref(path: Path) -> str:
+    """Manifest reference valid both in-tree and across run symlinks.
+
+    Campaign supervision may expose a run produced by a clean sibling
+    worktree through ``runs/<name>`` in the primary checkout. ``resolve()`` is
+    intentional for reading the real stage artifacts, but the resolved report
+    is then outside ``ROOT`` and cannot be made relative to it. Keep ordinary
+    in-tree manifests compact; use an absolute path for that explicit
+    cross-worktree case instead of failing after the PDF has been rendered.
+    """
+    path = path.resolve()
+    try:
+        return str(path.relative_to(ROOT.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     # The CLI passes an absolute path, while refreshers often discover relative
     # ``runs/...`` paths.  Normalize once so artifact paths in the manifest are
@@ -1512,8 +1529,8 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "pareto_v3" if run_dir.name.startswith("pareto_v3_") else
             "pareto_v2" if run_dir.name.startswith("pareto_v2_") else None),
         "complete": complete,
-        "report": str(report.relative_to(ROOT)),
-        "pdf": str(pdf.relative_to(ROOT)),
+        "report": _artifact_ref(report),
+        "pdf": _artifact_ref(pdf),
         "model": model.get("name"),
         "dataset": data.get("examples_path"),
         "pipeline_version": train.get("pipeline_version"),
@@ -1566,7 +1583,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "training_token_events_per_s": token_events_per_s,
         "best_overall_recall_epoch": best_overall_epoch,
         "learning_summary_csv": (
-            str((out_dir / "learning_summary.csv").relative_to(ROOT))
+            _artifact_ref(out_dir / "learning_summary.csv")
             if not learning.empty else None),
         "teacher_output_eval": {
             "present": not output_eval.empty,
@@ -1575,15 +1592,15 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "evaluation_only": True,
             "used_for_backward": False,
             "optimizer_weight": 0.0,
-            "csv": (str((out_dir / "teacher_output_eval_by_epoch.csv")
-                        .relative_to(ROOT)) if not output_eval.empty else None),
+            "csv": (_artifact_ref(out_dir / "teacher_output_eval_by_epoch.csv")
+                    if not output_eval.empty else None),
         },
         "strict_local": bool(signal.get("passed")) if signal else False,
         "full_standard_endpoint": {
             "present": not full_standard.empty,
             "items_per_task": (int(full_standard.iloc[-1].items_per_task)
                                if not full_standard.empty else 0),
-            "csv": (str((out_dir / "full_standard_endpoint.csv").relative_to(ROOT))
+            "csv": (_artifact_ref(out_dir / "full_standard_endpoint.csv")
                     if not full_standard.empty else None),
         },
         "source_commit": provenance.get("source_commit"),
