@@ -901,7 +901,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         update_identity = (
             "`online`: " + online_shape
             + f"{stale_label} known-answer token(s) per weight snapshot; "
-            f"`{train.get('online_optimizer', 'missing')}`; {gradient_law}; history "
+            f"`{train.get('v4_optimizer', 'missing')}`; {gradient_law}; history "
             f"`{train.get('history_policy', 'missing')}`; backward dispatch "
             f"`{train.get('backward_dispatch', 'per_block')}`; write dispatch "
             f"`{train.get('online_write_dispatch', 'after_backward')}`"
@@ -1074,7 +1074,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          f"- Training extent: {final_epoch} complete dataset epoch(s)."),
         f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
         f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
-        f"- Optimizer / LR rule / history: `{train.get('online_optimizer', 'adamw')}` / "
+        f"- Optimizer / LR rule / history: `{train.get('v4_optimizer', 'immediate_sgd')}` / "
         f"`{train.get('lr_rule', 'fixed')}` / `{train.get('history_policy', 'not_applicable')}`",
         f"- Backward / write dispatch: `{train.get('backward_dispatch', 'per_block')}` / "
         f"`{train.get('online_write_dispatch', 'after_backward')}`; stale-gradient "
@@ -1269,7 +1269,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"Update geometry/aggregation: {update_identity}",
             f"Realized update geometry: {realized_identity}",
             ("Optimizer / LR rule / history: "
-             f"{train.get('online_optimizer', 'adamw')} / "
+             f"{train.get('v4_optimizer', 'immediate_sgd')} / "
              f"{train.get('lr_rule', 'fixed')} / "
              f"{train.get('history_policy', 'not_applicable')}."),
             ("Batching: "
@@ -1348,7 +1348,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             "reduction": train.get("update_reduction", train.get("update_granularity")),
             "realized": realized_geometry,
         },
-        "optimizer": train.get("online_optimizer", "adamw"),
+        "optimizer": train.get("v4_optimizer", "immediate_sgd"),
         "lr_rule": train.get("lr_rule"),
         "history_policy": train.get("history_policy"),
         "backward_dispatch": train.get("backward_dispatch", "per_block"),
