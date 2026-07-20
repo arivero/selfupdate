@@ -750,3 +750,23 @@ agpuh01. Source: `runs/spec_31b_v4_ppp2_e1/stage1/metrics.jsonl`.
 Bit-exact on both teacher-side identity metrics. 4 of 5 models now confirm
 exact-seq is parallelism-invariant (26B/27B/31B/35B); 122B PPP2 in flight
 to complete the sweep.
+
+## PHASE 3 — PPP2 sweep progress: Qwen3.5-122B-A10B (2026-07-20) — SWEEP COMPLETE
+
+Source: `runs/spec_122b_v4_ppp2_e1/stage1/metrics.jsonl`.
+
+| metric | PPP2 | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9966268015946029 | 0.9966268015946029 | bit-exact |
+| teacher_exact_seq_rate | 0.8947368421052632 | 0.8947368421052632 | bit-exact |
+| exact_seq_match_answers | 1853 | 1853 | exact |
+| answer_token_count | 101091 | 101091 | exact |
+| epoch_seconds (stage1/top) | 137.87 | 96.55 (PPP4 stage0) | PPP2 slower, same pattern |
+
+**PPP2 sweep for all 5 Phase-1 models is now COMPLETE.** All 5 confirm
+bit-exact `teacher_argmax_acceptance` AND `teacher_exact_seq_rate` between
+PPP2 and PPP4 — parallelism-invariance holds for every model tested,
+extending the 0.8B-scale finding to real scale across dense and MoE
+architectures alike, for both the token-level and answer-level metric.
+PPP1 (single-GPU, all blocks) sweep is the remaining Phase 3 piece, in
+flight next across all 5 models in parallel.
