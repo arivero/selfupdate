@@ -152,13 +152,21 @@ the new inline locality certificate before the 40-epoch arm is admitted.
 
 - `campaign40_g26b_adam` is healthy on agpuh02 at approximately epoch 25 on
   all four stages; every GPU is active.  The cosine loss-screen arm is staged
-  as the immediate successor on that node.
+  behind the required architecture/locality admission smoke on that node.
 - `campaign40_q27b` is healthy on agpuh01 at approximately epoch 14 (the last
   stage temporarily trails during battery work); every GPU is active.  The
   three-epoch 31B tree/locality smoke is staged as its immediate successor.
 - Apparent cross-stage epoch skew is not treated as failure: subprocess
   batteries intentionally offload and synchronize stages.  Worker PID/GPU
   liveness and fresh boundary/battery rows were checked on the owning hosts.
+
+At 12:28 CEST, after Adam's four workers exited cleanly, the 35B tree/locality
+smoke launched on agpuh02 as `v4-20260720122842-4152136` (PIDs 4152187,
+4152226, 4152282, 4152322).  All four contracts identify clean runtime commit
+`39f13d2`; the source moved afterward only in reporting/docs.  Store capture
+completed and the expected epoch-zero battery is active.  The loss screen
+remains gated on exact reference-metric agreement and four passing inline
+locality certificates from this run.
 
 ### Provisional scientific read (not an endpoint claim)
 
