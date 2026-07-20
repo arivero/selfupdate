@@ -290,17 +290,38 @@ cross-entropy (log loss) against the reference answer is
 466--470 seconds without errors; epochs 2--3 and the live-store certificate
 remain the admission gate before the 40-epoch arm starts.
 
-The cosine arm has completed all 12 training epochs and is draining its final
-battery/certification work.  Its endpoint is already scientifically
-unattractive, pending the final certificate and recall row.  From epoch 1 to
-12, mean local cosine distance falls about 5.0%, but the median is essentially
-unchanged (`0.00366453` to `0.00366331`), so the gain is dominated by a few
-outlier layers.  Whole-set output distance does not benefit: cross-entropy is
-effectively flat (-0.034%) and KL is slightly worse (+0.014%).  At the matched
-`1e-6` immediate-SGD setting, its final effective-LoRA RMS delta is
-`1.75e-4`, 4.28x the short Huber reference (`4.10e-5`), while its maximum
-layer gradient grows from 559 to 1154 (Huber: 362 to 402).  Absolute-state
-cosine therefore spends substantially more parameter movement on increasingly
-concentrated gradients without improving the composed output.  Do not promote
-it; the residual-update (`delta_cosine`) gate remains the higher-value loss
-test because it directly removes the block-input identity component.
+The cosine arm completed all 12 training epochs and its final battery and
+live-store locality gate.  From epoch 1 to 12, mean local cosine distance falls
+about 5.0%, but the median is essentially unchanged (`0.00366453` to
+`0.00366331`), so the gain is dominated by a few outlier layers.  Whole-set
+output distance does not benefit: cross-entropy is effectively flat (-0.034%)
+and KL is slightly worse (+0.014%).  At the matched `3e-6` immediate-SGD
+setting, its final effective-LoRA RMS delta is `1.75e-4`, 4.28x the short
+Huber reference (`4.10e-5`), while its maximum layer gradient grows from 559
+to 1154 (Huber: 362 to 402).
+
+The final three-corpus recall is `0.14255`, down from epoch zero `0.14852`
+(-4.02% relative).  Machado improves slightly (`0.12254` to `0.12441`), but
+Quijote chapter 1 falls `0.19003` to `0.18124` and chapter 4 falls `0.13299`
+to `0.12199`; the best post-training mean was still below epoch zero.  The
+16-item standard-benchmark macro rises `0.3125` to `0.3750` (+0.0625), with
+ARC Easy and HellaSwag each +0.125 and ARC Challenge unchanged.  This tiny
+monitor is a useful no-catastrophe signal, not endpoint evidence; the
+100-item-per-task epoch-zero/checkpoint battery remains explicitly missing.
+
+All four stage certificates pass over the exact ownership partition L1--8,
+L9--16, L17--23, and L24--30.  Every owned block has finite positive local
+gradient signal; cross-block and frozen-vocabulary gradients are exactly zero;
+and adapter tensors, optimizer state, and rotation state remain byte-exact
+unchanged during certification.  The four shards were merged and the required
+layer-loss, effective-delta, individual-report, and grouped-report builders ran
+in order.  The resulting individual PDF and grouped campaign PDF are nonempty;
+their loss temporal/heatmap, parameter-delta, recall, standard-retention,
+signal-attribution, strict frontier, and clearly labelled coverage-only figures
+were visually inspected and are legible.  Cosine is now the first strictly
+local eligible campaign40 run, while historical uncertified arms remain only
+in the coverage inventory.  Absolute-state cosine therefore spends
+substantially more parameter movement on increasingly concentrated gradients
+without improving the composed output.  Do not promote it; the residual-update
+(`delta_cosine`) gate remains the higher-value loss test because it directly
+removes the block-input identity component.
