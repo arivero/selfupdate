@@ -1,0 +1,33 @@
+# Fresh delta_cosine admission reference: one process owns all 28 Qwen3-0.6B
+# blocks. Paired with delta_cosine_0p6b_store_ppp2_e1.yaml; placement is the
+# only intended difference. Mechanics-only (100 items, below scientific floor).
+run_name: h100_admit_delta_cosine_0p6b_store_ppp1_e1
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: true
+model:
+  device: cuda:0
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  epochs: 1
+  seed: 17
+  hidden_loss: delta_cosine
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_optimizer: immediate_sgd
+  v4_capture_micro_batch: 16
+  v4_relay_every_cohorts: 0
+  v4_teacher_residency: auto
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_stage: -1
+eval:
+  every_epochs: 1
+  recall_corpora: [machado]
+  standard_damage_every_epochs: 0
+
