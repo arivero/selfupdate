@@ -818,3 +818,24 @@ drop these overrides and inherit `micro_batch: 64` / `immediate_sgd` from
 its `base_*_v4_spec.yaml`, exactly matching PPP2/PPP4. Relaunched for all 5
 models (26B/31B on agpuh01 cuda:2/cuda:3, 27B/35B/122B on agpuh02
 cuda:0/cuda:1/cuda:2); results pending.
+
+### Qwen3.6-35B-A3B PPP1 (clean recipe) — COMPLETE, BIT-EXACT
+
+Source: `runs/spec_35b_v4_ppp1_e1/stage0/metrics.jsonl` (verified on disk;
+config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd` — the
+clean, non-confounded recipe).
+
+| metric | PPP1 (clean) | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.997829486626402 | 0.997829486626402 | bit-exact |
+| teacher_exact_seq_rate | 0.9261226460647031 | 0.9261226460647031 | bit-exact |
+| exact_seq_match_answers | 1918 | 1918 | exact |
+| answer_token_count | 74176 | 74176 | exact |
+| epoch_seconds | 116.85 | 71.07 (PPP4 stage0) | PPP1 slower (single-block rotate overhead), same pattern as PPP2 |
+
+First genuine PPP1 datapoint of the campaign: parallelism-invariance now
+confirmed across PPP8→PPP4→PPP2→PPP1 for this model, and the clean-vs-
+confounded pair above is a direct, matched-model demonstration that the
+recipe correction (holding micro_batch/optimizer fixed) is exactly what
+made the difference between a near-miss and a bit-exact result. 27B and
+122B PPP1 (agpuh02) and 26B/31B PPP1 (agpuh01) still in flight.
