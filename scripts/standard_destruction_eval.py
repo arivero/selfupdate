@@ -56,6 +56,55 @@ def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
 
 
+def _require_nonempty(path: Path, label: str) -> None:
+    if not path.is_file() or path.stat().st_size <= 0:
+        raise FileNotFoundError(f"offline model snapshot lacks {label}: {path}")
+
+
+def _validate_model_snapshot(src: Path) -> None:
+    """Fail loudly on missing runtime artifacts, not repository metadata."""
+    _require_nonempty(src / "config.json", "config.json")
+    _require_nonempty(src / "tokenizer_config.json", "tokenizer_config.json")
+    tokenizer_payloads = (
+        src / "tokenizer.json", src / "tokenizer.model",
+        src / "spiece.model", src / "vocab.json",
+    )
+    if not any(p.is_file() and p.stat().st_size > 0 for p in tokenizer_payloads):
+        raise FileNotFoundError(
+            f"offline model snapshot lacks a tokenizer payload: {src}")
+    if (src / "vocab.json").is_file() and not (src / "tokenizer.json").is_file():
+        _require_nonempty(src / "merges.txt", "merges.txt for vocab tokenizer")
+
+    index = src / "model.safetensors.index.json"
+    if index.is_file():
+        try:
+            payload = json.loads(index.read_text())
+            shards = sorted(set(payload["weight_map"].values()))
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid safetensor index {index}: {exc}") from exc
+        if not shards:
+            raise ValueError(f"empty safetensor weight map: {index}")
+        for shard in shards:
+            _require_nonempty(src / shard, f"indexed weight shard {shard}")
+    else:
+        weights = [p for p in src.glob("*.safetensors")
+                   if p.is_file() and p.stat().st_size > 0]
+        if not weights:
+            raise FileNotFoundError(
+                f"offline model snapshot lacks safetensor weights: {src}")
+
+
+def _local_hf_snapshot(repo_id: str) -> Path:
+    """Resolve the cached main snapshot without requiring metadata files."""
+    from huggingface_hub import hf_hub_download
+
+    config = Path(hf_hub_download(
+        repo_id, "config.json", local_files_only=True))
+    src = config.parent
+    _validate_model_snapshot(src)
+    return src
+
+
 def _stage_lock_is_stale(lock: Path) -> bool:
     """A node-local lock is stale when its local owner died or timed out."""
     try:
@@ -125,11 +174,9 @@ def _stage_source(source: str, label: str, shared: bool) -> str:
     jobs from constructing the same shared snapshot; dead owners are reclaimed
     so a killed copy cannot wedge every later evaluation on the node.
     """
-    from huggingface_hub import snapshot_download
-
     src = Path(source)
     if not src.exists():
-        src = Path(snapshot_download(source, local_files_only=True))
+        src = _local_hf_snapshot(source)
     root = Path(os.environ.get(
         "SELFUPDATE_EVAL_STAGE", f"/tmp/{os.environ.get('USER', 'user')}/selfupdate-eval-stage"))
     root.mkdir(parents=True, exist_ok=True)
