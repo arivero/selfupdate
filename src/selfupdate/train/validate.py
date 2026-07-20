@@ -48,6 +48,29 @@ def validate_knob_schedule(cfg) -> None:
 
     if train.v4_teacher_source not in ("cache", "online", "store"):
         bad.append("v4_teacher_source must be cache, online, or store")
+    if train.v4_context_source not in (
+            "teacher_uncensored", "flow_censored_teacher"):
+        bad.append(
+            "v4_context_source must be teacher_uncensored or "
+            "flow_censored_teacher")
+    if train.v4_context_source == "flow_censored_teacher":
+        if train.v4_teacher_source != "online":
+            bad.append(
+                "flow_censored_teacher context currently requires "
+                "v4_teacher_source=online; cache/store semantics are not "
+                "silently reinterpreted")
+        if train.v4_stage_scoped or train.v4_stage != -1:
+            bad.append(
+                "flow_censored_teacher context currently requires fully "
+                "resident single-process loading")
+        if train.v4_weight_residency != "resident":
+            bad.append(
+                "flow_censored_teacher context requires "
+                "v4_weight_residency=resident")
+        if cfg.mask.compaction != "flow_mask":
+            bad.append(
+                "flow_censored_teacher context requires mask.compaction="
+                "flow_mask")
     if (train.v4_teacher_source == "cache"
             and not cfg.cache.store_full_teacher_inputs):
         bad.append("v4 cache source requires store_full_teacher_inputs=true")

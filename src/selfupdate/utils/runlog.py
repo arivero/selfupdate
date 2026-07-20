@@ -76,12 +76,17 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             "student_init_identity": cfg.train.init_from or cfg.model.name,
             "pipeline_version": cfg.train.pipeline_version,
             "pipeline_revision": cfg.train.pipeline_revision,
-            "training_input": "teacher_h[L-1]",
-            "differentiable_output": "student_block_L(teacher_h[L-1])",
-            "training_target": "teacher_h[L]",
+            "training_input": (
+                "detached_adapters_off_flow_censored_h[L-1]"
+                if cfg.train.v4_context_source == "flow_censored_teacher"
+                else "detached_uncensored_teacher_h[L-1]"),
+            "differentiable_output": (
+                "student_block_L(detached_context_h[L-1])"),
+            "training_target": "detached_uncensored_teacher_h[L]",
             "end_to_end_student_trajectory_training": False,
             "final_logit_training": False,
             "teacher_hidden_source": cfg.train.v4_teacher_source,
+            "training_context_source": cfg.train.v4_context_source,
             "attention_source": cfg.train.v4_kv_source,
             "expert_routing_source": cfg.train.expert_routing_source,
             "mask_mode": cfg.mask.mode,

@@ -274,6 +274,14 @@ class TrainConfig:
     #            run ZERO teacher forwards (the measured 3.2x lever at 27B;
     #            the 122B/397B scaling lane pairs it with v4_stage_scoped).
     v4_teacher_source: str = "cache"  # cache | online | store
+    # Which detached adapters-off state supplies block L's query input and
+    # frozen attention context. teacher_uncensored is the historical v4 law.
+    # flow_censored_teacher is the legal-A diagnostic repair: an independent
+    # fully flow-censored adapters-off walk supplies h_c[L-1] for BOTH query
+    # and K/V, while the ordinary uncensored teacher walk still supplies the
+    # target h_u[L].  Initially supported only by the online, fully resident,
+    # single-process route; validate/runtime fail loudly everywhere else.
+    v4_context_source: str = "teacher_uncensored"  # teacher_uncensored | flow_censored_teacher
     # Backpressure for the store-fill relay: at most this many boundary
     # files of one producer stage alive in the exchange (consumer deletion
     # is the ack).

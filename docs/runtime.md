@@ -30,17 +30,18 @@ editable `selfupdate` installation.
 For block `L`, pipeline v4 trains
 
 ```text
-i_L = stopgrad(teacher h[L-1])
+i_L = stopgrad(context h[L-1])
 y_L = block_L^student(i_L; frozen teacher attention context)
 loss_L = HiddenLoss(y_L, teacher h[L])
 ```
 
-Both the residual input and attention context are teacher-fixed. The attention
-module receives adapters-off teacher K/V, or the corresponding frozen
-recurrent state for a linear-attention layer. Attention censorship is encoded
-in the mask. The backward graph contains exactly the current block's trainable
-parameters; it cannot reach another block, embedding, final norm, vocabulary
-head, teacher tensor, or frozen context.
+Both the residual input and attention context are detached and fixed during a
+local step. By default the attention module receives adapters-off uncensored
+teacher K/V; the legal-A diagnostic described below instead receives
+adapters-off flow-censored K/V. Attention censorship is encoded in the mask.
+The backward graph contains exactly the current block's trainable parameters;
+it cannot reach another block, embedding, final norm, vocabulary head,
+teacher tensor, or frozen context.
 
 The student's own hidden trajectory is never a training input. A "student
 step" means the block's trainable weights are enabled; it does not mean that
@@ -62,8 +63,16 @@ three sources:
 
 The product supplies block input, target, and frozen attention context.
 `gpu_corpus`, `cpu_stream`, and `rebuild` describe where or whether products
-persist; they do not alter the objective. Every source must preserve
-`i_L = teacher h[L-1]` and `target_L = teacher h[L]` exactly.
+persist; they do not alter the objective. Every source must preserve the
+default context `i_L = teacher h[L-1]` and target
+`teacher h[L]` exactly.  The opt-in diagnostic
+`train.v4_context_source: flow_censored_teacher` instead uses an
+adapters-off, fully flow-censored `i_L = h_c[L-1]` for both the query and
+frozen K/V, while retaining the uncensored `target_L = h_u[L]`.  Both are
+detached: the trainable block L is still the only differentiable operation.
+This repair is deliberately accepted only for online, fully resident,
+single-process execution; cache/store, staged, rotary, compressed-context,
+and recurrent routes fail loudly rather than inherit new semantics silently.
 
 `v4_kv_source: student_refresh` is a narrowly named context refresh: adapters
 are enabled when regenerating frozen K/V, but the projection inputs and block

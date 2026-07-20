@@ -1,12 +1,16 @@
-"""Pipeline-v4: blockwise teacher-forced training with frozen teacher KV.
+"""Pipeline-v4: blockwise teacher-forced training with frozen context KV.
 
 Every training loss is block-local against the cached teacher hidden states:
 block L runs on the teacher's own ``i{L} = h[L-1]`` rows and is matched to
 the teacher's ``h[L]`` at the same positions.  The attention context is the
 teacher's OWN frozen K/V — adapters-off projections of the cached full-prefix
 inputs — so gradients enter only through the query-side path of block L.
-The student's trajectory is NEVER a loss input; it exists only for the
-evaluation relay (M3) and the generation probes.
+The historical ``teacher_uncensored`` context uses that teacher state for the
+query and K/V.  The explicit, opt-in ``flow_censored_teacher`` repair instead
+uses a detached adapters-off censored trajectory h_c[L-1] for both, while the
+target remains uncensored teacher h_u[L].  Neither route creates a cross-block
+training graph.  The trainable student's trajectory is NEVER a loss input; it
+exists only for the evaluation relay (M3) and the generation probes.
 
 Censorship is pure attention censorship: every privileged key (the RAG
 passage AND the prompt text announcing it, ``t_privileged``) is removed from
@@ -255,9 +259,21 @@ class _V4Cohort:
         self.t0 = torch.tensor([p.t_aligned.start for p in pairs],
                                dtype=torch.long)
         self.teacher_ids = torch.zeros((B, self.T), dtype=torch.long)
+        repaired_context = (
+            cfg.train.v4_context_source == "flow_censored_teacher")
+        self.student_ids = (
+            torch.zeros((B, self.T), dtype=torch.long)
+            if repaired_context else None)
         for b, pair in enumerate(pairs):
             self.teacher_ids[b, : len(pair.teacher_ids)] = torch.tensor(
                 pair.teacher_ids, dtype=torch.long)
+            if repaired_context and len(pair.student_ids) != self.t_len[b]:
+                raise RuntimeError(
+                    f"{pair.example_id}: flow-mask student sequence length "
+                    f"{len(pair.student_ids)} != teacher {self.t_len[b]}")
+            if repaired_context:
+                self.student_ids[b, : len(pair.student_ids)] = torch.tensor(
+                    pair.student_ids, dtype=torch.long)
         self.keep = keep
         # Additive mask [B, 1, Q, T]: causal at each query row's own teacher
         # position, privileged and padded keys removed.  Padded query rows
@@ -395,7 +411,17 @@ class _TeacherTensors:
 @torch.no_grad()
 def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
                             device, n_layers):
-    """One adapters-off forward per cohort: teacher states computed by OUR
+    """Detached adapters-off context and target capture for one cohort.
+
+    The uncensored teacher trajectory always supplies h_u[L] targets.  Under
+    the historical ``teacher_uncensored`` context it also supplies h_u[L-1]
+    inputs.  Under explicit ``flow_censored_teacher`` an independent,
+    adapters-off, fully flow-censored trajectory supplies h_c[L-1] inputs;
+    because this function is ``no_grad``, no graph connects those states
+    across blocks.  The local trainable block remains the only differentiable
+    operation.
+
+    Teacher states are computed by OUR
     runtime instead of read from a stored cache (owner contract: "just keep
     calculating it"). vLLM contributes only answer token ids; hidden states
     always come from this stack, numerically identical to what the builder
@@ -419,13 +445,25 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
     for b0 in range(0, B, chunk):
         b1 = min(b0 + chunk, B)
         ids = ids_full[b0:b1]
+        repaired_context = (
+            cfg.train.v4_context_source == "flow_censored_teacher")
+        ids_censored = (cohort.student_ids[b0:b1].to(device)
+                        if repaired_context else None)
+        keep = (cohort.keep[b0:b1].to(device)
+                if repaired_context else None)
         pos = torch.arange(T, device=device)[None].expand(b1 - b0, -1)
         qpos_chunk = cohort.qpos_dev[b0:b1]
         ctx = (adapters_off() if adapters_off is not None
                else contextlib.nullcontext())
         with ctx:
-            h = stack.embed(ids)
-            pe = stack.rope(h, pos)
+            h_teacher = stack.embed(ids)
+            h_context = (stack.embed(ids_censored)
+                         if repaired_context else h_teacher)
+            # Preserve the proven online-teacher path byte-for-byte: its
+            # position bundle is constructed once before the block walk.
+            # The censored context follows the deployment relay and rebuilds
+            # its bundle at each layer from its own current state.
+            pe_teacher = stack.rope(h_teacher, pos)
             # No prepared mask: with a plain rope, run_block leaves
             # attention_mask None and SDPA's is_causal fast path gives exact
             # causal attention (why the 0.6B online-vs-cache equivalence
@@ -435,12 +473,20 @@ def _online_teacher_capture(cfg, stack, adapters_off, cohort, owned,
             # full-causal. NO_PREPARED here would discard that mask.
             for layer in range(1, n_layers + 1):
                 if layer in owned:
-                    inputs_parts[layer].append(h.clone())
-                h = stack.run_block(layer, h, pe, position_ids=pos,
-                                    input_ids=ids)
+                    inputs_parts[layer].append(h_context.clone())
+                h_teacher = stack.run_block(
+                    layer, h_teacher, pe_teacher,
+                    position_ids=pos, input_ids=ids)
+                if repaired_context:
+                    h_context = stack.run_block(
+                        layer, h_context, stack.rope(h_context, pos),
+                        position_ids=pos, flow_keep=keep, causal_length=T,
+                        input_ids=ids_censored)
+                else:
+                    h_context = h_teacher
                 if layer in owned:
-                    view = h if layer < n_layers else stack.loss_view(
-                        n_layers, h)
+                    view = (h_teacher if layer < n_layers else
+                            stack.loss_view(n_layers, h_teacher))
                     idx = qpos_chunk.reshape(
                         *qpos_chunk.shape, *([1] * (view.dim() - 2)))
                     idx = idx.expand(-1, -1, *view.shape[2:])
@@ -1172,6 +1218,25 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             f"layers yet (num_kv_shared_layers={shared_kv}): the shared "
             f"layers bypass past_key_values.update; a shared-kv arm of "
             f"_FrozenKV is required")
+    repaired_context = (
+        cfg.train.v4_context_source == "flow_censored_teacher")
+    if repaired_context:
+        # Keep this first implementation deliberately narrow.  DeepSeek's
+        # compressed-context recorder and recurrent mixers have different
+        # context carriers; treating their flow mask as ordinary frozen K/V
+        # would silently claim semantics we have not certified.
+        if getattr(stack, "needs_deepseek_masks", False):
+            raise NotImplementedError(
+                "v4_context_source=flow_censored_teacher does not yet "
+                "support DeepSeek compressed context")
+        recurrent = [
+            layer for layer in range(1, n + 1)
+            if _v4_layer_type(stack, layer) == "linear_attention"]
+        if recurrent:
+            raise NotImplementedError(
+                "v4_context_source=flow_censored_teacher currently supports "
+                "attention K/V blocks only; linear-attention layers present: "
+                f"{recurrent}")
     device = torch.device(cfg.model.device)
     loss_fn = HiddenLoss.from_config(cfg.train, stack)
     B = cfg.train.micro_batch
@@ -1265,14 +1330,22 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         hidden_loss=cfg.train.hidden_loss,
         objective=(
             "cos(student_block_L(x)-x, teacher_h[L]-x), "
-            "x=detached_teacher_h[L-1]"
+            "x=detached_context_h[L-1]"
             if cfg.train.hidden_loss == "delta_cosine" else
-            "student_block_L(teacher_h[L-1]) vs teacher_h[L]"),
+            "student_block_L(detached_context_h[L-1]) vs "
+            "detached_uncensored_teacher_h[L]"),
+        context_source=cfg.train.v4_context_source,
+        local_input=(
+            "detached_adapters_off_flow_censored_h[L-1]"
+            if repaired_context else "detached_uncensored_teacher_h[L-1]"),
+        target_source="detached_uncensored_teacher_h[L]",
         final_block_loss=(
             "absolute_postnorm_cosine_fallback"
             if cfg.train.hidden_loss == "delta_cosine" else
             "configured_hidden_loss"),
-        attention_context="frozen_teacher_kv_full_sequence",
+        attention_context=(
+            "frozen_adapters_off_flow_censored_kv_full_sequence"
+            if repaired_context else "frozen_teacher_kv_full_sequence"),
         linear_attention_rule=(
             "full_sequence_teacher_forced_own_recurrence_flow_censored"),
         sliding_attention_rule="frozen_teacher_kv_windowed_mask",
@@ -2456,7 +2529,11 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
     passed = (local_sq > 0 and cross_sq == 0.0 and vocab_sq == 0.0)
     return {
         "items": checked,
-        "gradient_contract": "teacher_forced_blockwise_frozen_teacher_kv",
+        "gradient_contract": (
+            "flow_censored_teacher_blockwise_frozen_context_kv"
+            if cfg.train.v4_context_source == "flow_censored_teacher" else
+            "teacher_forced_blockwise_frozen_teacher_kv"),
+        "context_source": cfg.train.v4_context_source,
         "final_logit_training": False,
         "local_grad_norm": local_sq ** 0.5,
         "cross_block_leak_grad_norm": cross_sq ** 0.5,

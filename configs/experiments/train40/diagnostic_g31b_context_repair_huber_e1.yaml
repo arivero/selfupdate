@@ -1,0 +1,34 @@
+# Full-size legal-A context-repair diagnostic.  Apply this overlay to the
+# resolved completed campaign config:
+#   --config runs/campaign40_g31b/stage0/config.yaml
+#   --experiment configs/experiments/train40/diagnostic_g31b_context_repair_huber_e1.yaml
+#
+# This is intentionally single-process and online: detached adapters-off,
+# fully flow-censored h_c[L-1] supplies BOTH the local query and frozen K/V;
+# the uncensored adapters-off teacher h_u[L] remains the target.  It does not
+# reinterpret the existing store/cache artifacts.  One epoch is the complete
+# 2,071-item corpus, not a small-model or item-limited smoke.
+run_name: campaign40_g31b_context_repair_huber_e1
+model:
+  device: cuda:0
+  pipeline_devices: [0]
+  pipeline_splits: []
+  pipeline_world_size: 1
+train:
+  epochs: 1
+  micro_batch: 1
+  v4_capture_micro_batch: 1
+  v4_context_source: flow_censored_teacher
+  v4_teacher_source: online
+  v4_loop_order: item_major
+  v4_teacher_residency: rebuild
+  v4_stage_scoped: false
+  v4_weight_residency: resident
+  v4_battery_mode: graft
+  v4_stage: -1
+  v4_stage_splits: []
+  v4_stage_devices: []
+  v4_relay_every_cohorts: 1
+eval:
+  every_epochs: 1
+  standard_damage_every_epochs: 1
