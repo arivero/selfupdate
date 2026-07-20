@@ -16,11 +16,63 @@ Reports: wall time for the whole batch (2071 items = one full epoch), and whethe
 prefill prediction matches its OWN earlier greedy answer (a self-consistency
 sanity check: it must, since greedy decoding IS iterated argmax).
 
-Run in the vLLM env:
+Run in the vLLM env (single-node, unchanged since Phase 1):
   CUDA_VISIBLE_DEVICES=0 ../venvs/vllm025/bin/python scripts/vllm_prefill_verify.py \
     --model Qwen/Qwen3.6-27B \
     --responses runs/vllm_h100/qwen36_27b_full_exactids/responses_bs256.jsonl \
     --out runs/spec_verify/27b_vllm_prefill_verify.json   # no --limit = full 2071-item epoch
+
+Multi-node (owner 2026-07-20, mirrors scripts/vllm_2node_smoke.py): driven by
+``torchrun``, NOT by CLI nnodes/node-rank args on this script — that `mp`-
+backend, manual-node-rank pattern was tried first and is CONFIRMED BROKEN
+for the offline ``LLM()`` API (see vllm_2node_smoke.py's docstring for the
+full root cause: the engine/orchestration layer is node-rank-unaware and
+builds a redundant EngineCore on every rank, which crashes with
+``AssertionError: collective_rpc should not be called on follower node``).
+The WORKING mechanism is ``distributed_executor_backend="external_launcher"``
+under torchrun (SPMD): every rank is a symmetric peer sharing torchrun's
+process group, so there is no leader/follower EngineCore split. Run the SAME
+command symmetrically on both nodes at the same time; torchrun sets
+RANK/WORLD_SIZE/LOCAL_RANK, this script reads them, ALL ranks call
+generate() together (they co-execute the forward — do NOT early-return on
+rank!=0, that would hang the collective), and only rank 0 (RANK==0) prints
+the summary and writes --out.
+
+  # agpuh01 (4 GPUs/node x 2 nodes = world size 8):
+  ../venvs/vllm025/bin/torchrun --nnodes 2 --node-rank 0 --nproc-per-node 4 \
+    --master-addr 172.21.5.1 --master-port 29501 \
+    scripts/vllm_prefill_verify.py --model <path> --responses <jsonl> \
+    --multi-node --pipeline-parallel-size 2 --out runs/spec_verify/foo.json
+  # agpuh02 (same instant, --node-rank 1, everything else identical):
+  ../venvs/vllm025/bin/torchrun --nnodes 2 --node-rank 1 --nproc-per-node 4 \
+    --master-addr 172.21.5.1 --master-port 29501 \
+    scripts/vllm_prefill_verify.py --model <path> --responses <jsonl> \
+    --multi-node --pipeline-parallel-size 2 --out runs/spec_verify/foo.json
+
+IMPORTANT (owner 2026-07-20, empirical): plain ``--multi-node`` with a single
+TP communicator spanning ALL 8 GPUs (tensor_parallel_size=WORLD_SIZE,
+pipeline_parallel_size=1, i.e. local_world_size=4 GPUs/node in ONE TP group
+across nodes) HANGS — reproduced 3x (once on the real 397B model, twice on
+the tiny 0.6B model with only 2 GPUs/node), always stuck immediately after
+"vLLM is using nccl==2.28.9" / before any NCCL INFO output even under
+NCCL_DEBUG=INFO, i.e. before ncclCommInitRank. Three NCCL env toggles
+(NCCL_IB_DISABLE=1, NCCL_P2P_DISABLE=1, NCCL_CUMEM_ENABLE=0) were each tried
+and did NOT clear it. The FIX is ``--pipeline-parallel-size <nnodes>``: this
+makes tensor_parallel_size = WORLD_SIZE / pipeline_parallel_size (GPUs per
+node only), so every TP communicator is intra-node-only (the proven Phase 1
+TP4 case) and every cross-node link is a 1-rank-per-node PP hop (the proven
+2-way smoke case) — confirmed working at PP2xTP4 (world size 8) on the tiny
+model 2026-07-20. Always pass ``--pipeline-parallel-size <nnodes>`` for any
+--multi-node run with more than 1 GPU per node.
+
+``--multi-node`` (default off) is the ONLY new flag that changes single-node
+behavior; when absent this script is byte-identical to the published
+single-node Phase 1 TP4 runs. Do NOT set CUDA_VISIBLE_DEVICES under
+torchrun — LOCAL_RANK selects the GPU. ``--tensor-parallel-size`` is ignored
+in --multi-node mode
+(world size comes from torchrun's WORLD_SIZE env var instead).
+``--kv-cache-dtype`` (e.g. fp8) and ``--cpu-offload-gb`` are passthroughs to
+vLLM's own EngineArgs, needed for the 8-card DeepSeek-V4-Flash escalation.
 """
 
 from __future__ import annotations
@@ -48,10 +100,51 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0, help="0 = whole file (2071 items = one full epoch)")
     ap.add_argument("--max-model-len", type=int, default=8192)
     ap.add_argument("--gpu-memory-utilization", type=float, default=0.85)
-    ap.add_argument("--tensor-parallel-size", type=int, default=1)
+    ap.add_argument("--tensor-parallel-size", type=int, default=1,
+                    help="single-node only; ignored under --multi-node "
+                         "(world size comes from torchrun's WORLD_SIZE)")
     ap.add_argument("--max-num-seqs", type=int, default=None)
     ap.add_argument("--out", default=None)
+    # multi-node (owner 2026-07-20): launched via torchrun, see docstring.
+    # Default off keeps this script byte-identical to the published
+    # single-node Phase 1 TP4 runs.
+    ap.add_argument("--multi-node", action="store_true",
+                    help="use distributed_executor_backend=external_launcher "
+                         "and read RANK/WORLD_SIZE/LOCAL_RANK from the "
+                         "torchrun-set environment (confirmed working "
+                         "2026-07-20; the earlier mp/node-rank path is not)")
+    ap.add_argument("--pipeline-parallel-size", type=int, default=1,
+                    help="--multi-node only (owner 2026-07-20): set this to "
+                         "nnodes for the 8-card escalation. A single TP "
+                         "communicator spanning local_world_size>1 GPUs "
+                         "ACROSS nodes hangs (confirmed: 3 NCCL env toggles "
+                         "tried, none cleared it — see vllm_2node_smoke.py). "
+                         "pipeline_parallel_size=nnodes with "
+                         "tensor_parallel_size=WORLD_SIZE/nnodes keeps every "
+                         "TP communicator intra-node-only (proven: Phase 1 "
+                         "TP4) and makes every cross-node link a "
+                         "1-rank-per-node PP hop (proven: the 2-way smoke) "
+                         "— confirmed working at PP2xTP4 (world size 8) on "
+                         "the tiny model 2026-07-20.")
+    ap.add_argument("--kv-cache-dtype", default=None,
+                    help="vLLM EngineArgs passthrough, e.g. fp8; default "
+                         "None leaves vLLM's own default (auto)")
+    ap.add_argument("--cpu-offload-gb", type=float, default=None,
+                    help="GiB of weights offloaded to pinned CPU RAM PER "
+                         "GPU, vLLM EngineArgs passthrough")
     args = ap.parse_args()
+
+    rank = 0
+    world_size = args.tensor_parallel_size
+    pp_size = 1
+    if args.multi_node:
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        pp_size = args.pipeline_parallel_size
+        # Control-plane binding: force NCCL/gloo rendezvous over the 10GbE
+        # interface, never the broken IPoIB rail (see vllm_2node_smoke.py).
+        os.environ.setdefault("GLOO_SOCKET_IFNAME", "eno12419np2")
+        os.environ.setdefault("NCCL_SOCKET_IFNAME", "eno12419np2")
 
     rows = []
     with open(args.responses) as fh:
@@ -85,16 +178,25 @@ def main() -> None:
     # which is the implicated code (compilation_config showed
     # disable_custom_all_reduce=False as vLLM's own default, i.e. the fragile
     # path is opt-out, not opt-in).
+    tp_size = world_size // pp_size if args.multi_node else world_size
     llm_kw = dict(model=args.model, max_model_len=args.max_model_len,
                  gpu_memory_utilization=args.gpu_memory_utilization,
-                 tensor_parallel_size=args.tensor_parallel_size,
+                 tensor_parallel_size=tp_size,
                  enforce_eager=True,
                  disable_custom_all_reduce=True)
+    if pp_size > 1:
+        llm_kw["pipeline_parallel_size"] = pp_size
     if args.max_num_seqs:
         llm_kw["max_num_seqs"] = args.max_num_seqs
+    if args.kv_cache_dtype:
+        llm_kw["kv_cache_dtype"] = args.kv_cache_dtype
+    if args.cpu_offload_gb:
+        llm_kw["cpu_offload_gb"] = args.cpu_offload_gb
+    if args.multi_node:
+        llm_kw["distributed_executor_backend"] = "external_launcher"
     llm = LLM(**llm_kw)
     load_s = time.perf_counter() - t_load
-    print(f"loaded in {load_s:.1f}s", flush=True)
+    print(f"[rank {rank}] loaded in {load_s:.1f}s", flush=True)
 
     # input = prompt + answer[:-1]; ask for exactly the last answer token.
     prompts, golds, drop = [], [], 0
@@ -110,8 +212,17 @@ def main() -> None:
         print(f"dropped {drop} empty-answer rows", flush=True)
     sp = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=1)
     t0 = time.perf_counter()
+    # --multi-node: ALL ranks must call generate() together (external_launcher
+    # ranks co-execute the forward as symmetric peers); early-returning on
+    # rank!=0 here would hang the collective on the other ranks forever.
     outs = llm.generate(prompts, sp, use_tqdm=False)
     dt = time.perf_counter() - t0
+
+    if args.multi_node and rank != 0:
+        # Non-driver rank: participated in the collective generate() above,
+        # nothing further to do (matches vllm_2node_smoke.py's convention).
+        print(f"[rank {rank}] done (non-driver, no output written)", flush=True)
+        return
 
     match = sum(int(o.outputs[0].token_ids[0] == g)
                 for o, g in zip(outs, golds))
@@ -134,6 +245,17 @@ def main() -> None:
                 "greedy decoding IS iterated argmax, so vLLM's own prefill "
                 "here must reproduce its own earlier generated last token."),
     }
+    if args.multi_node:
+        # Only added for multi-node runs so the single-node JSON schema
+        # stays byte-identical to the published Phase 1 TP4 results.
+        summary["distributed_executor_backend"] = "external_launcher"
+        summary["world_size"] = world_size
+        summary["tensor_parallel_size"] = tp_size
+        summary["pipeline_parallel_size"] = pp_size
+    if args.kv_cache_dtype:
+        summary["kv_cache_dtype"] = args.kv_cache_dtype
+    if args.cpu_offload_gb:
+        summary["cpu_offload_gb"] = args.cpu_offload_gb
     print(json.dumps(summary, indent=2), flush=True)
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
