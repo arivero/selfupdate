@@ -104,7 +104,6 @@ train_and_report.py             train_batch_bench.py
 train_certify.py                train_oom_backoff.py
 train_tuned_lens.py             v31_bk_cohort_probe.py
 v31_bk_smoke.py                 v3_smoke.py
-v4_battery.py
 ```
 
 ### Data, teacher caches, conversion, and model preparation
@@ -137,7 +136,7 @@ refresh_report_v2_index.py               render_programmer_walkthrough.py
 report_pdf_v2.py                         report_v2.py
 retention_eval.py                        signal_attribution.py
 standard_destruction_eval.py             summarize_standard_destruction.py
-tasks_report.py                          verify_vllm_teacher_forced.py
+tasks_report.py
 ```
 
 ### vLLM and distributed verification utilities

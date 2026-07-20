@@ -167,6 +167,10 @@ class LocalScoreBackend:
     def __init__(self, stack, splits):
         self.stack, self.splits = stack, splits
 
+    def guard_phase(self, _label, fn):
+        """Mirror the distributed backend's rank-local phase interface."""
+        return fn()
+
     def score_pairs(self, tok, pairs, batch_size):
         texts = [p + c for p, c in pairs]
         enc = tok(texts, return_tensors="pt", padding=True,

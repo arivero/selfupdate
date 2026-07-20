@@ -1,7 +1,7 @@
-# Pipeline-v4 runtime guide
+# Pipeline-v4.5 runtime guide
 
 This document describes the only active training runtime on this branch:
-pipeline v4. The scientific protocol and full knob contract live in
+pipeline v4.5. The scientific protocol and full knob contract live in
 [`training_pipeline_v4.md`](training_pipeline_v4.md). Pipeline-v1/v2/v3
 implementations and their student-trajectory training inputs are historical;
 Git history and the explicitly archived protocol documents preserve them.
@@ -15,14 +15,14 @@ matrix are documented in
 |---|---|
 | `scripts/train.py` | load configuration, select an optional v4 stage, and pin imports to this checkout |
 | `scripts/launch_v4_stages.sh` | coordinate independent PPP stage processes |
-| `src/selfupdate/train/layerwise.py` | construct the common runtime and dispatch pipeline v4 |
+| `src/selfupdate/train/layerwise.py` | construct the common runtime and dispatch pipeline v4.5 |
 | `src/selfupdate/train/online_v4.py` | teacher tensors, block-local updates, validation relay, epoch battery, locality certification, and publication |
 | `src/selfupdate/train/v4_store.py` | fill-once relayed teacher-store construction |
 | `src/selfupdate/train/validate.py` | reject configurations outside the v4 contract |
 | `src/selfupdate/train/losses.py` | absolute block-local hidden losses |
 | `scripts/merge_v4_adapters.py` | assemble disjoint stage-owned adapters without averaging |
 | `scripts/compare_v4_shard_numerics.py` | compare single-process and independently sharded results |
-| `scripts/v4_battery.py` | evaluation subprocess for scoped or rotating models |
+| `src/selfupdate/eval/reconstructed_battery.py` | private trainer-owned fallback for unsupported/scoped/rotating models |
 
 Every Python entry point inserts this checkout's `src/` directory into
 `sys.path`. The shared node-local environment intentionally contains no
@@ -30,7 +30,7 @@ editable `selfupdate` installation.
 
 ## The sole training dataflow
 
-For block `L`, pipeline v4 trains
+For block `L`, pipeline v4.5 trains
 
 ```text
 i_L = stopgrad(context h[L-1])

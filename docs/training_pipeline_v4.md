@@ -1,4 +1,4 @@
-# Training pipeline v4 — blockwise teacher-forced, frozen teacher KV
+# Training pipeline v4.5 — blockwise teacher-forced, frozen teacher KV
 
 Owner-specified 2026-07-17. Implementation: `src/selfupdate/train/online_v4.py`;
 knobs in `config.py` (`train.v4_*`), rules in `validate.py` (pipeline_version 4

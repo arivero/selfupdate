@@ -1024,9 +1024,9 @@ def _owned_adapter_tensors(stack, owned) -> dict:
 
 def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                         owned, baseline, rotator=None, transport=None):
-    """Plan B6: every stage publishes adapters and releases VRAM; stage 0
-    spawns scripts/v4_battery.py (full model, device_map=auto over all
-    cards, existing telemetry probes) and signals done; stages resume."""
+    """Every stage publishes adapters and releases VRAM; stage 0 self-invokes
+    scripts/train.py's private reconstructed-evaluator worker (full model,
+    device_map=auto over all cards) and signals done; stages resume."""
     import os
     import subprocess
     import sys as _sys
@@ -1108,7 +1108,7 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                 status = -1
             else:
                 script = (Path(__file__).resolve().parents[3] / "scripts" /
-                          "v4_battery.py")
+                          "train.py")
                 child_env = dict(os.environ)
                 # The child must speak THIS launch's identity; solo children
                 # otherwise mint a pid-flavoured identity and fail the envelope.
@@ -1119,8 +1119,10 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                 with open(logf, "ab") as fh:
                     status = subprocess.run(
                         [_sys.executable, str(script), "--config", base_p,
-                         "--experiment", exp_p, "--run-dir", str(run_dir),
-                         "--epoch", str(epoch), "--stages", str(stages)],
+                         "--experiment", exp_p, "--v4-battery-worker",
+                         "--v4-battery-run-dir", str(run_dir),
+                         "--v4-battery-epoch", str(epoch),
+                         "--v4-battery-stages", str(stages)],
                         stdout=fh, stderr=fh, env=child_env).returncode
         except Exception as exc:
             # Stage 0 must still release every remote rank from its status

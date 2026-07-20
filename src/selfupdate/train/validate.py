@@ -1,4 +1,4 @@
-"""Dispatch-time validation for the v4-only trainer.
+"""Dispatch-time validation for the v4.5 trainer.
 
 The objective is structural, not an optional schedule: teacher ``h[L-1]`` is
 the input to block L and teacher ``h[L]`` is its target.  Old pipeline and
@@ -28,10 +28,10 @@ def validate_knob_schedule(cfg) -> None:
 
     if train.pipeline_version != 4:
         raise ValueError(
-            "this repository is v4-only: train.pipeline_version must be 4; "
+            "this repository is v4.5-only: train.pipeline_version must be 4; "
             "student-trajectory training pipelines were removed")
-    if train.pipeline_revision not in ("", "4.0"):
-        bad.append("pipeline_revision must be 4.0")
+    if train.pipeline_revision not in ("", "4.0", "4.5"):
+        bad.append("pipeline_revision must be 4.0 (legacy) or 4.5")
     if cfg.model.pipeline_split or cfg.model.pipeline_splits:
         bad.append("model.pipeline_split(s) are obsolete; use v4_stage_splits")
 
@@ -142,6 +142,9 @@ def validate_knob_schedule(cfg) -> None:
         bad.append("resident single-process evaluation must use graft mode")
     if train.v4_battery_mode == "distributed" and train.v4_stage < 0:
         bad.append("distributed battery mode requires a staged launch")
+    if (train.v4_battery_mode == "distributed"
+            and train.pipeline_revision != "4.5"):
+        bad.append("distributed live-student evaluation requires revision 4.5")
     if train.v4_battery_mode == "distributed" and not train.lora.enabled:
         bad.append("distributed battery a/b certification requires LoRA")
     if (cfg.eval.vllm_uncensored_generation_limit < 0

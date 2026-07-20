@@ -26,7 +26,8 @@ The delta objective is strictly block-local. For block L it compares
 differentiable term; no student block output feeds a later training block.
 Its launch remains gated until the `delta_cosine` implementation passes
 `scripts/audit_configs.py`, fresh single-process-versus-PPP numerics with
-`scripts/compare_v4_shard_numerics.py`, and `scripts/v4_battery.py`.
+`scripts/compare_v4_shard_numerics.py`, and a disposable v4.5 trainer-owned
+distributed battery.
 
 ## Fixed controls and interpretation
 

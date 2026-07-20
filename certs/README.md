@@ -12,6 +12,7 @@ python scripts/compare_v4_shard_numerics.py \
 ```
 
 The comparison is exact by default; pass `--rtol` only when the experiment
-deliberately changes numerical placement. `scripts/v4_battery.py` is the
-stage-coordinated token-prediction validation subprocess, not a training
-objective or a stored certification fixture.
+deliberately changes numerical placement. The v4.5 trainer-owned distributed
+battery is the stage-coordinated token-prediction validation path, not a
+training objective or a stored certification fixture. Unsupported models use
+the trainer's private reconstructed fallback automatically.

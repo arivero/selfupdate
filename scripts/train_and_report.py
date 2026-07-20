@@ -27,7 +27,7 @@ def main() -> None:
     cfg = load_config(args.config, args.experiment)
     if cfg.train.pipeline_version != 4:
         raise SystemExit(
-            "this checkout is pipeline-v4 only; set "
+            "this checkout is pipeline-v4.5 only; set "
             "train.pipeline_version=4")
     run_dir = ROOT / "runs" / cfg.run_name
     checkpoint = run_dir / "checkpoint"

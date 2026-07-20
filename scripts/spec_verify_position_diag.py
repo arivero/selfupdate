@@ -228,7 +228,7 @@ def main() -> None:
     div_last = sum(1 for d in divergences if d["pos_from_end"] == 0)
 
     # depth-quartile histogram over the divergent tokens (same convention as
-    # the 26B write-up and verify_vllm_teacher_forced.py: relative position
+    # the 26B write-up and v4.5 epoch-zero test a: relative position
     # within THIS answer's length, quartile 0..3 low->high depth)
     quartiles = [0, 0, 0, 0]
     for d in divergences:

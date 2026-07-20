@@ -189,9 +189,9 @@ class LoraConfig:
 
 @dataclass
 class TrainConfig:
-    # This checkout exposes only pipeline-v4 teacher-hidden training.
+    # This checkout exposes only pipeline-v4.5 teacher-hidden training.
     pipeline_version: int = 4
-    pipeline_revision: str = "4.0"
+    pipeline_revision: str = "4.5"
     expert_routing_source: str = "black_box"       # future: teacher_routing_cache
     method: str = "layerwise"
     # method | teacher_reference | ablation | control | legacy_archive | confounded | open
@@ -388,9 +388,10 @@ class TrainConfig:
     # graft:
     # stage 0 grafts every stage's adapters onto its full resident model
     # (impossible under v4_stage_scoped). subprocess: all stages release
-    # VRAM at the boundary; stage 0 spawns scripts/v4_battery.py which
-    # loads the model device_map=auto over every card, grafts, probes,
-    # exits (plan B6). Requires scripts/train.py's SELFUPDATE_V4_CONFIG.
+    # VRAM at the boundary; stage 0 self-invokes the trainer's private worker,
+    # which loads the model device_map=auto over every card, grafts, probes,
+    # and exits. There is no user-facing battery script. Requires
+    # scripts/train.py's SELFUPDATE_V4_CONFIG.
     v4_battery_mode: str = "graft"  # distributed | graft | subprocess
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0

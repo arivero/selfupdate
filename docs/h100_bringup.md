@@ -99,9 +99,10 @@ liveness, checkpoints, evaluation completion, and scientific telemetry.
   foreign blocks and embedding/norm/head gradients are exactly zero.
 - Compare equal-seed single-process and PPP artifacts with
   `scripts/compare_v4_shard_numerics.py`.
-- Run `scripts/v4_battery.py` for the ordinary censored student full-forward
-  token metrics.  This evaluation path may propagate student states between
-  layers, but it runs without backward and has optimizer weight zero.
+- Run the v4.5 trainer with `v4_battery_mode: distributed` for the ordinary
+  censored live-student token metrics. Unsupported architectures select the
+  trainer-owned reconstructed fallback. Both run without backward and have
+  optimizer weight zero.
 - Merge staged adapters with `scripts/merge_v4_adapters.py`; ownership is
   disjoint, so merge selects tensors rather than averaging them.
 

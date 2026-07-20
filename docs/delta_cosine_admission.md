@@ -39,10 +39,11 @@ scripts/launch_v4_stages.sh \
   configs/experiments/h100_smoke/delta_cosine_0p6b_store_ppp2_e1.yaml
 ```
 
-`v4_battery.py` is not launched by hand. `v4_battery_mode: subprocess` makes
-the trainer invoke it after every owner publishes its adapter shard, at epoch
-zero and epoch one. The one-corpus recall battery is retained; the unrelated
-standard-damage probe is disabled to keep admission short.
+The battery is not launched by hand. `v4_battery_mode: distributed` runs the
+live v4.5 student after every owner reaches the boundary; unsupported models
+may use `subprocess`, which makes the trainer self-invoke its private fallback.
+The one-corpus recall battery is retained; the unrelated standard-damage probe
+is disabled to keep admission short.
 
 ## Required evidence
 

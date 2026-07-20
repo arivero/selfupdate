@@ -1,7 +1,8 @@
-# Pipeline-v4 student evaluation audit
+# Pipeline-v4.5 student evaluation audit
 
-Status: verified from the 2026-07-20 code path; native live-PPP evaluation is
-an implementation item, not yet the default.
+Status: verified from the 2026-07-20 code path. Native live-PPP evaluation is
+implemented as `v4_battery_mode: distributed`; unsupported architectures keep
+the explicit trainer-owned reconstructed fallback.
 
 ## What each metric executes
 
@@ -19,36 +20,34 @@ pipeline order, but it evaluates fixed teacher-forced training sequences. It
 does not select a token and feed that token back as the next input.
 
 The epoch recall battery is genuine greedy autoregressive student inference.
-For stage-scoped PPP, however, the implementation publishes every stage's
-current adapters, offloads the live blocks, loads a separate complete base
-model in `scripts/v4_battery.py`, grafts all published adapters, and then
-calls ordinary Hugging Face `generate()`. Standard damage similarly uses
-complete-model option-likelihood forwards. Launch-identity and epoch
-envelopes protect the adapter exchange, so this is a reconstructed copy of
-the current student rather than fabricated generation. It is nonetheless
-the wrong operational architecture for PPP.
+In v4.5 distributed mode it runs through the live stage-owned blocks and
+retains KV state only for each rank's owned layers. Standard damage likewise
+scores complete sequences through those live partitions. The older path—and
+the current explicit fallback—publishes every stage's current adapters,
+offloads live blocks, reconstructs a complete base model, grafts the adapters,
+and calls ordinary Hugging Face generation/forward. Its launch/epoch envelopes
+make it a genuine reconstructed current student, but it is not the native PPP
+execution architecture.
 
 ## Utilization consequence
 
-At a battery boundary all four trainers pause and evict their owned blocks;
-one GPU then holds the reconstructed complete model while the other three
-wait. A measured 26B battery spends roughly 311--318 seconds in telemetry;
-the full boundary costs 332--369 seconds. Loading, grafting, synchronization,
-offload, and restore account for only about 19--57 seconds. Removing reload
-is worthwhile, but autoregressive decoding is the dominant cost; the larger
-utilization gain comes from executing and eventually microbatch-pipelining
-the live partitions.
+In the reconstructed fallback all four trainers pause and evict their owned
+blocks; one GPU then holds the complete model while the other three wait. A
+measured 26B battery spent roughly 311--318 seconds in telemetry and 332--369
+seconds at the complete boundary. Loading, grafting, synchronization, offload,
+and restore accounted for about 19--57 seconds. Native mode removes those
+reload phases and executes all live partitions, although autoregressive decode
+remains the dominant serialized cost until further microbatch pipelining.
 
-## Required replacement
+## Implemented replacement and remaining gate
 
-A native battery must be a synchronous collective at one adapter epoch. It
-needs a dedicated NCCL evaluation communicator on same-node as well as
-cross-node stages. Stage 0 tokenizes and embeds, every rank executes only its
-owned blocks, and the final rank applies the frozen final norm/head. Standard
-multiple-choice scoring can relay full sequences without a cache. Recall
-generation additionally requires per-owned-layer KV caches and final-rank to
-stage-0 token loopback. Stage 0 alone writes telemetry, and all ranks must
-restore their exact training state or fail together.
+The native battery is a synchronous collective at one adapter epoch using a
+dedicated NCCL evaluation communicator. Stage 0 tokenizes and embeds, every
+rank executes only its owned blocks, and the final rank applies frozen final
+norm/head. Standard multiple-choice scoring relays full sequences; recall
+generation retains per-owned-layer KV caches and loops selected tokens from
+the final rank back to stage 0. Stage 0 alone writes telemetry, and all ranks
+restore exact training state or fail together.
 
 Keep the subprocess fallback until logits, option scores, generated token
 ids, EOS behavior, telemetry rows, adapter freshness, and frozen-vocabulary

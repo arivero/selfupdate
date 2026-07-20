@@ -91,11 +91,11 @@ def _package_payload() -> str:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for path in sorted(PACKAGE.rglob("*.py")):
             source = path.read_text(encoding="utf-8")
-            # A standalone v4 trainer must spawn its standalone battery copy.
+            # A standalone v4.5 trainer must self-invoke its standalone copy.
             if path.relative_to(PACKAGE).as_posix() == "train/online_v4.py":
                 source = source.replace(
-                    ' / "scripts" / "v4_battery.py"',
-                    ' / "defactorised" / "v4_battery.py"')
+                    ' / "scripts" /\n                          "train.py"',
+                    ' / "defactorised" /\n                          "train.py"')
             info = zipfile.ZipInfo(
                 "selfupdate/" + path.relative_to(PACKAGE).as_posix(),
                 date_time=(1980, 1, 1, 0, 0, 0))

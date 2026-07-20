@@ -189,7 +189,7 @@ def extract_archive():
 
 
 def shared_archive_bytes():
-    """Repack deterministically and redirect the embedded v4 child process."""
+    """Repack deterministically and redirect the embedded v4.5 self-invocation."""
     original = zipfile.ZipFile(io.BytesIO(extract_archive()))
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as target:
@@ -197,8 +197,8 @@ def shared_archive_bytes():
             data = original.read(name)
             if name == "selfupdate/train/online_v4.py":
                 data = data.replace(
-                    b' / "defactorised" / "v4_battery.py"',
-                    b' / "compressed" / "v4_battery.py"',
+                    b' / "defactorised" /\n                          "train.py"',
+                    b' / "compressed" /\n                          "train.py"',
                 )
             info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED

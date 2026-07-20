@@ -1,4 +1,4 @@
-# Native pipeline-parallel evaluation
+# Pipeline v4.5 native pipeline-parallel evaluation
 
 `train.v4_battery_mode: distributed` evaluates the live stage-owned student.
 It never reconstructs a complete model, materializes a foreign block, or sends

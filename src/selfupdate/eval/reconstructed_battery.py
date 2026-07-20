@@ -1,5 +1,4 @@
-#!/usr/bin/env python
-"""Pause-and-eval battery subprocess for stage-scoped pipeline-v4 (plan B6).
+"""Internal reconstructed-model fallback for pipeline-v4.5 evaluation.
 
 Spawned by stage 0 at a battery epoch AFTER every stage has published its
 owned adapter shard and released its VRAM (evicted rotated blocks + acked).
@@ -9,18 +8,14 @@ probes as v3/v4 single-process mode — the owner's non-negotiable per-epoch
 battery (recall corpora incl. epoch zero, standard damage) — appending rows
 to stage 0's metrics.jsonl. Exits; stages resume training.
 
-Never launched by hand during a run: the ack/done coordination in
-online_v4._subprocess_battery owns the GPU handoff.
+This is not a user-facing entry point. ``scripts/train.py`` dispatches it only
+after the live trainer has coordinated adapter publication and GPU release.
 """
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
-
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
 
 def _load_epoch_zero_standard_baseline(run_dir: Path) -> dict:
@@ -60,7 +55,7 @@ def _load_epoch_zero_standard_baseline(run_dir: Path) -> dict:
     }
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--experiment", required=True)
@@ -69,7 +64,7 @@ def main() -> None:
     ap.add_argument("--epoch", type=int, required=True,
                     help="battery epoch (0 = epoch-zero baseline)")
     ap.add_argument("--stages", type=int, required=True)
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     import torch
     from transformers import AutoTokenizer
@@ -217,7 +212,3 @@ def main() -> None:
             adapter_graft_seconds=round(adapter_graft_seconds, 3),
             **probe_timings,
             evaluation_seconds=round(time.time() - started, 3))
-
-
-if __name__ == "__main__":
-    main()

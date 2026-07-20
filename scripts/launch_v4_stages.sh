@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch every pipeline-v4 layer-shard stage of one experiment, one detached
+# Launch every pipeline-v4.5 layer-shard stage of one experiment, one detached
 # process per stage. The stage count comes from the CONFIG
 # (train.v4_stage_splits: N cuts -> N+1 stages), so this works for any
 # number of GPUs — nothing here assumes four.

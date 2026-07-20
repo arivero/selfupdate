@@ -1,4 +1,4 @@
-# selfupdate — v4 teacher-forced block distillation
+# selfupdate — v4.5 teacher-forced block distillation
 
 This checkout has one training law.  For every block `L`, the input and target
 are adjacent hidden states from the frozen teacher:
@@ -86,14 +86,19 @@ physical devices, ownership cuts, relay transport, teacher source, and
 residency are read from the experiment config.  The launcher is coordination
 only: training itself has no inter-stage student activation edge.
 
-## Evaluation and certification
+## Evaluation and certification (v4.5)
 
-`scripts/v4_battery.py` performs the ordinary student full-forward token
-battery.  `scripts/compare_v4_shard_numerics.py` compares single-process and
-independent-shard artifacts; [certs/README.md](certs/README.md) describes the
-current on-demand workflow.  Locality certification runs at training end and
-withholds checkpoint publication if gradients escape the owned block or touch
-the frozen vocabulary stack.
+The trainer performs the ordinary live PP student battery at synchronized
+epoch boundaries. Unsupported architectures use its private reconstructed
+fallback automatically. `scripts/compare_v4_shard_numerics.py` compares
+single-process and independent-shard artifacts;
+[certs/README.md](certs/README.md) describes the current on-demand workflow.
+Locality certification runs at training end and withholds checkpoint
+publication if gradients escape the owned block or touch the frozen
+vocabulary stack.
+
+Migration from removed evaluator entry points is documented in
+[`docs/v4_5_migration.md`](docs/v4_5_migration.md).
 
 Historical experiment evidence remains in `EXPERIMENTS.md`, `issues.md`, and
 the dated report documents.  It is evidence about retired protocols, not a
