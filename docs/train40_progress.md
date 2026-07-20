@@ -352,3 +352,27 @@ node-local staging, and writes the canonical `runs/standard_damage` identities
 that `report_v2.py` consumes.  Run it only on an otherwise idle node; endpoint
 jobs remain queued behind active training and will be followed by report
 regeneration.
+
+### 35B epoch-10 scientific checkpoint
+
+The first third of Qwen3.6-35B is repeating the important Qwen-27B warning,
+not the Gemma pattern.  Mean local Huber loss falls 22.1% from epoch 1 to 10
+(`0.01644` to `0.01280`), but whole-set cross-entropy worsens 0.33%
+(`0.023714` to `0.023792`) while KL improves only 0.44%
+(`0.006664` to `0.006635`).  Mean three-corpus recall at epoch 10 is
+`0.14344`, essentially identical to epoch zero `0.14341`, but composition
+shifts sharply: Machado rises `0.0914` to `0.1308`, Quijote chapter 1 falls
+`0.2285` to `0.1805`, and chapter 4 rises slightly `0.1104` to `0.1190`.
+The 16-item standard macro is unchanged (`0.5417`), with offsetting task
+movement, and is not endpoint evidence.
+
+The mechanism is again periodic and concentrated.  Epoch-1 gradient norm is
+largest at L8 (`8327`), then L32 (`3822`), L16 (`2986`), L12 (`1818`), and
+other roughly four-layer-spaced positions; the median is only `22.9`.  By
+epoch 10 the maximum has decayed to `887`, but the same periodic family still
+dominates.  Effective-LoRA RMS reaches `9.65e-4` while its median layer delta
+is only `2.01e-4`.  Two Qwen architectures now show that depth-uniform loss
+weights do not imply depth-uniform effective training when architecture-scale
+outliers dominate.  The high-value follow-up is per-layer update/gradient
+normalization (and residual-update geometry), not a larger global learning
+rate.  This is a live checkpoint, not the 40-epoch conclusion.
