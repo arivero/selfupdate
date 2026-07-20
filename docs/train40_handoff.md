@@ -163,6 +163,18 @@ n=8/task sample size, or does it replicate with a repeated seed?
 
 ## Status as of this handoff (verify before trusting — this will be stale by the time you read it)
 
+Update 2026-07-20 (live campaign): the owner requested a full-size lens-loss
+training follow-up.  Use the existing depth-uniform, block-local
+`lens_kl` arm (`campaign40_loss_lens_kl_g26b`); do not turn it into a
+deep-only/tail-weighted objective.  Its launch is intentionally ordered after
+the committed Gemma-31B context-leak probe: the RAG span locator passed the
+full 2,071-record/tokenizer audit, but v4's uncensored teacher h[L-1] query and
+frozen teacher K/V may carry privileged information through nonprivileged
+positions after layer 1.  A lens result collected under that mismatch must be
+labelled as such, and no loss-family winner is promoted until the probe is
+interpreted.  The already-running 26B `delta_cosine` arm continues to its
+matched 24,852-item budget; no 0.6B arm is permitted.
+
 Completed: `campaign40_g26b_sgd` (full report generated and hand-verified).
 Running or queued at write time: `campaign40_q27b` (27B primary, just
 launched), `campaign40_g26b_adam` (26B confirmatory, just launched);
