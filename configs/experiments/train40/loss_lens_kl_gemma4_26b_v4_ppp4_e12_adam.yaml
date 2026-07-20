@@ -1,0 +1,49 @@
+# Conditional optimizer fallback for the depth-uniform full-vocabulary lens.
+# Launch only if the matched SGD arm completes with finite/local gradients but
+# shows inadequate movement.  Adam 3e-7 is the previously screened 26B recipe;
+# Adam does not rescue a full-vocabulary OOM or the legacy context confound.
+run_name: campaign40_loss_lens_kl_g26b_adam
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.0"
+  method: layerwise
+  run_class: open
+  batching: bucketed
+  micro_batch: 16
+  epochs: 12
+  seed: 17
+  hidden_loss: lens_kl
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  v4_capture_micro_batch: 2
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_teacher_residency: auto
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_battery_mode: subprocess
+  v4_min_train_gpu_util: 50.0
+  v4_nccl_timeout_s: 1800
+  v4_stage_splits: [8, 16, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: adam
+  v4_adam_betas: [0.9, 0.999]
+  v4_adam_eps: 1.0e-8
+  v4_adam_weight_decay: 0.0
+  lr: 3.0e-7
+eval:
+  every_epochs: 3
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  recite_lines: 20
+  standard_damage_every_epochs: 3
+  standard_damage_limit: 16
+  standard_damage_batch_size: 4
+  generation_batch: 4
