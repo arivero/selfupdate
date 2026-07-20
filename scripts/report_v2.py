@@ -928,6 +928,41 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         + [int(row.get("epoch", 0)) for row in rows
            if row.get("kind") == "v4_epoch"],
         default=0)
+    # Pipeline-v4's authoritative execution/provenance fields live in the
+    # per-stage contract rows. The representative config is stage0 by design,
+    # so legacy model.pipeline_* fields describe only that process and must
+    # not be mistaken for the whole PPP launch.
+    contracts = [r for r in rows
+                 if r.get("kind") == "pipeline_v4_contract"]
+    contract = contracts[0] if contracts else {}
+    stage_count = len(metrics.stage_dirs) if metrics.stage_scoped else 1
+    if metrics.stage_scoped:
+        pp_execution = f"stage_scoped_ppp{stage_count}"
+        pp_execution_display = f"stage-scoped PPP{stage_count}"
+        pipeline_splits = list(train.get("v4_stage_splits", []) or [])
+        pipeline_devices = list(train.get("v4_stage_devices", []) or [])
+    else:
+        pp_execution = train.get("pp_execution", "serial")
+        pp_execution_display = pp_execution
+        pipeline_splits = list(model.get("pipeline_splits", []) or [])
+        pipeline_devices = list(model.get("pipeline_devices", []) or [])
+    training_input = (contract.get("training_input")
+                      or contract.get("local_input")
+                      or train.get("trajectory_source"))
+    training_context_source = (contract.get("training_context_source")
+                               or contract.get("context_source"))
+    attention_source = (contract.get("attention_source")
+                        or contract.get("attention_context")
+                        or train.get("attention_source"))
+    expert_routing_source = (contract.get("expert_routing_source")
+                             or train.get("expert_routing_source"))
+    dataset_items = int(contract.get("dataset_items", 0) or 0)
+    if not dataset_items:
+        dataset_items = max(
+            (int(r.get("dataset_item_count", 0) or 0) for r in rows
+             if r.get("kind") in ("teacher_output_eval",
+                                  "student_trajectory_eval")),
+            default=0)
     if delta.empty:
         delta, delta_representation = _final_delta_csv(
             run_dir / "eval" / "weight_deltas.csv", final_epoch)
@@ -997,6 +1032,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     epochs = sorted(set(recall.get("epoch", pd.Series(dtype=int))).union(
         set(standard.get("epoch", pd.Series(dtype=int)))))
     max_items = max((int(r.get("items_seen", 0)) for r in rows), default=0)
+    if not max_items and dataset_items and final_epoch:
+        # Every v4_epoch is one complete traversal. Dataset size is replicated
+        # in each stage's contract, so multiply by epochs exactly once—not by
+        # the number of stage rows.
+        max_items = dataset_items * final_epoch
     times = [float(r["t"]) for r in rows if "t" in r]
     elapsed_min = (max(times) - min(times)) / 60 if len(times) > 1 else float("nan")
     provenance = next((r for r in rows if r.get("source_commit")), {})
@@ -1202,7 +1242,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         f"- Student initialization: `{provenance.get('student_init_identity', train.get('init_from') or model.get('name', 'missing'))}`",
         f"- Layerwise project: `{cfg.get('layerwise_project_version', 'legacy')}`",
         f"- Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
-        f"- PP executor / partition profile: `{train.get('pp_execution', 'serial')}` / `{train.get('partition_profile_id', '') or 'unpinned'}`",
+        f"- PP executor / partition profile: `{pp_execution_display}` / `{train.get('partition_profile_id', '') or 'unpinned'}`",
         f"- Censorship: `{mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}`",
         f"- Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
         f"- Run class: `{reported_run_class}` (source `{run_class_source}`; "
@@ -1215,8 +1255,11 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
          "coordinates, not an epoch claim."
          if partial_boundary else
          f"- Training extent: {final_epoch} complete dataset epoch(s)."),
-        f"- State / attention / expert routing: `{train.get('trajectory_source', 'missing')}` / "
-        f"`{train.get('attention_source', 'missing')}` / `{train.get('expert_routing_source', 'missing')}`",
+        f"- Training input / context / attention / expert routing: "
+        f"`{training_input or 'missing'}` / "
+        f"`{training_context_source or 'missing'}` / "
+        f"`{attention_source or 'missing'}` / "
+        f"`{expert_routing_source or 'missing'}`",
         f"- Optimizer / LR / Adam inertia: `{_optimizer_identity(train)}`; rule / history: "
         f"`{train.get('lr_rule', 'fixed')}` / `{train.get('history_policy', 'not_applicable')}`",
         f"- Backward / write dispatch: `{train.get('backward_dispatch', 'per_block')}` / "
@@ -1404,7 +1447,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
             f"Dataset: {data.get('examples_path', 'missing')}",
             f"Layerwise project: {cfg.get('layerwise_project_version', 'legacy')}",
             f"Pipeline: v{train.get('pipeline_revision') or train.get('pipeline_version', 'missing')}",
-            f"PP executor / partition profile: {train.get('pp_execution', 'serial')} / {train.get('partition_profile_id', '') or 'unpinned'}",
+            f"PP executor / partition profile: {pp_execution_display} / {train.get('partition_profile_id', '') or 'unpinned'}",
             f"Censorship: {mask.get('mode', 'missing')} × {mask.get('compaction', 'missing')}",
             f"Loss: {_loss_name(str(train.get('hidden_loss', 'missing')))}",
             (f"Run class: {reported_run_class} (source {run_class_source}; "
@@ -1460,7 +1503,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         figures=figures,
     )
     manifest = {
-        "schema_version": 6,
+        "schema_version": 7,
         "run": run_dir.name,
         "campaign": (
             "layerwise34_timing"
@@ -1476,10 +1519,12 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "pipeline_version": train.get("pipeline_version"),
         "pipeline_revision": train.get("pipeline_revision"),
         "layerwise_project_version": cfg.get("layerwise_project_version"),
-        "pp_execution": train.get("pp_execution", "serial"),
+        "pp_execution": pp_execution,
+        "stage_count": stage_count,
+        "v4_stage_scoped": metrics.stage_scoped,
         "partition_profile_id": train.get("partition_profile_id"),
-        "pipeline_splits": model.get("pipeline_splits", []),
-        "pipeline_devices": model.get("pipeline_devices", []),
+        "pipeline_splits": pipeline_splits,
+        "pipeline_devices": pipeline_devices,
         "run_class": reported_run_class,
         "configured_run_class": configured_run_class,
         "run_class_source": run_class_source,
@@ -1507,7 +1552,16 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
         "activation_shard_users": (
             train.get("activation_shard_users", 0)
             or train.get("micro_batch")),
+        # trajectory_source is retained for legacy consumers only. V4 has no
+        # end-to-end student training trajectory; the typed fields below state
+        # its actual local training provenance without inventing one.
         "trajectory_source": train.get("trajectory_source"),
+        "training_input": training_input,
+        "training_context_source": training_context_source,
+        "attention_source": attention_source,
+        "expert_routing_source": expert_routing_source,
+        "dataset_items": dataset_items,
+        "items_observed": max_items,
         "partial_training_boundary": partial_boundary,
         "training_token_events_per_s": token_events_per_s,
         "best_overall_recall_epoch": best_overall_epoch,
