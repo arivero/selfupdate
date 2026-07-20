@@ -1534,6 +1534,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             run_dir, log, owned=owned, n_layers=n, moe_ctrl=moe_ctrl,
             moe_routing=moe_routing, teacher_eval_rows=teacher_eval_rows,
             rotator=rotator, transport=boundary_transport)
+    if boundary_transport is not None:
+        # Readiness gate (2026-07-20 fix; issues.md "OPEN — DeepSeek-V4-Flash
+        # PPP8 cross-node NCCL hang"): announce that every store-fill send
+        # this stage will ever issue toward stage+1 is done (correct to call
+        # here whether or not store-fill actually ran above — when it
+        # didn't, this is simply the earliest point at which it's safe, since
+        # there was never any pre-relay traffic to guard against). This must
+        # run BEFORE stage+1 is allowed to post its epoch-relay irecv burst;
+        # see BoundaryTransport.recv_forward.
+        boundary_transport.mark_relay_ready()
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None

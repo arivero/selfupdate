@@ -829,6 +829,10 @@ source mode remains an experimental variable and belongs in telemetry.
 training), defer this fix. Do not relaunch DeepSeek PPP8 training until this
 is addressed.**
 
+**UPDATE 2026-07-20: fixed and validated on a live 2-rank cross-node repro —
+see "RESOLVED 2026-07-20" below (this diagnosis is left exactly as written
+for the record; the fix is additive).**
+
 Three attempts of `configs/experiments/h100_smoke/deepseek_v4_flash_ppp8_xnode.yaml`
 (2x4 H100 cross-node, agpuh01+agpuh02) all failed before ever completing an
 epoch. Diagnosed via a delegated static-analysis pass (no GPU touched) reading
@@ -932,6 +936,138 @@ presently unsatisfiable, as coded, for ANY stage-scoped+store PPP8 campaign —
 including the 397B spec_verify run in progress as of this writing. The real
 cross-node "cert relay" is explicitly deferred future work
 (`online_v4.py:1855`), not a DeepSeek-specific gap.
+
+### RESOLVED 2026-07-20 — cross-node NCCL hang fixed (out-of-band readiness
+gate) + issues A/B fixed (config-only)
+
+Built the minimal 2-rank cross-node repro the coordinator asked for instead
+of re-launching full DeepSeek (`scripts/relay_nccl_hang_repro.py`): drives
+the REAL `BoundaryTransport`/`NcclBoundaryRelay` from `relay_nccl.py`
+directly with synthetic tensors across agpuh01/agpuh02, no model, no
+DeepSeek. One rank plays a slow predecessor (stage3: still issuing
+store-fill-style sends, has not reached its epoch-relay send), the other a
+fast successor (stage4: calls `recv_forward(epoch, block=False)` in a poll
+loop — exactly `_RelayServicer.submit()` -> `service(block=False)`).
+
+**The repro REFINES the original mechanism, not just confirms it.** Every
+single `recv_forward(block=False)` poll returned in 0.000-0.002s regardless
+of how long the peer had left to stall — `post_recv()`'s `dist.irecv()` does
+NOT block; the non-blocking contract is honored at the primitive level. The
+real hazard is a silent **order-based data mismatch**, not a blocked call:
+NCCL matches send/recv strictly by call order per (src,dst) pair, untagged,
+and store-fill traffic shares that one ordered channel with epoch-relay
+traffic by design. Posting the epoch-relay irecv burst before the
+predecessor has issued every one of its store-fill sends gets those irecvs
+satisfied by LEFTOVER store-fill tensors instead of the real boundary —
+reproduced as `AssertionError: relay data mismatch` (`result[0]` held a
+stale store-fill value, not the true relayed 99.0). A control run with no
+interleaved traffic during the predecessor's stall (`--extra-fill-during-delay
+0`) completes clean, isolating that the corruption specifically needs
+unconsumed same-channel traffic ahead of the premature irecv burst — which
+is exactly the real DeepSeek shape (stage3 genuinely still mid store-fill;
+stage4 already past it). This also fully explains the op-count asymmetry in
+the original diagnosis (rank4 "last enqueued 2072, completed 1405" vs
+rank3's clean 708): rank4 prematurely posts a large irecv burst that only
+rank3's eventual sends can satisfy; when rank3 is stuck for 70+ minutes,
+most of that burst stays unmatched far past the NCCL timeout, and the
+watchdog timeout/dump is what reads as "hung" from outside.
+
+**Fix implemented (proposal (b), not the heavier (a) process-group split):**
+a tiny second `TCPStore` (`NcclBoundaryRelay.__init__`, `relay_nccl.py`),
+separate from the main NCCL group and from the node-local `/dev/shm` file
+relay (which cannot carry this signal cross-node at all — confirmed by
+reading `_RelayFiles`: it always resolves under `SELFUPDATE_V4_RELAY_ROOT`,
+which `launch_v4_stages.sh` defaults to `/dev/shm`, invisible across
+nodes). Hosted at `MASTER_ADDR`/`MASTER_PORT+1` (overridable via
+`SELFUPDATE_V4_READY_PORT`), `is_master=(stage==0)` mirroring the main
+rendezvous leader. Each stage calls `boundary_transport.mark_relay_ready()`
+exactly once, right after `capture_relay_store()` returns in
+`train_online_v4` (`online_v4.py`, unconditional on whether store-fill
+actually ran — correct either way, since that's the earliest point at which
+there is provably no more pre-relay traffic coming). `BoundaryTransport
+.recv_forward()` now checks (or, for a blocking `drain()`, waits on) the
+predecessor's flag via `NcclBoundaryRelay.predecessor_relay_ready()` /
+`wait_predecessor_relay_ready()` before ever calling `post_recv()` for a new
+epoch; non-blocking callers just see "not ready yet" (identical to an
+unarrived boundary) instead of risking the mismatch.
+
+**Validated on the same repro, post-fix:** with the predecessor stalling 12s
+(sleeping only — no interleaved traffic, so nothing is left orphaned for the
+gate to be defeated by) then marking ready, then stalling 6 MORE seconds
+before its true send (simulating real local-epoch training after
+store-fill, before the actual relay send) — every poll during BOTH stalls
+correctly returned `None` with `post_recv` NOT YET posted while
+`predecessor_ready=False`; the instant the ready flag appeared, `post_recv`
+was posted and polling continued to correctly report "not arrived" (still
+0.000-0.002s per call, so the gate adds no meaningful latency); the data
+that finally arrived was correct (no mismatch, clean exit both ranks).
+
+**Known limitation, documented honestly, not fixed further:** the gate
+prevents PREMATURE posting relative to the predecessor's declared
+readiness; it does not retroactively fix a channel that already has
+UNMATCHED, unconsumed pre-relay traffic sitting in it (confirmed: forcing
+orphaned sends in the repro — sends with no designated receiver anywhere —
+still produced a mismatch even with the gate, since the gate only holds
+back the RECEIVER's irecv, not clean up someone else's uncollected mail).
+This is not a gap in the current production code path: `capture_relay_store`
+always fully drains store-fill 1:1 (`recv_fill_one` blocks synchronously
+per cohort) before returning, so by construction nothing is ever orphaned
+before `mark_relay_ready()` fires. Flagging this invariant explicitly so a
+future change to store-fill's pacing doesn't silently reopen the hole.
+
+Files: `src/selfupdate/train/relay_nccl.py` (readiness store + 3 new
+methods + the `recv_forward` gate), `src/selfupdate/train/online_v4.py`
+(the `mark_relay_ready()` call site), `scripts/launch_v4_stages.sh`
+(forwards `SELFUPDATE_V4_READY_PORT` to remote stages),
+`scripts/relay_nccl_hang_repro.py` (the repro itself, kept as a permanent
+diagnostic — reusable for any future cross-node relay change).
+
+**Issues A and B (independent, both config-only fixes, no code changed):**
+read the actual crash logs (`runs/h100_dsv4f_v4_ppp8x_stage6.log`,
+`..._stage7.log`, 2026-07-19 05:52 launch) instead of re-deriving from the
+summary in the OPEN diagnosis above.
+
+- **A (stage6 utilization-gate self-abort):** `RuntimeError: UTILIZATION
+  GATE (mid-epoch): rolling training-phase GPU utilization 48.9% < 50%
+  floor after 3840 cohort steps`. Root cause: `v4_min_train_gpu_util: 50.0`
+  is inherited from `base_deepseek_v4_flash_v4_full.yaml`, calibrated for
+  RESIDENT weight placement — but the PPP8 experiment config separately
+  sets `v4_weight_residency: rotate` (needed because DeepSeek's ~12 GB/layer
+  MoE blocks don't fit resident) without also overriding the utilization
+  floor. Every OTHER rotate-residency config on this branch (the
+  `*_v4_ppp1_rotate.yaml` family: gemma4_26b/31b, qwen35_122b,
+  qwen36_27b/35b) already sets `v4_min_train_gpu_util: 0.0` for exactly this
+  reason — legitimate weight-paging stalls under rotation dip utilization
+  below a floor calibrated for resident placement. This is the CLAUDE.md
+  "knob copied without its enabling context" pattern, not a code bug. Fixed
+  by adding `v4_min_train_gpu_util: 0.0` to
+  `configs/experiments/h100_smoke/deepseek_v4_flash_ppp8_xnode.yaml`.
+- **B (stage7 backward OOM):** `torch.OutOfMemoryError` inside
+  `summed.backward()` in epoch 0: "Tried to allocate 10.40 GiB ... 7.96 GiB
+  is free ... 70.92 GiB in use" of 79.20 GiB — a ~2.1 GiB deficit. Distinct
+  from the three already-fixed store-fill OOMs (those are a no_grad forward
+  pass; this is the training step's retained backward graph, a different
+  and larger memory profile). Root cause: stage7 is the only stage that
+  OOMed among the several 5-layer stages (0, 2, 4, 5) — it uniquely also
+  carries the resident LM head/final norm, a fixed extra cost on top of the
+  same per-cohort activation footprint that `micro_batch: 2` was tuned for
+  (that tuning, the 32->8->2 arc, targeted store-fill's CSA-attention memory
+  specifically, never validated against the training epoch's backward
+  pass). Fixed by decoupling the two: added `v4_capture_micro_batch: 2`
+  (config.py: "Only affects the no-grad teacher forward, never the training
+  step") to freeze store-fill at its already-proven-safe batch size, and
+  lowered `micro_batch` (now training-only) to `1`, in the same PPP8
+  experiment config.
+
+**Recommendation on a real DeepSeek PPP8 relaunch:** all three issues have a
+validated-or-config-only fix now in place, but none has been validated
+end-to-end on a real full DeepSeek launch (only the hang mechanism, on a
+synthetic repro, and the OOM/util-gate root causes, via config reasoning
+plus the existing crash logs). Per the standing guidance to check in before
+that step (real risk: an unsupervised overnight cross-node DeepSeek launch,
+lowest scientific value remaining in the whole spec_verify campaign per
+project memory "phase2-models-borrowed-answers") — reported back to the
+coordinator with this summary; awaiting the go/no-go before attempting it.
 
 ## OPEN, HARDER THAN FIRST THOUGHT: DeepSeek-V4-Flash vLLM TP8 — no available nvcc both compiles DeepGEMM and runs on this driver (spec_verify Phase 2, 2026-07-20)
 

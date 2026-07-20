@@ -16,18 +16,53 @@ train:
   schedule: summed
   grad_accum: 1
   batching: bucketed
-  # micro_batch 2: DeepSeek's CSA attention uses EAGER (the sparse lightning
-  # indexer can't use flash/SDPA), so eager_attention_forward materializes the
-  # full [B,heads,q,k] logits at T~5000 PLUS a same-size copy for the `-.max()`
+  # micro_batch 1 (2026-07-20, was 2): the 32->8->2 arc below fixed
+  # store-fill's no_grad-forward OOMs, but a LATER, DISTINCT crash showed 2
+  # is still too large for the TRAINING step's backward pass specifically —
+  # stage7 (last stage, layers 39-43 PLUS the resident LM head/final norm,
+  # the only stage carrying that fixed extra weight) hit
+  # `torch.OutOfMemoryError` inside `summed.backward()` in epoch 0:
+  # "Tried to allocate 10.40 GiB ... 7.96 GiB is free ... 70.92 GiB in use"
+  # of 79.20 GiB — a ~2.1 GiB deficit (h100_dsv4f_v4_ppp8x_stage7.log,
+  # 2026-07-19 05:52 launch). Sibling 5-layer stages (0, 2, 4, 5) never
+  # OOMed; only stage7, which uniquely also carries the LM head resident,
+  # did — the backward graph (retained activations + grads) is a DIFFERENT,
+  # larger memory profile than store-fill's no_grad forward, so the same
+  # knob needed a further cut for training specifically. v4_capture_micro_batch
+  # below freezes store-fill at the already-proven-safe 2 (see its own
+  # comment: "Only affects the no-grad teacher forward, never the training
+  # step" — config.py) so this cut costs training throughput only, not the
+  # store-fill pass this history already fixed.
+  micro_batch: 1
+  # DeepSeek's CSA attention uses EAGER (the sparse lightning indexer can't
+  # use flash/SDPA), so eager_attention_forward materializes the full
+  # [B,heads,q,k] logits at T~5000 PLUS a same-size copy for the `-.max()`
   # softmax stabilization — ~30 GB EACH at B=8, which OOM'd on top of the
   # (pool-capped) resident weights. The logits scale with B, so 2 brings the
-  # attention to ~7.5 GB. (32->8->2 across the memory-debug arc; the pool cap in
-  # rotation.py fixed the separate buffer-accumulation OOM.)
-  micro_batch: 2
+  # attention to ~7.5 GB. (32->8->2 across the memory-debug arc; the pool cap
+  # in rotation.py fixed the separate buffer-accumulation OOM.) This is the
+  # store-fill-only batch size (see micro_batch comment above for why
+  # training now uses a smaller, separate value).
+  v4_capture_micro_batch: 2
   epochs: 3
   seed: 17
   v4_teacher_source: store
   v4_loop_order: layer_major
+  # Utilization gate DISABLED for this run (2026-07-20; was inherited as
+  # 50.0 from base_deepseek_v4_flash_v4_full.yaml, uncalibrated for THIS
+  # config's own v4_weight_residency: rotate choice below). Stage6 tripped
+  # it mid-epoch at 48.9% rolling utilization -- just under the 50% floor --
+  # h100_dsv4f_v4_ppp8x_stage6.log, 2026-07-19 05:52 launch:
+  # "UTILIZATION GATE (mid-epoch): rolling training-phase GPU utilization
+  # 48.9% < 50% floor after 3840 cohort steps". Legitimate weight-paging
+  # stalls under rotation dip utilization below a floor calibrated for
+  # resident placement; every OTHER rotate-residency config on this branch
+  # (the PPP1-rotate family: gemma4_26b/31b, qwen35_122b, qwen36_27b/35b
+  # _v4_ppp1_rotate.yaml) already overrides this to 0.0 for the same reason.
+  # This config set v4_weight_residency: rotate without also copying that
+  # override -- a knob copied without its enabling context (see CLAUDE.md
+  # "Corollary 2026-07-17").
+  v4_min_train_gpu_util: 0.0
   # chunk depth 2 (not the default 8): the chunk-layer-outer fill buffers this
   # many cohorts' FrozenDeepseekCtx (sliding K/V + compressed entries + int64
   # top-k over T~5000) on-card before flushing — far heavier per cohort than
