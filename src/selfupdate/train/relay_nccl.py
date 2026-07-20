@@ -5,10 +5,12 @@ Owner decision 2026-07-18: after measuring the fabric (dual HDR-200 at
 and a history of Lustre metadata/page-fault stalls, the BULK relay
 payloads move over NCCL — which speaks IB verbs natively (the broken
 node-to-node IPoIB layer is irrelevant) and moves tensors GPU-to-GPU
-(NVLink within a node). Only the boundary tensors ride NCCL; the small
-control-plane envelopes (adapter publications, battery acks, store-fill
-store) stay on the file relay, whose on-disk audit trail the reaper and
-post-mortems depend on.
+(NVLink within a node). Boundary tensors ride the main NCCL communicator.
+For a cross-node subprocess battery, adapter publications ride a separate
+NCCL communicator, while the final scalar success/failure status uses the
+launch-scoped TCPStore: each node's file relay is deliberately node-local
+/dev/shm, so neither payload nor acknowledgement can cross hosts there.
+Same-node control and the store-fill audit trail remain on the file relay.
 
 Design facts this module leans on:
 
@@ -144,6 +146,13 @@ class NcclBoundaryRelay:
             world_size=self.stages, is_master=(self.stage == 0),
             timeout=timeout, wait_for_workers=True)
         self._relay_ready_marked = False
+        # Created lazily by the first subprocess battery. It MUST be a
+        # distinct communicator: the boundary communicator has ordered,
+        # potentially in-flight point-to-point traffic, and inserting a
+        # collective into that sequence can cross-match or deadlock it.
+        self._battery_group = None
+        self._group_timeout = timeout
+        self._battery_status_timeout_s = max(timeout.total_seconds(), 3600.0)
         _dbg("post ready-gate TCPStore; NcclBoundaryRelay fully ready")
 
     def mark_relay_ready(self) -> None:
@@ -255,6 +264,104 @@ class NcclBoundaryRelay:
         self.dist.recv(t, src=src)
         return t
 
+    # -- cross-node subprocess-battery exchange -------------------------
+
+    def _get_battery_group(self):
+        """Collectively create a communicator isolated from boundary P2P."""
+        if self._battery_group is None:
+            self._battery_group = self.dist.new_group(
+                ranks=list(range(self.stages)), backend="nccl",
+                timeout=self._group_timeout)
+        return self._battery_group
+
+    def collect_battery_adapters(self, epoch: int, rf) -> None:
+        """Materialize every stage's adapter file in stage 0's local shm.
+
+        Each source broadcasts its already-enveloped safetensors file as one
+        byte tensor. Sequential broadcasts bound temporary device memory to
+        the largest single stage shard. Only rank 0 persists remote shards;
+        its child then consumes the ordinary `_RelayFiles` contract.
+        """
+        group = self._get_battery_group()
+        own_path = rf.path(epoch, f"adapters_stage{self.stage}.st")
+        try:
+            own_bytes = own_path.read_bytes()
+        except OSError:
+            # Publish length zero below so every rank observes and raises the
+            # same failure instead of one source leaving peers in a collective.
+            own_bytes = b""
+        prep_error = None
+        for src in range(self.stages):
+            length = torch.tensor(
+                [len(own_bytes) if self.stage == src else 0],
+                dtype=torch.long, device=self.device)
+            self.dist.broadcast(length, src=src, group=group)
+            nbytes = int(length.item())
+            if nbytes <= 0:
+                raise RuntimeError(
+                    f"stage {src} published an empty battery adapter file "
+                    f"at epoch {epoch}")
+            if self.stage == src:
+                # bytearray supplies the writable buffer required by
+                # torch.frombuffer without warning or undefined mutation.
+                payload = torch.frombuffer(
+                    bytearray(own_bytes), dtype=torch.uint8).to(self.device)
+            else:
+                payload = torch.empty(
+                    nbytes, dtype=torch.uint8, device=self.device)
+            self.dist.broadcast(payload, src=src, group=group)
+            if self.stage == 0 and src != 0:
+                try:
+                    dst = rf.path(epoch, f"adapters_stage{src}.st")
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = dst.with_name(dst.name + ".xnode.tmp")
+                    tmp.write_bytes(payload.cpu().numpy().tobytes())
+                    tmp.replace(dst)
+                    # Detect a stale/wrong publication before child launch.
+                    rf.read(dst, expect_epoch=epoch, as_stage=0)
+                except Exception as exc:
+                    # Keep participating in all remaining broadcasts; an
+                    # early rank-0 raise would strand every peer in NCCL.
+                    prep_error = prep_error or repr(exc)
+            del payload
+        failed = torch.tensor(
+            [int(prep_error is not None) if self.stage == 0 else 0],
+            dtype=torch.int32, device=self.device)
+        self.dist.broadcast(failed, src=0, group=group)
+        if int(failed.item()):
+            detail = prep_error if self.stage == 0 else "reported by stage 0"
+            raise RuntimeError(
+                f"cross-node battery adapter materialization failed: {detail}")
+
+    def exchange_battery_status(self, epoch: int, status: int) -> int:
+        """Publish/wait for stage 0's result without a long NCCL operation.
+
+        A 122B battery can keep stage 0 in its child for many minutes. Remote
+        ranks therefore poll the already-established launch TCPStore instead
+        of posting a broadcast that can trip ProcessGroupNCCL's watchdog while
+        the child owns stage 0's GPUs.
+        """
+        key = f"battery_status_e{epoch:04d}"
+        if self.stage == 0:
+            self._ready_store.set(key, str(int(status)))
+            return int(status)
+        from .stop import stop_requested
+        deadline = time.monotonic() + self._battery_status_timeout_s
+        while not self._ready_store.check([key]):
+            if stop_requested():
+                raise RuntimeError(
+                    f"stopped while waiting for stage 0 battery epoch {epoch}")
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"battery status timeout after "
+                    f"{self._battery_status_timeout_s:.0f}s at epoch {epoch}; "
+                    "stage 0 died or stalled")
+            time.sleep(2.0)
+        value = self._ready_store.get(key)
+        if isinstance(value, bytes):
+            value = value.decode()
+        return int(value)
+
 
 def parse_stage_hosts() -> list:
     """Stage -> short hostname map from the launcher (already resolved: no
@@ -339,6 +446,17 @@ class BoundaryTransport:
         if self.nccl is not None:
             self.nccl.reap_sent(block=True)   # flush any parked isends first
             self.nccl.dist.barrier()
+
+    def collect_battery_adapters(self, epoch: int) -> None:
+        """Cross-node adapter exchange; same-node batteries use shm files."""
+        if self.nccl is not None:
+            self.nccl.collect_battery_adapters(epoch, self.rf)
+
+    def exchange_battery_status(self, epoch: int, status: int) -> int:
+        """Cross-node battery result; pass through for file transport."""
+        if self.nccl is None:
+            return int(status)
+        return self.nccl.exchange_battery_status(epoch, status)
 
     # -- forward pipe: epoch relay (all cohorts per epoch) ---------------
     def send_forward(self, epoch: int, out: dict) -> None:

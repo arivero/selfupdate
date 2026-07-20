@@ -931,7 +931,7 @@ def _owned_adapter_tensors(stack, owned) -> dict:
 
 
 def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
-                        owned, baseline, rotator=None):
+                        owned, baseline, rotator=None, transport=None):
     """Plan B6: every stage publishes adapters and releases VRAM; stage 0
     spawns scripts/v4_battery.py (full model, device_map=auto over all
     cards, existing telemetry probes) and signals done; stages resume."""
@@ -976,55 +976,93 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
         for L, dev in evicted_blocks:
             stack.blocks[L - 1].to(dev)
 
-    rf.write(rf.path(epoch, f"battery_ack_stage{stage}.st"),
-             {"ack": torch.zeros(1)}, stage=stage, epoch=epoch)
-    if stage != 0:
-        rf.wait(rf.path(epoch, "battery_done.st"))
-        _restore_evicted()
-        return baseline
-    for k in range(1, stages):
-        rf.wait(rf.path(epoch, f"battery_ack_stage{k}.st"))
-    paths = os.environ.get("SELFUPDATE_V4_CONFIG", "")
-    base_p, _, exp_p = paths.partition("::")
-    if not base_p or not exp_p:
-        raise RuntimeError(
-            "v4_battery_mode=subprocess needs SELFUPDATE_V4_CONFIG="
-            "<base>::<experiment> in the environment (scripts/train.py "
-            "exports it)")
-    script = Path(__file__).resolve().parents[3] / "scripts" / "v4_battery.py"
+    cross_node = transport is not None and transport.nccl is not None
+    status = 0
     logf = run_dir / f"battery_e{epoch:04d}.log"
-    child_env = dict(os.environ)
-    # The child must speak THIS launch's identity: solo runs mint
-    # `solo-<pid>` lazily, and a child minting its own pid-flavored id was
-    # refused by the envelope check (2026-07-18 battery_e0000 mismatch).
-    child_env["SELFUPDATE_V4_LAUNCH_ID"] = rf.launch_id
-    if cfg.train.v4_stage < 0:
-        # Rotary PPP1: the battery child must stay on the rotor's OWN
-        # card — device_map=auto over every GPU tramples concurrent runs
-        # (three rotors + a PPP5 stage shared one node, 2026-07-18).
-        # Inside the child, auto-placement spills the remainder to CPU.
-        own = torch.device(cfg.model.device).index or 0
-        child_env["CUDA_VISIBLE_DEVICES"] = str(own)
-    with open(logf, "ab") as fh:
-        rc = subprocess.run(
-            [_sys.executable, str(script), "--config", base_p,
-             "--experiment", exp_p, "--run-dir", str(run_dir),
-             "--epoch", str(epoch), "--stages", str(stages)],
-            stdout=fh, stderr=fh, env=child_env).returncode
-    if rc != 0:
-        raise RuntimeError(
-            f"battery subprocess failed rc={rc}; see {logf} — the "
-            "per-epoch battery is non-negotiable, a run without it "
-            "must not continue silently")
-    rf.write(rf.path(epoch, "battery_done.st"), {"done": torch.zeros(1)},
-             stage=0, epoch=epoch)
-    _restore_evicted()
-    return baseline
+    try:
+        if cross_node:
+            # Publications live in host-private /dev/shm. Move the enveloped
+            # files over the dedicated battery communicator; only stage 0
+            # materializes remote shards for its child.
+            transport.collect_battery_adapters(epoch)
+        else:
+            rf.write(rf.path(epoch, f"battery_ack_stage{stage}.st"),
+                     {"ack": torch.zeros(1)}, stage=stage, epoch=epoch)
+        if stage != 0:
+            if cross_node:
+                status = transport.exchange_battery_status(epoch, 0)
+                if status == 0:
+                    rf.path(epoch, f"adapters_stage{stage}.st").unlink(
+                        missing_ok=True)
+                if status != 0:
+                    raise RuntimeError(
+                        f"stage 0 battery subprocess failed rc={status} at "
+                        f"epoch {epoch}; all stages are stopping")
+            else:
+                rf.wait(rf.path(epoch, "battery_done.st"))
+            return baseline
+        if not cross_node:
+            for k in range(1, stages):
+                rf.wait(rf.path(epoch, f"battery_ack_stage{k}.st"))
+
+        child_error = None
+        try:
+            paths = os.environ.get("SELFUPDATE_V4_CONFIG", "")
+            base_p, _, exp_p = paths.partition("::")
+            if not base_p or not exp_p:
+                status = -1
+            else:
+                script = (Path(__file__).resolve().parents[3] / "scripts" /
+                          "v4_battery.py")
+                child_env = dict(os.environ)
+                # The child must speak THIS launch's identity; solo children
+                # otherwise mint a pid-flavoured identity and fail the envelope.
+                child_env["SELFUPDATE_V4_LAUNCH_ID"] = rf.launch_id
+                if cfg.train.v4_stage < 0:
+                    own = torch.device(cfg.model.device).index or 0
+                    child_env["CUDA_VISIBLE_DEVICES"] = str(own)
+                with open(logf, "ab") as fh:
+                    status = subprocess.run(
+                        [_sys.executable, str(script), "--config", base_p,
+                         "--experiment", exp_p, "--run-dir", str(run_dir),
+                         "--epoch", str(epoch), "--stages", str(stages)],
+                        stdout=fh, stderr=fh, env=child_env).returncode
+        except Exception as exc:
+            # Stage 0 must still release every remote rank from its status
+            # broadcast if log creation/spawn itself fails.
+            child_error = exc
+            status = -2
+        if cross_node:
+            status = transport.exchange_battery_status(epoch, status)
+            if status == 0:
+                rf.path(epoch, f"adapters_stage{stage}.st").unlink(
+                    missing_ok=True)
+        elif status == 0:
+            rf.write(rf.path(epoch, "battery_done.st"),
+                     {"done": torch.zeros(1)}, stage=0, epoch=epoch)
+        elif child_error is not None:
+            rf.request_stop()
+        if child_error is not None:
+            raise RuntimeError(
+                f"battery subprocess could not be launched; {child_error}") \
+                from child_error
+        if status != 0:
+            if not cross_node:
+                rf.request_stop()
+            detail = ("missing SELFUPDATE_V4_CONFIG=<base>::<experiment>"
+                      if status == -1 else f"see {logf}")
+            raise RuntimeError(
+                f"battery subprocess failed rc={status}; {detail} — the "
+                "per-epoch battery is non-negotiable, a run without it "
+                "must not continue silently")
+        return baseline
+    finally:
+        _restore_evicted()
 
 
 def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                           owned, baseline, started_at: float,
-                          rotator=None):
+                          rotator=None, transport=None):
     """Owner-mandated per-epoch battery in staged mode.
 
     Every stage publishes its owned adapter tensors; stage 0 waits for all
@@ -1035,7 +1073,8 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     """
     if cfg.train.v4_battery_mode == "subprocess":
         return _subprocess_battery(cfg, stack, log, epoch, run_dir,
-                                   owned, baseline, rotator=rotator)
+                                   owned, baseline, rotator=rotator,
+                                   transport=transport)
     stage = cfg.train.v4_stage
     stages = len(cfg.train.v4_stage_splits or []) + 1
     # Single-process (PPP1) run_dir IS the run root; staged run_dirs
@@ -1685,7 +1724,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # against CPU-mastered rotated blocks — the 2026-07-18 g31b
             # PPP1 crash ("cuda:0 and cpu").
             baseline = _subprocess_battery(cfg, stack, log, 0, run_dir,
-                                           owned, baseline, rotator=rotator)
+                                           owned, baseline, rotator=rotator,
+                                           transport=boundary_transport)
     elif single_process or cfg.train.v4_stage == 0:
         # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
         # so its full resident model IS the base model at this point.
@@ -1927,7 +1967,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 if (epoch + 1) % every == 0:
                     baseline = _staged_epoch_battery(
                         cfg, stack, tok, log, epoch + 1, run_dir, owned,
-                        baseline, started_at, rotator=rotator)
+                        baseline, started_at, rotator=rotator,
+                        transport=boundary_transport)
                 else:
                     log.log(kind="epoch_battery_skipped", epoch=epoch + 1,
                             reason="staged_battery_at_eval_cadence")

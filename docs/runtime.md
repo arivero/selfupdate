@@ -110,6 +110,15 @@ last stage computes the metrics. These boundaries are evaluation data, not
 PPP training dependencies. Generation, recall, standard-damage, and
 parameter-delta probes are likewise evaluation-only.
 
+Cross-node stages use NCCL/InfiniBand for validation boundaries while
+co-located neighbors use node-local `/dev/shm`. Subprocess batteries use a
+separate NCCL communicator: every stage publishes its enveloped adapter shard,
+stage 0 materializes remote shards in its own `/dev/shm` for the unchanged
+battery child, and publishes the child's success/failure through the
+launch-scoped TCPStore. This keeps adapter payloads off Lustre and avoids both
+inserting collectives into the ordered boundary stream and holding an NCCL
+collective open during a long evaluation.
+
 ## Locality, numerical, and publication gates
 
 - Store-backed stage-scoped runs certify inline after relay drain/barrier and

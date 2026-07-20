@@ -181,9 +181,10 @@ inputs remain teacher hidden states. Despite its historical name,
   the genuine censored student forward — flow attention mask, full causal
   walk on the student's own states. Single-process: one call per epoch.
   Staged: `_staged_relay_epoch` — stage 0 embeds and runs its blocks, each
-  later stage waits for its predecessor's boundary file (`_RelayFiles`,
-  atomic tmp+rename under `runs/<run>/relay/`), the last stage logs the
-  CE/KL. Boundaries flow card→CPU→card. `v4_relay_every_cohorts > 0`
+  later stage waits for its predecessor's boundary (`_RelayFiles` in
+  node-local `/dev/shm` for co-located neighbors; NCCL/InfiniBand when the
+  edge crosses hosts), and the last stage logs the CE/KL.
+  `v4_relay_every_cohorts > 0`
   enables it; the current implementation fires at EPOCH boundaries (under
   layer_major, sub-epoch sync levels do not exist; an item_major sub-epoch
   cadence needs a sequence protocol and is future work). This is the
@@ -193,10 +194,13 @@ inputs remain teacher hidden states. Despite its historical name,
   epoch zero), the standard-damage battery, and parameter-delta profiles run
   every epoch — in single-process mode directly (same telemetry as v3); in
   staged mode via `_staged_epoch_battery`: every stage publishes its owned
-  adapter tensors per epoch, stage 0 grafts the foreign blocks onto its
-  resident model (harmless — v4 training never reads foreign blocks) and
-  runs the same probes. Stage 0 also runs epoch zero directly (zero-init
-  LoRA = base model).
+  adapter tensors per epoch, then stage 0's subprocess loads the full model,
+  grafts every stage shard, and runs the same probes. Across hosts the
+  enveloped adapter files travel over a battery-only NCCL communicator into
+  stage 0's local `/dev/shm`; its scalar result is published through the
+  launch-scoped TCPStore, so a failed child stops the whole stage set instead
+  of leaving remote ranks in a node-local file wait (or a long-lived NCCL
+  collective).
 - **Locality certification** (`certify_locality_v4`): measured, not assumed —
   sampled (item, layer) backwards must put zero gradient on every foreign
   block and on embed/norm/head. The dispatch refuses to publish a checkpoint
