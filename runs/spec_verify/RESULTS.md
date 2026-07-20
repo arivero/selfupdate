@@ -882,6 +882,56 @@ config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
 4 of 5 models now bit-exact on PPP1 (35B, 26B, 122B, 31B). Only 27B
 remains.
 
+### Qwen3.6-27B PPP1 (clean recipe) — COMPLETE, BIT-EXACT
+
+Source: `runs/spec_27b_v4_ppp1_e1/stage0/metrics.jsonl` (verified on disk;
+config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
+
+| metric | PPP1 (clean) | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9995056985891225 | 0.9995056985891225 | bit-exact |
+| teacher_exact_seq_rate | 0.9859971028488653 | 0.9859971028488653 | bit-exact |
+| exact_seq_match_answers | 2042 | 2042 | exact |
+| answer_token_count | 70807 | 70807 | exact |
+| epoch_seconds | 257.16 | 106.31 (PPP4 stage0) | PPP1 slower (rotate overhead) |
+
+27B's own OOM/retry is resolved as transient contention, not a per-model
+capacity ceiling: the first attempt crashed sharing the node with 35B/122B
+(all three PPP1 captures running simultaneously); the identical clean
+config succeeded solo once those two had finished and freed the node.
+No dense-FFN-activation capacity effect needed as an explanation.
+
+## PHASE 3 — PPP1 sweep COMPLETE: all 5 models bit-exact vs PPP4
+
+| model | teacher_argmax_acceptance | teacher_exact_seq_rate | epoch_seconds PPP1 | epoch_seconds PPP4 (stage0) |
+|---|---:|---:|---:|---:|
+| Qwen3.6-27B (dense) | 0.9995056985891225 | 0.9859971028488653 | 257.16 | 106.31 |
+| gemma-4-31B (dense) | 0.9992767415302627 | 0.9744084983099952 | 167.26 | 140.137 |
+| Qwen3.6-35B-A3B (MoE) | 0.997829486626402 | 0.9261226460647031 | 116.85 | 71.07 |
+| Qwen3.5-122B-A10B (MoE) | 0.9966268015946029 | 0.8947368421052632 | 263.63 | 96.64 |
+| gemma-4-26B-A4B (MoE) | 0.9952869328553885 | 0.8570738773539353 | 109.98 | 68.95 |
+
+**Parallelism-invariance now holds end-to-end across every degree tested in
+this campaign, for all 5 Phase-1 models: PPP8(x-node, 397B only)/PPP4→PPP2→
+PPP1, on both the token-level metric (`teacher_argmax_acceptance`) and the
+answer-level metric (`teacher_exact_seq_rate`).** Every one of the 15
+PPPn-vs-PPP4 comparisons run this campaign (5 models x {PPP2, PPP1} plus the
+0.8B-scale PPP8/PPP4/PPP2/PPP1 tie) is bit-exact; the only non-bit-exact
+PPP1 datapoint anywhere in the campaign was the deliberately-preserved
+35B confounded run (micro_batch:16+adam), which is a batch-shape control,
+not a counterexample. PPP1 is consistently the slowest degree per model
+(single-block weight-rotation overhead, worst for the largest model, 122B,
+at 2.73x its PPP4 stage0 time), exactly the tradeoff `v4_weight_residency:
+rotate` is documented to make — trading epoch time for fitting on one card.
+
+This closes Phase 3 (PPP2/PPP1 sweep) and, with it, the standing goal
+("really finish phase 3": PPP1/PPP2 sweep across all 5 already-tested
+models, full 2071-item epoch, packed efficiently across 8 cards) — genuinely
+complete, not just launched. Remaining campaign items are Phase 2's
+DeepSeek PPP8 training-side NCCL hang (root-caused, not yet repaired) and
+the already-closed-as-blocked 397B/DeepSeek vLLM TP8 legs (capacity ceiling /
+nvcc-driver incompatibility, see above).
+
 **27B PPP1 crashed** on agpuh02 (host pinned-memory OOM inside
 `put_linear`'s `full_inputs.cpu().pin_memory()`, not a GPU OOM) while
 running concurrently with 35B and 122B — three simultaneous PPP1 jobs each
