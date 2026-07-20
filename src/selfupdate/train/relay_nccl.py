@@ -35,6 +35,7 @@ import contextlib
 import datetime
 import hashlib
 import os
+import time
 
 import torch
 
@@ -163,14 +164,6 @@ class NcclBoundaryRelay:
         and nothing else."""
         return self._ready_store.check([f"relay_ready_{pred_stage}"])
 
-    def wait_predecessor_relay_ready(self, pred_stage: int) -> None:
-        """Blocking counterpart for a drain(): really wait for the
-        predecessor to finish its pre-relay traffic rather than posting our
-        irecvs early. Raises (the store's own configured timeout) naming
-        the exact missing dependency, instead of an opaque NCCL watchdog
-        dump many minutes later."""
-        self._ready_store.wait([f"relay_ready_{pred_stage}"])
-
     def _boundary_shape(self, cohort) -> tuple:
         hidden = self._hidden_dims
         return (len(cohort.indices), cohort.T, *hidden)
@@ -295,6 +288,10 @@ class BoundaryTransport:
         self.hosts = parse_stage_hosts()
         self.transport = resolve_relay_transport(cfg)
         self.nccl = None
+        # Shared with the readiness-gate poll below (recv_forward): the same
+        # budget the main NCCL group already uses, so one knob still governs
+        # "how long do we tolerate a stalled peer" everywhere.
+        self._ready_timeout_s = int(cfg.train.v4_nccl_timeout_s)
         if self.transport == "nccl":
             self.nccl = NcclBoundaryRelay(cfg, cohorts, device, launch_id)
 
@@ -374,7 +371,7 @@ class BoundaryTransport:
                 if not self.nccl.predecessor_relay_ready(self.stage - 1):
                     if not block:
                         return None
-                    self.nccl.wait_predecessor_relay_ready(self.stage - 1)
+                    self._wait_predecessor_relay_ready(self.stage - 1)
                 self.nccl.post_recv(epoch)
             return self.nccl.take(epoch, block=block)
         path = self.rf.path(epoch, f"stage{self.stage - 1}.st")
@@ -387,6 +384,34 @@ class BoundaryTransport:
         with contextlib.suppress(OSError):
             path.parent.rmdir()
         return {int(k[1:]): v for k, v in loaded.items()}
+
+    def _wait_predecessor_relay_ready(self, pred_stage: int,
+                                      poll_s: float = 2.0) -> None:
+        """Blocking counterpart to the readiness gate, for a drain(): really
+        wait for the predecessor rather than posting our irecvs early. Polls
+        the (non-blocking) check in a loop instead of a raw
+        ``TCPStore.wait()`` -- a raw wait would block the FULL
+        v4_nccl_timeout_s (up to 1800s) with no chance to notice a
+        sibling's cooperative stop, exactly the failure class drain()
+        exists to survive (the 2026-07-18 e500 finale: a blocked wait that
+        outlived a stopped sibling cost three stages their checkpoints).
+        Mirrors _RelayFiles.wait()'s own stop-aware polling so both halves
+        of the boundary transport honor a stop the same way."""
+        from .online_v4 import _RelayStopped
+        from .stop import stop_requested
+        deadline = time.monotonic() + self._ready_timeout_s
+        while not self.nccl.predecessor_relay_ready(pred_stage):
+            if stop_requested() or (self.rf is not None
+                                    and self.rf.stop_seen()):
+                raise _RelayStopped(
+                    f"waiting for stage {pred_stage} relay-ready")
+            if time.monotonic() > deadline:
+                raise RuntimeError(
+                    f"relay-ready timeout after {self._ready_timeout_s:.0f}s"
+                    f" waiting for stage {pred_stage} to mark its "
+                    "store-fill sends done; it may have crashed or "
+                    "stalled -- inspect its log")
+            time.sleep(poll_s)
 
     def reap_forward(self, block: bool) -> None:
         if self.nccl is not None:
