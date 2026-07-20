@@ -186,6 +186,26 @@ example; it produced no result and was not silently reused.  The 31B and 35B
 merged checkpoints/reports are now complete; their missing 100-item standard
 endpoints are the next GPU work when these probes release cards.
 
+Scientific result (first 16 deterministic examples, four seeds): the v4
+context mismatch is large and depth-growing, not a token-span-location
+failure.  Teacher-local versus fully censored input relative L2 is exactly
+0 at L1, then 0.0497/0.0457/0.0930/0.1437/0.2739/0.6443/0.9342 at
+L2/6/12/24/36/48/60; cosine at L60 is 0.5703.  At L60 the same-target Huber
+loss is 0.02346 under the current teacher-local context but 0.34728 under the
+deployment-matched censored trajectory (14.8x).  This confirms that the
+current local objective becomes progressively easier than the composed
+censored deployment path and explains why falling local loss can coexist with
+weak recall.  Larger seed-71/89/101/113 probes were launched on all four
+agpuh01 GPUs to quantify uncertainty.  Do not interpret or promote lens/vocab
+loss arms as fixes for this mismatch; repair/certify context semantics first.
+
+The first 100-item endpoint attempts failed before GPU load because
+`snapshot_download(local_files_only=True)` treats missing repository metadata
+(README/license/.gitattributes) as an incomplete snapshot despite present
+model artifacts.  GPUs were immediately backfilled with the larger probes;
+the endpoint resolver is under a fail-loud offline staging audit.  Do not
+enable network or bypass required model-file checks as a workaround.
+
 Completed: `campaign40_g26b_sgd` (full report generated and hand-verified).
 Running or queued at write time: `campaign40_q27b` (27B primary, just
 launched), `campaign40_g26b_adam` (26B confirmatory, just launched);
