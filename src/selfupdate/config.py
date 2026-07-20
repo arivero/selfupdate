@@ -331,6 +331,9 @@ class TrainConfig:
     # different times, so "all owned layers current to cohort c" only exists
     # at epoch boundaries anyway. An item_major sub-epoch relay would need a
     # sequence protocol on top of _RelayFiles and is future work.
+    # In v4_battery_mode=distributed, positive means run the exact
+    # synchronized b trajectory at native battery epoch boundaries; the
+    # approximate asynchronous relay is not started in that mode.
     v4_relay_every_cohorts: int = 4
     # Where per-layer teacher tensors live during training. gpu_corpus keeps
     # the active layer's whole-corpus inputs/targets/KV resident (layer_major
@@ -379,13 +382,16 @@ class TrainConfig:
     # moments (the 397B lane). auto: measure owned bytes vs free VRAM at
     # load. Non-resident requires v4_stage_scoped + layer_major.
     v4_weight_residency: str = "resident"  # resident | rotate | auto
-    # How the owner-mandated per-epoch battery runs in staged mode. graft:
+    # How the owner-mandated per-epoch battery runs in staged mode. distributed:
+    # all ranks synchronously evaluate with their live owned blocks over a
+    # dedicated NCCL communicator (supported resident Qwen/Gemma families).
+    # graft:
     # stage 0 grafts every stage's adapters onto its full resident model
     # (impossible under v4_stage_scoped). subprocess: all stages release
     # VRAM at the boundary; stage 0 spawns scripts/v4_battery.py which
     # loads the model device_map=auto over every card, grafts, probes,
     # exits (plan B6). Requires scripts/train.py's SELFUPDATE_V4_CONFIG.
-    v4_battery_mode: str = "graft"  # graft | subprocess
+    v4_battery_mode: str = "graft"  # distributed | graft | subprocess
     # Adam hyperparameters for v4_optimizer=adam (one AdamW per owned block).
     # Defaults reproduce torch AdamW. v4_grad_clip=0 disables clipping; >0
     # clips each block's gradient to that max L2 norm before the step, and the
@@ -415,6 +421,13 @@ class EvalConfig:
     # (tasks_eval generation_batch).  1 = historical per-item loop; measured
     # 2026-07-11: B=1 per-epoch eval was 42-56% of loss-grid arm wall time.
     generation_batch: int = 1
+    # Optional live-PP a' control: autoregress from each training record's
+    # complete uncensored/RAG prompt and compare with its vLLM answer.  Zero
+    # preserves historical battery cost/rows; positive values select the
+    # deterministic first N records. This control is distinct from epoch-zero
+    # censored recall and is currently native-distributed-only.
+    vllm_uncensored_generation_limit: int = 0
+    vllm_uncensored_max_extra_tokens: int = 48
 
 
 @dataclass

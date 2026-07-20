@@ -105,7 +105,10 @@ def _chunks(xs: list, n: int) -> Iterable[list]:
 
 
 @torch.no_grad()
-def _score_pairs(model, tok, pairs: list[tuple[str, str]], device: str) -> list[float]:
+def _score_pairs(model, tok, pairs: list[tuple[str, str]], device: str,
+                 *, backend=None, batch_size: int | None = None) -> list[float]:
+    if backend is not None:
+        return backend.score_pairs(tok, pairs, batch_size or len(pairs))
     texts = [p + c for p, c in pairs]
     # Padding must be right: continuation boundaries below are indexed from
     # the sequence start.  Several fleet tokenizers default to left padding.
@@ -132,7 +135,8 @@ def _score_pairs(model, tok, pairs: list[tuple[str, str]], device: str) -> list[
 
 
 def evaluate_task(model, tok, task: str, limit: int | None, batch_size: int,
-                  device: str, *, keep_examples: bool = True) -> dict:
+                  device: str, *, keep_examples: bool = True,
+                  backend=None) -> dict:
     """Score one fixed multiple-choice subset by option likelihood."""
     examples = task_examples(task, limit)
     flat, owners = [], []
@@ -143,7 +147,8 @@ def evaluate_task(model, tok, task: str, limit: int | None, batch_size: int,
 
     scores_by_example = [[-math.inf] * len(ex["choices"]) for ex in examples]
     for batch, owner_batch in zip(_chunks(flat, batch_size), _chunks(owners, batch_size)):
-        scores = _score_pairs(model, tok, batch, device)
+        scores = _score_pairs(model, tok, batch, device, backend=backend,
+                              batch_size=len(batch))
         for (ex_i, choice_i), score in zip(owner_batch, scores):
             scores_by_example[ex_i][choice_i] = score
 
@@ -170,21 +175,23 @@ def evaluate_task(model, tok, task: str, limit: int | None, batch_size: int,
 
 def evaluate_standard(model, tok, *, tasks: tuple[str, ...] = STANDARD_TASKS,
                       limit: int | None = 100, batch_size: int = 16,
-                      device: str = "cuda", keep_examples: bool = True) -> dict:
+                      device: str = "cuda", keep_examples: bool = True,
+                      backend=None) -> dict:
     """Evaluate a fixed standard suite and restore the caller's model mode."""
     unknown = set(tasks) - set(STANDARD_TASKS)
     if unknown:
         raise ValueError(f"unknown standard task(s): {sorted(unknown)}")
-    was_training = model.training
-    model.eval()
+    was_training = model.training if backend is None else None
+    if backend is None:
+        model.eval()
     try:
         results = {
             task: evaluate_task(model, tok, task, limit, batch_size, device,
-                                keep_examples=keep_examples)
+                                keep_examples=keep_examples, backend=backend)
             for task in tasks
         }
     finally:
-        if was_training:
+        if backend is None and was_training:
             model.train()
     accs = [r["accuracy"] for r in results.values()]
     return {

@@ -57,6 +57,15 @@ def student_prompt(record: dict) -> str:
     return record["shared_prefix"] + record.get("student_stub", "") + record["shared_mid"]
 
 
+def teacher_prompt(record: dict) -> str:
+    """Uncensored/RAG generation prompt used by the explicit teacher control."""
+    if record.get("interleaved"):
+        full = "".join(text for text, _is_privileged in record["interleaved"])
+        return record["shared_prefix"] + full + record["shared_mid"]
+    return (record["shared_prefix"] + record.get("privileged", "")
+            + record["shared_mid"])
+
+
 def normalize_verse(text: str) -> str:
     """Whitespace-insensitive comparison: models often emit markdown-style
     trailing double spaces or blank lines between stanzas; those are

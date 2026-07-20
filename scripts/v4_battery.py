@@ -87,6 +87,7 @@ def main() -> None:
     run_dir = Path(args.run_dir)
     log = RunLog(run_dir, defaults={"battery_subprocess": True})
 
+    load_started = time.perf_counter()
     # device_map="auto" BALANCES the model across every visible card even when
     # it fits one — and battery generation over that split shuttles activations
     # across cards through accelerate hooks EVERY token, which made a 26B eval
@@ -138,20 +139,38 @@ def main() -> None:
     log.log(kind="v4_battery_placement", epoch=args.epoch,
             placement=placement, best_card=best_card,
             best_free_gb=round(best_free / 2**30, 1))
+    model_load_seconds = time.perf_counter() - load_started
+    attach_started = time.perf_counter()
     peft_model = attach_lora(model, cfg.train.lora)
     model = peft_model.get_base_model()
     stack = BlockStack(model)
     stack.freeze_non_blocks()
+    adapter_attach_seconds = time.perf_counter() - attach_started
 
     # Mirror the trainer: solo runs (stages == 1) use run_dir itself
     # as the exchange root; staged run_dirs are one level deeper.
     rf = _RelayFiles(run_dir.parent if args.stages > 1 else run_dir)
     grafted = 0
+    graft_started = time.perf_counter()
+    bounds = [0] + list(cfg.train.v4_stage_splits or []) + [stack.n_layers]
     with torch.no_grad():
         for k in range(args.stages):
             path = rf.wait(rf.path(args.epoch, f"adapters_stage{k}.st"))
-            tensors = rf.read(path, expect_epoch=args.epoch, as_stage=0)
+            tensors = rf.read(path, expect_epoch=args.epoch, as_stage=0,
+                              expect_stage=k)
             path.unlink(missing_ok=True)
+            expected = set()
+            for layer in range(bounds[k] + 1, bounds[k + 1] + 1):
+                expected.update(
+                    f"L{layer:03d}.{name}"
+                    for name, param in
+                    stack.blocks[layer - 1].named_parameters()
+                    if param.requires_grad)
+            if set(tensors) != expected:
+                raise RuntimeError(
+                    f"stage {k} adapter publication mismatch at epoch "
+                    f"{args.epoch}: missing={sorted(expected - set(tensors))[:8]} "
+                    f"unexpected={sorted(set(tensors) - expected)[:8]}")
             for key, value in tensors.items():
                 layer_tag, _, local = key.partition(".")
                 layer = int(layer_tag[1:])
@@ -159,13 +178,25 @@ def main() -> None:
                     stack.blocks[layer - 1].named_parameters())[local]
                 param.copy_(value.to(param.device, param.dtype))
                 grafted += 1
+    adapter_graft_seconds = time.perf_counter() - graft_started
     # Telemetry probes read the device from cfg; with device_map=auto the
     # meaningful anchor is the embedding device (inputs enter there).
     cfg.model.device = str(model.get_input_embeddings().weight.device)
     tok = AutoTokenizer.from_pretrained(cfg.model.name)
     started = time.time()
+    probe_timings = {}
+    provenance = {
+        "evaluation_backend": "reconstructed_full_model_subprocess",
+        "weight_source": "epoch_enveloped_all_stage_adapter_graft",
+        "adapter_epoch": args.epoch,
+        "launch_identity": rf.launch_id,
+        "stage_epoch_synchronized": True,
+        "complete_student_trajectory": True,
+        "foreign_blocks_materialized": True,
+    }
     if args.epoch == 0:
-        _epoch_zero_telemetry(cfg, stack, tok, log, started)
+        _epoch_zero_telemetry(cfg, stack, tok, log, started,
+                              provenance=provenance, timings=probe_timings)
     else:
         baseline = None
         if cfg.eval.standard_damage_every_epochs:
@@ -174,10 +205,18 @@ def main() -> None:
                     source="stage0_metrics_epoch0_standard_eval",
                     standard_limit=baseline["limit"])
         _epoch_end_telemetry(cfg, stack, tok, log, epoch=args.epoch - 1,
-                             baseline=baseline, started_at=started)
+                             baseline=baseline, started_at=started,
+                             provenance=provenance, timings=probe_timings)
     log.log(kind="v4_battery_subprocess", epoch=args.epoch,
             grafted_tensors=grafted, stages=args.stages,
-            seconds=round(time.time() - started, 3))
+            launch_identity=rf.launch_id,
+            adapter_epoch_verified=True,
+            all_stage_adapter_keysets_complete=True,
+            model_load_seconds=round(model_load_seconds, 3),
+            adapter_attach_seconds=round(adapter_attach_seconds, 3),
+            adapter_graft_seconds=round(adapter_graft_seconds, 3),
+            **probe_timings,
+            evaluation_seconds=round(time.time() - started, 3))
 
 
 if __name__ == "__main__":

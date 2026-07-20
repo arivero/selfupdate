@@ -32,10 +32,11 @@ def teacher_output_eval_sums(
     chunk_rows: int = 64,
     answer_lengths: list[int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, int, torch.Tensor, torch.Tensor,
-           torch.Tensor | None]:
+           torch.Tensor | None, torch.Tensor | None]:
     """Return token-summed CE, teacher-to-student KL, token count, the
     argmax-acceptance sums (student and teacher) against the answer ids, and
-    (when ``answer_lengths`` is given) the per-answer exact-match sum.
+    (when ``answer_lengths`` is given) the student and teacher per-answer
+    exact-match sums.
 
     ``student_hidden[i]`` and ``teacher_hidden[i]`` are final, post-norm
     states at the position predicting ``teacher_answer_ids[i]``.  Chunking
@@ -52,11 +53,11 @@ def teacher_output_eval_sums(
 
     ``answer_lengths`` (owner 2026-07-20), if given, is the per-answer row
     count in this call's row order (one entry per answer, summing to the
-    total row count).  The extra return value is then the count of answers
-    where EVERY teacher-argmax token matched its vLLM id — the same
-    reproduction check as ``teacher_argmax_acceptance``, at per-answer
-    ("exact-seq") instead of per-token granularity.  ``None`` when
-    ``answer_lengths`` is omitted, so existing callers are unaffected.
+    total row count).  The extra return values are then the counts of answers
+    where EVERY student-argmax / teacher-argmax token matched its vLLM id —
+    the same reproduction checks as the token-level acceptances, at
+    per-answer ("exact-seq") granularity.  Both are ``None`` when
+    ``answer_lengths`` is omitted.
     """
     if chunk_rows <= 0:
         raise ValueError("chunk_rows must be positive")
@@ -85,6 +86,7 @@ def teacher_output_eval_sums(
     kl_sum = torch.zeros((), dtype=torch.float32, device=device)
     student_match_sum = torch.zeros((), dtype=torch.float32, device=device)
     teacher_match_sum = torch.zeros((), dtype=torch.float32, device=device)
+    student_match_bits = [] if answer_lengths is not None else None
     teacher_match_bits = [] if answer_lengths is not None else None
     count = int(student_hidden.shape[0])
     for first in range(0, count, chunk_rows):
@@ -102,28 +104,35 @@ def teacher_output_eval_sums(
         # log-probability, hence this is KL(teacher || student).
         kl_sum.add_(F.kl_div(
             student_logp, teacher_logp, reduction="sum", log_target=True))
-        student_match_sum.add_(
-            (student_logp.argmax(-1) == ids).sum().float())
+        student_bits = student_logp.argmax(-1) == ids
+        student_match_sum.add_(student_bits.sum().float())
         teacher_bits = teacher_logp.argmax(-1) == ids
         teacher_match_sum.add_(teacher_bits.sum().float())
         if teacher_match_bits is not None:
+            student_match_bits.append(student_bits)
             teacher_match_bits.append(teacher_bits)
         del student_logits, teacher_logits, student_logp, teacher_logp
 
     if ce_sum.requires_grad or kl_sum.requires_grad:
         raise RuntimeError("evaluation-only output metrics acquired a graph")
 
+    student_exact_match_sum = None
     teacher_exact_match_sum = None
     if answer_lengths is not None:
-        full_bits = torch.cat(teacher_match_bits)
+        student_full_bits = torch.cat(student_match_bits)
+        teacher_full_bits = torch.cat(teacher_match_bits)
+        student_exact_match_sum = torch.zeros((), dtype=torch.float32,
+                                              device=device)
         teacher_exact_match_sum = torch.zeros((), dtype=torch.float32,
                                               device=device)
         pos = 0
         for length in answer_lengths:
             if length > 0:
-                teacher_exact_match_sum += full_bits[
+                student_exact_match_sum += student_full_bits[
+                    pos:pos + length].all().float()
+                teacher_exact_match_sum += teacher_full_bits[
                     pos:pos + length].all().float()
             pos += length
 
     return (ce_sum, kl_sum, count, student_match_sum, teacher_match_sum,
-            teacher_exact_match_sum)
+            student_exact_match_sum, teacher_exact_match_sum)

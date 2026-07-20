@@ -664,7 +664,10 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
     kl = torch.zeros((), dtype=torch.float64, device=device)
     s_match = torch.zeros((), dtype=torch.float64, device=device)
     t_match = torch.zeros((), dtype=torch.float64, device=device)
+    s_exact = torch.zeros((), dtype=torch.float64, device=device)
+    t_exact = torch.zeros((), dtype=torch.float64, device=device)
     count = 0
+    answers = 0
     for idx, cohort in enumerate(cohorts):
         view = stack.loss_view(n, finals[idx].to(device))
         rows_v, rows_t, row_ids = [], [], []
@@ -681,15 +684,20 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
                     0, teacher_h.shape[0] - 1)
                 rows_t.append(teacher_h.index_select(0, rel).to(device))
             row_ids.append(cohort.eval_ids[b])
-        c, k, cnt, sm, tm, _ex_unused = teacher_output_eval_sums(
+        answer_lengths = [int(rows.shape[0]) for rows in cohort.eval_rows]
+        c, k, cnt, sm, tm, se, te = teacher_output_eval_sums(
             torch.cat(rows_v).detach().float(),
             torch.cat(rows_t).detach().float(),
-            torch.cat(row_ids).to(device), stack.lm_head)
+            torch.cat(row_ids).to(device), stack.lm_head,
+            answer_lengths=answer_lengths)
         ce += c.double()
         kl += k.double()
         s_match += sm.double()
         t_match += tm.double()
+        s_exact += se.double()
+        t_exact += te.double()
         count += cnt
+        answers += len(answer_lengths)
     log.log(
         kind="student_trajectory_eval", epoch=epoch,
         CE_eval_loss=float(ce.item() / max(count, 1)),
@@ -699,6 +707,11 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
         # reproduction of the uncensored vLLM draft, not pipeline fidelity.
         student_argmax_acceptance=float(s_match.item() / max(count, 1)),
         teacher_argmax_acceptance=float(t_match.item() / max(count, 1)),
+        student_exact_seq_rate=float(s_exact.item() / max(answers, 1)),
+        teacher_exact_seq_rate=float(t_exact.item() / max(answers, 1)),
+        student_exact_seq_match_answers=int(s_exact.item()),
+        teacher_exact_seq_match_answers=int(t_exact.item()),
+        exact_seq_answer_count=answers,
         answer_token_count=count,
         dataset_item_count=len(ds.pairs),
         dataset_coverage="whole_training_set_once_per_call",
@@ -711,6 +724,23 @@ def _relay_eval_tail(cfg, stack, ds, cohorts, cache, device, log,
         aggregation="token_weighted_mean",
         trajectory=trajectory,
         serviced_at_epoch=serviced_at_epoch,
+        inference_semantics="teacher_forced_fixed_sequence_scoring",
+        autoregressive=False,
+        teacher_forced=True,
+        complete_student_trajectory=True,
+        student_state_source="censored_student_trajectory_from_embedding",
+        uses_teacher_hidden_as_student_input_after_embedding=False,
+        teacher_states_used_only_as_scoring_targets=True,
+        stage_epoch_synchronized=(serviced_at_epoch is None),
+        may_combine_different_adapter_epochs=(serviced_at_epoch is not None),
+        requested_adapter_epoch=epoch,
+        final_stage_serviced_at_epoch=serviced_at_epoch,
+        adapter_epoch_exact=(serviced_at_epoch is None),
+        student_kv_state_source=(
+            "current_adapters_enabled_censored_student_full_sequence"),
+        teacher_kv_state_source=(
+            "frozen_adapters_disabled_zero_run_teacher_reference"),
+        acceptance_semantics="argmax_on_teacher_forced_predictor_rows",
         CE_target="teacher_realized_answer_token_ids",
         KL_direction="teacher_to_student",
         vocabulary_head="frozen",
@@ -824,7 +854,8 @@ class _RelayFiles:
         tmp.rename(path)
 
     def read(self, path: Path, *, expect_epoch: int | None = None,
-             as_stage: int | None = None) -> dict:
+             as_stage: int | None = None,
+             expect_stage: int | None = None) -> dict:
         from safetensors import safe_open
         with safe_open(str(path), framework="pt") as handle:
             meta = handle.metadata() or {}
@@ -842,6 +873,11 @@ class _RelayFiles:
                 raise RuntimeError(
                     f"relay envelope at {path} is addressed to stage "
                     f"{addressee!r}, but stage {as_stage} tried to read it")
+            if (expect_stage is not None
+                    and meta.get("from_stage") != str(expect_stage)):
+                raise RuntimeError(
+                    f"relay envelope at {path} claims producer stage "
+                    f"{meta.get('from_stage')!r}, expected {expect_stage}")
             if (expect_epoch is not None
                     and meta.get("epoch") != str(expect_epoch)):
                 raise RuntimeError(
@@ -948,6 +984,16 @@ class _RelayServicer:
                          error=str(err)[:300])
             self.pending.clear()
 
+    def flush_strict(self) -> None:
+        """Drain every submitted relay before synchronous PP evaluation.
+
+        Unlike the end-of-run best-effort drain, an epoch battery may not
+        proceed after abandoning an older boundary: evaluation collectives
+        must start with no outstanding relay P2P or file payload.
+        """
+        self.service(block=True)
+        self.transport.reap_forward(block=True)
+
     def _produce(self, epoch: int, boundaries) -> None:
         out = _relay_segment(self.cfg, self.stack, self.ds, self.cohorts,
                              self.device, self.owned, boundaries,
@@ -985,6 +1031,7 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     import subprocess
     import sys as _sys
 
+    boundary_started = time.perf_counter()
     # Single-process (rotary PPP1) normalizes to stage 0: it publishes,
     # spawns, and has no siblings to ack/notify.
     stage = max(cfg.train.v4_stage, 0)
@@ -997,6 +1044,7 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
     rf.write(rf.path(epoch, f"adapters_stage{stage}.st"),
              _owned_adapter_tensors(stack, owned), stage=stage, epoch=epoch)
     evicted_blocks = []
+    offload_started = time.perf_counter()
     if rotator is not None:
         for L in list(rotator._staged):
             rotator.evict(L)
@@ -1017,6 +1065,7 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                 blk.to("cpu")
                 evicted_blocks.append((L, dev))
     torch.cuda.empty_cache()
+    offload_seconds = time.perf_counter() - offload_started
 
     def _restore_evicted():
         for L, dev in evicted_blocks:
@@ -1103,12 +1152,23 @@ def _subprocess_battery(cfg, stack, log, epoch: int, run_dir: Path,
                 "must not continue silently")
         return baseline
     finally:
+        restore_started = time.perf_counter()
         _restore_evicted()
+        if stage == 0:
+            log.log(
+                kind="v4_battery_boundary_timing", epoch=epoch,
+                evaluation_backend="reconstructed_full_model_subprocess",
+                offload_seconds=round(offload_seconds, 3),
+                restore_seconds=round(
+                    time.perf_counter() - restore_started, 3),
+                total_boundary_seconds=round(
+                    time.perf_counter() - boundary_started, 3))
 
 
 def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                           owned, baseline, started_at: float,
-                          rotator=None, transport=None):
+                          rotator=None, transport=None,
+                          distributed_battery=None, relay=None):
     """Owner-mandated per-epoch battery in staged mode.
 
     Every stage publishes its owned adapter tensors; stage 0 waits for all
@@ -1117,6 +1177,24 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
     the SAME recall/standard-damage probes as v3.  Other stages return
     immediately and keep training.
     """
+    if cfg.train.v4_battery_mode == "distributed":
+        if distributed_battery is None:
+            raise RuntimeError("distributed battery mode has no evaluator")
+        if relay is not None:
+            relay.flush_strict()
+        elif transport is not None:
+            transport.reap_forward(block=True)
+        verdict = distributed_battery.consensus_support()
+        if verdict.supported:
+            return distributed_battery.run_epoch(
+                epoch, baseline=baseline, started_at=started_at)
+        if distributed_battery.is_writer:
+            log.log(kind="distributed_battery_fallback", epoch=epoch,
+                    reason=verdict.reason, model_type=verdict.model_type,
+                    fallback="reconstructed_full_model_subprocess")
+        return _subprocess_battery(
+            cfg, stack, log, epoch, run_dir, owned, baseline,
+            rotator=rotator, transport=transport)
     if cfg.train.v4_battery_mode == "subprocess":
         return _subprocess_battery(cfg, stack, log, epoch, run_dir,
                                    owned, baseline, rotator=rotator,
@@ -1147,13 +1225,28 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                  epoch=epoch)
         return baseline
     n = stack.n_layers
+    bounds = [0] + list(cfg.train.v4_stage_splits or []) + [n]
     with torch.no_grad():
         for other in range(1, stages):
             path = rf.wait(rf.path(epoch, f"adapters_stage{other}.st"))
-            grafted = rf.read(path, expect_epoch=epoch, as_stage=0)
+            grafted = rf.read(path, expect_epoch=epoch, as_stage=0,
+                              expect_stage=other)
             path.unlink(missing_ok=True)
             with contextlib.suppress(OSError):
                 path.parent.rmdir()
+            expected = {
+                f"L{layer:03d}.{name}"
+                for layer in range(bounds[other] + 1,
+                                   bounds[other + 1] + 1)
+                for name, param in
+                stack.blocks[layer - 1].named_parameters()
+                if param.requires_grad
+            }
+            if set(grafted) != expected:
+                raise RuntimeError(
+                    f"stage {other} adapter publication mismatch at epoch "
+                    f"{epoch}: missing={sorted(expected - set(grafted))[:8]} "
+                    f"unexpected={sorted(set(grafted) - expected)[:8]}")
             for key, value in grafted.items():
                 layer_tag, _, local = key.partition(".")
                 layer = int(layer_tag[1:])
@@ -1162,8 +1255,18 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
                         f"stage {other} published block {layer}, owned here")
                 params = dict(stack.blocks[layer - 1].named_parameters())
                 params[local].copy_(value.to(params[local].device))
-    return _epoch_end_telemetry(cfg, stack, tok, log, epoch=epoch - 1,
-                                baseline=baseline, started_at=started_at)
+    return _epoch_end_telemetry(
+        cfg, stack, tok, log, epoch=epoch - 1, baseline=baseline,
+        started_at=started_at,
+        provenance={
+            "evaluation_backend": "live_full_model_grafted_adapters",
+            "weight_source": "epoch_enveloped_stage_adapter_graft",
+            "adapter_epoch": epoch,
+            "launch_identity": rf.launch_id,
+            "stage_epoch_synchronized": True,
+            "complete_student_trajectory": True,
+            "foreign_blocks_materialized": True,
+        })
 
 
 def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
@@ -1694,7 +1797,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     rows_t.append(target[b].index_select(0, r))
                     ids.append(cohort.eval_ids[b])
                     answer_lengths.append(int(r.shape[0]))
-                ce, kl, count, s_match, t_match, t_exact = (
+                ce, kl, count, s_match, t_match, s_exact, t_exact = (
                     teacher_output_eval_sums(
                         torch.cat(rows_v).detach().float(),
                         torch.cat(rows_t).detach().float(),
@@ -1705,6 +1808,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 "kl": torch.zeros((), dtype=torch.float64, device=device),
                 "s_match": torch.zeros((), dtype=torch.float64, device=device),
                 "t_match": torch.zeros((), dtype=torch.float64, device=device),
+                "s_exact": torch.zeros((), dtype=torch.float64, device=device),
                 "t_exact": torch.zeros((), dtype=torch.float64, device=device),
                 "answers": 0,
                 "count": 0})
@@ -1712,6 +1816,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             ev["kl"] += kl.double()
             ev["s_match"] += s_match.double()
             ev["t_match"] += t_match.double()
+            ev["s_exact"] += s_exact.double()
             ev["t_exact"] += t_exact.double()
             ev["answers"] += len(cohort.indices)
             ev["count"] += count
@@ -1741,11 +1846,20 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         boundary_transport.set_hidden_dims(_dims, torch.bfloat16)
     relay = None
     if (not single_process and cfg.train.v4_relay_every_cohorts
+            and cfg.train.v4_battery_mode != "distributed"
             and run_dir is not None):
         relay = _RelayServicer(cfg, stack, ds, cohorts, cache, device, log,
                                run_dir, owned, rotator=rotator,
                                teacher_eval_rows=teacher_eval_rows,
                                transport=boundary_transport)
+    distributed_battery = None
+    if (not single_process
+            and cfg.train.v4_battery_mode == "distributed"):
+        from ..eval.distributed_pp import DistributedBattery
+
+        distributed_battery = DistributedBattery(
+            cfg, stack, tok, log, owned, rotator=rotator, ds=ds,
+            cohorts=cohorts, adapters_off=adapters_off)
     if store_source:
         # Store-fill: ONE relayed teacher pass before any epoch fills this stage's
         # per-(layer, cohort) store; every epoch then runs with zero
@@ -1769,7 +1883,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     started_at = time.time()
     tracker = ParameterDeltaTracker(stack)
     baseline = None
-    if cfg.train.v4_battery_mode == "subprocess":
+    if cfg.train.v4_battery_mode == "distributed":
+        baseline = _staged_epoch_battery(
+            cfg, stack, tok, log, 0, run_dir, owned, baseline, started_at,
+            rotator=rotator, transport=boundary_transport,
+            distributed_battery=distributed_battery, relay=relay)
+    elif cfg.train.v4_battery_mode == "subprocess":
         if int(cfg.eval.every_epochs) > int(cfg.train.epochs):
             # Declared debt, not silence (owner kill-doomed-runs policy,
             # 2026-07-18): a smoke whose eval cadence exceeds its epoch
@@ -1792,7 +1911,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
     elif single_process or cfg.train.v4_stage == 0:
         # Stage 0 runs epoch zero directly: LoRA is zero-init everywhere,
         # so its full resident model IS the base model at this point.
-        baseline = _epoch_zero_telemetry(cfg, stack, tok, log, started_at)
+        baseline = _epoch_zero_telemetry(
+            cfg, stack, tok, log, started_at,
+            provenance={
+                "evaluation_backend": "live_complete_model_in_process",
+                "weight_source": "live_zero_initialized_student",
+                "adapter_epoch": 0,
+                "stage_epoch_synchronized": True,
+                "complete_student_trajectory": True,
+                "foreign_blocks_materialized": True,
+            })
     tracker.log(log, epoch=0, phase="epoch0", started_at=started_at)
     for epoch in range(cfg.train.epochs):
         if stopped:
@@ -1961,13 +2089,14 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 # student-side equals it at zero-init/lr-0.
                 student_argmax_acceptance=float(ev["s_match"].item() / count),
                 teacher_argmax_acceptance=float(ev["t_match"].item() / count),
-                # Per-answer granularity of the same reproduction check (owner
-                # 2026-07-20): exact-seq = fraction of answers where EVERY
-                # teacher-argmax token matched its vLLM id, not just the
-                # token-weighted mean above.
+                # Per-answer granularity of the same reproduction check:
+                # exact-seq means EVERY answer token matched its vLLM id.
+                student_exact_seq_rate=float(
+                    ev["s_exact"].item() / max(ev["answers"], 1)),
                 teacher_exact_seq_rate=float(
                     ev["t_exact"].item() / max(ev["answers"], 1)),
-                exact_seq_match_answers=int(ev["t_exact"].item()),
+                student_exact_seq_match_answers=int(ev["s_exact"].item()),
+                teacher_exact_seq_match_answers=int(ev["t_exact"].item()),
                 exact_seq_answer_count=ev["answers"],
                 answer_token_count=ev["count"],
                 expected_answer_token_count=expected_eval,
@@ -1983,6 +2112,19 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 temporal_semantics=(
                     "streaming_pre_final_block_write_at_each_cohort_visit"),
                 trajectory="teacher_forced_blockwise",
+                inference_semantics="teacher_forced_final_block_diagnostic",
+                autoregressive=False,
+                teacher_forced=True,
+                complete_student_trajectory=False,
+                student_state_source="uncensored_teacher_h[n-1]",
+                uses_teacher_hidden_as_student_input_after_embedding=True,
+                student_block_input_hidden_source=(
+                    "frozen_adapters_disabled_zero_run_teacher_h[n-1]"),
+                attention_kv_state_source=(
+                    "frozen_adapters_disabled_zero_run_teacher_kv"),
+                local_training_law_matched_context=True,
+                acceptance_semantics=(
+                    "argmax_on_teacher_forced_final_block_predictor_rows"),
                 CE_target="teacher_realized_answer_token_ids",
                 KL_direction="teacher_to_student",
                 vocabulary_head="frozen",
@@ -2017,12 +2159,24 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 else:
                     baseline = _epoch_end_telemetry(
                         cfg, stack, tok, log, epoch=epoch, baseline=baseline,
-                        started_at=started_at)
+                        started_at=started_at,
+                        provenance={
+                            "evaluation_backend": (
+                                "live_complete_model_in_process"),
+                            "weight_source": "live_single_process_weights",
+                            "adapter_epoch": epoch + 1,
+                            "stage_epoch_synchronized": True,
+                            "complete_student_trajectory": True,
+                            "foreign_blocks_materialized": True,
+                        })
             elif not stopped:
                 if run_dir is None:
                     raise ValueError("staged pipeline-v4 needs run_dir for "
                                      "the relay/battery exchange")
-                if relay is not None and (
+                native_battery_due = (
+                    cfg.train.v4_battery_mode == "distributed"
+                    and (epoch + 1) % max(int(cfg.eval.every_epochs), 1) == 0)
+                if relay is not None and not native_battery_due and (
                         (epoch + 1) % max(cfg.train.v4_relay_every_cohorts, 1)
                         == 0):
                     relay.submit(epoch + 1)
@@ -2037,7 +2191,9 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                     baseline = _staged_epoch_battery(
                         cfg, stack, tok, log, epoch + 1, run_dir, owned,
                         baseline, started_at, rotator=rotator,
-                        transport=boundary_transport)
+                        transport=boundary_transport,
+                        distributed_battery=distributed_battery,
+                        relay=relay)
                 else:
                     log.log(kind="epoch_battery_skipped", epoch=epoch + 1,
                             reason="staged_battery_at_eval_cadence")
@@ -2055,6 +2211,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         time.perf_counter() - boundary_started, 3))
     if relay is not None and not stopped:
         relay.drain()
+    if distributed_battery is not None:
+        distributed_battery.finalize()
     if boundary_transport is not None:
         # Cross-node: hold ALL ranks here until every stage has finished its
         # relay, so no fast stage tears down the NCCL group under a slow

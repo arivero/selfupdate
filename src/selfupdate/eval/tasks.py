@@ -275,7 +275,8 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
                context_wrong: bool = False,
                rag_tool_prompt: bool = False,
                rag_system_prompt: bool = False,
-               generation_batch: int = 1) -> dict:
+               generation_batch: int = 1,
+               generation_backend=None) -> dict:
     """Run the three-task battery; returns plain per-task accuracies.
 
     ``with_context``: teacher/RAG ceiling mode (owner directive 2026-07-11).
@@ -337,8 +338,9 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
     # This public evaluator is called directly by scripts as well as between
     # epochs by the trainer.  Dropout must never contaminate an evaluation,
     # but a training caller must resume training mode afterwards.
-    was_training = model.training
-    model.eval()
+    was_training = model.training if generation_backend is None else None
+    if generation_backend is None:
+        model.eval()
     try:
         items = build_tasks(poem_path, seed=seed, n_per_task=n_per_task)
         scope = {False: None, True: "full"}.get(with_context, with_context)
@@ -384,9 +386,12 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         # on SentencePiece models such as Mistral.  chatfmt knows whether a
         # model actually has a single-token turn closer and otherwise returns
         # its real EOS id.
-        eos = stop_token_id(tokenizer)
-        device = next(model.parameters()).device
-        questions, prompts, budgets = [], [], []
+        eos = (generation_backend.stop_token_id(tokenizer)
+               if generation_backend is not None
+               else stop_token_id(tokenizer))
+        device = (next(model.parameters()).device
+                  if generation_backend is None else None)
+        questions, prompts, basis_texts = [], [], []
         for i, it in enumerate(items):
             q = QUESTIONS[it["kind"]].format(x=it["x"], n=it["n"])
             questions.append(q)
@@ -418,12 +423,20 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
             # window-scope passage (643-836 tokens) before doing so, far
             # more than a one-line answer's own length. A safe stop budget
             # is sized to the RAG input, not the answer (owner directive).
-            basis_len = (len(tokenizer.encode(contexts[i]))
-                        if contexts is not None
-                        else len(tokenizer.encode(it["reference"])))
-            budgets.append(math.ceil(basis_len * budget_multiplier)
-                           + max_extra_tokens)
-        if generation_batch > 1:
+            basis_texts.append(contexts[i] if contexts is not None
+                               else it["reference"])
+        if generation_backend is not None:
+            basis_lengths = generation_backend.token_lengths(
+                tokenizer, basis_texts, add_special_tokens=True)
+        else:
+            basis_lengths = [len(tokenizer.encode(text))
+                             for text in basis_texts]
+        budgets = [math.ceil(length * budget_multiplier) + max_extra_tokens
+                   for length in basis_lengths]
+        if generation_backend is not None:
+            answers, completion = generation_backend.generate_answers(
+                tokenizer, prompts, budgets, eos, generation_batch)
+        elif generation_batch > 1:
             answers, completion = _generate_answers_batched(
                 model, tokenizer, prompts, budgets, eos, generation_batch)
         else:
@@ -508,5 +521,5 @@ def tasks_eval(model, tokenizer, poem_path: str, seed: int = 17,
         result["examples"] = examples
         return result
     finally:
-        if was_training:
+        if generation_backend is None and was_training:
             model.train()

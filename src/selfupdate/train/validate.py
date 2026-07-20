@@ -135,14 +135,23 @@ def validate_knob_schedule(cfg) -> None:
         if train.v4_loop_order != "layer_major":
             bad.append("weight rotation requires layer_major")
 
-    if train.v4_battery_mode not in ("graft", "subprocess"):
-        bad.append("v4_battery_mode must be graft or subprocess")
+    if train.v4_battery_mode not in ("distributed", "graft", "subprocess"):
+        bad.append("v4_battery_mode must be distributed, graft or subprocess")
     if (train.v4_battery_mode == "subprocess" and train.v4_stage < 0
             and not train.v4_stage_scoped):
         bad.append("resident single-process evaluation must use graft mode")
+    if train.v4_battery_mode == "distributed" and train.v4_stage < 0:
+        bad.append("distributed battery mode requires a staged launch")
+    if train.v4_battery_mode == "distributed" and not train.lora.enabled:
+        bad.append("distributed battery a/b certification requires LoRA")
+    if (cfg.eval.vllm_uncensored_generation_limit < 0
+            or cfg.eval.vllm_uncensored_max_extra_tokens < 0):
+        bad.append("vLLM uncensored evaluation limits must be non-negative")
     if train.v4_stage_scoped:
-        if train.v4_battery_mode != "subprocess":
-            bad.append("stage-scoped evaluation requires subprocess mode")
+        if train.v4_battery_mode not in ("distributed", "subprocess"):
+            bad.append(
+                "stage-scoped evaluation requires distributed or "
+                "subprocess mode")
         if (train.v4_stage < 0
                 and train.v4_weight_residency not in ("rotate", "auto")):
             bad.append("single-process stage-scoped mode is the rotary PPP1 lane")

@@ -246,12 +246,16 @@ def _epoch_recall_corpora(cfg) -> list[tuple[str, str]]:
 
 
 def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
-                      started_at: float) -> None:
+                      started_at: float, backend=None, writer: bool = True,
+                      provenance: dict | None = None,
+                      timings: dict | None = None) -> None:
     """Log corpus-separated fast recall without changing training mode."""
+    probe_started = time.perf_counter()
     results = {
         name: tasks_eval(stack.model, tok, path,
                          n_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
-                         generation_batch=cfg.eval.generation_batch)
+                         generation_batch=cfg.eval.generation_batch,
+                         generation_backend=backend)
         for name, path in _epoch_recall_corpora(cfg)
     }
     summary = {
@@ -267,27 +271,43 @@ def _log_epoch_recall(cfg, stack, tok, log, *, epoch: int, phase: str,
     # truth for new/combined arms.
     primary = next(iter(summary.values()))
     overall = sum(v["overall_word_acc"] for v in summary.values()) / len(summary)
-    log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
-            recall_items_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
-            next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
-            cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
-            vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-            minutes=round((time.time() - started_at) / 60, 1))
-    print(" ".join(
-        f"{name}: {value['overall_word_acc']:.2f}" for name, value in summary.items()))
+    elapsed = time.perf_counter() - probe_started
+    if timings is not None:
+        timings["recall_telemetry_seconds"] = round(elapsed, 3)
+    if writer:
+        log.log(kind="eval", epoch=epoch, phase=phase, recall=summary,
+                recall_items_per_task=EPOCH_RECALL_ITEMS_PER_TASK,
+                next_acc=primary["next_acc"], prev_acc=primary["prev_acc"],
+                cloze_acc=primary["cloze_acc"], overall_word_acc=overall,
+                inference_semantics="autoregressive_greedy_rollout",
+                teacher_forced=False,
+                censorship_state="student_prompt_without_privileged_context",
+                prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
+                **(provenance or {}),
+                vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                vram_reserved_gb=round(
+                    torch.cuda.max_memory_reserved() / 2**30, 2),
+                probe_seconds=round(elapsed, 3),
+                minutes=round((time.time() - started_at) / 60, 1))
+        print(" ".join(
+            f"{name}: {value['overall_word_acc']:.2f}"
+            for name, value in summary.items()))
 
 
 def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
-                         baseline: dict | None, started_at: float) -> dict:
+                         baseline: dict | None, started_at: float,
+                         backend=None, writer: bool = True,
+                         provenance: dict | None = None,
+                         timings: dict | None = None) -> dict:
     """Same-subset fast standard-benchmark probe for epoch-gating a campaign."""
     from ..eval.standard import STANDARD_TASKS, evaluate_standard
 
+    probe_started = time.perf_counter()
     probe = evaluate_standard(
         stack.model, tok, tasks=STANDARD_TASKS,
         limit=cfg.eval.standard_damage_limit,
         batch_size=cfg.eval.standard_damage_batch_size,
-        device=cfg.model.device, keep_examples=False,
+        device=cfg.model.device, keep_examples=False, backend=backend,
     )
     base = baseline or probe
     deltas = {
@@ -296,35 +316,57 @@ def _log_standard_damage(cfg, stack, tok, log, *, epoch: int, phase: str,
     }
     worst_task = min(deltas, key=deltas.get)
     mean_delta = sum(deltas.values()) / len(deltas)
-    log.log(kind="standard_eval", epoch=epoch, phase=phase,
-            standard_tasks={task: probe["tasks"][task]["accuracy"]
-                            for task in STANDARD_TASKS},
-            standard_macro_accuracy=probe["macro_accuracy"],
-            standard_epoch0_delta=mean_delta,
-            standard_worst_task=worst_task,
-            standard_worst_delta=deltas[worst_task],
-            standard_limit=probe["limit"],
-            benchmark_revisions=probe["benchmark_revisions"],
-            vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
-            vram_reserved_gb=round(torch.cuda.max_memory_reserved() / 2**30, 2),
-            minutes=round((time.time() - started_at) / 60, 1))
-    print(f"{phase}: standard {probe['macro_accuracy']:.3f} "
-          f"(Δ {mean_delta:+.3f}; worst {worst_task} {deltas[worst_task]:+.3f})")
+    elapsed = time.perf_counter() - probe_started
+    if timings is not None:
+        timings["standard_telemetry_seconds"] = round(elapsed, 3)
+    if writer:
+        log.log(kind="standard_eval", epoch=epoch, phase=phase,
+                standard_tasks={task: probe["tasks"][task]["accuracy"]
+                                for task in STANDARD_TASKS},
+                standard_macro_accuracy=probe["macro_accuracy"],
+                standard_epoch0_delta=mean_delta,
+                standard_worst_task=worst_task,
+                standard_worst_delta=deltas[worst_task],
+                standard_limit=probe["limit"],
+                benchmark_revisions=probe["benchmark_revisions"],
+                inference_semantics=(
+                    "teacher_forced_normalized_option_log_likelihood"),
+                teacher_forced=True,
+                autoregressive=False,
+                prompt_and_scoring_contract="identical_epoch0_and_post_epoch",
+                **(provenance or {}),
+                vram_gb=round(torch.cuda.max_memory_allocated() / 2**30, 2),
+                vram_reserved_gb=round(
+                    torch.cuda.max_memory_reserved() / 2**30, 2),
+                probe_seconds=round(elapsed, 3),
+                minutes=round((time.time() - started_at) / 60, 1))
+        print(f"{phase}: standard {probe['macro_accuracy']:.3f} "
+              f"(Δ {mean_delta:+.3f}; worst {worst_task} "
+              f"{deltas[worst_task]:+.3f})")
     return base
 
 
-def _epoch_zero_telemetry(cfg, stack, tok, log, started_at: float) -> dict | None:
+def _epoch_zero_telemetry(cfg, stack, tok, log, started_at: float, *,
+                          backend=None, writer: bool = True,
+                          provenance: dict | None = None,
+                          timings: dict | None = None) -> dict | None:
     """Always record recall; gate only the optional standard-damage probe."""
     _log_epoch_recall(cfg, stack, tok, log, epoch=0, phase="epoch0",
-                      started_at=started_at)
+                      started_at=started_at, backend=backend, writer=writer,
+                      provenance=provenance, timings=timings)
     if not cfg.eval.standard_damage_every_epochs:
         return None
     return _log_standard_damage(cfg, stack, tok, log, epoch=0, phase="epoch0",
-                                baseline=None, started_at=started_at)
+                                baseline=None, started_at=started_at,
+                                backend=backend, writer=writer,
+                                provenance=provenance, timings=timings)
 
 
 def _epoch_end_telemetry(cfg, stack, tok, log, *, epoch: int,
-                         baseline: dict | None, started_at: float) -> dict | None:
+                         baseline: dict | None, started_at: float,
+                         backend=None, writer: bool = True,
+                         provenance: dict | None = None,
+                         timings: dict | None = None) -> dict | None:
     """Epoch-boundary probes shared by every epoch-driven schedule: fast
     recall on the configured cadence, plus the same-subset standard-damage probe
     when gating is enabled. Returns the (unchanged) standard baseline."""
@@ -333,12 +375,15 @@ def _epoch_end_telemetry(cfg, stack, tok, log, *, epoch: int,
     if completed % cfg.eval.every_epochs == 0 or last:
         _log_epoch_recall(cfg, stack, tok, log, epoch=completed,
                           phase=f"after_epoch_{completed}",
-                          started_at=started_at)
+                          started_at=started_at, backend=backend,
+                          writer=writer, provenance=provenance,
+                          timings=timings)
     if (cfg.eval.standard_damage_every_epochs
             and (completed % cfg.eval.standard_damage_every_epochs == 0
                  or last)):
         baseline = _log_standard_damage(
             cfg, stack, tok, log, epoch=completed,
             phase=f"after_epoch_{completed}", baseline=baseline,
-            started_at=started_at)
+            started_at=started_at, backend=backend, writer=writer,
+            provenance=provenance, timings=timings)
     return baseline

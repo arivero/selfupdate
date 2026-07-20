@@ -318,7 +318,8 @@ class NcclBoundaryRelay:
                     tmp.write_bytes(payload.cpu().numpy().tobytes())
                     tmp.replace(dst)
                     # Detect a stale/wrong publication before child launch.
-                    rf.read(dst, expect_epoch=epoch, as_stage=0)
+                    rf.read(dst, expect_epoch=epoch, as_stage=0,
+                            expect_stage=src)
                 except Exception as exc:
                     # Keep participating in all remaining broadcasts; an
                     # early rank-0 raise would strand every peer in NCCL.
@@ -497,7 +498,8 @@ class BoundaryTransport:
             if not block:
                 return None
             self.rf.wait(path)
-        loaded = self.rf.read(path, expect_epoch=epoch, as_stage=self.stage)
+        loaded = self.rf.read(path, expect_epoch=epoch, as_stage=self.stage,
+                              expect_stage=self.stage - 1)
         path.unlink(missing_ok=True)
         with contextlib.suppress(OSError):
             path.parent.rmdir()
@@ -566,7 +568,8 @@ class BoundaryTransport:
             return t
         path = self.rf.wait(self.rf.path(
             epoch, f"capture_c{idx:04d}_stage{self.stage - 1}.st"))
-        loaded = self.rf.read(path, expect_epoch=epoch, as_stage=self.stage)
+        loaded = self.rf.read(path, expect_epoch=epoch, as_stage=self.stage,
+                              expect_stage=self.stage - 1)
         path.unlink(missing_ok=True)
         return loaded["h"]
 
@@ -584,6 +587,7 @@ class BoundaryTransport:
         if self.nccl is not None and not self.same_node(self.stages - 1, 0):
             return self.nccl.recv_token(batch, src=self.stages - 1)
         path = self.rf.wait(self.rf.path(0, "_loopback.st"))
-        tok = self.rf.read(path, expect_epoch=0, as_stage=0)["tok"]
+        tok = self.rf.read(path, expect_epoch=0, as_stage=0,
+                           expect_stage=self.stages - 1)["tok"]
         path.unlink(missing_ok=True)
         return tok.to(self.device)
