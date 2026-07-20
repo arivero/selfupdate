@@ -839,3 +839,39 @@ confounded pair above is a direct, matched-model demonstration that the
 recipe correction (holding micro_batch/optimizer fixed) is exactly what
 made the difference between a near-miss and a bit-exact result. 27B and
 122B PPP1 (agpuh02) and 26B/31B PPP1 (agpuh01) still in flight.
+
+### gemma-4-26B-A4B PPP1 (clean recipe) — COMPLETE, BIT-EXACT
+
+Source: `runs/spec_26b_v4_ppp1_e1/stage0/metrics.jsonl` (verified on disk;
+config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
+
+| metric | PPP1 (clean) | PPP4 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9952869328553885 | 0.9952869328553885 | bit-exact |
+| teacher_exact_seq_rate | 0.8570738773539353 | 0.8570738773539353 | bit-exact |
+| exact_seq_match_answers | 1775 | 1775 | exact |
+| answer_token_count | 90387 | 90387 | exact |
+| epoch_seconds | 109.98 | 68.95 (PPP4 stage0) | PPP1 slower (rotate overhead) |
+
+### Qwen3.5-122B-A10B PPP1 (clean recipe) — COMPLETE, BIT-EXACT
+
+Source: `runs/spec_122b_v4_ppp1_e1/stage0/metrics.jsonl` (verified on disk;
+config confirms `micro_batch: 64`, `v4_optimizer: immediate_sgd`).
+
+| metric | PPP1 (clean) | PPP4/PPP2 reference | match |
+|---|---:|---:|---|
+| teacher_argmax_acceptance | 0.9966268015946029 | 0.9966268015946029 | bit-exact |
+| teacher_exact_seq_rate | 0.8947368421052632 | 0.8947368421052632 | bit-exact |
+| exact_seq_match_answers | 1853 | 1853 | exact |
+| answer_token_count | 101091 | 101091 | exact |
+| epoch_seconds | 263.63 | 96.64 (PPP4 stage0) | PPP1 slower (rotate overhead, largest model) |
+
+**27B PPP1 crashed** on agpuh02 (host pinned-memory OOM inside
+`put_linear`'s `full_inputs.cpu().pin_memory()`, not a GPU OOM) while
+running concurrently with 35B and 122B — three simultaneous PPP1 jobs each
+staging full per-owned-layer captures to pinned host memory exhausted host
+RAM/pinned-memory headroom, exactly the risk flagged in the corrected
+`122b_v4_spec_ppp1.yaml`'s own comment about `cpu_stream` residency under
+concurrent sibling PPP1 stores. Not a config error — relaunching alone now
+that 35B/122B have both exited and freed their host allocations. 31B PPP1
+(agpuh01) still running.
