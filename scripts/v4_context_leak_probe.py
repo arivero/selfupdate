@@ -100,6 +100,9 @@ def main() -> None:
                     help="comma-separated 1-based block numbers")
     ap.add_argument("--limit", type=int, default=32)
     ap.add_argument("--seed", type=int, default=17)
+    ap.add_argument(
+        "--hidden-loss", default="",
+        help="optional diagnostic-only loss override (no config/run write)")
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -107,6 +110,9 @@ def main() -> None:
         raise SystemExit("--limit must be positive")
 
     cfg = load_config(args.config, args.experiment)
+    configured_hidden_loss = cfg.train.hidden_loss
+    if args.hidden_loss:
+        cfg.train.hidden_loss = args.hidden_loss
     if cfg.train.pipeline_version != 4 or cfg.mask.compaction != "flow_mask":
         raise SystemExit("probe requires pipeline-v4 with mask.compaction=flow_mask")
     if cfg.train.v4_stage_scoped or cfg.train.v4_stage >= 0:
@@ -265,6 +271,8 @@ def main() -> None:
         "provenance": {
             **_git_provenance(), "config": args.config,
             "experiment": args.experiment, "model": cfg.model.name,
+            "configured_hidden_loss": configured_hidden_loss,
+            "diagnostic_hidden_loss_override": args.hidden_loss or None,
             "dataset": cfg.data.examples_path, "seed": args.seed,
             "selected_indices": indices, "selected_example_ids": [
                 ds.pairs[i].example_id for i in indices],
