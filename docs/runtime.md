@@ -112,8 +112,13 @@ parameter-delta probes are likewise evaluation-only.
 
 ## Locality, numerical, and publication gates
 
-- `certify_locality_v4` requires exact-zero gradients on foreign blocks and on
-  embedding/norm/head parameters.
+- Store-backed stage-scoped runs certify inline after relay drain/barrier and
+  before Adam-state or checkpoint publication, while their exact fill-once
+  entries and typed contexts are still alive.  The gate checks every owned
+  layer for finite positive local signal, exact-zero gradients on every other
+  real block and the frozen vocabulary/lens stack, and byte-exact preservation
+  of adapters and optimizer state.  Cache/online sources retain the legacy
+  `certify_locality_v4` path.
 - `scripts/compare_v4_shard_numerics.py` checks that independent ownership
   reproduces corresponding single-process updates.
 - Each stage writes a manifest; `scripts/merge_v4_adapters.py` takes every

@@ -60,16 +60,22 @@ def train_layerwise(cfg: ExperimentConfig) -> Path:
     from .online_v4 import _owned_range, certify_locality_v4, train_online_v4
 
     with cooperative_stop_signals():
-        stopped = train_online_v4(
+        stopped, locality = train_online_v4(
             cfg, stack, tokenizer, log, cache,
             peft_model=runtime.peft_model, run_dir=run_dir)
-        locality = certify_locality_v4(
-            cfg, stack, tokenizer, cache, run_dir,
-            peft_model=runtime.peft_model)
+        if locality is None:
+            locality = certify_locality_v4(
+                cfg, stack, tokenizer, cache, run_dir,
+                peft_model=runtime.peft_model)
         cert_keys = (
             "items", "gradient_contract", "final_logit_training",
             "local_grad_norm", "cross_block_leak_grad_norm",
             "frozen_vocab_grad_norm", "local_signal_present_in_every_block",
+            "certificate_source", "checked_layers", "probes_used",
+            "per_layer",
+            "adapter_tensors_byte_exact_unchanged",
+            "optimizer_state_byte_exact_unchanged",
+            "rotation_state_unchanged",
             "passed", "skipped", "owner_note",
         )
         log.log(

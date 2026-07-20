@@ -82,3 +82,42 @@ SGD at `3e-6`; consequently this is explicitly an objective-plus-scale screen.
 At most one objective can be promoted to a 40-epoch confirmation, and only if
 its whole-set CE/KL, all recall corpora, damage, gradient distribution, and
 LoRA-delta scale jointly pass the documented rule.
+
+## Locality certification repair
+
+The old end-of-run certifier could not run after a stage-scoped fill-once
+store job because foreign blocks are meta-loaded and the ephemeral store had
+already gone out of scope.  It therefore emitted
+`stage_scoped_store_certification_pending_relay` and allowed a checkpoint as
+declared debt.  The repaired path certifies inline after relay drain/barrier,
+while every exact store entry and typed attention context is still alive.
+It runs the same local forward/loss helper as training, checks every owned
+layer for finite positive local signal and exact-zero foreign/frozen-stack
+gradients, and proves adapter and Adam state bytes are unchanged.  Missing
+store entries or a failed cert withhold publication.  Reports accept the new
+evidence only when every configured stage is present, passed, and its checked
+layers exactly cover its declared ownership; historical skipped rows remain
+uncertified.  CPU contract checks pass; the 31B/35B tree-regression smokes are
+the first GPU admission gate before this change is used by a full arm.
+
+## 122B cross-node preflight — NO-GO as of 2026-07-20 11:50 CEST
+
+Do not launch `campaign40_q122b` yet.  Read-only preflight found two technical
+blockers hidden by the earlier handoff:
+
+- Cross-node subprocess-battery acknowledgement/done files are under each
+  node's private `/dev/shm`.  Stage 0 on agpuh01 cannot observe stage 4--7
+  acknowledgements written on agpuh02.  The prior 122B eval-in attempt proves
+  this failure: all stages filled their stores but the run produced zero
+  epochs and stopped waiting for `battery_ack_stage4.st` at epoch zero.  The
+  NCCL readiness gate fixes training-boundary transport, not battery control.
+- The campaign config inherits `micro_batch: 32` and
+  `v4_capture_micro_batch: 0`, not the claimed 16/2 recipe.  Prior PPP8 SGD
+  attempts at this shape OOMed stage 7 during backward.  Pin 16/2 explicitly
+  and smoke it; do not call the uncompleted eval-in run proof.
+
+Both nodes otherwise have matching 122B model snapshots and byte-identical
+2,071-item teacher indexes, healthy pinned runtimes/IB, adequate RAM and
+`/dev/shm`, and no 122B lease or run directory.  Correct stale launcher/config
+comments that still claim a shared-Lustre relay: the real file relay is
+node-local `/dev/shm`, while cross-node tensor transport is NCCL/IB.

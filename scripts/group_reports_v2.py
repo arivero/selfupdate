@@ -341,7 +341,7 @@ def _write_group(name: str, value: str, manifests: list[dict],
         for row in noneligible.itertuples(index=False)
     ] or ["No missing or uncertified discovered runs."])
     md = [
-        f"# Pipeline-v2 grouped report — {name}: {value}", "",
+        f"# Grouped training report v2 — {name}: {value}", "",
         f"Inclusion rule: published `report_manifest.json`, campaign "
         f"`{campaign}`, "
         f"strict-local certification passed, `{name}={value}`.", "",
@@ -360,7 +360,7 @@ def _write_group(name: str, value: str, manifests: list[dict],
     tmp.replace(out / "report.md")
     pdf_path = write_grouped_pdf(
         out / "report.pdf",
-        title=f"Pipeline-v2 grouped report — {name}: {value}",
+        title=f"Grouped training report v2 — {name}: {value}",
         inclusion=[
             f"Campaign: {campaign}",
             f"Grouping: {name}={value}",

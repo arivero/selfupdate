@@ -727,6 +727,81 @@ def _signal_frame(signal: dict) -> pd.DataFrame:
     ]).sort_values("layer") if signal else pd.DataFrame()
 
 
+def _inline_locality_signal(
+        rows: list[dict], expected_stages: int | None = None) -> dict:
+    """Adapt complete live-store cert rows to the legacy signal schema.
+
+    A partial staged run is never promoted: every observed stage must have
+    exactly one contract and exactly one passed, non-skipped certificate, and
+    both ``checked_layers`` and ``per_layer`` must exactly cover that stage's
+    declared owned range.
+    """
+    stages = {row.get("_stage") for row in rows}
+    if not stages:
+        return {}
+    if expected_stages is not None and stages != set(range(expected_stages)):
+        return {}
+    certs = []
+    per_block = {}
+    all_owned = set()
+    for stage in stages:
+        stage_rows = [row for row in rows if row.get("_stage") == stage]
+        contracts = [row for row in stage_rows
+                     if row.get("kind") == "pipeline_v4_contract"]
+        stage_certs = [row for row in stage_rows
+                       if row.get("kind") == "locality_certification"]
+        if len(contracts) != 1 or len(stage_certs) != 1:
+            return {}
+        owned = contracts[0].get("owned_blocks")
+        cert = stage_certs[0]
+        if (not owned or len(owned) != 2 or cert.get("skipped")
+                or not cert.get("passed")):
+            return {}
+        expected = set(range(int(owned[0]), int(owned[1]) + 1))
+        try:
+            checked = {int(layer) for layer in cert.get("checked_layers", [])}
+            layer_values = {int(layer): value for layer, value in
+                            (cert.get("per_layer", {}) or {}).items()}
+        except (TypeError, ValueError):
+            return {}
+        if checked != expected or set(layer_values) != expected:
+            return {}
+        if all_owned.intersection(expected):
+            return {}
+        all_owned.update(expected)
+        for layer, values in layer_values.items():
+            if not isinstance(values, dict):
+                return {}
+            per_block[str(layer)] = {
+                "local_grad_norm": values.get("local_grad_norm",
+                                               float("nan")),
+                "max_foreign_grad_norm": values.get(
+                    "cross_block_grad_norm", float("nan")),
+                "frozen_vocab_grad_norm": values.get(
+                    "frozen_vocab_grad_norm", float("nan")),
+            }
+        certs.append(cert)
+    if not all_owned or all_owned != set(range(1, max(all_owned) + 1)):
+        return {}
+    return {
+        "passed": True,
+        "items": sum(int(cert.get("items", 0)) for cert in certs),
+        "local_grad_norm": sum(
+            float(cert.get("local_grad_norm", 0.0)) ** 2
+            for cert in certs) ** 0.5,
+        "cross_block_leak_grad_norm": sum(
+            float(cert.get("cross_block_leak_grad_norm", 0.0)) ** 2
+            for cert in certs) ** 0.5,
+        "frozen_vocab_grad_norm": sum(
+            float(cert.get("frozen_vocab_grad_norm", 0.0)) ** 2
+            for cert in certs) ** 0.5,
+        "teacher_target_source": "live_fill_once_store",
+        "teacher_cache_hash": "stage_local_store",
+        "per_block": per_block,
+        "_report_source": "metrics locality_certification rows",
+    }
+
+
 def _signal_asset(frame: pd.DataFrame, out_dir: Path) -> Path | None:
     if frame.empty:
         return None
@@ -811,8 +886,13 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
     if standard.empty:
         standard, full_standard = full_standard, pd.DataFrame()
     signal_path = run_dir / "eval" / "signal_attribution.json"
+    expected_stages = (len(train.get("v4_stage_splits", []) or []) + 1
+                       if metrics.stage_scoped else None)
     signal = (json.loads(signal_path.read_text(encoding="utf-8"))
-              if signal_path.exists() else {})
+              if signal_path.exists() else
+              _inline_locality_signal(rows, expected_stages))
+    signal_source = signal.get(
+        "_report_source", "eval/signal_attribution.json") if signal else ""
     signal_frame = _signal_frame(signal)
     if not loss.empty: loss.to_csv(out_dir / "layer_loss_by_epoch.csv", index=False)
     if not delta.empty: delta.to_csv(out_dir / "parameter_delta_by_epoch.csv", index=False)
@@ -1206,7 +1286,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
              if not signal_frame.empty else ""),
         "", ("Exact per-layer values: "
              "[`signal_attribution_by_layer.csv`](eval/report_v2/signal_attribution_by_layer.csv); "
-             "source artifact: [`signal_attribution.json`](eval/signal_attribution.json)."
+             f"source: `{signal_source}`."
              if signal else ""),
         "", "## Coverage and missing evidence", "",
     ]
@@ -1326,7 +1406,7 @@ def generate(run_dir: Path, allow_incomplete: bool = False) -> Path:
                 "stageK/metrics.jsonl (stage0's config used as the "
                 "representative snapshot), "
                 if metrics.stage_scoped else "config.yaml, metrics.jsonl, ")
-             + "eval/report_v2/, and eval/signal_attribution.json when present."),
+             + "eval/report_v2/, and the declared signal-certification source."),
         ],
         figures=figures,
     )

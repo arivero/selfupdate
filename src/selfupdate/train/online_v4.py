@@ -1082,8 +1082,13 @@ def _staged_epoch_battery(cfg, stack, tok, log, epoch: int, run_dir: Path,
 
 
 def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
-                    run_dir: Path | None = None) -> bool:
-    """Run the v4 walk.  Returns True when stopped cooperatively."""
+                    run_dir: Path | None = None) -> tuple[bool, dict | None]:
+    """Run the v4 walk.
+
+    Returns ``(stopped, inline_locality)``.  The second member is populated
+    only when a fill-once store is still live at the end of training; other
+    teacher sources use the legacy post-walk certifier in ``layerwise``.
+    """
     if cfg.train.pipeline_version != 4:
         raise ValueError("train_online_v4 requires pipeline_version=4")
     if cfg.train.max_steps:
@@ -1377,9 +1382,15 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         moe_ctrl.set_maps(row_map, row_mask)
         return moe_ctrl.student_phase()
 
-    def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
-                          epoch_lr: float, capture: dict | None = None
-                          ) -> None:
+    def local_forward_loss(layer: int, cohort_idx: int,
+                           capture: dict | None = None,
+                           *, measure_time: bool = False) -> dict:
+        """Run the exact local student route and construct its summed loss.
+
+        Optimizer writes, clipping, gradient clearing and telemetry are kept
+        outside this helper.  The live-store locality certificate therefore
+        exercises precisely the same typed context and loss path as training.
+        """
         cohort = cohorts[cohort_idx]
         layer_type = _v4_layer_type(stack, layer)
         moe_step = moe_ctrl is not None and layer in moe_ctrl.adapters
@@ -1399,12 +1410,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                             < torch.tensor(cohort.t_len,
                                            device=device)[:, None]
                             ).reshape(-1)
-                ctx = moe_student_ctx(layer, cohort, row_map, row_mask)
+                ctx = moe_student_ctx(layer, cohort_idx, row_map, row_mask)
             else:
                 ctx = contextlib.nullcontext()
-            torch.cuda.synchronize(device)
-            epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
-                                      + time.perf_counter() - prep_started)
+            if measure_time:
+                torch.cuda.synchronize(device)
+                prep_seconds = time.perf_counter() - prep_started
             exec_started = time.perf_counter()
             with ctx:
                 out_full = stack.run_block(
@@ -1449,12 +1460,12 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 row_map = (torch.arange(Bq, device=device)[:, None]
                            * cohort.T + cohort.qpos_dev).reshape(-1)
                 row_mask = (cohort.qpos_dev > 0).reshape(-1)
-                ctx = moe_student_ctx(layer, cohort, row_map, row_mask)
+                ctx = moe_student_ctx(layer, cohort_idx, row_map, row_mask)
             else:
                 ctx = contextlib.nullcontext()
-            torch.cuda.synchronize(device)
-            epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
-                                      + time.perf_counter() - prep_started)
+            if measure_time:
+                torch.cuda.synchronize(device)
+                prep_seconds = time.perf_counter() - prep_started
             exec_started = time.perf_counter()
             with ctx:
                 out = stack.run_block(
@@ -1482,6 +1493,32 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             # regularizer joins THIS step's backward (drained inside the
             # phase so the graph never leaks across steps).
             summed = summed + router_extra
+        return {
+            "cohort": cohort,
+            "out": out,
+            "view": view,
+            "target": target,
+            "mean_loss": mean_loss,
+            "summed": summed,
+            "cells": flat_view.shape[0],
+            "prep_seconds": prep_seconds if measure_time else 0.0,
+            "exec_started": exec_started,
+        }
+
+    def layer_cohort_step(layer: int, cohort_idx: int, epoch_state: dict,
+                          epoch_lr: float, capture: dict | None = None
+                          ) -> None:
+        result = local_forward_loss(
+            layer, cohort_idx, capture, measure_time=True)
+        cohort = result["cohort"]
+        out = result["out"]
+        view = result["view"]
+        target = result["target"]
+        mean_loss = result["mean_loss"]
+        summed = result["summed"]
+        cells = result["cells"]
+        epoch_state["_prep_s"] = (epoch_state.get("_prep_s", 0.0)
+                                  + result["prep_seconds"])
         params = _v4_clear_block_grads(stack, layer)
         summed.backward()
         if cfg.train.v4_optimizer == "adam":
@@ -1504,15 +1541,16 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             grad_norm = _v4_immediate_sgd(params, epoch_lr)
         torch.cuda.synchronize(device)
         epoch_state["_exec_s"] = (epoch_state.get("_exec_s", 0.0)
-                                  + time.perf_counter() - exec_started)
+                                  + time.perf_counter()
+                                  - result["exec_started"])
         state = epoch_state.setdefault(layer, {
             "loss_sum": torch.zeros((), dtype=torch.float64, device=device),
             "cells": 0,
             "grad_sq": torch.zeros((), dtype=torch.float64, device=device),
             "writes": 0,
         })
-        state["loss_sum"] += mean_loss.detach().double() * flat_view.shape[0]
-        state["cells"] += flat_view.shape[0]
+        state["loss_sum"] += mean_loss.detach().double() * cells
+        state["cells"] += cells
         state["grad_sq"] += grad_norm.double().square()
         state["writes"] += 1
         try:
@@ -1686,7 +1724,8 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                         break
                 if rotator is not None:
                     rotator.evict(layer)
-                if residency == "gpu_corpus" and len(owned) > 1:
+                if (not store_source and residency == "gpu_corpus"
+                        and len(owned) > 1):
                     free, _ = torch.cuda.mem_get_info(device)
                     if free < 8 << 30:
                         tensors.drop_layer(layer)
@@ -1911,7 +1950,13 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         # relay, so no fast stage tears down the NCCL group under a slow
         # sibling still mid-relay (task #24). No-op for single-node (files).
         boundary_transport.barrier()
-    if optimizers and run_dir is not None:
+    inline_locality = None
+    if store_source:
+        inline_locality = _certify_live_store_locality(
+            cfg, stack, tensors, cohorts, owned, local_forward_loss,
+            loss_fn, optimizers, rotator)
+    if (optimizers and run_dir is not None
+            and (inline_locality is None or inline_locality["passed"])):
         # Warm starts keep momentum (plan B0): per-block AdamW state,
         # CPU-serialized, outside the epoch loop (no hot-loop syncs).
         ckpt = Path(run_dir) / "checkpoint"
@@ -1922,7 +1967,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             torch.save(payload, ckpt / "adam_moments.pt")
             log.log(kind="v4_adam_moments", action="saved",
                     layers=sorted(payload))
-    return stopped
+    return stopped, inline_locality
 
 
 def _cpu_state_dict(opt) -> dict:
@@ -1938,6 +1983,249 @@ def _cpu_state_dict(opt) -> dict:
             return [mv(v) for v in x]
         return x
     return mv(opt.state_dict())
+
+
+def _tensor_bytes(tensor: torch.Tensor) -> torch.Tensor:
+    """Small exact snapshot used only by the end-of-run locality gate."""
+    return (tensor.detach().contiguous().reshape(-1).view(torch.uint8)
+            .cpu().clone())
+
+
+def _certify_live_store_locality(cfg, stack, tensors, cohorts, owned,
+                                 local_forward_loss, loss_fn, optimizers,
+                                 rotator) -> dict:
+    """Certify locality while fill-once stage-local teacher data is alive.
+
+    This runs after the validation relay and cross-node barrier, but before
+    Adam serialization and checkpoint publication.  It performs one backward
+    for every owned layer against cohort zero's exact stored input, target and
+    typed context.  No optimizer, clipping, write, or training counter is
+    touched.
+    """
+    if not cohorts:
+        raise RuntimeError("live-store locality certification has no cohorts")
+    missing = [(layer, cohort_idx)
+               for layer in owned for cohort_idx in range(len(cohorts))
+               if tensors.get(layer, cohort_idx) is None]
+    if missing:
+        raise RuntimeError(
+            "live-store locality certification refused: fill-once store is "
+            f"missing {len(missing)} entries, first={missing[:8]}")
+
+    block_params = {
+        layer: [p for p in stack.block_params(layer) if not p.is_meta]
+        for layer in range(1, stack.n_layers + 1)
+    }
+    trainable = []
+    for layer in owned:
+        for name, param in stack.blocks[layer - 1].named_parameters():
+            if param.requires_grad and not param.is_meta:
+                trainable.append((f"block{layer}.{name}", param))
+    if not trainable:
+        raise RuntimeError(
+            "live-store locality certification found no trainable adapters")
+
+    def unique_params(modules):
+        out, seen = [], set()
+        for module in modules:
+            if module is None:
+                continue
+            for param in module.parameters():
+                if id(param) not in seen and not param.is_meta:
+                    seen.add(id(param))
+                    out.append(param)
+        return out
+
+    frozen_modules = [stack.embed_tokens, stack.final_norm, stack.lm_head,
+                      getattr(stack, "hc_head", None)]
+    translators = getattr(loss_fn, "translators", None)
+    if translators is not None:
+        frozen_modules.append(translators)
+    frozen_params = unique_params(frozen_modules)
+    all_clear_params = unique_params(
+        list(stack.blocks) + frozen_modules)
+
+    adapter_before = {
+        name: (tuple(param.shape), param.dtype, _tensor_bytes(param))
+        for name, param in trainable
+    }
+
+    def optimizer_signature():
+        sig = []
+        for layer, opt in sorted(optimizers.items()):
+            groups = []
+            for group in opt.param_groups:
+                groups.append(tuple(sorted(
+                    (key, repr(value)) for key, value in group.items()
+                    if key != "params")))
+            state = []
+            for param, values in opt.state.items():
+                entries = []
+                for key, value in sorted(values.items()):
+                    if torch.is_tensor(value):
+                        entries.append((key, tuple(value.shape), value.dtype,
+                                        str(value.device),
+                                        _tensor_bytes(value)))
+                    else:
+                        entries.append((key, repr(value)))
+                state.append((id(param), tuple(entries)))
+            sig.append((layer, tuple(groups), tuple(state)))
+        return sig
+
+    def signatures_equal(left, right):
+        if len(left) != len(right):
+            return False
+        for a, b in zip(left, right):
+            if len(a) != len(b):
+                return False
+            for av, bv in zip(a, b):
+                if torch.is_tensor(av) or torch.is_tensor(bv):
+                    if not (torch.is_tensor(av) and torch.is_tensor(bv)
+                            and torch.equal(av, bv)):
+                        return False
+                elif isinstance(av, tuple) and isinstance(bv, tuple):
+                    if not signatures_equal([av], [bv]):
+                        return False
+                elif av != bv:
+                    return False
+        return True
+
+    optimizer_before = optimizer_signature()
+    rotation_before = None
+    if rotator is not None:
+        rotation_before = (
+            rotator.stall_seconds, rotator.h2d_bytes, rotator.pages,
+            tuple(sorted(rotator._staged)), tuple(sorted(rotator._inflight)))
+
+    local_sq = 0.0
+    cross_sq = 0.0
+    vocab_sq = 0.0
+    cross_exact_zero = True
+    vocab_exact_zero = True
+    per_layer = {}
+    result = None
+    try:
+        for layer in owned:
+            if rotator is not None:
+                rotator.activate(layer)
+            try:
+                probe_norms = []
+                finite_positive = False
+                layer_cross_sq = 0.0
+                frozen_layer_sq = 0.0
+                for cohort_idx in range(min(4, len(cohorts))):
+                    for param in all_clear_params:
+                        param.grad = None
+                    # build_layer_cohort inside this shared route obtains the
+                    # immutable typed store entry and raises if absent.
+                    result = local_forward_loss(layer, cohort_idx)
+                    result["summed"].backward()
+                    probe_sq = 0.0
+                    for param in block_params[layer]:
+                        if param.grad is not None:
+                            grad = param.grad.detach().float()
+                            probe_sq += float(grad.square().sum().item())
+                    local_norm = probe_sq ** 0.5
+                    probe_norms.append(local_norm)
+
+                    probe_cross_sq = 0.0
+                    for foreign, params in block_params.items():
+                        if foreign == layer:
+                            continue
+                        for param in params:
+                            if param.grad is not None:
+                                grad = param.grad.detach().float()
+                                cross_exact_zero &= bool(
+                                    torch.count_nonzero(grad).item() == 0)
+                                probe_cross_sq += float(
+                                    grad.square().sum().item())
+                    cross_sq += probe_cross_sq
+                    layer_cross_sq += probe_cross_sq
+                    probe_frozen_sq = 0.0
+                    for param in frozen_params:
+                        if param.grad is not None:
+                            grad = param.grad.detach().float()
+                            vocab_exact_zero &= bool(
+                                torch.count_nonzero(grad).item() == 0)
+                            probe_frozen_sq += float(
+                                grad.square().sum().item())
+                    vocab_sq += probe_frozen_sq
+                    frozen_layer_sq += probe_frozen_sq
+                    finite_positive = bool(
+                        local_norm > 0.0 and torch.isfinite(
+                            torch.tensor(local_norm)).item())
+                    result = None
+                    if finite_positive:
+                        break
+                if finite_positive:
+                    local_sq += local_norm ** 2
+                per_layer[str(layer)] = {
+                    "local_grad_norm": local_norm,
+                    "finite_positive": finite_positive,
+                    "probes_used": len(probe_norms),
+                    "probe_cohort_indices": list(range(len(probe_norms))),
+                    "probe_local_grad_norms": probe_norms,
+                }
+                per_layer[str(layer)]["cross_block_grad_norm"] = (
+                    layer_cross_sq ** 0.5)
+                per_layer[str(layer)]["frozen_vocab_grad_norm"] = (
+                    frozen_layer_sq ** 0.5)
+            finally:
+                result = None
+                for param in all_clear_params:
+                    param.grad = None
+                if rotator is not None:
+                    rotator.evict(layer)
+    finally:
+        for param in all_clear_params:
+            param.grad = None
+        if rotator is not None and rotation_before is not None:
+            # activate/evict restores placement and Adam moment devices;
+            # restore observability counters so certification is invisible to
+            # training telemetry and warm-start state.
+            rotator.stall_seconds = rotation_before[0]
+            rotator.h2d_bytes = rotation_before[1]
+            rotator.pages = rotation_before[2]
+
+    adapter_unchanged = True
+    for name, param in trainable:
+        shape, dtype, before = adapter_before[name]
+        adapter_unchanged &= (
+            tuple(param.shape) == shape and param.dtype == dtype
+            and torch.equal(_tensor_bytes(param), before))
+    optimizer_unchanged = signatures_equal(
+        optimizer_before, optimizer_signature())
+    rotation_unchanged = True
+    if rotator is not None and rotation_before is not None:
+        rotation_unchanged = (
+            tuple(sorted(rotator._staged)) == rotation_before[3]
+            and tuple(sorted(rotator._inflight)) == rotation_before[4]
+            and rotator.stall_seconds == rotation_before[0]
+            and rotator.h2d_bytes == rotation_before[1]
+            and rotator.pages == rotation_before[2])
+    every_local = all(row["finite_positive"] for row in per_layer.values())
+    probes_used = sum(row["probes_used"] for row in per_layer.values())
+    passed = (len(per_layer) == len(owned) and every_local
+              and cross_exact_zero and vocab_exact_zero
+              and adapter_unchanged and optimizer_unchanged
+              and rotation_unchanged)
+    return {
+        "items": probes_used,
+        "probes_used": probes_used,
+        "checked_layers": list(per_layer),
+        "per_layer": per_layer,
+        "gradient_contract": "teacher_forced_blockwise_frozen_teacher_kv",
+        "certificate_source": "live_fill_once_store",
+        "final_logit_training": False,
+        "local_grad_norm": local_sq ** 0.5,
+        "cross_block_leak_grad_norm": cross_sq ** 0.5,
+        "frozen_vocab_grad_norm": vocab_sq ** 0.5,
+        "local_signal_present_in_every_block": every_local,
+        "adapter_tensors_byte_exact_unchanged": adapter_unchanged,
+        "optimizer_state_byte_exact_unchanged": optimizer_unchanged,
+        "rotation_state_unchanged": rotation_unchanged,
+        "passed": bool(passed),
+    }
 
 
 def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
