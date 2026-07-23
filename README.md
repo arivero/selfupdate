@@ -30,7 +30,9 @@ optimizer weight and never enter backward.
 - `CE-eval-loss` and `KL-eval-loss` are whole-training-set evaluation metrics,
   never objectives.
 - The staged checkpoint manifest assigns every block to exactly one owner;
-  `scripts/merge_v4_adapters.py` merges by ownership, never averaging.
+  merging is by ownership, never averaging (the standalone
+  `scripts/merge_v4_adapters.py` helper was removed in the 2026-07-23
+  cleanup — git history keeps it).
 
 The authoritative protocol is
 [docs/training_pipeline_v4.md](docs/training_pipeline_v4.md).  See

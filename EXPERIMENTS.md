@@ -7,21 +7,28 @@ src/selfupdate/train/online_v4.py. M1 (single-process) and M2 (any-GPU-count
 layer shard) are implemented AND verified on agpuh01 (0.6B smoke: epoch in
 6.8 s at 34,413 token-events/s; sharding bit-identical to single-process;
 locality exact zeros). M3 (staged relay + merged per-epoch battery) and M4
-options (adam, aligned positions, student-refresh KV) are implemented,
-verification runs pending: docs/v4_verification_handoff.md has the exact
-commands and acceptance criteria. Scientific runs must respect the
+options (adam, aligned positions, student-refresh KV) are implemented;
+their verification runs concluded and were superseded by the v4.6 migration
+(docs/v4_6_migration.md — live-owner evaluation mandatory, complete-model
+reconstruction path deleted). docs/v4_verification_handoff.md, the interim
+handoff doc for that verification pass, was removed 2026-07-23 (git history
+keeps it). Scientific runs must respect the
 12k-item floor; everything so far is mechanics. Envelope (owner order):
 0.8B, 4B, 27B, 35B-A3B, gemma-4-26b-a4b, gemma-4-31b, DeepSeek-V4-Flash
 (MLA work), Qwen3.5-122B-A10B (stage-scoped loading) — full list with
 per-member demands in docs/training_pipeline_v4.md.
 
-Updated: 2026-07-15 (below this line: pre-v4 status). Working-file convention (as issues.md and
-recommendations.md, 2026-07-10): closed/absorbed content is REMOVED from
-this file — git history keeps it. The full chronological narrative (C1
-waves, findings C2-1..C2-35, wave tables, chimeras, 0.8-band anatomy,
-intrusion-200 detail) lives in this file's history at commit `4638ddc`
-and in docs/casebook.md + paper/paper1.pdf. Machine-readable claims:
-runs/conclusions.yaml (validate with scripts/conclusion_check.py).
+Updated: 2026-07-15 (below this line: pre-v4 status). Working-file convention (as issues.md,
+2026-07-10; `recommendations.md` itself was removed 2026-07-23 as a stale
+spec for the reporting tooling retired the same day): closed/absorbed
+content is REMOVED from this file — git history keeps it. The full
+chronological narrative (C1 waves, findings C2-1..C2-35, wave tables,
+chimeras, 0.8-band anatomy, intrusion-200 detail) lives in this file's
+history at commit `4638ddc` and in paper/paper1.pdf (docs/casebook.md,
+which held the signal-anatomy detail, was removed 2026-07-23 — git history
+keeps it). The machine-readable conclusion ledger and its validator
+(`runs/conclusions.yaml`, `scripts/conclusion_check.py`) were removed the
+same day along with the rest of the standalone report tooling.
 
 CURRENT TRUTH: Campaign 2 closed 2026-07-05. Crown = **slide8pure**
 (CER 0.007 / line-exact 99.3% / intrusion 2.5% ± 2.2 at n=200),
@@ -43,7 +50,10 @@ requires prefetched teacher output or confirmed speculative tokens.
 
 The next campaign screens Qwen3.5-0.8B across sixteen L40S GPUs, then promotes
 stable Pareto recipes to Qwen3.5-4B. The exact gates, 16-slot matrices, report
-requirements, and promotion rule are in `docs/pareto_v31_16gpu_plan.md`.
+requirements, and promotion rule were in `docs/pareto_v31_16gpu_plan.md`
+(pre-v4 planning doc, removed 2026-07-23 along with the rest of the
+superseded pareto_v2/v31/v32 series — git history keeps it; this whole
+campaign is itself pre-v4 historical status, superseded by pipeline v4.6).
 Current hard gates: add batched recurrent linear-attention state to the v3.1
 probe, and replace the existing 0.8B cache for scientific use because its
 source generation is 58.52% hard-cut (the RAG gate permits at most 10%). This
@@ -299,6 +309,7 @@ certified (Law 10; certs/pp2). TP2 runs mechanically through the block
 walk (tp_plan="auto", no DTensor surgery) but is probe-only by policy —
 correctness unvalidated. At 0.6B the collectives dominate (+72%); PP2's
 +6% confirms activations-across-PCIe is cheap at batch 1. The 27B bridge
-is where TP's fat matmuls would amortize — harness:
-scripts/parallel_bench.py. offload_adam: full-FT 4B at 2.3 s/item;
+is where TP's fat matmuls would amortize (the `scripts/parallel_bench.py`
+harness named here was never populated in this checkout — pre-existing
+dangling reference, noted 2026-07-23). offload_adam: full-FT 4B at 2.3 s/item;
 streamed pinned paging (2026-07-10) cut step overhead 2.65x at 0.6B.

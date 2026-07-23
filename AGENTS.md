@@ -10,10 +10,14 @@ Everything needed lives in this repo. Do not depend on host-local agent memory.
 - `EXPERIMENTS.md` - live layerwise plan and status board.
 - `docs/hidden_loss.md`, `docs/scaling.md`, `docs/memory.md` - loss math,
   locality proofs, scale plan, memory accounting.
-- `runs/results.md`, `runs/report.pdf`, `runs/curves.png` - generated
-  artifacts when present.
-- `runs/*/metrics.jsonl` and `runs/pipeline_*.log` - raw dynamics and history.
-- `runs/*/checkpoint` - checkpoints, gitignored.
+- `runs/vllm_h100/` - the only run artifacts kept in-repo: per-model vLLM
+  answer-generation output (`responses_bs*.jsonl`, `PROVENANCE.md`,
+  `summary.json`). Training-run artifacts (`results.md`, `report.pdf`,
+  `metrics.jsonl`, `pipeline_*.log`, checkpoints) are disposable and
+  regenerated per launch; the historical backlog was swept 2026-07-23
+  (git history keeps the record for tracked files) and standalone
+  report/analysis scripts were removed with it — validation is in-pipeline
+  only now (see Branch Focus / Publication-Critical Constraints below).
 
 The Python runtime is a node-local venv in `/tmp`, built by
 `scripts/venv_setup.sh` — never a venv on Lustre, and never a container. See
@@ -230,7 +234,10 @@ interpreted without silently promoting them to frontier evidence.
   blocks", or any depth-increasing weight profile — these are the tail
   wearing a costume; do not let mission-fulfillment pressure reintroduce
   them. Depth-UNIFORM treatment is the invariant; report gradient-share
-  attribution (scripts/signal_attribution.py) next to every claim.
+  attribution next to every claim (the `scripts/signal_attribution.py` path
+  named here was never populated in this checkout — pre-existing dangling
+  reference, noted 2026-07-23; attribution is now an in-pipeline concern,
+  not a standalone script).
 
 ## Hard-Won Lessons
 
@@ -473,29 +480,27 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - Per-node scheduler log: `runs/pipeline_sched_<host>.log`; use a per-node
   `JOBLOG_DIR=runs/pareto_v2_4b_worker_logs/<host>` so worker evidence does not
   interleave.
-- `evaluate.py --base` needs lane-specific `--out` paths during concurrent
-  base evals.
-- Results refresher/report shipper should run on only one node.
+- Standard-evaluation and reporting were standalone-script driven historically;
+  both are in-pipeline only now (2026-07-23 cleanup removed `evaluate.py` and
+  `report_shipper.sh`). Multi-node concurrent base evals should still avoid
+  writing to a shared path from more than one lane.
 
 ## Operational Conventions
 
-- **Scientific report completeness (owner, 2026-07-11):** a report is not
-  complete if it contains only endpoint recall/damage tables. Before issuing
-  or committing `runs/report.pdf`, regenerate and include, for every in-scope
-  completed run: (1) per-layer loss by epoch as BOTH a heatmap and a temporal
-  line plot (horizontal axis = epoch, vertical axis = loss, one trace per
-  layer), plus a cross-run layer summary;
-  (2) per-layer parameter modification versus epoch 0/base; (3) recall by
-  corpus including epoch 0; (4) standard-benchmark damage and the recall-vs-
-  damage frontier; and (5) an explicit coverage/provenance page naming missing
-  artifacts, batching regime, loss kind, connected-window width, and evaluation
-  source. Never silently omit a run because one artifact is absent: show it as
-  missing and queue the calculation. Reports for a named campaign must filter
-  to that campaign and must not ingest historical runs merely because an old
-  directory was touched or re-evaluated recently. At minimum run
-  `scripts/layer_loss_plots.py`, `scripts/delta_profiles.py`, the campaign
-  report builder, and the report PDF builder in that order. The agent owns
-  verifying that the resulting PDF visibly contains these pages.
+- **Scientific report completeness (owner, 2026-07-11; policy retired
+  2026-07-23):** this checkout no longer builds standalone PDF reports.
+  `report_v2.py`, `report_pdf_v2.py`, `layer_loss_plots.py`,
+  `delta_profiles.py`, `group_reports_v2.py`, `model_matrix.py`,
+  `conclusion_check.py`, and the rest of the standalone eval/report scripts
+  (`retention_eval.py`, `standard_destruction_eval.py`, `teacher_ceiling.py`,
+  `evaluate.py`, `tasks_report.py`, ...) were removed on 2026-07-23 along with
+  the historical `runs/` backlog they reported on (git history keeps both).
+  The completeness bar this section used to describe — per-layer loss over
+  epoch, parameter deltas vs base, recall by corpus, standard-benchmark
+  damage, coverage/provenance — is now the job of in-pipeline evaluation
+  (`train/online_v4.py` + `train/validate.py`), not a post-hoc report
+  builder. Do not resurrect a separate reporting script; extend the
+  in-pipeline eval path instead.
 
 - **Evaluation terminology (owner, 2026-07-16):** `epoch zero` is the
   untrained network evaluated under the same prompts, inputs, decoding,
@@ -566,8 +571,9 @@ The following pointer is historical campaign context, not a current method
 recommendation:
 
 Campaign 2 closed 2026-07-05 16:00 (EXPERIMENTS.md: CLOSING TABLE, ten
-laws, ledger corrections; paper/paper1.pdf; docs/casebook.md at
-signal-anatomy standard). Crown: slide8pure 0.007/99.3%/CLEAN
+laws, ledger corrections; paper/paper1.pdf; signal-anatomy detail formerly
+in docs/casebook.md, removed 2026-07-23 cleanup — git history keeps it).
+Crown: slide8pure 0.007/99.3%/CLEAN
 (intrusion 2.5% at n=200), 84.4% trajectory-driven. The last-3% law
 (C2-34) has ~5 replications. NOTE the two silent-default confounds of
 2026-07-05 — tail_ce_kind is now an UNSET sentinel and every windowed
@@ -579,8 +585,11 @@ confound); PP2 blocker CLOSED (pp2fix 0.011 + certs/pp2); xs 1.7B
 spectrum recalls but is DIRTY (22-40% intrusion — cleanliness at 1.7B
 is an open C3 question); lw_r_crown17_pinned never ran and needs an
 OWNER DECISION (task_label readout no longer exists on this branch).
-Conclusion ledger: runs/conclusions.yaml (validate with
-scripts/conclusion_check.py); cross-model matrix: scripts/model_matrix.py.
+Conclusion ledger and cross-model matrix tooling (`runs/conclusions.yaml`,
+`scripts/conclusion_check.py`, `scripts/model_matrix.py`) were removed in
+the 2026-07-23 cleanup along with the rest of the standalone report
+tooling; the claims they recorded live on in this section's prose and in
+git history.
 C3 queue: (1) teacher-stream k-windows;
 (2) premise-gated thinking teacher_kl; (3) Qwen3.6-27B bridge grid +
 Gemma4-E4B (embed-scaling adapter); (4) wide-channel ragchannel;
