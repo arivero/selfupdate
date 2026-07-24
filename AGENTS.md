@@ -499,9 +499,10 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
   The completeness bar this section used to describe — per-layer loss over
   epoch, parameter deltas vs base, recall by corpus, standard-benchmark
   damage, coverage/provenance — is now the job of in-pipeline evaluation
-  (`train/online_v4.py` + `train/validate.py`), not a post-hoc report
-  builder. Do not resurrect a separate reporting script; extend the
-  in-pipeline eval path instead.
+  (`train/online_v4.py` + `train/validate.py`), not a post-hoc evaluator.
+  `scripts/v4_run_report.py` is a read-only renderer for those live metrics:
+  it may plot losses, updates, deltas, and evaluation already emitted by the
+  trainer, but must never compute a new scientific evaluation or mutate a run.
 
 - **Evaluation terminology (owner, 2026-07-16):** `epoch zero` is the
   untrained network evaluated under the same prompts, inputs, decoding,
