@@ -103,8 +103,10 @@ liveness, checkpoints, evaluation completion, and scientific telemetry.
   evaluation. There is no battery-mode knob or reconstructed fallback.
   Evaluation runs without backward and with optimizer weight zero; rotary,
   shared-KV, per-layer-input, hybrid-cache, and mHC state stay stage-owned.
-- Merge staged adapters with `scripts/merge_v4_adapters.py`; ownership is
-  disjoint, so merge selects tensors rather than averaging them.
+- The campaign gate and its evaluation are entirely in-training.  Do not
+  merge adapters or create a checkpoint merely to evaluate a demo run;
+  merging is an explicit later publication/export operation, not part of
+  Slurm training or certification.
 
 ## 7. sbatch campaign templates
 
@@ -157,6 +159,28 @@ sbatch --account="$SLURM_CAMPAIGN_ACCOUNT" \
        ${SLURM_CAMPAIGN_NODELIST:+--nodelist="$SLURM_CAMPAIGN_NODELIST"} \
        scripts/spec_g26b_a4b_campaign.sbatch
 ```
+
+Run `sbatch` from the repository root.  Slurm executes a spool copy of the
+script, so the templates deliberately derive `ROOT` from `SLURM_SUBMIT_DIR`,
+not from `$0` or `BASH_SOURCE`.
+
+The campaign templates execute this order inside the allocation: build the
+node-local training venv; stage model snapshots to `/dev/shm`; generate the
+answers; build one immutable durable teacher cache; copy that *specific cache
+identity* to `/dev/shm/$USER/selfupdate-teacher-cache`; then run the PPP gate
+and its one-process reference through `launch_v4_stages.sh`.  The
+`SELFUPDATE_TEACHER_CACHE_ROOT` override changes only the physical cache root,
+not the cache identity.  On a multi-node PPP8 allocation, each allocated node
+must receive its own copy before remote stages start; model `HF_HOME` and the
+teacher-cache root are both forwarded to those stages.
+
+The stage launcher detaches the individual worker processes but the sbatch
+script retains the Slurm allocation and watches their lease until completion.
+The 120-minute bound applies independently to each one-epoch numerics-gate
+side; the allocation itself has the 24-hour Slurm wall time.  Current
+`v4_progress` rows are written to each stage's `metrics.jsonl` every 60
+seconds when the config enables them; use those rows for progress rather than
+inferring it from GPU utilization.
 
 ## Common traps
 

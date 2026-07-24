@@ -233,7 +233,7 @@ echo "==== stage: full 500-epoch PPP4 campaign $(date -Is) ===="
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_CAMPAIGN" || fail "campaign launch"
 echo "launched; stage logs: runs/${CAMPAIGN_RUN}_stage*.log"
-echo "merge when done: $PY scripts/merge_v4_adapters.py runs/${CAMPAIGN_RUN}"
+echo "evaluation is emitted in-training; no adapter merge is part of this campaign"
 
 # Keep the job (and the reservation) alive so the detached stage processes
 # are not orphaned when this script would otherwise exit; the stages run to

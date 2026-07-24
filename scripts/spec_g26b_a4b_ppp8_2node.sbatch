@@ -224,7 +224,7 @@ export SELFUPDATE_V4_STAGE_HOSTS="$NODE0 $NODE0 $NODE0 $NODE0 $NODE1 $NODE1 $NOD
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_CAMPAIGN" || fail "campaign launch"
 echo "launched; stage logs: runs/g26b_a4b_ppp8_2node_campaign_stage*.log"
-echo "merge when done: $PY scripts/merge_v4_adapters.py runs/g26b_a4b_ppp8_2node_campaign"
+echo "evaluation is emitted in-training; no adapter merge is part of this campaign"
 
 wait_for_stages "runs/.v4-launch-g26b_a4b_ppp8_2node_campaign.pids" 100000 \
   && echo "==== campaign stages finished $(date -Is) ====" \
