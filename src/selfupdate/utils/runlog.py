@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -57,6 +58,12 @@ def setup_run_dir(cfg) -> tuple[Path, "RunLog"]:
             text=True).splitlines()
         defaults = {
             "run_name": cfg.run_name,
+            # Stage metrics files can accumulate several launches (the
+            # bootstrap rotation covers reruns, but readers still need an
+            # in-row discriminator when correlating with appended stage
+            # logs); the launcher's id stamps every row, null for direct
+            # non-launcher invocations.
+            "launch_id": os.environ.get("SELFUPDATE_V4_LAUNCH_ID"),
             "layerwise_project_version": getattr(
                 cfg, "layerwise_project_version", "3.4"),
             "source_commit": subprocess.check_output(

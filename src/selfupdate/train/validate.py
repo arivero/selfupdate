@@ -139,6 +139,23 @@ def validate_knob_schedule(cfg) -> None:
 
     if train.v4_stage >= 0 and not train.lora.enabled:
         bad.append("staged v4.6 a/b evaluation requires LoRA")
+    if train.micro_batch < 1:
+        bad.append("micro_batch must be >= 1")
+    # Launch-time cohort-granularity gate (2026-07-24): the PPP8 numerics
+    # gate inherited base.yaml's micro_batch=1 because its experiment yaml
+    # never pinned the knob, ran 2071 single-item cohorts per layer instead
+    # of 130, and was budget-killed while perfectly healthy. v4_stage >= 0
+    # marks a launcher-driven stage process (never set by the static config
+    # audit), so this fires exactly at dispatch of a real gate/campaign run.
+    if (train.v4_stage >= 0 and train.micro_batch == 1
+            and not train.v4_allow_micro_batch_1):
+        bad.append(
+            "staged v4 launch with micro_batch=1: base.yaml's default "
+            "leaked into this run's cohort granularity; pin train."
+            "micro_batch in the experiment yaml, or declare a deliberate "
+            "width-1 probe with train.v4_allow_micro_batch_1")
+    if train.v4_allow_micro_batch_1 and train.micro_batch != 1:
+        bad.append("v4_allow_micro_batch_1 set while micro_batch != 1")
     if (cfg.eval.vllm_uncensored_generation_limit < 0
             or cfg.eval.vllm_uncensored_max_extra_tokens < 0):
         bad.append("vLLM uncensored evaluation limits must be non-negative")

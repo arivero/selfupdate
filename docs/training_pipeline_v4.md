@@ -69,6 +69,14 @@ another layer. Consequences, all implemented:
    count read from the config — nothing assumes four GPUs).
    Sharding is numerics-neutral: per-layer results must be bit-identical to
    single-process at equal seed, and the smoke pair exists to verify that.
+   Staged launches (`--v4-stage k`) reject `micro_batch: 1` at dispatch
+   unless `train.v4_allow_micro_batch_1` declares a deliberate width-1
+   probe: base.yaml's default is 1, and a PPP yaml that forgets the knob
+   silently trains single-item cohorts (2026-07-24 PPP8 gate: 2071 cohorts
+   instead of 130, ~16x epoch and epoch-battery cost). The
+   `pipeline_v4_contract` row logs `micro_batch`, cohort widths, and
+   `planned_block_cohort_writes_per_epoch` so granularity is checkable from
+   the first metrics row.
 3. **Loop order is free** (`v4_loop_order`): `layer_major` (default) keeps
    one layer's teacher tensors and optimizer state hot across all cohorts;
    `item_major` walks owned layers per cohort.

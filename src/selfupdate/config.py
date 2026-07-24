@@ -339,6 +339,13 @@ class TrainConfig:
     # a CUDA tensor or synchronizing the device; 0 keeps the normal quiet hot
     # loop.
     v4_progress_every_s: int = 0
+    # Staged (launcher-driven) runs REJECT micro_batch=1 unless this is set:
+    # base.yaml's micro_batch default is 1, and a PPP experiment yaml that
+    # forgets to pin the knob silently trains on single-item cohorts (the
+    # 2026-07-24 PPP8 gate: 2071 cohorts instead of 130, ~16x the epoch and
+    # epoch-battery cost, budget-killed with healthy heartbeats). A deliberate
+    # width-1 probe declares itself here; everything else pins micro_batch.
+    v4_allow_micro_batch_1: bool = False
     # Where per-layer teacher tensors live during training. gpu_corpus keeps
     # the active layer's whole-corpus inputs/targets/KV resident (layer_major
     # on small models: ~4 GB/layer at 0.6B). cpu_stream stages per cohort

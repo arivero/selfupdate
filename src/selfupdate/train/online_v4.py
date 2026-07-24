@@ -1331,6 +1331,14 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         optimizer=cfg.train.v4_optimizer,
         cohorts=len(cohorts),
         dataset_items=len(ds.pairs),
+        # Granularity is verifiable from this first row, before any epoch
+        # work: an unpinned micro_batch shows up here as cohorts ==
+        # dataset_items (the 2026-07-24 PPP8 gate symptom). Python ints only;
+        # no CUDA synchronization.
+        micro_batch=B,
+        cohort_width_max=max(len(c) for c in cohort_indices),
+        cohort_width_min=min(len(c) for c in cohort_indices),
+        planned_block_cohort_writes_per_epoch=len(owned) * len(cohorts),
     )
 
     def build_layer_cohort(layer: int, cohort_idx: int,
@@ -1763,6 +1771,11 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
                 planned_block_cohort_writes=epoch_state["_planned_writes"],
                 active_layer=layer,
                 active_cohort=cohort_idx,
+                # elapsed_seconds counts from THIS EPOCH's walk start, not
+                # from process launch — the 2026-07-24 PPP8 post-mortem
+                # misread it as launch-relative and diagnosed a stall that
+                # never happened. epoch_started_t anchors it in wall clock.
+                epoch_started_t=round(epoch_state["_started_wall"], 3),
                 elapsed_seconds=round(
                     now - epoch_state["_started_mono"], 3),
                 cuda_synchronized=False,
@@ -1867,6 +1880,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         epoch_state: dict = {
             "_util": [], "_epoch": epoch,
             "_started_mono": time.monotonic(),
+            "_started_wall": time.time(),
         }
         rng = random.Random(cfg.train.seed + epoch)
         visit = list(range(len(cohorts)))
