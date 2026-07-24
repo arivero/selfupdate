@@ -190,6 +190,18 @@ def main():
         "<p>Loss is aggregated by epoch/layer. Per-cohort synchronous loss "
         "logging is deliberately absent; cohort geometry is shown instead.</p>"
         + cards)
+    from matplotlib.backends.backend_pdf import PdfPages
+    with PdfPages(out / "report.pdf") as pdf:
+        for title, filename in figures:
+            image = plt.imread(out / filename)
+            height, width = image.shape[:2]
+            fig = plt.figure(figsize=(11.69, 8.27))
+            ax = fig.add_axes((.03, .03, .94, .9))
+            ax.imshow(image)
+            ax.axis("off")
+            fig.suptitle(title, fontsize=14)
+            pdf.savefig(fig)
+            plt.close(fig)
     print(json.dumps(summary, indent=2))
     return 0 if figures else 2
 
