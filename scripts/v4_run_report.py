@@ -49,7 +49,7 @@ def main():
         plt.close()
         figures.append((title, f"{name}.png"))
 
-    def layer_data(kind, field, *, vector=False):
+    def collect_layer_data(kind, field, *, vector=False):
         data = defaultdict(dict)
         for row in kinds[kind]:
             if row.get("partial"):
@@ -115,16 +115,20 @@ def main():
         plt.yticks(layers)
         save(name, title)
 
-    loss_data = layer_data("v4_epoch", "layer_losses")
-    grad_data = layer_data("v4_gradient_norm", "grad_norms")
+    loss_data = collect_layer_data("v4_epoch", "layer_losses")
+    grad_data = collect_layer_data("v4_gradient_norm", "grad_norms")
     layer_series(loss_data, "layer_losses", "loss_by_epoch_layer",
                  "Block-local loss by epoch and layer")
     layer_density(loss_data, "layer_losses", "loss_density_layer_epoch",
                   "Block-local loss density: layer × epoch", "Blues")
-    layer_series(grad_data, "grad_norms", "gradient_by_epoch_layer",
-                 "Gradient norm by epoch and layer")
-    layer_density(grad_data, "grad_norms", "gradient_density_layer_epoch",
-                  "Gradient-norm density: layer × epoch", "Reds")
+    layer_series(
+        grad_data, "epoch RSS of cohort gradient norms",
+        "gradient_by_epoch_layer",
+        "Epoch root-sum-square of cohort gradient norms by layer")
+    layer_density(
+        grad_data, "epoch RSS of cohort gradient norms",
+        "gradient_density_layer_epoch",
+        "Epoch gradient RSS density: layer × epoch", "Reds")
 
     for field, name, title in (
         ("per_layer_absolute_l2", "weight_delta_absolute",
@@ -132,7 +136,7 @@ def main():
         ("per_layer_relative_l2", "weight_delta_relative",
          "Relative effective LoRA weight delta"),
     ):
-        data = layer_data("parameter_delta", field, vector=True)
+        data = collect_layer_data("parameter_delta", field, vector=True)
         if data:
             order = ordered_layers(data)
             colors = plt.colormaps["turbo"](

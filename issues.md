@@ -1,5 +1,93 @@
 # Issues / Follow-Ups
 
+## PRIORITY — `student_refresh` is not a student-trajectory fixed-point update (2026-07-24)
+
+The present name suggests that refreshing K/V after an epoch makes the local
+block problem approach the censored student's deployed attention.  It does
+not.  `online_v4.py` invalidates the per-(layer, cohort) tensor store at the
+configured boundary and rebuilds K/V with the current adapters enabled, but
+both the refreshed K/V projection inputs and the next local block's
+query/residual input remain cached teacher `t[L-1]`.
+
+For an ordinary attention block, the current refresh therefore evaluates the
+current projections at the **teacher anchor**:
+
+```text
+Q_refresh[L] = (Wq[L] + dWq[L]) t[L-1]
+K_refresh[L] = (Wk[L] + dWk[L]) t[L-1]
+V_refresh[L] = (Wv[L] + dWv[L]) t[L-1]
+```
+
+This is useful: it removes the inconsistency in which K/V was generated with
+adapters off even though the trained `k_proj`/`v_proj` adapters had changed.
+It is nevertheless not the attention executed by the complete censored
+student.  In that trajectory, **query, key, and value all come from the same
+evolving student state**:
+
+```text
+s[L-1]       = StudentCensored[0:L-1](input)
+Q_deploy[L]  = (Wq[L] + dWq[L]) s[L-1]
+K_deploy[L]  = (Wk[L] + dWk[L]) s[L-1]
+V_deploy[L]  = (Wv[L] + dWv[L]) s[L-1]
+```
+
+Consequently, a proposal to refresh K/V from `s[L-1]` while continuing to
+form Q from `t[L-1]` would also be wrong: it would train a hybrid attention
+operation that occurs in neither the teacher nor the deployed student.  The
+query-side distinction is not optional.  Q, K, V, positions, censorship mask,
+and the block residual input must describe one explicitly named state
+snapshot if the purpose is student-trajectory fixed-point iteration.
+
+This matters for the current anomaly: block-local losses and the
+teacher-forced final-block diagnostic improve while full censored-student
+cross-entropy worsens and argmax acceptance falls.  Driving
+
+```text
+BlockL(t[L-1], refreshed-context-at-t[L-1]) -> t[L]
+```
+
+to a small loss does not prove convergence of
+
+```text
+BlockL(s[L-1], censored-student-context-at-s[L-1]) -> t[L].
+```
+
+The existing `student_refresh` mode must therefore be described as
+**adapter-refreshed teacher-anchored context**, not as evolving-student K/V
+or a fixed-point solver.
+
+### Scientific decision required before a patch
+
+There are two coherent algorithms, and they must not be conflated:
+
+1. **Keep the publication-critical teacher-anchored law.** Retain detached
+   `t[L-1]` for Q/residual and regenerate Q/K/V context at that same teacher
+   anchor. Rename or relabel `student_refresh` in configuration and telemetry,
+   and treat it only as a projection-drift correction. It cannot be claimed
+   to close the deployment-trajectory gap.
+2. **Add an explicitly experimental outer fixed-point iteration.** At an
+   epoch boundary, run the complete censored student under `no_grad`, snapshot
+   detached `s[L-1]` for the whole training corpus, and in the following epoch
+   derive the block residual and Q/K/V consistently from that same snapshot.
+   Targets may remain teacher `t[L]`, and the snapshot prevents a cross-block
+   backward graph, but this changes the optimizer input from teacher
+   `t[L-1]` to student `s[L-1]`. It therefore violates the current
+   publication-critical training law and must not be introduced silently on
+   this branch.
+
+Do **not** implement the superficially cheaper middle ground of student K/V
+plus teacher Q/residual. It neither matches deployment nor preserves a
+teacher-consistent local operator.
+
+Any experiment addressing this issue must report, at every refresh boundary:
+
+- the provenance/epoch of the state snapshot used for Q, K, V, and residual;
+- `||s[L-1]-t[L-1]||` by layer and the resulting Q/K/V divergence;
+- the loss discontinuity before versus after refresh;
+- teacher-forced block fidelity and complete censored-student CE/KL/argmax
+  acceptance side by side; and
+- refresh wall time and memory, separately from optimizer epoch time.
+
 ## PRIORITY — retain loss telemetry by cohort without slowing the v4 hot loop (2026-07-24)
 
 The read-only v4 report can plot block-local loss by epoch and layer, but the
