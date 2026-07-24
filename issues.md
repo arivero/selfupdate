@@ -122,6 +122,14 @@ the campaign done-list and the completed hot-loop ladder.
    data engineering.
 6. **Anchor corpus breadth**: anchors_es.txt is 6 fragments; a rotating
    larger corpus may improve anchor-KL further.
+7. **Generative evaluator equivalence gate**: before a campaign, run the
+   trainer's in-training generative evaluator and vLLM on the identical base
+   state, prompts, tokenizer/chat template, stop policy, and deterministic
+   decoding parameters.  Require identical generated token ids; record
+   latency and throughput separately.  The trainer remains the scientific
+   evaluator and vLLM is an implementation/speed control.  A mismatch must
+   abort the campaign and be diagnosed as context, tokenizer, or decoding
+   drift — never worked around by exporting or merging a model.
 
 ## Observed RAG failure mode — full-document copying is not guaranteed (2026-07-12)
 
