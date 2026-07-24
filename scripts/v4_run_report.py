@@ -89,7 +89,7 @@ def main():
                    title_fontsize=7)
         save(name, title)
 
-    def layer_density(data, field, name, title):
+    def layer_density(data, field, name, title, cmap):
         if not data:
             return
         layers = list(range(min(data), max(data) + 1))
@@ -107,8 +107,8 @@ def main():
             matrix, origin="lower", aspect="auto", interpolation="nearest",
             extent=(epochs[0] - .5, epochs[-1] + .5,
                     layers[0] - .5, layers[-1] + .5),
-            cmap="magma", norm=LogNorm(vmin=positive.min(),
-                                       vmax=positive.max()))
+            cmap=cmap, norm=LogNorm(vmin=positive.min(),
+                                    vmax=positive.max()))
         plt.colorbar(image, label=field)
         plt.xlabel("epoch")
         plt.ylabel("layer")
@@ -120,11 +120,11 @@ def main():
     layer_series(loss_data, "layer_losses", "loss_by_epoch_layer",
                  "Block-local loss by epoch and layer")
     layer_density(loss_data, "layer_losses", "loss_density_layer_epoch",
-                  "Block-local loss density: layer × epoch")
+                  "Block-local loss density: layer × epoch", "Blues")
     layer_series(grad_data, "grad_norms", "gradient_by_epoch_layer",
                  "Gradient norm by epoch and layer")
     layer_density(grad_data, "grad_norms", "gradient_density_layer_epoch",
-                  "Gradient-norm density: layer × epoch")
+                  "Gradient-norm density: layer × epoch", "Reds")
 
     for field, name, title in (
         ("per_layer_absolute_l2", "weight_delta_absolute",
@@ -153,7 +153,8 @@ def main():
             if field == "per_layer_relative_l2":
                 layer_density(
                     data, field, "weight_delta_relative_density",
-                    "Relative effective LoRA weight-delta density: layer × epoch")
+                    "Relative effective LoRA weight-delta density: layer × epoch",
+                    "Greens")
 
     epoch_rows = kinds["v4_epoch"]
     if epoch_rows:
