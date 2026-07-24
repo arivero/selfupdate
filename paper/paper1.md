@@ -407,11 +407,10 @@ did it is the same machinery designed to stream one block of a
 
 ---
 
-*Artifacts: `EXPERIMENTS.md` (closing table and chronology),
-`runs/report.pdf` (per-run appendix; archived copy alongside this
-paper), `runs/results.md`, `runs/curves.png`, `runs/forget_curves.png`,
-`docs/hidden_loss.md`, `docs/forward_trajectory.md`. Figures reproducible
-via `paper/make_figs.py` from run artifacts.*
+*Artifacts: `EXPERIMENTS.md` (closing table and chronology), plus the
+historical report and figure artifacts archived alongside this paper.
+The standalone reporting pipeline and its CSV-based figure generator were
+retired on 2026-07-23; current evidence is emitted by in-training evaluation.*
 
 ---
 
