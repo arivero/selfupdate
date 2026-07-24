@@ -7,7 +7,7 @@
 #SBATCH --output=runs/sbatch_v4_report_%j.out
 #SBATCH --error=runs/sbatch_v4_report_%j.err
 set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${SLURM_SUBMIT_DIR:?submit this job from the repository root}"
 cd "$ROOT"
 [[ "$#" -eq 1 ]] || { echo "usage: sbatch scripts/v4_report.sbatch RUN_DIR" >&2; exit 2; }
 [[ -d "$1" ]] || { echo "missing run directory: $1" >&2; exit 2; }

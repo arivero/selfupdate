@@ -1,5 +1,35 @@
 # Issues / Follow-Ups
 
+## PRIORITY — retain loss telemetry by cohort without slowing the v4 hot loop (2026-07-24)
+
+The read-only v4 report can plot block-local loss by epoch and layer, but the
+trainer does not currently retain a loss series at cohort/update granularity.
+Add enough telemetry to diagnose within-epoch convergence, outlier cohorts,
+length-bucket effects, and the difference between B16/B32 without reintroducing
+the sync-bound failure mode.
+
+**Non-negotiable performance constraint:** this must not add `.item()`,
+`.cpu()`, host logging, printing, file I/O, or a CUDA synchronization inside
+the `(layer, cohort)` walk.  The payload is small, but byte count is not the
+risk: an otherwise tiny device-to-host observation can serialize the GPU.
+Accumulate detached loss summaries in preallocated device tensors and transfer
+them only at an existing accumulation/epoch boundary, preferably in one
+batched asynchronous copy.  Bound memory explicitly and retain cohort identity
+or its deterministic bucket/index mapping in the flushed row.
+
+Acceptance requires:
+
+1. reports can plot loss versus cohort/update for every owned block, with
+   cohort width/length metadata and an unambiguous epoch/launch identity;
+2. no new synchronization primitive or per-cohort Python formatting occurs in
+   the hot loop;
+3. an H100 A/B gate over the real sequence-length distribution shows no
+   statistically meaningful regression in `epoch_seconds`,
+   `token_events_per_second`, or GPU utilization; any measurable regression
+   blocks the feature rather than being accepted as an observability tax; and
+4. telemetry can be disabled or downsampled without changing optimizer
+   semantics, update order, cohort construction, or numerical results.
+
 ## OPEN — teacher-cache answer generation wastes the GPU (H100, 2026-07-17)
 
 **Owner call: must be patched before the ~2,000-prompt run. It was good enough
