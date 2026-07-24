@@ -1,0 +1,36 @@
+# Gemma-4-31B dense control for the complete-decoder-matrix LoRA campaign.
+# Keep the proven PPP4/store geometry, but match the Qwen campaign's 50
+# epochs and evaluation cadence.  The LoRA tuple is pinned here because rank
+# and coverage are scientific variables, not incidental base defaults.
+run_name: campaign50_g31b_dense_ppp4
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  batching: bucketed
+  micro_batch: 8
+  epochs: 50
+  seed: 17
+  hidden_loss: huber
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+    expert_parameters: false
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5

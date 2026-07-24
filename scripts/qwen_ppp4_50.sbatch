@@ -32,7 +32,7 @@ export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=erro
 export TRITON_CACHE_DIR="/tmp/$USER/selfupdate-triton"
 export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-torchinductor"
 
-echo "==== Qwen PPP4/50 start model=$MODEL exp=$EXP commit=$(git rev-parse HEAD) $(date -Is) ===="
+echo "==== model PPP4/50 start model=$MODEL exp=$EXP commit=$(git rev-parse HEAD) $(date -Is) ===="
 scripts/venv_setup.sh || fail "venv setup"
 scripts/venv_check.sh || fail "venv check"
 PY="/tmp/$USER/selfupdate-venv/bin/python"
@@ -67,4 +67,4 @@ for stage in 0 1 2 3; do
   grep -q "run complete:" "runs/${RUN_NAME}_stage${stage}.log" \
     || fail "$RUN_NAME stage $stage lacks run-complete marker"
 done
-echo "==== Qwen PPP4/50 complete run=$RUN_NAME $(date -Is) ===="
+echo "==== model PPP4/50 complete run=$RUN_NAME $(date -Is) ===="
