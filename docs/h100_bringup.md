@@ -163,6 +163,22 @@ sbatch --account="$SLURM_CAMPAIGN_ACCOUNT" \
        scripts/spec_g26b_a4b_campaign.sbatch
 ```
 
+The single-node template has two explicit scientific arms selected at submit
+time:
+
+| `PPP4_ARM` | gate | campaign |
+|---|---|---|
+| `unscoped_b16` (default) | PPP4 and single-process at batch 16, full model loaded per stage | unscoped PPP4 at batch 16 |
+| `scoped_b32` | scoped PPP4 and single-process reference at batch 16 | stage-scoped PPP4 at batch 32 |
+
+For example:
+
+```bash
+PPP4_ARM=scoped_b32 sbatch --account="$SLURM_CAMPAIGN_ACCOUNT" \
+  --partition="$SLURM_CAMPAIGN_PARTITION" \
+  scripts/spec_g26b_a4b_campaign.sbatch
+```
+
 Run `sbatch` from the repository root.  Slurm executes a spool copy of the
 script, so the templates deliberately derive `ROOT` from `SLURM_SUBMIT_DIR`,
 not from `$0` or `BASH_SOURCE`.
@@ -202,7 +218,10 @@ after allocation to confirm the lease and remaining SHM entries.
   NVML ownership tripwire.
 - Store-fill time and first-load cache warmth are not steady-state training
   speed.  Report them separately.
-- Weight staging does not warm Python imports; use
-  `scripts/warm_python_runtime.sh` before a multi-worker cold start.
+- Weight staging does not warm Python imports. Fleet/scheduler launches that
+  fan out many workers should run `scripts/warm_python_runtime.sh` first.
+  The two committed H100 sbatch templates instead execute `venv_check.sh` on
+  every allocated node before starting their small fixed stage set; they do
+  not need a separate warm-python pass.
 - Keep TorchInductor/Triton caches node-local and cap compiler/native CPU
   thread pools as described in `AGENTS.md`.

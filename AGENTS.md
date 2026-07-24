@@ -110,8 +110,9 @@ cost a session, is in `docs/h100_bringup.md`.
 `src/selfupdate/train/layerwise.py` is a thin v4 entry point;
 `online_v4.py` owns the teacher-hidden block steps and validation relay;
 `runtime.py` owns loading/cache/frozen-vocabulary/save; `v4_store.py` owns the
-fill-once teacher store; `rotation.py`/`shard_load.py` own scaling transport;
-and `validate.py` rejects every non-v4 training configuration. Read
+fill-once teacher store; `rotation.py`/`shard_load.py` own weight-residency
+transport; `relay_nccl.py` owns cross-node boundary/store-fill transport; and
+`validate.py` rejects every non-v4 training configuration. Read
 `docs/runtime.md` before touching execution machinery.
 
 The training law is structural: block L consumes detached teacher h[L-1]; the

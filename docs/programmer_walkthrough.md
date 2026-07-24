@@ -110,9 +110,10 @@ updates only its owned adapters. Training sends no activations between stages
 and uses no wavefront.
 
 At checkpoint time each process publishes its owned adapter tensors plus a
-manifest. `scripts/merge_v4_adapters.py` selects every tensor from exactly one
-owner; it assembles rather than averages. Compare a staged run with the
-equal-seed single-process reference using
+manifest. Those stage LoRAs are the durable artifacts; evaluation does not
+merge them. Any later serving-only collation is temporary and selects each
+tensor from exactly one owner rather than averaging. Compare a staged run
+with the equal-seed single-process reference using
 `scripts/compare_v4_shard_numerics.py`.
 
 ## 7. Recognize the validation-only student walk

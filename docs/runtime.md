@@ -17,9 +17,11 @@ Native stage-owned evaluation and cache provenance are documented in
 | `src/selfupdate/train/layerwise.py` | construct the common runtime and dispatch pipeline v4.6 |
 | `src/selfupdate/train/online_v4.py` | teacher tensors, block-local updates, validation relay, epoch battery, locality certification, and publication |
 | `src/selfupdate/train/v4_store.py` | fill-once relayed teacher-store construction |
+| `src/selfupdate/train/rotation.py`, `shard_load.py` | stage-owned weight materialization and residency transport |
+| `src/selfupdate/train/relay_nccl.py` | cross-node boundary and store-fill transport over NCCL |
 | `src/selfupdate/train/validate.py` | reject configurations outside the v4 contract |
 | `src/selfupdate/train/losses.py` | absolute block-local hidden losses |
-| `scripts/merge_v4_adapters.py` | assemble disjoint stage-owned adapters without averaging |
+| `scripts/merge_v4_adapters.py` | optional transient serving collation of disjoint LoRA shards; never an evaluation or durable run artifact |
 | `scripts/compare_v4_shard_numerics.py` | compare single-process and independently sharded results |
 | `src/selfupdate/eval/distributed_pp.py` | synchronous live-owner standard, recall, a/b/a′ evaluation |
 
@@ -139,9 +141,9 @@ when it is their turn.
   `certify_locality_v4` path.
 - `scripts/compare_v4_shard_numerics.py` checks that independent ownership
   reproduces corresponding single-process updates.
-- Each stage writes a manifest; `scripts/merge_v4_adapters.py` takes every
-  adapter tensor from its unique owner and never averages tensors.
-- A failed locality or merge contract must not publish a completed model.
+- Each stage writes a manifest and retains its own LoRA checkpoint as the
+  durable scientific/resume artifact.
+- A failed locality contract must not publish a completed checkpoint.
 - Teacher-forced and student-trajectory CE/KL remain distinctly named. Both
   are evaluation-only, but answer different questions.
 

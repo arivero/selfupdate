@@ -62,20 +62,19 @@ that is not current execution guidance.
 
 ## Utilities intentionally retained
 
-- `merge_v4_adapters.py` produces an ordinary PEFT adapter from disjoint stage
-  checkpoints. It is deployment/publication, not evaluation.
-- `fuse_experts_snapshot.py` produces an ordinary Hugging Face sharded
-  checkpoint (`model-*.safetensors`, `model.safetensors.index.json`, copied
-  `config.json` and tokenizer assets). It is retained for vLLM-compatible
-  deployment; it does not invent a selfupdate checkpoint format.
-- `evaluate.py` and `standard_destruction_eval.py` evaluate arbitrary
-  historical/foreign checkpoints and include surfaces outside an active
-  trainer boundary.
-- `teacher_ceiling.py`, `vllm_prefill_verify.py`, and the vLLM benchmark
-  drivers test the external teacher engine, which the trainer cannot certify
-  from inside itself.
-- `check_*`, `compare_v4_shard_numerics.py`, report builders, cache builders,
-  staging tools, and the generic launcher remain independent utilities.
+- `compare_v4_shard_numerics.py` and the `check_*` self-checks validate live
+  runtime invariants without storing a scientific numerical reference.
+- Cache builders, SHM/HF staging tools, `benchmark_vllm_generation.py`, and
+  the generic stage launcher remain operational utilities.
+- `merge_v4_adapters.py` is a remote serving-only convenience for temporary
+  collation of disjoint LoRA shards. It is not evaluation and its output is
+  not a durable run artifact.
+
+The standalone evaluator/reporting wrappers, including `evaluate.py`,
+`standard_destruction_eval.py`, `teacher_ceiling.py`, report builders, and
+their orphaned `src/selfupdate/eval/` helpers, were removed on 2026-07-23
+(with the remaining orphan cleanup completed on 2026-07-24). Historical
+mentions are provenance only.
 
 ## Adoption gate
 

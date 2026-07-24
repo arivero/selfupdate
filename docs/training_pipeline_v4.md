@@ -213,16 +213,18 @@ inputs remain teacher hidden states. Despite its historical name,
   per-layer token inputs, hybrid caches, and mHC boundary tails are native.
   There is no reconstructed-model subprocess or adapter-graft fallback.
 - **Locality certification** (`certify_locality_v4`): measured, not assumed —
-  sampled (item, layer) backwards must put zero gradient on every foreign
-  block and on embed/norm/head. The dispatch refuses to publish a checkpoint
-  when it fails.
+  sampled items at every owned layer must produce finite positive local
+  gradient and exact-zero gradient on every foreign block and on
+  embed/norm/head. The dispatch refuses to publish a checkpoint when it
+  fails.
 
-## Checkpoints and merging
+## Checkpoints
 
 Each stage saves an ordinary PEFT checkpoint plus `v4_stage_manifest.json`
-(its owned block range). `scripts/merge_v4_adapters.py` assembles the full
-adapter by taking each block's tensors from the one stage that owns it —
-no averaging; the merge is exact because ownership is disjoint.
+(its owned block range). Those per-stage LoRA checkpoints are the durable
+scientific and resume artifacts. A serving-only collation may temporarily
+select each block's tensors from its unique owner, but merged output is not
+stored as a run artifact and is never needed for evaluation.
 
 ## Beyond the OOM wall (contribution statement, owner 2026-07-18)
 
@@ -511,35 +513,25 @@ the relay CE/KL is precisely the deployment-matched metric that will show
 whether pure teacher-forcing at every layer recites. This is the
 experiment, not a bug.
 
-## DeepSeek-V4-Flash frozen-context adapter (plan B8 — design, cert-gated)
+## DeepSeek-V4-Flash frozen-context adapter (plan B8 — implemented, cert-gated)
 
-The MLA + sparse-indexer stack does not satisfy the `_FrozenKV` duck-type:
-`DeepseekV4Attention` calls `past_key_values.update(kv, kv, layer_idx)` but
-its compressor then needs `past_key_values.layers[layer_idx]` typed as
-`DeepseekV4HCACache`/`DeepseekV4CSACache` (`update_compressor_states` /
-`update_overlap_state`), and rope arrives as a `{main, compress}` bundle the
-model's own `rotary_emb` builds per layer type — `blocks.rope` returns
-neither. Design (not yet implemented):
+`deepseek_ctx.py` implements the typed teacher-context path for the MLA +
+sparse-indexer stack. `DeepseekRecorder` records the real
+`DeepseekV4HCACache`/`DeepseekV4CSACache` compressor state, sliding K/V, and
+teacher top-k indexer routing; `FrozenDeepseekCtx` serves those artifacts
+read-only with the extended censorship/causal mask. The DeepSeek rope bundle
+and exact MLA LoRA target families are also wired.
 
-1. **Rope bundle branch** in `BlockStack.rope`: when the config is
-   `deepseek_v4`, call the model's rotary with both layer types and pass the
-   dict through, mirroring the gemma4 bundle path.
-2. **`_FrozenDeepseekCtx`**: a per-layer typed record/frozen wrapper around
-   the REAL `DeepseekV4HCACache`/`CSACache` objects — record during the
-   teacher prefill (adapters off), then serve read-only during query-side
-   passes, exactly the `_FrozenKV` record/consume contract but holding the
-   compressed latents + indexer/overlap states instead of k/v heads. The
-   linear-attention recurrent-state precedent (store the state at answer
-   start) is the template for the compressor state.
-3. **Quantized base**: `scripts/dequantize_snapshot.py` produces the bf16
-   snapshot (fp8 e4m3 + fp4 experts -> plain tensors; HF fp8 quantizer is
-   `is_trainable=False`, so LoRA-on-fp8 is out of contract). ~316 GB bf16 →
-   the stage-scoped + rotation lane, identical to Qwen.
-4. **LoRA targets**: MLA projections are `q_a_proj/q_b_proj/
-   kv_a_proj_with_mqa/kv_b_proj/o_proj` — extend `lora.TARGET_MODULES`
-   per-family before attach (today's list would adapt only `o_proj` + MLP).
-5. **Gate**: `certify_locality_v4` must show exact-zero cross-block and
-   frozen-vocab gradients through the adapter before any training run.
+Both teacher-source paths are live: `online_v4.py` records and consumes the
+context for online/cache training and locality certification, while
+`v4_store.py` stores the same typed state during fill-once construction.
+Cross-stage store fill transports only boundary hidden state; compressed
+context remains stage-local.
+
+Implementation does not waive admission: a new DeepSeek snapshot/config must
+still pass config audit, full per-owned-layer locality certification,
+single-vs-staged numerics, and the live-owner evaluation battery before a
+campaign.
 
 ## Base-weight fine-tuning (plan B9 — design note, NOT coded)
 
