@@ -187,6 +187,8 @@ STAGE_ENV="PYTORCH_ALLOC_CONF=$PYTORCH_ALLOC_CONF \
 TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error \
 SELFUPDATE_CPU_THREADS=$SELFUPDATE_CPU_THREADS \
 HF_HUB_OFFLINE=$HF_HUB_OFFLINE HF_DATASETS_OFFLINE=$HF_DATASETS_OFFLINE \
+HF_HOME=${HF_HOME:-} \
+SELFUPDATE_TEACHER_CACHE_ROOT=${SELFUPDATE_TEACHER_CACHE_ROOT:-} \
 SELFUPDATE_V4_LAUNCH_ID=$SELFUPDATE_V4_LAUNCH_ID \
 SELFUPDATE_V4_RELAY_ROOT=$SELFUPDATE_V4_RELAY_ROOT \
 SELFUPDATE_V4_CROSS_NODE=${SELFUPDATE_V4_CROSS_NODE:-0} \
@@ -214,8 +216,9 @@ for ((k = 0; k < STAGES; k++)); do
     echo "  stage $k -> local pid $!  log $logfile"
   else
     # Remote stage: same tree over the shared filesystem, that node's own
-    # /tmp venv (build it there first: scripts/venv_setup.sh). HF_HOME is
-    # NOT forwarded — each node resolves its own stage or account cache.
+    # /tmp venv (build it there first: scripts/venv_setup.sh). Forward the
+    # node-local HF_HOME selected above: every participating node must have
+    # published its own /dev/shm model stage before this launch.
     # NEVER capture the remote pid via command substitution: sshd holds
     # the session open for a healthy backgrounded stage (even with stdin
     # from /dev/null) and $() blocks forever — the PPP5 spawn loop froze

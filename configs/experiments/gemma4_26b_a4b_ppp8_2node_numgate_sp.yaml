@@ -1,0 +1,35 @@
+# Numerics gate, single-process side, for the 2-node PPP8 variant. Distinct
+# run_name from gemma4_26b_a4b_ppp4_numgate.yaml's g26b_a4b_numgate_sp so the
+# two campaigns' numgate runs never collide if their jobs happen to overlap
+# in the queue. See gemma4_26b_a4b_ppp4_numgate.yaml for the full rationale;
+# identical here except run_name.
+run_name: g26b_a4b_ppp8_numgate_sp
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  epochs: 1
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_progress_every_s: 60
+eval:
+  every_epochs: 1

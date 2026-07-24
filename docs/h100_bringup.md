@@ -106,6 +106,58 @@ liveness, checkpoints, evaluation completion, and scientific telemetry.
 - Merge staged adapters with `scripts/merge_v4_adapters.py`; ownership is
   disjoint, so merge selects tensors rather than averaging them.
 
+## 7. sbatch campaign templates
+
+Campaign sbatch scripts under `scripts/` (e.g. `spec_g26b_a4b_campaign.sbatch`)
+are committed as reusable templates and must carry no host- or account-
+specific value: no absolute paths, no Slurm account/partition/nodelist. Two
+constraints shape this:
+
+- `#SBATCH` directive lines are parsed by `sbatch` at submission time, before
+  the script runs as a shell script — they CANNOT reference shell variables.
+  `#SBATCH --account=$SLURM_CAMPAIGN_ACCOUNT` silently does not work. Account,
+  partition, and node selection must therefore be passed on the `sbatch`
+  command line, not baked into the script header.
+- Everything else host-specific (the SSL cert bundle path, the vLLM
+  interpreter path) is read from `.campaign_env.sh` at the repository root —
+  gitignored, one per checkout/account, never committed. The script sources
+  it and fails loudly (`: "${VAR:?...}"`) if a required variable is unset.
+  Copy `.campaign_env.sh.example` to `.campaign_env.sh` and fill in real
+  values once per checkout.
+
+Required variables (documented here, defined in `.campaign_env.sh`):
+
+| variable | meaning |
+|---|---|
+| `SLURM_CAMPAIGN_ACCOUNT` | `sbatch --account=...` value for this cluster account |
+| `SLURM_CAMPAIGN_PARTITION` | GPU partition to submit to (e.g. the H100 partition) |
+| `SLURM_CAMPAIGN_NODELIST` | optional; pin a specific node, or leave empty to let Slurm place it |
+| `SELFUPDATE_SSL_CERT_FILE` | certifi bundle path for this account's Python HTTPS (see AGENTS.md) |
+| `SELFUPDATE_VLLM_PYTHON` | interpreter with vLLM installed, for the generation stage |
+
+**vLLM is deliberately NOT vendored in this repo and NOT rebuilt in `/tmp`,**
+unlike the main training venv (`scripts/venv_setup.sh`, which genuinely is
+built fresh per node in ~30s). vLLM's build is complex and driver-dependent —
+this account keeps several pre-built variants side by side at
+`/fs/agustina/arivero/supercomplex/venvs/` (`vllm025`, `vllm126`, `vllmAda`,
+plain `vllm`, ...) for different torch/CUDA/hardware combinations, each the
+product of real trial-and-error, not something to casually reproduce.
+`SELFUPDATE_VLLM_PYTHON` should point at one of these existing persistent
+installs (`vllm025` = vllm 0.25.0+cu129, confirmed working for gemma-4 answer
+generation on H100 as of 2026-07-23) — never attempt to `pip install vllm`
+into the node-local training venv or build a fresh one in `/tmp` as part of a
+campaign script.
+
+Submit with:
+
+```bash
+source .campaign_env.sh
+sbatch --account="$SLURM_CAMPAIGN_ACCOUNT" \
+       --partition="$SLURM_CAMPAIGN_PARTITION" \
+       ${SLURM_CAMPAIGN_NODELIST:+--nodelist="$SLURM_CAMPAIGN_NODELIST"} \
+       scripts/spec_g26b_a4b_campaign.sbatch
+```
+
 ## Common traps
 
 - A bare `cuda` device string may not identify the physical card intended by

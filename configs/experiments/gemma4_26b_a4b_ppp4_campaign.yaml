@@ -1,0 +1,58 @@
+# Full scientific v4.6 PPP4 campaign for google/gemma-4-26B-A4B-it (30L,
+# 25 sliding + 5 full, MoE), authored 2026-07-23 to test the pipeline after
+# the same-day script/runs cleanup. No prior trainable config for this model
+# survived (only teacher_cache_gemma4_26b_a4b_v5rs.yaml + teacher_ref_*,
+# both non-trainable); this file merges those settings with fresh PPP4
+# fields. v4_teacher_source=cache (not store): the docs' ENVELOPE SPEED
+# TABLE lists gemma-4-26B-A4B's best config as "PPP4 4-GPU cpu_stream"
+# without "store" (unlike every larger model's row) -- 26B-A4B (~52GB
+# bf16) fits one card, so it doesn't need store's memory trick.
+# GATE: do not trust any epoch count here until
+# scripts/compare_v4_shard_numerics.py (single-process vs this PPP4 config)
+# passes AND epoch 1-3 teacher-argmax acceptance / recall visibly moves --
+# a Gemma shared-KV bug could pass sharding-agreement while still wrong
+# (docs/training_pipeline_v4.md: "Gemma shared-KV TO DO").
+run_name: g26b_a4b_ppp4_unscoped_b16_campaign
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  # build_teacher_cache.py always writes remove-view student metadata
+  # (no keep_privileged); v4 training requires flow_mask/intact censorship
+  # (validate_knob_schedule). source_compaction marks the cache as a
+  # cross-view read so DistillDataset recomputes student offsets from this
+  # flow_mask view instead of asserting against the cache's remove-view
+  # s0/position_gap -- the teacher-aligned t0/A still must match exactly.
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  epochs: 500
+  micro_batch: 16
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_stage_splits: [8, 15, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8
+  vllm_uncensored_generation_limit: 8

@@ -1,0 +1,50 @@
+# 2-node, 8-GPU PPP8 variant of gemma4_26b_a4b_ppp4_campaign.yaml -- same
+# model/data/mask/cache (deliberately reusing gemma-4-26B-A4B-it rather than
+# a model that actually needs 8 GPUs: this run's purpose is exercising
+# cross-node stage coordination -- rendezvous/master-node selection, NCCL
+# transport, boundary mail over InfiniBand vs same-node /dev/shm -- not
+# capacity, since 26B-A4B fits one card. See scripts/spec_g26b_a4b_ppp8_2node.sbatch.
+# GATE: same caveat as the PPP4 campaign -- numerics agreement (single-process
+# vs PPP8) proves sharding is consistent, not that gemma's shared-KV
+# attention is correct; watch epoch 1-3 learning too.
+run_name: g26b_a4b_ppp8_2node_campaign
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  epochs: 500
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  # 30 layers -> 8 stages of [4,4,3,4,4,3,4,4]; device ids repeat per node
+  # (physical GPU 0-3 on each host, never renumbered -- SELFUPDATE_V4_STAGE_HOSTS
+  # supplies the stage->host map at launch time, set by the sbatch script from
+  # this job's own Slurm node allocation, not hardcoded here).
+  v4_stage_splits: [4, 8, 11, 15, 19, 22, 26]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8
+  vllm_uncensored_generation_limit: 8

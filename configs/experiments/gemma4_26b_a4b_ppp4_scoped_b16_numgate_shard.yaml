@@ -1,0 +1,18 @@
+run_name: g26b_a4b_ppp4_scoped_b16_numgate_shard
+model: {name: google/gemma-4-26B-A4B-it, dtype: bfloat16}
+data: {examples_path: data/combined/examples_v5rs_window.jsonl}
+mask: {mode: rag_system, compaction: flow_mask}
+cache: {source_compaction: remove, hidden_dtype: bfloat16, generation_batch: 64, generation_budget_bucket: 32, generation_shuffle_seed: 17, max_sequence_tokens: 8192}
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
+  epochs: 1
+  micro_batch: 16
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_progress_every_s: 60
+  v4_stage_scoped: true
+  v4_stage_splits: [8, 15, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+eval: {every_epochs: 1}

@@ -1,0 +1,40 @@
+# Numerics gate, PPP8 cross-node side. Paired with
+# gemma4_26b_a4b_ppp8_2node_numgate_sp.yaml (the single-process side). Same
+# 8-way stage split as gemma4_26b_a4b_ppp8_2node_campaign.yaml; the sbatch
+# script sets SELFUPDATE_V4_STAGE_HOSTS from this job's own Slurm node
+# allocation before launching, so stages 0-3 land on the first node and
+# 4-7 on the second -- this run is the actual test of cross-node
+# rendezvous/master-node selection and NCCL boundary transport, not just
+# sharding math (that part is already covered by the PPP4 single-node gate).
+run_name: g26b_a4b_ppp8_numgate_shard
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  epochs: 1
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_progress_every_s: 60
+  v4_stage_splits: [4, 8, 11, 15, 19, 22, 26]
+  v4_stage_devices: [0, 1, 2, 3, 0, 1, 2, 3]
+eval:
+  every_epochs: 1

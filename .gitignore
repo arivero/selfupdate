@@ -14,3 +14,4 @@ containers/*.sqsh
 containers/*.ext4
 containers/dev-python/
 archive/
+.campaign_env.sh

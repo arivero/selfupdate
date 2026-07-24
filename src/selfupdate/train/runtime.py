@@ -33,6 +33,86 @@ def load_causal_lm(src, **kw):
         return AutoModelForImageTextToText.from_pretrained(src, **kw)
 
 
+def pp_device_map(cfg) -> dict:
+    """Pipeline map: embedding on the first configured stage; decoder blocks partitioned by
+    ``pipeline_split`` (2 GPUs) or ``pipeline_splits`` (N GPUs). The final
+    norm/head live on the last card for untied models, so the top readout
+    window stays colocated with logits."""
+    from transformers import AutoConfig
+
+    mc = AutoConfig.from_pretrained(cfg.model.name)
+    text_cfg = getattr(mc, "text_config", mc)
+    n = text_cfg.num_hidden_layers
+    splits = list(cfg.model.pipeline_splits or [])
+    if splits:
+        if any(left >= right for left, right in zip(splits, splits[1:])):
+            raise ValueError(
+                f"pipeline_splits must be strictly increasing: {splits}")
+        if torch.cuda.device_count() < len(splits) + 1:
+            raise ValueError(
+                f"pipeline_splits {splits} needs {len(splits) + 1} visible GPUs"
+            )
+        if splits != sorted(splits) or splits[0] <= 0 or splits[-1] >= n:
+            raise ValueError(f"pipeline_splits {splits} outside 1..{n - 1}")
+    else:
+        if torch.cuda.device_count() < 2:
+            raise ValueError("pipeline_split needs 2 visible GPUs (queue n_gpus=2)")
+        split = cfg.model.pipeline_split
+        if not 0 < split < n:
+            raise ValueError(f"pipeline_split {split} outside 1..{n - 1}")
+        splits = [split]
+    devices = list(getattr(cfg.model, "pipeline_devices", []) or [])
+    if devices and len(devices) != len(splits) + 1:
+        raise ValueError(
+            "model.pipeline_devices must contain one physical id per stage")
+    if len(set(devices)) != len(devices):
+        raise ValueError("model.pipeline_devices must contain unique ids")
+    if not devices:
+        devices = list(range(len(splits) + 1))
+    if any(device < 0 or device >= torch.cuda.device_count()
+           for device in devices):
+        raise ValueError(
+            f"model.pipeline_devices {devices} are not visible on this host")
+    # tied embeddings (Qwen3 <=1.7B): embed IS lm_head — one tensor cannot
+    # live on two cards, so the whole vocabulary stack stays on cuda:0 and
+    # readout-window loss calls hop back (an [A,H] transfer per call). Untied
+    # models put norm+head on cuda:1 with the readout window.
+    tied = getattr(mc, "tie_word_embeddings",
+                   getattr(text_cfg, "tie_word_embeddings", False))
+    last_dev = devices[-1]
+    first_dev = devices[0]
+    vocab_dev = first_dev if tied else last_dev
+    model_type = getattr(mc, "model_type", "")
+    # Select the topology of the class registered under AutoModelForCausalLM,
+    # not merely the metadata carried by the repository config. Qwen3.5
+    # advertises vision/audio sub-configs, but its causal-LM registration is
+    # the text-only model with ``model.layers``. Treating metadata presence as
+    # proof of a composite produced a completely invalid
+    # ``model.language_model.*`` device map. Qwen3.6 multimodal releases are
+    # explicit composites and retain the language-tower prefix.
+    composite = model_type in (
+        "qwen3_6", "qwen3_6_vl", "gemma4", "mistral3")
+    prefix = "model.language_model" if composite else "model"
+    dm = {f"{prefix}.embed_tokens": first_dev,
+          f"{prefix}.rotary_emb": first_dev,
+          # Final hidden loss belongs to the final stage even when the
+          # checkpoint ties the vocabulary head to the stage-0 embedding.
+          f"{prefix}.norm": last_dev, "lm_head": vocab_dev}
+    if prefix != "model":
+        dm["model.vision_tower"] = first_dev
+        dm["model.embed_vision"] = first_dev
+    for i in range(n):
+        dev = 0
+        while dev < len(splits) and i >= splits[dev]:
+            dev += 1
+        dm[f"{prefix}.layers.{i}"] = devices[dev]
+    return dm
+
+
+def uses_pipeline_map(cfg) -> bool:
+    return cfg.model.pipeline_split > 0 or bool(cfg.model.pipeline_splits)
+
+
 def vocab_signature(stack) -> tuple:
     """Cheap exact fingerprint of every frozen token/vocabulary tensor.
 

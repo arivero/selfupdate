@@ -1,0 +1,40 @@
+# Numerics gate, single-process side. Paired with
+# gemma4_26b_a4b_ppp4_numgate_shard.yaml (the PPP4 side): the two must agree
+# cell-for-cell via scripts/compare_v4_shard_numerics.py before
+# gemma4_26b_a4b_ppp4_campaign.yaml is trusted for anything scientific --
+# gemma's shared-KV attention has no correctness pedigree in this checkout
+# (docs/training_pipeline_v4.md: "Gemma shared-KV TO DO"). Same
+# model/data/mask/cache as the campaign config; epochs: 1 is enough for one
+# clean epoch-boundary metrics row. v4_stage_splits empty = one stage
+# owning every block (single-process, per config.py's TrainConfig comment).
+run_name: g26b_a4b_ppp4_unscoped_b16_numgate_sp
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora:
+    enabled: true
+    r: 16
+    alpha: 32
+    dropout: 0.0
+  epochs: 1
+  micro_batch: 16
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_progress_every_s: 60
+eval:
+  every_epochs: 1

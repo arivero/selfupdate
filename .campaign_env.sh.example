@@ -1,0 +1,24 @@
+# Copy this file to .campaign_env.sh (gitignored, one per checkout/account)
+# and fill in real values. Read by scripts/*.sbatch campaign templates;
+# see docs/h100_bringup.md "sbatch campaign templates" for the full contract.
+# Never commit .campaign_env.sh itself -- it's account/host-specific.
+
+# sbatch --account=... for this cluster account.
+export SLURM_CAMPAIGN_ACCOUNT=your-slurm-account
+
+# GPU partition to submit campaign jobs to (e.g. this cluster's H100 partition).
+export SLURM_CAMPAIGN_PARTITION=your-gpu-partition
+
+# Optional: pin a specific node. Leave empty ("") to let Slurm place the job
+# anywhere in SLURM_CAMPAIGN_PARTITION.
+export SLURM_CAMPAIGN_NODELIST=
+
+# certifi bundle for Python HTTPS on this cluster (see AGENTS.md's Hard-Won
+# Lessons section for why this is required here).
+export SELFUPDATE_SSL_CERT_FILE=/path/to/certifi/cacert.pem
+
+# Python interpreter with vLLM installed, used by the generation stage
+# (scripts/benchmark_vllm_generation.py). This is deliberately separate from
+# the node-local training venv (scripts/venv_setup.sh) -- vLLM is not one of
+# its pinned packages.
+export SELFUPDATE_VLLM_PYTHON=/path/to/vllm-venv/bin/python
