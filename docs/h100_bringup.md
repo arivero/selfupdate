@@ -104,9 +104,12 @@ liveness, checkpoints, evaluation completion, and scientific telemetry.
   Evaluation runs without backward and with optimizer weight zero; rotary,
   shared-KV, per-layer-input, hybrid-cache, and mHC state stay stage-owned.
 - The campaign gate and its evaluation are entirely in-training.  Do not
-  merge adapters or create a checkpoint merely to evaluate a demo run;
-  merging is an explicit later publication/export operation, not part of
-  Slurm training or certification.
+  merge adapters or create a checkpoint merely to evaluate a demo run.
+  The only durable scientific/resume artifacts are the per-stage LoRA
+  checkpoints.  Never save a merged model or merged adapter as a run
+  artifact.  vLLM can serve a base model with LoRA enabled; an exceptional
+  serving-only collation of disjoint stage adapters is temporary utility
+  work, not a checkpoint or deliverable, and is removed afterwards.
 
 ## 7. sbatch campaign templates
 
