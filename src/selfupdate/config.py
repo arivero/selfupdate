@@ -334,6 +334,11 @@ class TrainConfig:
     # Positive means run the exact synchronized b trajectory at native battery
     # epoch boundaries.
     v4_relay_every_cohorts: int = 4
+    # Optional CPU-only progress heartbeat for long local walks.  It logs
+    # completed block/cohort writes at this wall-clock interval without reading
+    # a CUDA tensor or synchronizing the device; 0 keeps the normal quiet hot
+    # loop.
+    v4_progress_every_s: int = 0
     # Where per-layer teacher tensors live during training. gpu_corpus keeps
     # the active layer's whole-corpus inputs/targets/KV resident (layer_major
     # on small models: ~4 GB/layer at 0.6B). cpu_stream stages per cohort

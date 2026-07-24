@@ -129,6 +129,8 @@ def validate_knob_schedule(cfg) -> None:
         bad.append("invalid v4_weight_residency")
     if train.v4_relay_every_cohorts < 0:
         bad.append("v4_relay_every_cohorts must be non-negative")
+    if train.v4_progress_every_s < 0:
+        bad.append("v4_progress_every_s must be non-negative")
     if train.v4_weight_residency != "resident":
         if not train.v4_stage_scoped:
             bad.append("rotate/auto weight residency requires stage-scoped loading")

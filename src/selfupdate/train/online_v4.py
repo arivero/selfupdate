@@ -1744,6 +1744,28 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
             ev["answers"] += len(cohort.indices)
             ev["count"] += count
         del out, view, target
+        # An opt-in, host-only heartbeat makes a long full-corpus numerics
+        # gate observable without restoring the forbidden .item()/cpu()
+        # telemetry synchronizations to this hot path.  The write count is a
+        # Python integer; it says nothing about queued CUDA completion.
+        completed = int(epoch_state.get("_completed_writes", 0)) + 1
+        epoch_state["_completed_writes"] = completed
+        interval = cfg.train.v4_progress_every_s
+        now = time.monotonic()
+        last = epoch_state.get("_progress_last_t", float("-inf"))
+        if interval and now - last >= interval:
+            epoch_state["_progress_last_t"] = now
+            log.log(
+                kind="v4_progress",
+                epoch=int(epoch_state["_epoch"]) + 1,
+                completed_block_cohort_writes=completed,
+                planned_block_cohort_writes=epoch_state["_planned_writes"],
+                active_layer=layer,
+                active_cohort=cohort_idx,
+                elapsed_seconds=round(
+                    now - epoch_state["_started_mono"], 3),
+                cuda_synchronized=False,
+            )
 
     stopped = False
     expected_eval = sum(c.n_eval for c in cohorts)
@@ -1848,6 +1870,7 @@ def train_online_v4(cfg, stack, tok, log, cache, peft_model=None,
         rng = random.Random(cfg.train.seed + epoch)
         visit = list(range(len(cohorts)))
         rng.shuffle(visit)
+        epoch_state["_planned_writes"] = len(owned) * len(visit)
         if (cfg.train.v4_kv_source == "student_refresh"
                 and cfg.train.v4_kv_refresh_epochs
                 and epoch and epoch % cfg.train.v4_kv_refresh_epochs == 0):
