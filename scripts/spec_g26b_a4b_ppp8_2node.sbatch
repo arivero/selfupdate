@@ -56,6 +56,16 @@ export TRITON_CACHE_DIR="/tmp/$USER/selfupdate-triton"
 export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-torchinductor"
 
 fail() { echo "FATAL: $*" >&2; exit 1; }
+RUN_SUFFIX="j${SLURM_JOB_ID}"
+NUMGATE_SP_RUN="g26b_a4b_ppp8_numgate_sp_${RUN_SUFFIX}"
+NUMGATE_SHARD_RUN="g26b_a4b_ppp8_numgate_shard_${RUN_SUFFIX}"
+CAMPAIGN_RUN="g26b_a4b_ppp8_2node_campaign_${RUN_SUFFIX}"
+NUMERICS_RTOL=1e-7
+
+for fresh_run in "$NUMGATE_SP_RUN" "$NUMGATE_SHARD_RUN" "$CAMPAIGN_RUN"; do
+  [[ ! -e "runs/$fresh_run" ]] \
+    || fail "fresh run directory already exists: runs/$fresh_run"
+done
 
 # --- discover the 2 allocated nodes from Slurm's own allocation, never
 # hardcoded, so this template is portable to any 2 nodes the scheduler picks.
@@ -88,9 +98,10 @@ echo "==== stage: fresh vLLM answer generation (2071 items), $NODE0 only $(date 
 # Single-node generation is enough: 26B-A4B fits one card's TP=4 (measured
 # 2026-07-17 and again 2026-07-23); the 2-node aspect is for TRAINING stage
 # coordination, not generation throughput.
-GEN_DIR="runs/vllm_h100/gemma4_26b_a4b_it_ppp8_$(date +%Y%m%d)"
+GEN_DIR="runs/vllm_h100/gemma4_26b_a4b_it_ppp8_${SLURM_JOB_ID}"
 mkdir -p "$GEN_DIR"
 GEN_OUT="$GEN_DIR/responses_bs256.jsonl"
+vllm_wall_start=$SECONDS
 "$VLLM_PY" scripts/benchmark_vllm_generation.py \
   --model google/gemma-4-26B-A4B-it \
   --config configs/base.yaml \
@@ -104,6 +115,16 @@ GEN_OUT="$GEN_DIR/responses_bs256.jsonl"
   --reasoning-effort low \
   --out "$GEN_DIR" || fail "vLLM generation"
 [[ -s "$GEN_OUT" ]] || fail "vLLM generation produced no output at $GEN_OUT"
+vllm_wall_seconds=$((SECONDS - vllm_wall_start))
+"$PY" - "$GEN_DIR/summary.json" "$vllm_wall_seconds" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+row = s["results"][0]
+print("TIMING vllm_answers "
+      f"wall_seconds={sys.argv[2]} load_seconds={s['load_seconds']:.3f} "
+      f"generation_seconds={row['seconds']:.3f} examples={row['examples']} "
+      f"tokens_per_second={row['tokens_per_second']:.3f}")
+PYEOF
 
 echo "==== stage: teacher-hidden cache build, $NODE0 only $(date -Is) ===="
 # Shared Lustre cache.root (base.yaml default) -- both nodes read the same
@@ -112,10 +133,12 @@ echo "==== stage: teacher-hidden cache build, $NODE0 only $(date -Is) ===="
 # use -- see docs/h100_bringup.md and AGENTS.md's "knob copied without its
 # enabling context" lesson before ever turning that on for real capacity
 # reasons).
+cache_wall_start=$SECONDS
 "$PY" scripts/build_teacher_cache.py \
   --config configs/base.yaml \
   --experiment configs/teacher_references/teacher_cache_gemma4_26b_a4b_v5rs.yaml \
   --generation-responses "$GEN_OUT" || fail "build_teacher_cache"
+echo "TIMING teacher_hidden_cache wall_seconds=$((SECONDS - cache_wall_start)) (phase breakdown is the cache timing line above)"
 
 # See scripts/spec_g26b_a4b_campaign.sbatch for why this patching step
 # exists: build_teacher_cache.py's --generation-responses makes the cache
@@ -123,23 +146,24 @@ echo "==== stage: teacher-hidden cache build, $NODE0 only $(date -Is) ===="
 # training path sets that field from a yaml, so a plain training config
 # misses the cache unless patched to match.
 patch_generation_responses() {
-  local src="$1" dst="$2"
-  "$PY" - "$src" "$dst" "$GEN_OUT" <<'PYEOF'
+  local src="$1" dst="$2" run_name="$3"
+  "$PY" - "$src" "$dst" "$GEN_OUT" "$run_name" <<'PYEOF'
 import sys, yaml
-src, dst, gen_out = sys.argv[1:4]
+src, dst, gen_out, run_name = sys.argv[1:5]
 with open(src) as f:
     d = yaml.safe_load(f) or {}
 d.setdefault("cache", {})["generation_responses_path"] = gen_out
+d["run_name"] = run_name
 with open(dst, "w") as f:
     yaml.safe_dump(d, f, sort_keys=False)
 PYEOF
 }
-PATCHED_NUMGATE_SP="runs/.patched_gemma4_26b_a4b_ppp8_numgate_sp.yaml"
-PATCHED_NUMGATE_SHARD="runs/.patched_gemma4_26b_a4b_ppp8_numgate_shard.yaml"
-PATCHED_CAMPAIGN="runs/.patched_gemma4_26b_a4b_ppp8_2node_campaign.yaml"
-patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_numgate_sp.yaml "$PATCHED_NUMGATE_SP"
-patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_numgate_shard.yaml "$PATCHED_NUMGATE_SHARD"
-patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_campaign.yaml "$PATCHED_CAMPAIGN"
+PATCHED_NUMGATE_SP="runs/.patched_${NUMGATE_SP_RUN}.yaml"
+PATCHED_NUMGATE_SHARD="runs/.patched_${NUMGATE_SHARD_RUN}.yaml"
+PATCHED_CAMPAIGN="runs/.patched_${CAMPAIGN_RUN}.yaml"
+patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_numgate_sp.yaml "$PATCHED_NUMGATE_SP" "$NUMGATE_SP_RUN"
+patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_numgate_shard.yaml "$PATCHED_NUMGATE_SHARD" "$NUMGATE_SHARD_RUN"
+patch_generation_responses configs/experiments/gemma4_26b_a4b_ppp8_2node_campaign.yaml "$PATCHED_CAMPAIGN" "$CAMPAIGN_RUN"
 
 # Keep the durable-cache identity, but copy its immutable contents to each
 # node's local /dev/shm before any PPP8 stage starts.  The launcher forwards
@@ -190,6 +214,16 @@ wait_for_stages() {
   return 1
 }
 
+require_stage_completion() {
+  local run="$1" stages="$2"
+  for k in $(seq 0 $((stages - 1))); do
+    [[ -s "runs/$run/stage$k/checkpoint/adapter_model.safetensors" ]] \
+      || fail "$run stage $k exited without publishing its LoRA checkpoint"
+    rg -q "run complete:" "runs/${run}_stage${k}.log" \
+      || fail "$run stage $k exited without a run-complete marker"
+  done
+}
+
 echo "==== GATE 1: numerics -- PPP8 (cross-node) then single-process, 1 epoch each $(date -Is) ===="
 # Both sides go through launch_v4_stages.sh, even the "single-process" one
 # (a 1-stage config, SELFUPDATE_V4_STAGE_HOSTS still unset here so it stays
@@ -203,30 +237,33 @@ echo "==== GATE 1: numerics -- PPP8 (cross-node) then single-process, 1 epoch ea
 export SELFUPDATE_V4_STAGE_HOSTS="$NODE0 $NODE0 $NODE0 $NODE0 $NODE1 $NODE1 $NODE1 $NODE1"
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_NUMGATE_SHARD" || fail "numgate PPP8 launch"
-wait_for_stages "runs/.v4-launch-g26b_a4b_ppp8_numgate_shard.pids" 1440 \
+wait_for_stages "runs/.v4-launch-${NUMGATE_SHARD_RUN}.pids" 1440 \
   || fail "numgate PPP8 stages did not finish within the 120m gate budget"
+require_stage_completion "$NUMGATE_SHARD_RUN" 8
 
 unset SELFUPDATE_V4_STAGE_HOSTS
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_NUMGATE_SP" || fail "numgate single-process launch"
-wait_for_stages "runs/.v4-launch-g26b_a4b_ppp8_numgate_sp.pids" 1440 \
+wait_for_stages "runs/.v4-launch-${NUMGATE_SP_RUN}.pids" 1440 \
   || fail "numgate single-process stage did not finish within the 120m gate budget"
+require_stage_completion "$NUMGATE_SP_RUN" 1
 "$PY" scripts/compare_v4_shard_numerics.py \
-  runs/g26b_a4b_ppp8_numgate_sp/stage0 runs/g26b_a4b_ppp8_numgate_shard --strict-current \
-  || fail "NUMERICS GATE FAILED: single-process and PPP8 disagree -- either the sharding/cross-node transport is broken, or (as with the PPP4 gate) gemma's shared-KV path itself is wrong. Stopping before burning the reservation."
+  "runs/${NUMGATE_SP_RUN}/stage0" "runs/${NUMGATE_SHARD_RUN}" \
+  --strict-current --rtol "$NUMERICS_RTOL" \
+  || fail "NUMERICS GATE FAILED: single-process and PPP8 differ beyond rtol=$NUMERICS_RTOL; inspect the comparator output to distinguish numerical, provenance, locality, transport, and sharding failures."
 echo "==== GATE 1 PASSED $(date -Is) ===="
 
 echo "==== GATE 2 (manual read, not auto-abort): epoch 1-3 learning signal ===="
-echo "Check runs/g26b_a4b_ppp8_2node_campaign_stage*.log for teacher-argmax"
+echo "Check runs/${CAMPAIGN_RUN}_stage*.log for teacher-argmax"
 echo "acceptance / recall moving after the campaign launch below."
 
 echo "==== stage: full 500-epoch PPP8 2-node campaign $(date -Is) ===="
 export SELFUPDATE_V4_STAGE_HOSTS="$NODE0 $NODE0 $NODE0 $NODE0 $NODE1 $NODE1 $NODE1 $NODE1"
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_CAMPAIGN" || fail "campaign launch"
-echo "launched; stage logs: runs/g26b_a4b_ppp8_2node_campaign_stage*.log"
+echo "launched; stage logs: runs/${CAMPAIGN_RUN}_stage*.log"
 echo "evaluation is emitted in-training; no adapter merge is part of this campaign"
 
-wait_for_stages "runs/.v4-launch-g26b_a4b_ppp8_2node_campaign.pids" 100000 \
+wait_for_stages "runs/.v4-launch-${CAMPAIGN_RUN}.pids" 100000 \
   && echo "==== campaign stages finished $(date -Is) ====" \
   || echo "==== wait_for_stages ceiling hit (24h wall time will end the job regardless) $(date -Is) ===="

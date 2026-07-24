@@ -68,6 +68,16 @@ case "$PPP4_ARM" in
     CAMPAIGN_RUN=g26b_a4b_ppp4_scoped_b32_campaign ;;
   *) fail "unknown PPP4_ARM=$PPP4_ARM" ;;
 esac
+RUN_SUFFIX="j${SLURM_JOB_ID}"
+NUMGATE_SP_RUN="${NUMGATE_SP_RUN}_${RUN_SUFFIX}"
+NUMGATE_SHARD_RUN="${NUMGATE_SHARD_RUN}_${RUN_SUFFIX}"
+CAMPAIGN_RUN="${CAMPAIGN_RUN}_${RUN_SUFFIX}"
+NUMERICS_RTOL=1e-7
+
+for fresh_run in "$NUMGATE_SP_RUN" "$NUMGATE_SHARD_RUN" "$CAMPAIGN_RUN"; do
+  [[ ! -e "runs/$fresh_run" ]] \
+    || fail "fresh run directory already exists: runs/$fresh_run"
+done
 
 echo "==== stage: venv setup $(date -Is) ===="
 scripts/venv_setup.sh || fail "venv_setup"
@@ -98,6 +108,7 @@ GEN_OUT="$GEN_DIR/responses_bs256.jsonl"
 # makes the two sides disagree per-record and build_teacher_cache.py rejects
 # it (ValueError: "generation response ... used budget ..., expected ... from
 # cache config" -- caught live 2026-07-23 on job 422587).
+vllm_wall_start=$SECONDS
 "$VLLM_PY" scripts/benchmark_vllm_generation.py \
   --model google/gemma-4-26B-A4B-it \
   --config configs/base.yaml \
@@ -111,6 +122,16 @@ GEN_OUT="$GEN_DIR/responses_bs256.jsonl"
   --reasoning-effort low \
   --out "$GEN_DIR" || fail "vLLM generation"
 [[ -s "$GEN_OUT" ]] || fail "vLLM generation produced no output at $GEN_OUT"
+vllm_wall_seconds=$((SECONDS - vllm_wall_start))
+"$PY" - "$GEN_DIR/summary.json" "$vllm_wall_seconds" <<'PYEOF'
+import json, sys
+s = json.load(open(sys.argv[1]))
+row = s["results"][0]
+print("TIMING vllm_answers "
+      f"wall_seconds={sys.argv[2]} load_seconds={s['load_seconds']:.3f} "
+      f"generation_seconds={row['seconds']:.3f} examples={row['examples']} "
+      f"tokens_per_second={row['tokens_per_second']:.3f}")
+PYEOF
 
 echo "==== stage: teacher-hidden cache build $(date -Is) ===="
 # Cache generation and cache reading use DIFFERENT configs by design: the
@@ -122,10 +143,12 @@ echo "==== stage: teacher-hidden cache build $(date -Is) ===="
 # job 422578, which used the campaign yaml here by mistake). Both configs
 # share cache.root (base.yaml default), so training reads the same cache
 # this build produces.
+cache_wall_start=$SECONDS
 "$PY" scripts/build_teacher_cache.py \
   --config configs/base.yaml \
   --experiment configs/teacher_references/teacher_cache_gemma4_26b_a4b_v5rs.yaml \
   --generation-responses "$GEN_OUT" || fail "build_teacher_cache"
+echo "TIMING teacher_hidden_cache wall_seconds=$((SECONDS - cache_wall_start)) (phase breakdown is the cache timing line above)"
 
 # resolve_cache_dir's hash includes a sha of cache.generation_responses_path's
 # CONTENT when that field is set (teacher/cache.py line ~91-94). The build
@@ -142,13 +165,14 @@ echo "==== stage: teacher-hidden cache build $(date -Is) ===="
 # used, and point every downstream train.py/launch_v4_stages.sh call at the
 # patched copies instead of the static ones.
 patch_generation_responses() {
-  local src="$1" dst="$2"
-  "$PY" - "$src" "$dst" "$GEN_OUT" <<'PYEOF'
+  local src="$1" dst="$2" run_name="$3"
+  "$PY" - "$src" "$dst" "$GEN_OUT" "$run_name" <<'PYEOF'
 import sys, yaml
-src, dst, gen_out = sys.argv[1:4]
+src, dst, gen_out, run_name = sys.argv[1:5]
 with open(src) as f:
     d = yaml.safe_load(f) or {}
 d.setdefault("cache", {})["generation_responses_path"] = gen_out
+d["run_name"] = run_name
 with open(dst, "w") as f:
     yaml.safe_dump(d, f, sort_keys=False)
 PYEOF
@@ -156,9 +180,9 @@ PYEOF
 PATCHED_NUMGATE_SP="runs/.patched_${NUMGATE_SP_RUN}.yaml"
 PATCHED_NUMGATE_SHARD="runs/.patched_${NUMGATE_SHARD_RUN}.yaml"
 PATCHED_CAMPAIGN="runs/.patched_${CAMPAIGN_RUN}.yaml"
-patch_generation_responses "$NUMGATE_SP_CFG" "$PATCHED_NUMGATE_SP"
-patch_generation_responses "$NUMGATE_SHARD_CFG" "$PATCHED_NUMGATE_SHARD"
-patch_generation_responses "$CAMPAIGN_CFG" "$PATCHED_CAMPAIGN"
+patch_generation_responses "$NUMGATE_SP_CFG" "$PATCHED_NUMGATE_SP" "$NUMGATE_SP_RUN"
+patch_generation_responses "$NUMGATE_SHARD_CFG" "$PATCHED_NUMGATE_SHARD" "$NUMGATE_SHARD_RUN"
+patch_generation_responses "$CAMPAIGN_CFG" "$PATCHED_CAMPAIGN" "$CAMPAIGN_RUN"
 
 # Training uses the durable-cache identity, but its immutable contents must
 # still be node-local for the hot layer/cohort walk.  The override preserves
@@ -209,6 +233,16 @@ wait_local_stages() {
   return 1
 }
 
+require_stage_completion() {
+  local run="$1" stages="$2"
+  for k in $(seq 0 $((stages - 1))); do
+    [[ -s "runs/$run/stage$k/checkpoint/adapter_model.safetensors" ]] \
+      || fail "$run stage $k exited without publishing its LoRA checkpoint"
+    rg -q "run complete:" "runs/${run}_stage${k}.log" \
+      || fail "$run stage $k exited without a run-complete marker"
+  done
+}
+
 echo "==== GATE 1: numerics -- PPP4 then single-process, 1 epoch each $(date -Is) ===="
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_NUMGATE_SHARD" || fail "numgate PPP4 launch"
@@ -216,13 +250,16 @@ scripts/launch_v4_stages.sh configs/base.yaml \
 # same explicit 120-minute budget and never compare incomplete artifacts.
 wait_local_stages "runs/.v4-launch-${NUMGATE_SHARD_RUN}.pids" 1440 \
   || fail "numgate PPP4 stages did not finish within the 120m gate budget"
+require_stage_completion "$NUMGATE_SHARD_RUN" 4
 scripts/launch_v4_stages.sh configs/base.yaml \
   "$PATCHED_NUMGATE_SP" || fail "numgate single-process launch"
 wait_local_stages "runs/.v4-launch-${NUMGATE_SP_RUN}.pids" 1440 \
   || fail "numgate single-process stage did not finish within the 120m gate budget"
+require_stage_completion "$NUMGATE_SP_RUN" 1
 "$PY" scripts/compare_v4_shard_numerics.py \
-  "runs/${NUMGATE_SP_RUN}/stage0" "runs/${NUMGATE_SHARD_RUN}" --strict-current \
-  || fail "NUMERICS GATE FAILED: single-process and PPP4 disagree -- gemma shared-KV path is likely broken, campaign would be invalid. Stopping before burning the reservation."
+  "runs/${NUMGATE_SP_RUN}/stage0" "runs/${NUMGATE_SHARD_RUN}" \
+  --strict-current --rtol "$NUMERICS_RTOL" \
+  || fail "NUMERICS GATE FAILED: single-process and PPP4 differ beyond rtol=$NUMERICS_RTOL; inspect the comparator output to distinguish numerical, provenance, locality, and sharding failures."
 echo "==== GATE 1 PASSED $(date -Is) ===="
 
 echo "==== GATE 2 (manual read, not auto-abort): epoch 1-3 learning signal ===="

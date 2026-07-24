@@ -32,6 +32,7 @@ train:
     alpha: 32
     dropout: 0.0
   epochs: 500
+  micro_batch: 32
   v4_teacher_source: cache
   v4_teacher_residency: cpu_stream
   # 30 layers -> 8 stages of [4,4,3,4,4,3,4,4]; device ids repeat per node

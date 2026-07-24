@@ -31,6 +31,10 @@ train:
     alpha: 32
     dropout: 0.0
   epochs: 1
+  # Keep the numerical reference paired with the single-process side.  The
+  # capacity campaign below uses 32; the gate uses 16 because its reference
+  # must also fit on one H100 with identical cohort boundaries.
+  micro_batch: 16
   v4_teacher_source: cache
   v4_teacher_residency: cpu_stream
   v4_progress_every_s: 60
