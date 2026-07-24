@@ -550,6 +550,23 @@ Online-teacher LoRA runs (`train.online_teacher: true`) need no teacher cache.
 - Configs are `configs/base.yaml` plus small YAMLs in `configs/experiments/`.
 - Run outputs land in `runs/<run_name>/`.
 - Long work runs detached via `nohup setsid ... >> runs/pipeline*.log 2>&1 &`.
+- A Slurm post-processing job that must run when training TERMINATES — whether
+  by success, failure, timeout, or an intentional `scancel` — uses an
+  `afterany` dependency. Capture the producer id and submit the consumer
+  explicitly:
+
+  ```bash
+  TRAIN_JOB="$(sbatch --parsable scripts/qwen_ppp4_50.sbatch BASE EXP MODEL)"
+  REPORT_JOB="$(sbatch --parsable --dependency="afterany:${TRAIN_JOB}" \
+    scripts/v4_report.sbatch "runs/RUN_NAME")"
+  ```
+
+  Use `afterok` only when post-processing incomplete/failed artifacts would be
+  invalid. In particular, do **not** use `afterok` for campaign reports when
+  the planned stopping mechanism may be `scancel`: Slurm marks that producer
+  `CANCELLED`, so an `afterok` report remains pending forever. One report job
+  belongs to one exact run directory; never share a report output path across
+  concurrent runs.
 - After changes touching masking, aligned spans, cache layer-index conventions,
   or detach discipline, run `scripts/audit_configs.py`, compare single-process
   and PPP artifacts with `scripts/compare_v4_shard_numerics.py`, and run the
