@@ -248,7 +248,9 @@ don't fit, it rotates.** The memory arithmetic, per 80 GB H100:
 - Pipeline-v4 per stage holds: the owned shard's FROZEN bf16 weights
   (no grads, no moments — teacher-forced blockwise training never
   backpropagates through frozen weights), LoRA adapters + their optimizer
-  state (MBs), and ONE block's activations at micro-batch scale. 31B
+  state, and ONE block's activations at micro-batch scale. Expert-complete
+  MoE LoRA is not necessarily MB-scale: packed per-expert adapters can contain
+  hundreds of millions of parameters and must be accounted stage by stage. 31B
   trains on 4 cards with ~15 GB of weights per stage.
 - When even the owned frozen shard exceeds the card (397B: ~200 GB/stage),
   `v4_weight_residency: rotate` pages block weights one-way from mmap

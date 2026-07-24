@@ -273,6 +273,11 @@ def main():
         ("Training objective", str(first.get("hidden_loss",
                                              first.get("loss_kind", "unknown")))),
         ("Loss kind", str(first.get("loss_kind", "unknown"))),
+        ("LoRA",
+         (f"rank {first.get('lora_rank', 'unknown')}; "
+          f"alpha {first.get('lora_alpha', 'unknown')}; "
+          f"packed experts {first.get('lora_expert_parameters', 'unknown')}"
+          if first.get("lora_enabled", True) else "disabled")),
         ("Micro-batch / cohorts",
          f"{first.get('micro_batch', 'unknown')} / "
          f"{first.get('cohorts', 'unknown')} "

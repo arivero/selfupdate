@@ -55,9 +55,14 @@ class ParameterDeltaTracker:
                     if a.ndim != 2 or b.ndim != 2:
                         raise NotImplementedError(
                             "effective LoRA delta telemetry requires matrix adapters")
-                    base_weight = getattr(base_layer, "weight", None)
+                    parameter_name = getattr(module, "parameter_name", None)
+                    if parameter_name is not None and hasattr(module, "get_param"):
+                        base_weight = module.get_param()
+                    else:
+                        base_weight = getattr(base_layer, "weight", None)
                     if base_weight is None:
-                        raise RuntimeError("LoRA module has no base_layer.weight")
+                        raise RuntimeError(
+                            "LoRA module has no effective base parameter")
                     lora.append({
                         "a": a,
                         "b": b,
@@ -67,6 +72,8 @@ class ParameterDeltaTracker:
                         "base_sq": float(
                             base_weight.detach().float().square().sum()),
                         "effective_count": base_weight.numel(),
+                        "num_experts": int(
+                            getattr(module, "num_experts", 1)),
                     })
             self.lora_refs[layer] = lora
             params = [p for p in stack.block_params(layer) if p.requires_grad]
@@ -90,6 +97,22 @@ class ParameterDeltaTracker:
         a, b = entry["a"].detach().float(), entry["b"].detach().float()
         a0 = entry["a0"].to(a.device)
         b0 = entry["b0"].to(b.device)
+        experts = entry.get("num_experts", 1)
+        if experts > 1:
+            # PEFT ParamWrapper packs A=[E*r,in], B=[out,E*r] but its
+            # effective tensor is E independent products B_e A_e, not the
+            # dense cross-expert product B@A.
+            a = a.reshape(experts, -1, a.shape[-1])
+            a0 = a0.reshape(experts, -1, a0.shape[-1])
+            b = b.reshape(b.shape[0], -1, experts).permute(2, 0, 1)
+            b0 = b0.reshape(b0.shape[0], -1, experts).permute(2, 0, 1)
+            left = torch.cat((b, -b0), dim=2)
+            right = torch.cat((a, a0), dim=1)
+            gram_left = left.transpose(1, 2) @ left
+            gram_right = right @ right.transpose(1, 2)
+            return (
+                (gram_left * gram_right.transpose(1, 2)).sum().clamp_min(0)
+                * entry["scale"] ** 2)
         # [B, -B0] @ [A; A0] represents BA - B0A0.  Its Frobenius
         # norm follows from rank-(2r) Gram matrices, keeping telemetry O(r²).
         left = torch.cat((b, -b0), dim=1)

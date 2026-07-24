@@ -40,8 +40,8 @@ loss_L = HiddenLoss(y_L, teacher h[L])
 ```
 
 Both the residual input and attention context are detached and fixed during a
-local step. By default the attention module receives adapters-off uncensored
-teacher K/V; the legal-A diagnostic described below instead receives
+local step. Under the legacy `teacher_frozen` setting the attention module
+receives adapters-off uncensored teacher K/V; the legal-A diagnostic receives
 adapters-off flow-censored K/V. Attention censorship is encoded in the mask.
 The backward graph contains exactly the current block's trainable parameters;
 it cannot reach another block, embedding, final norm, vocabulary head,
@@ -81,7 +81,26 @@ and recurrent routes fail loudly rather than inherit new semantics silently.
 `v4_kv_source: student_refresh` is a narrowly named context refresh: adapters
 are enabled when regenerating frozen K/V, but the projection inputs and block
 residual inputs remain teacher hidden states. It is not student-trajectory
-training.
+training. For a campaign that adapts Q/K/V matrices, refresh is required at
+every epoch boundary (`v4_kv_refresh_epochs: 1`): Q is computed
+differentiably from teacher `h[L-1]` by the current block, while detached K/V
+is regenerated from the same teacher `h[L-1]` with the same adapter epoch.
+
+## Complete decoder-matrix LoRA coverage
+
+For Gemma4 and Qwen3.6, LoRA attaches to every ordinary `nn.Linear` inside
+each owned text decoder block, including hybrid/linear attention projections,
+shared experts and router projections. Packed MoE expert banks
+(`experts.gate_up_proj` and `experts.down_proj`) and bare router matrices are
+`nn.Parameter`, not `nn.Linear`; they use PEFT `target_parameters` and require
+`train.lora.expert_parameters: true`. Discovery fails loudly if such MoE
+matrices exist while that flag is false. Vision, embedding, final norm and LM
+head remain excluded.
+
+Packed adapters use name-keyed Kaiming-A/zero-B initialization so an owned
+layer is bit-identical under full-model and stage-scoped attachment. Their
+size is material: Gemma-4-26B complete LoRA has 495,790,080 parameters at r16
+and 1,983,160,320 at r64; Qwen3.6-35B-A3B has 946,698,880 at r16.
 
 ## PPP means independent layer shards
 

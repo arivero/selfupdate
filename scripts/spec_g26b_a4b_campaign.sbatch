@@ -66,6 +66,13 @@ case "$PPP4_ARM" in
     NUMGATE_SP_RUN=g26b_a4b_ppp4_scoped_b16_numgate_sp
     NUMGATE_SHARD_RUN=g26b_a4b_ppp4_scoped_b16_numgate_shard
     CAMPAIGN_RUN=g26b_a4b_ppp4_scoped_b32_campaign ;;
+  scoped_r64_b32)
+    NUMGATE_SP_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_r64_b16_numgate_sp.yaml
+    NUMGATE_SHARD_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_r64_b16_numgate_shard.yaml
+    CAMPAIGN_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_r64_b32_campaign.yaml
+    NUMGATE_SP_RUN=g26b_a4b_ppp4_scoped_r64_b16_numgate_sp
+    NUMGATE_SHARD_RUN=g26b_a4b_ppp4_scoped_r64_b16_numgate_shard
+    CAMPAIGN_RUN=g26b_a4b_ppp4_scoped_r64_b32_campaign ;;
   *) fail "unknown PPP4_ARM=$PPP4_ARM" ;;
 esac
 RUN_SUFFIX="j${SLURM_JOB_ID}"

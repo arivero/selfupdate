@@ -1,5 +1,43 @@
 # Issues / Follow-Ups
 
+## PRIORITY — implement and test full block fine-tuning beside complete LoRA (2026-07-24)
+
+The layerwise method must have a real full-fine-tuning arm, not only LoRA
+arms.  This is needed to distinguish a failure of the local training law from
+a capacity, rank, factorization, or projection-coverage limit imposed by
+LoRA.  "Full" here means every trainable matrix in the owned decoder block,
+including packed MoE expert `gate_up_proj`/`down_proj` tensors and router
+matrices; embeddings, final norm, and LM head remain frozen under the
+Frozen-Vocabulary Principle.
+
+This does **not** demote LoRA.  LoRA is the intended deployment mechanism
+because one frozen base model should support separate small adapters for many
+users without duplicating or modifying the base weights.  The full-fine-tune
+arm is the scientific capacity/control experiment; complete LoRA is the
+multi-user product method.  Reports must state this distinction explicitly.
+
+Implement and gate:
+
+1. a stage-scoped full-block optimizer path with the same detached
+   teacher-anchored local law and no cross-block graph;
+2. complete matrix coverage in both arms: softmax attention, hybrid/linear
+   attention projections, dense/shared MLP, packed experts, and router
+   matrices, with a fail-loud manifest of included and excluded parameters;
+3. adapter-refreshed teacher-anchored K/V for LoRA and correspondingly fresh
+   current-weight K/V for full fine-tuning at every epoch boundary;
+4. matched LoRA-rank and full-fine-tune comparisons using identical corpus,
+   cohort construction, masks, update/item budgets, evaluation cadence, and
+   initialization/base commit;
+5. memory, checkpoint size, epoch time, block loss, complete censored-student
+   CE/KL/argmax acceptance, recall, and standard-damage reporting; and
+6. a multi-user check showing two independently trained LoRA checkpoints can
+   be selected over the same immutable base model without merges or
+   cross-user state contamination.
+
+Do not interpret full fine-tuning outperforming LoRA as permission to merge
+and store per-user models.  It diagnoses adapter capacity and guides rank or
+adapter-structure changes.
+
 ## PRIORITY — `student_refresh` is not a student-trajectory fixed-point update (2026-07-24)
 
 The present name suggests that refreshing K/V after an epoch makes the local
@@ -56,24 +94,35 @@ The existing `student_refresh` mode must therefore be described as
 **adapter-refreshed teacher-anchored context**, not as evolving-student K/V
 or a fixed-point solver.
 
-### Scientific decision required before a patch
+### Owner decision: adapter-refreshed teacher-anchored Q/K/V
 
-There are two coherent algorithms, and they must not be conflated:
+Keep the publication-critical teacher-anchored law.  If LoRA is attached to
+the matrices that generate Q, K, or V, the training operator for epoch `e`
+must use the current adapters consistently:
 
-1. **Keep the publication-critical teacher-anchored law.** Retain detached
-   `t[L-1]` for Q/residual and regenerate Q/K/V context at that same teacher
-   anchor. Rename or relabel `student_refresh` in configuration and telemetry,
-   and treat it only as a projection-drift correction. It cannot be claimed
-   to close the deployment-trajectory gap.
-2. **Add an explicitly experimental outer fixed-point iteration.** At an
-   epoch boundary, run the complete censored student under `no_grad`, snapshot
-   detached `s[L-1]` for the whole training corpus, and in the following epoch
-   derive the block residual and Q/K/V consistently from that same snapshot.
-   Targets may remain teacher `t[L]`, and the snapshot prevents a cross-block
-   backward graph, but this changes the optimizer input from teacher
-   `t[L-1]` to student `s[L-1]`. It therefore violates the current
-   publication-critical training law and must not be introduced silently on
-   this branch.
+```text
+Q_e[L] = (Wq[L] + dWq_e[L]) t[L-1]
+K_e[L] = (Wk[L] + dWk_e[L]) t[L-1]
+V_e[L] = (Wv[L] + dWv_e[L]) t[L-1].
+```
+
+Q is produced by the ordinary differentiable local block call.  K/V may be
+cached because they are context-only and detached, but that cache becomes
+stale as soon as an optimizer epoch changes `dWk` or `dWv`.  Therefore the
+per-(layer, cohort) training K/V must be invalidated at the epoch boundary
+and regenerated from cached teacher `t[L-1]` using the newly updated LoRA
+matrices before the next epoch consumes it.  The refresh is adapters-ON and
+no-grad; its provenance must identify the adapter epoch that produced it.
+
+This is the intended meaning of the existing refresh mechanism.  Rename or
+relabel the historical `student_refresh` term as
+**adapter-refreshed teacher-anchored context**: no student trajectory is used
+to build training K/V.
+
+An outer fixed-point experiment based on complete censored-student
+`s[L-1]` remains a different, currently unsanctioned algorithm.  It would
+change the optimizer input away from teacher `t[L-1]` and must not be
+introduced as part of this repair.
 
 Do **not** implement the superficially cheaper middle ground of student K/V
 plus teacher Q/residual. It neither matches deployment nor preserves a

@@ -139,6 +139,8 @@ def validate_knob_schedule(cfg) -> None:
 
     if train.v4_stage >= 0 and not train.lora.enabled:
         bad.append("staged v4.6 a/b evaluation requires LoRA")
+    if train.lora.expert_parameters and not train.lora.enabled:
+        bad.append("lora.expert_parameters requires lora.enabled")
     if train.micro_batch < 1:
         bad.append("micro_batch must be >= 1")
     # Launch-time cohort-granularity gate (2026-07-24): the PPP8 numerics

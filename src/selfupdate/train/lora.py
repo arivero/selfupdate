@@ -7,6 +7,7 @@ with the teacher cache is preserved exactly.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 
@@ -28,6 +29,12 @@ MLA_V4_TARGET_MODULES = ["q_a_proj", "q_b_proj", "kv_proj", "o_b_proj",
 _KV_SIDE_SUBMODULES = (".compressor.", ".indexer.")
 TARGET_LEAVES = tuple(set(TARGET_MODULES) | set(MLA_V3_TARGET_MODULES)
                       | set(MLA_V4_TARGET_MODULES))
+EXPERT_PARAMETER_LEAVES = ("gate_up_proj", "down_proj")
+ALL_BLOCK_LINEAR_MODEL_TYPES = (
+    "gemma4", "gemma4_text",
+    "qwen3_5", "qwen3_5_text",
+    "qwen3_5_moe", "qwen3_5_moe_text",
+)
 
 _LAYER_RE = re.compile(r"\blayers\.(\d+)\.")
 
@@ -43,9 +50,11 @@ def _owned_targets(model, owned_layers) -> list[str]:
     nn.Linear (gemma4 vision wraps projections in Gemma4ClippableLinear)."""
     import torch
 
+    model_type = getattr(getattr(model, "config", None), "model_type", "")
+    all_block_linears = model_type in ALL_BLOCK_LINEAR_MODEL_TYPES
     targets = []
     for name, module in model.named_modules():
-        if name.split(".")[-1] not in TARGET_LEAVES:
+        if not all_block_linears and name.split(".")[-1] not in TARGET_LEAVES:
             continue
         if not isinstance(module, torch.nn.Linear):
             continue
@@ -62,6 +71,94 @@ def _owned_targets(model, owned_layers) -> list[str]:
             f"owned-layer LoRA target discovery found no projections for "
             f"layers {sorted(owned_layers)[:4]}...")
     return targets
+
+
+def _expert_parameter_targets(model, owned_layers=None) -> list[str]:
+    """Exact packed expert/router tensors eligible for MoE LoRA.
+
+    Gemma4 and Qwen MoE families store all expert projections as
+    ``[experts, out, in]`` Parameters.  Suffix-based module discovery cannot
+    see them, and targeting a generic ``gate_up_proj`` would also catch
+    unrelated/vision parameters.  Return exact text-decoder names.
+    """
+    import torch
+
+    owned = None if owned_layers is None else set(owned_layers)
+    targets = []
+    modules = dict(model.named_modules())
+    for name, param in model.named_parameters():
+        parent_name, _, leaf = name.rpartition(".")
+        parent = modules.get(parent_name)
+        packed_expert = (
+            leaf in EXPERT_PARAMETER_LEAVES
+            and ".experts." in name and param.ndim == 3)
+        bare_router = (
+            leaf == "weight" and param.ndim == 2
+            and (name.endswith(".mlp.gate.weight")
+                 or name.endswith(".router.weight")))
+        if not (packed_expert or bare_router):
+            continue
+        # A normal Linear is already covered by target_modules.
+        if isinstance(parent, torch.nn.Linear):
+            continue
+        if "visual" in name or "vision" in name:
+            continue
+        match = _LAYER_RE.search(name)
+        if match is None:
+            continue
+        if owned is not None and int(match.group(1)) not in owned:
+            continue
+        targets.append(name)
+    return targets
+
+
+def _stable_adapter_seed(base_seed: int, target: str) -> int:
+    digest = hashlib.sha256(
+        f"selfupdate-packed-expert-lora:{base_seed}:{target}".encode()
+    ).digest()
+    return int.from_bytes(digest[:8], "little") & ((1 << 63) - 1)
+
+
+def _canonical_adapter_target(module_name: str, module) -> str:
+    """Recover the pre-PEFT target name from nested Linear/ParamWrappers."""
+    name = module_name.removeprefix("base_model.model.")
+    parts = [part for part in name.split(".") if part != "base_layer"]
+    name = ".".join(parts)
+    parameter_name = getattr(module, "parameter_name", None)
+    return f"{name}.{parameter_name}" if parameter_name else name
+
+
+def _reset_adapters_stably(peft_model, base_seed: int) -> None:
+    """Name-keyed LoRA init, identical for full and stage-scoped attaches.
+
+    Packed expert parameters are injected after ordinary Linear modules by
+    PEFT, so global traversal RNG cannot be made stage-local merely by
+    consuming a prefix.  A name-keyed CPU generator preserves the standard
+    Kaiming-A/zero-B law without making initialization depend on which foreign
+    blocks exist in this process.
+    """
+    import torch
+
+    with torch.no_grad():
+        for name, module in peft_model.named_modules():
+            adapters_a = getattr(module, "lora_A", None)
+            adapters_b = getattr(module, "lora_B", None)
+            if not adapters_a or not adapters_b:
+                continue
+            target = _canonical_adapter_target(name, module)
+            for adapter_name in adapters_a:
+                if adapter_name not in adapters_b:
+                    continue
+                a = adapters_a[adapter_name].weight
+                b = adapters_b[adapter_name].weight
+                generator = torch.Generator(device="cpu")
+                generator.manual_seed(
+                    _stable_adapter_seed(base_seed, f"{target}:{adapter_name}"))
+                staged = torch.empty(a.shape, dtype=torch.float32, device="cpu")
+                torch.nn.init.kaiming_uniform_(
+                    staged, a=math.sqrt(5), generator=generator)
+                a.copy_(staged.to(device=a.device, dtype=a.dtype))
+                b.zero_()
 
 
 def _target_modules(model):
@@ -92,22 +189,23 @@ def _target_modules(model):
             raise ValueError(
                 "DeepSeek-V4 LoRA target discovery found no projections")
         return targets
-    if model_type != "gemma4":
+    if model_type not in ALL_BLOCK_LINEAR_MODEL_TYPES:
         return TARGET_MODULES
     import torch
 
-    prefix = "model.language_model.layers."
     targets = []
     for name, module in model.named_modules():
-        if not name.startswith(prefix):
+        if _LAYER_RE.search(name) is None:
             continue
-        parts = name.split(".")
-        if len(parts) < 1 or parts[-1] not in TARGET_LEAVES:
+        if "visual" in name or "vision" in name:
+            continue
+        if any(part in name for part in _KV_SIDE_SUBMODULES):
             continue
         if isinstance(module, torch.nn.Linear):
             targets.append(name)
     if not targets:
-        raise ValueError("Gemma 4 LoRA target discovery found no text projection .linear modules")
+        raise ValueError(
+            f"{model_type} LoRA target discovery found no decoder Linear modules")
     return targets
 
 
@@ -163,6 +261,36 @@ def _consume_linear_lora_init(specs: list[tuple[str, int, int]],
 
 def attach_lora(model, lora_cfg, owned_layers=None):
     from peft import LoraConfig, get_peft_model
+    import torch
+
+    rng_state = torch.random.get_rng_state()
+    # PEFT constructs adapters on the same device as their base tensors and
+    # may therefore consume CUDA RNG.  Touch only devices that actually own
+    # materialized parameters in this process: stage-scoped jobs must not
+    # initialize or perturb a foreign card merely to preserve RNG state.
+    cuda_devices = sorted({
+        int(param.device.index)
+        for param in model.parameters()
+        if param.device.type == "cuda" and param.device.index is not None
+    })
+    cuda_rng_states = {
+        device: torch.cuda.get_rng_state(device)
+        for device in cuda_devices
+    }
+    base_seed = torch.initial_seed()
+    discovered_expert_targets = _expert_parameter_targets(model, owned_layers)
+    if discovered_expert_targets and not lora_cfg.expert_parameters:
+        raise ValueError(
+            "packed MoE expert/router matrices were found but "
+            "lora.expert_parameters=false; refusing an attention/shared-only "
+            "adapter that silently freezes the expert memory: "
+            f"{discovered_expert_targets[:4]}")
+    expert_targets = (
+        discovered_expert_targets if lora_cfg.expert_parameters else [])
+    if lora_cfg.expert_parameters and not expert_targets:
+        raise ValueError(
+            "lora.expert_parameters=true but no packed text expert "
+            "gate_up_proj/down_proj Parameters were found in owned layers")
 
     if owned_layers is None:
         # Historical full-model path: preserve its initialization byte for
@@ -203,6 +331,7 @@ def attach_lora(model, lora_cfg, owned_layers=None):
             lora_alpha=lora_cfg.alpha,
             lora_dropout=lora_cfg.dropout,
             target_modules=targets,
+            target_parameters=expert_targets or None,
             bias="none",
             task_type="CAUSAL_LM",
         ),
@@ -212,4 +341,11 @@ def attach_lora(model, lora_cfg, owned_layers=None):
         # attach too; later dropout or other stochastic machinery must not
         # learn which loading path was used.
         _consume_linear_lora_init(suffix_specs, int(lora_cfg.r))
+    if expert_targets:
+        _reset_adapters_stably(peft_model, base_seed)
+        # Expert-enabled initialization is explicitly name-keyed and must not
+        # fork later stochastic machinery according to stage ownership.
+        torch.random.set_rng_state(rng_state)
+        for device, state in cuda_rng_states.items():
+            torch.cuda.set_rng_state(state, device)
     return peft_model

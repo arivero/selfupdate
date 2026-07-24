@@ -72,6 +72,21 @@ columns per run.
 | 4B full-FT tail window k=8 (frozen copy) | ~0.9B | [expunged] | ~30 GB (nvidia-smi, run in flight) | bf16 student 8 + bf16 teacher 8 + window fp32 3.6 + Adam 7.2 + grads 3.6 |
 | gpt-oss-20B LoRA (MXFP4→bf16) | ~60M | summed | 40.7 GB | dequantized base ~40 |
 
+Current complete-adapter accounting for the 2026-07-24 H100 arms (adapter
+parameters only, before gradients/optimizer/transient effective deltas):
+
+| model | coverage | rank | adapter params | bf16 bytes |
+|---|---|---:|---:|---:|
+| Gemma-4-26B-A4B | all decoder Linear + router + 128 packed experts/layer | 16 | 495,790,080 | 0.992 GB |
+| Gemma-4-26B-A4B | same | 64 | 1,983,160,320 | 3.966 GB |
+| Qwen3.6-27B | dense MLP + softmax and hybrid/linear attention | 16 | 116,727,808 | 0.233 GB |
+| Qwen3.6-35B-A3B | hybrid/softmax attention + shared MLP + router + 256 packed experts/layer | 16 | 946,698,880 | 1.893 GB |
+
+These totals are partitioned by owned layers in PPP4. PEFT's packed-parameter
+path may also materialize an effective expert delta during a block forward;
+the first real H100 gate must measure that transient rather than extrapolate
+only from checkpoint size.
+
 ## Speed/Memory Ledger — 2026-07-06 Hot-Loop Fixes
 
 The low-memory claim is the research goal; throughput work must never buy

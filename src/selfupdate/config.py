@@ -185,6 +185,10 @@ class LoraConfig:
     r: int = 16
     alpha: int = 32
     dropout: float = 0.0
+    # Packed MoE banks are 3-D nn.Parameters rather than nn.Linear modules.
+    # They require PEFT target_parameters; keep this explicit because their
+    # adapter parameter/memory cost is much larger than ordinary projections.
+    expert_parameters: bool = False
 
 
 @dataclass
