@@ -33,6 +33,7 @@ set -uo pipefail
 : "${SLURM_SUBMIT_DIR:?run sbatch from the repository root}"
 ROOT="$SLURM_SUBMIT_DIR"
 cd "$ROOT"
+export SELFUPDATE_SHM_LEASE_GC=1
 
 if [[ -f "$ROOT/.campaign_env.sh" ]]; then
   # shellcheck source=/dev/null

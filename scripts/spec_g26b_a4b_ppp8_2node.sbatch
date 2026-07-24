@@ -40,6 +40,7 @@ set -uo pipefail
 : "${SLURM_SUBMIT_DIR:?run sbatch from the repository root}"
 ROOT="$SLURM_SUBMIT_DIR"
 cd "$ROOT"
+export SELFUPDATE_SHM_LEASE_GC=1
 
 if [[ -f "$ROOT/.campaign_env.sh" ]]; then
   # shellcheck source=/dev/null
@@ -80,7 +81,7 @@ echo "==== stage: HF model-weight cache -> /dev/shm, both nodes $(date -Is) ====
 # Multi-Node Conventions); the shared Lustre cache under caches/ (below) is
 # NOT this and does not need per-node duplication.
 scripts/stage_hf_cache.sh --shm google/gemma-4-26B-A4B-it || fail "stage_hf_cache on $NODE0"
-ssh -o BatchMode=yes "$NODE1" "cd '$ROOT' && scripts/stage_hf_cache.sh --shm google/gemma-4-26B-A4B-it" \
+ssh -o BatchMode=yes "$NODE1" "cd '$ROOT' && SLURM_JOB_ID='$SLURM_JOB_ID' SELFUPDATE_SHM_LEASE_GC=1 scripts/stage_hf_cache.sh --shm google/gemma-4-26B-A4B-it" \
   || fail "stage_hf_cache on $NODE1"
 
 echo "==== stage: fresh vLLM answer generation (2071 items), $NODE0 only $(date -Is) ===="
@@ -162,7 +163,7 @@ SELFUPDATE_TEACHER_CACHE_DEST="$SELFUPDATE_TEACHER_CACHE_ROOT" \
   scripts/stage_teacher_cache_shm.sh "$CACHE_NAME" \
   || fail "stage_teacher_cache_shm on $NODE0"
 ssh -o BatchMode=yes "$NODE1" \
-  "cd '$ROOT' && SELFUPDATE_TEACHER_CACHE_SOURCE='$CACHE_SOURCE_ROOT' SELFUPDATE_TEACHER_CACHE_DEST='$SELFUPDATE_TEACHER_CACHE_ROOT' scripts/stage_teacher_cache_shm.sh '$CACHE_NAME'" \
+  "cd '$ROOT' && SLURM_JOB_ID='$SLURM_JOB_ID' SELFUPDATE_SHM_LEASE_GC=1 SELFUPDATE_TEACHER_CACHE_SOURCE='$CACHE_SOURCE_ROOT' SELFUPDATE_TEACHER_CACHE_DEST='$SELFUPDATE_TEACHER_CACHE_ROOT' scripts/stage_teacher_cache_shm.sh '$CACHE_NAME'" \
   || fail "stage_teacher_cache_shm on $NODE1"
 
 # Waiting on a cross-node stage set needs to check REMOTE pids over ssh, not

@@ -35,6 +35,7 @@ distillation; attention censorship; frozen teacher KV).
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import random
 import socket
@@ -2420,9 +2421,9 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                         peft_model=None):
     """Measured locality certification for the v4 objective.
 
-    For a sample of (item, layer) cells, run one v4 step's backward and
-    verify the gradient touches exactly the current block: zero gradient on
-    every other block, the embedding, the final norm, and the LM head.
+    For every owned layer and a sample of items, run one v4 step's backward
+    and verify the gradient touches exactly the current block: zero gradient
+    on every other block, the embedding, the final norm, and the LM head.
     """
     from ..data.dataset import DistillDataset
 
@@ -2450,13 +2451,21 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
         cache_source_compaction=cfg.cache.source_compaction,
         student_compaction=cfg.mask.compaction,
         item_cache_items=cfg.cache.item_cache_items)
-    sample_layers = sorted({owned.start, (owned.start + owned.stop - 1) // 2,
-                            owned.stop - 1})
+    sample_layers = list(owned)
     adapters_off = peft_model.disable_adapter if peft_model is not None else None
     local_sq = 0.0
     cross_sq = 0.0
     vocab_sq = 0.0
     checked = 0
+    layer_evidence = {
+        layer: {
+            "local_sq": 0.0,
+            "cross_sq": 0.0,
+            "vocab_sq": 0.0,
+            "probes_used": 0,
+        }
+        for layer in sample_layers
+    }
     vocab_params = (list(stack.embed_tokens.parameters())
                     + list(stack.final_norm.parameters())
                     + list(stack.lm_head.parameters())
@@ -2584,18 +2593,32 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                            normed=(layer == n), layer=layer,
                            aligned_input=flat_input)
             (loss * int(valid.sum())).backward()
+            probe_local_sq = 0.0
             for p in stack.block_params(layer):
                 if p.grad is not None:
-                    local_sq += float(p.grad.float().square().sum())
+                    probe_local_sq += float(
+                        p.grad.float().square().sum())
+            probe_cross_sq = 0.0
             for foreign in range(1, n + 1):
                 if foreign == layer:
                     continue
                 for p in stack.block_params(foreign):
                     if p.grad is not None:
-                        cross_sq += float(p.grad.float().square().sum())
+                        probe_cross_sq += float(
+                            p.grad.float().square().sum())
+            probe_vocab_sq = 0.0
             for p in vocab_params:
                 if p.grad is not None:
-                    vocab_sq += float(p.grad.float().square().sum())
+                    probe_vocab_sq += float(
+                        p.grad.float().square().sum())
+            local_sq += probe_local_sq
+            cross_sq += probe_cross_sq
+            vocab_sq += probe_vocab_sq
+            evidence = layer_evidence[layer]
+            evidence["local_sq"] += probe_local_sq
+            evidence["cross_sq"] += probe_cross_sq
+            evidence["vocab_sq"] += probe_vocab_sq
+            evidence["probes_used"] += 1
             checked += 1
             for p in stack.block_params(layer):
                 p.grad = None
@@ -2603,9 +2626,36 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
                 p.data = cpu_data
             for buf, cpu_data in paged_buf:
                 buf.data = cpu_data
-    passed = (local_sq > 0 and cross_sq == 0.0 and vocab_sq == 0.0)
+    per_layer = {}
+    for layer, evidence in layer_evidence.items():
+        finite_positive = (
+            evidence["probes_used"] > 0
+            and evidence["local_sq"] > 0.0
+            and math.isfinite(evidence["local_sq"]))
+        per_layer[str(layer)] = {
+            "local_grad_norm": evidence["local_sq"] ** 0.5,
+            "cross_block_grad_norm": evidence["cross_sq"] ** 0.5,
+            "frozen_vocab_grad_norm": evidence["vocab_sq"] ** 0.5,
+            "finite_positive": finite_positive,
+            "probes_used": evidence["probes_used"],
+        }
+    every_local = (
+        len(per_layer) == len(sample_layers)
+        and all(row["finite_positive"] for row in per_layer.values()))
+    checked_layers = [
+        str(layer) for layer, evidence in layer_evidence.items()
+        if evidence["probes_used"] > 0
+    ]
+    passed = (every_local and cross_sq == 0.0 and vocab_sq == 0.0)
     return {
         "items": checked,
+        "probes_used": checked,
+        "checked_layers": checked_layers,
+        "per_layer": per_layer,
+        "certificate_source": (
+            "post_walk_cache"
+            if cfg.train.v4_teacher_source == "cache"
+            else "post_walk_regenerated_teacher"),
         "gradient_contract": (
             "flow_censored_teacher_blockwise_frozen_context_kv"
             if cfg.train.v4_context_source == "flow_censored_teacher" else
@@ -2615,6 +2665,6 @@ def certify_locality_v4(cfg, stack, tok, cache, run_dir, items: int = 4,
         "local_grad_norm": local_sq ** 0.5,
         "cross_block_leak_grad_norm": cross_sq ** 0.5,
         "frozen_vocab_grad_norm": vocab_sq ** 0.5,
-        "local_signal_present_in_every_block": local_sq > 0,
+        "local_signal_present_in_every_block": every_local,
         "passed": bool(passed),
     }

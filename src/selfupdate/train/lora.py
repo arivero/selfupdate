@@ -7,6 +7,7 @@ with the teacher cache is preserved exactly.
 
 from __future__ import annotations
 
+import math
 import re
 
 TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -110,11 +111,91 @@ def _target_modules(model):
     return targets
 
 
+def _canonical_target_specs(model) -> list[tuple[str, int, int]]:
+    """Exact PEFT traversal order and Linear shapes for a full-model attach.
+
+    ``_target_modules`` may return exact paths (Gemma/DeepSeek-V4) or leaf
+    suffixes (the ordinary decoder families).  PEFT visits ``named_modules``
+    in model order and applies the same exact-or-suffix match.  Reconstructing
+    that ordered list lets a stage-scoped attach preserve the full attach's
+    RNG stream without creating adapters on foreign meta blocks.
+    """
+    import torch
+
+    selected = list(_target_modules(model))
+    exact = set(selected)
+    specs = []
+    for name, module in model.named_modules():
+        if name not in exact and not any(
+                name.endswith(f".{target}") for target in selected):
+            continue
+        if not isinstance(module, torch.nn.Linear):
+            raise TypeError(
+                "stage-scoped LoRA RNG equivalence currently requires "
+                f"ordinary Linear targets; {name!r} is "
+                f"{type(module).__name__}")
+        specs.append((name, int(module.in_features),
+                      int(module.out_features)))
+    if not specs:
+        raise ValueError("canonical full-model LoRA target list is empty")
+    return specs
+
+
+def _consume_linear_lora_init(specs: list[tuple[str, int, int]],
+                              rank: int) -> None:
+    """Advance CPU RNG exactly as PEFT 0.19.1 initializes Linear LoRA.
+
+    For each target PEFT constructs A and B (one ``nn.Linear`` reset each),
+    then ``reset_lora_parameters`` initializes A a second time with the same
+    Kaiming law and zeros B.  The zeroing consumes no RNG.  Keeping these
+    throwaway tensors one target at a time bounds temporary memory to one
+    adapter pair.
+    """
+    import torch
+
+    for _name, in_features, out_features in specs:
+        lora_a = torch.nn.Linear(in_features, rank, bias=False)
+        lora_b = torch.nn.Linear(rank, out_features, bias=False)
+        torch.nn.init.kaiming_uniform_(
+            lora_a.weight, a=math.sqrt(5))
+        del lora_a, lora_b
+
+
 def attach_lora(model, lora_cfg, owned_layers=None):
     from peft import LoraConfig, get_peft_model
 
-    targets = (_owned_targets(model, set(owned_layers))
-               if owned_layers is not None else _target_modules(model))
+    if owned_layers is None:
+        # Historical full-model path: preserve its initialization byte for
+        # byte.  Stage-scoped equivalence is implemented only in the branch
+        # below.
+        targets = _target_modules(model)
+        prefix_specs = suffix_specs = []
+    else:
+        owned = set(owned_layers)
+        targets = _owned_targets(model, owned)
+        canonical = _canonical_target_specs(model)
+        canonical_names = [name for name, _, _ in canonical]
+        expected_owned = [
+            name for name in canonical_names
+            if ((match := _LAYER_RE.search(name)) is not None
+                and int(match.group(1)) in owned)
+        ]
+        if targets != expected_owned:
+            raise RuntimeError(
+                "stage-scoped LoRA targets are not the owned subsequence of "
+                "the canonical full-model attach; refusing an RNG-shifted "
+                f"run (scoped={targets[:4]!r}, "
+                f"canonical_owned={expected_owned[:4]!r})")
+        positions = [canonical_names.index(name) for name in targets]
+        first, last = positions[0], positions[-1] + 1
+        if positions != list(range(first, last)):
+            raise RuntimeError(
+                "stage-scoped LoRA ownership is not contiguous in canonical "
+                "target order; cannot preserve full-model RNG exactly")
+        prefix_specs = canonical[:first]
+        suffix_specs = canonical[last:]
+        _consume_linear_lora_init(prefix_specs, int(lora_cfg.r))
+
     peft_model = get_peft_model(
         model,
         LoraConfig(
@@ -126,4 +207,9 @@ def attach_lora(model, lora_cfg, owned_layers=None):
             task_type="CAUSAL_LM",
         ),
     )
+    if owned_layers is not None:
+        # Leave the process-wide RNG at the same point as a canonical full
+        # attach too; later dropout or other stochastic machinery must not
+        # learn which loading path was used.
+        _consume_linear_lora_init(suffix_specs, int(lora_cfg.r))
     return peft_model

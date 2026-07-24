@@ -185,6 +185,15 @@ side; the allocation itself has the 24-hour Slurm wall time.  Current
 seconds when the config enables them; use those rows for progress rather than
 inferring it from GPU utilization.
 
+The H100 campaign templates opt into `scripts/shm_lease_gc.sh` before staging.
+On each node it records the active Slurm allocation and the exact HF snapshot
+and teacher-cache identities it needs, then removes only this account's
+unleased entries under `/dev/shm/$USER/selfupdate-{hf,teacher}-cache`.  A
+failed Slurm query is fail-closed: no cache is removed.  The collector is
+deliberately not globally enabled for other launch paths until every consumer
+there also declares a lease.  On the first rollout, inspect the node manually
+after allocation to confirm the lease and remaining SHM entries.
+
 ## Common traps
 
 - A bare `cuda` device string may not identify the physical card intended by
