@@ -143,3 +143,29 @@ agpuh01 / agpuh02 busy with the r16 arms (Gemma-31B `422811`, Qwen-35B
 `422807`), both finishing within hours; agpuh03 is `drain`. The r64 queue is
 PENDING behind them and will flow as nodes free. Core huber-r64 (979/81/83/85)
 sit ahead of the alt-loss arms by submit order.
+
+## v5: trainv5.py fired — job 423052 (owner instruction, 2026-07-25 evening)
+
+`scripts/trainv5.py` — pure monolith (no `selfupdate` imports, new run
+identity, zero hash-collision surface with v4). Law: self-distillation —
+teacher = same model adapters-off WITH passage; student = model+LoRA (all 7
+Linear kinds, ALL 60 layers) with the passage REMOVED (remove-view =
+deployment condition); KL(teacher||student) at answer positions, end-to-end
+backprop. Solves-by-construction the two v4 failures: MLPs get output-level
+gradient, and there is no teacher K/V cache to go stale.
+
+- Data reuse: examples jsonl + gemma4_31b vLLM responses (exact ids);
+  censored prompts by text surgery with an exact round-trip gate
+  (2071/2071 pass, ~215 tokens cut, teacher word_acc 0.870).
+- Owner notes: depth-uniform LoRA capacity (unknown memorization locus) +
+  per-layer surprise telemetry each epoch (the profile itself localizes
+  where poetry lives); optional --layer-gate topk:N. Capacity check:
+  3 bits/param vs gzip'd Machado+Cervantes (r32 → ratio >>1).
+- Evals in-file: generative recall per corpus from censored prompts,
+  arc_easy damage (100 vendored), teacher-forced argmax acceptance (v4's
+  flat-0.556 metric — direct comparison), frozen-vocab tripwire.
+- Launch: scripts/trainv5.sbatch, job 423052 (4xH100, behind the r64+screen
+  queue). Defaults: Gemma-4-31B dense, r32/a64, lr 1e-4 AdamW, 8 epochs,
+  eval every epoch. Metrics in runs/trainv5_g31b_selfdistill/metrics.jsonl.
+- vN roadmap in the file header: censorship generalizes to masking distant
+  high-attention tokens (continuous personalization).
