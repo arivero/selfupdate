@@ -285,3 +285,32 @@ capacity, eval, epoch), stdout in `runs/sbatch_trainv5_<jobid>.out`.
 - Write verdicts into THIS file under each section, then update
   EXPERIMENTS.md only once per closed question, and keep memory files
   (v4-not-learning-diagnosis, a4b-r64-numerics-discrepancy) in sync.
+
+## v5 paced campaign — one arm every 2 days until Aug 15 (owner, 2026-07-26)
+
+All 24h-capped (`scripts/trainv5.sbatch`), `--begin=<date>T20:00` so the
+cluster stays usable by others between arms. Baseline huber/all/r32/1e-4 is
+job 423052 (runs first, unscheduled). Analysis per §D; every arm logs the
+surprise profile, backprop counts, tripwire certifications, and the same
+fixed recall subset.
+
+| begin | run_name | axis | args | job |
+|---|---|---|---|---|
+| Jul 28 | trainv5_g31b_vmse | loss | vocab_mse | 423062 |
+| Jul 30 | trainv5_g31b_dcos | loss | delta_cosine | 423063 |
+| Aug 01 | trainv5_g31b_nmse | loss | nmse | 423064 |
+| Aug 03 | trainv5_g31b_cos | loss | cosine | 423065 |
+| Aug 05 | trainv5_g31b_huber_topk8 | gate | topk:8 | 423066 |
+| Aug 07 | trainv5_g31b_vmse_topk8 | loss x gate | vocab_mse + topk:8 | 423067 |
+| Aug 09 | trainv5_g31b_huber_mf25 | gate (PPP-friendly) | minfrac:0.25 | 423068 |
+| Aug 11 | trainv5_g31b_huber_r8 | capacity floor | r8/a16 | 423069 |
+| Aug 13 | trainv5_g31b_huber_r128 | capacity abundance | r128/a256 | 423070 |
+| Aug 15 | trainv5_g31b_vmse_lr3e4 | step size | vocab_mse + lr 3e-4 | 423071 |
+
+Review verdicts (2026-07-26 final pass): monolith purity confirmed (stdlib +
+torch/transformers/peft only); layerwise isolation is now CERTIFIED at
+runtime (one-shot single-block backward leak check, batch 1) plus per-batch
+detached-input assertions and the per-epoch frozen-vocabulary fingerprint;
+teacher hiddens host-RAM cached after first computation (epochs 2+ skip the
+teacher forward, ~1/3 of step compute); fixed a view-retention leak (~8 GiB)
+and per-epoch recall resampling churn.
