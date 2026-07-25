@@ -1,0 +1,29 @@
+# Qwen-27B r64 2x2 'not-learning' screen — loss-geometry + LR arm.
+# vocab_mse at 10x LR: the signal-giving loss with enough step size to move weights.
+run_name: campaign50_q27b_ppp4_r64_vmse_lr3e5
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 50
+  seed: 17
+  hidden_loss: vocab_mse
+  lora: {enabled: true, r: 64, alpha: 128, dropout: 0.0, expert_parameters: false}
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_stage_splits: [16, 32, 48]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-5
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5
