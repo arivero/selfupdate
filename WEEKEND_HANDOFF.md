@@ -147,12 +147,27 @@ sit ahead of the alt-loss arms by submit order.
 ## v5: trainv5.py fired — job 423052 (owner instruction, 2026-07-25 evening)
 
 `scripts/trainv5.py` — pure monolith (no `selfupdate` imports, new run
-identity, zero hash-collision surface with v4). Law: self-distillation —
-teacher = same model adapters-off WITH passage; student = model+LoRA (all 7
-Linear kinds, ALL 60 layers) with the passage REMOVED (remove-view =
-deployment condition); KL(teacher||student) at answer positions, end-to-end
-backprop. Solves-by-construction the two v4 failures: MLPs get output-level
-gradient, and there is no teacher K/V cache to go stale.
+identity, zero hash-collision surface with v4). Law (owner-corrected
+2026-07-26 — "backprop only happens layerwise"; output-logit training is
+FORBIDDEN, embeddings/unembedding/final norm never move, gate asserted at
+startup + tripwired per epoch): teacher = same model adapters-off WITH
+passage, one no-grad pass records per-layer hidden targets h_t[L] at answer
+rows; student = model+LoRA (all 7 Linear kinds, ALL 60 layers) with the
+passage REMOVED (remove-view = deployment condition), ONE forward in which
+every block input is detached by hook — block L transforms its OWN censored
+trajectory state h_s[L-1], and its local loss distance(y_L, h_t[L]) roots
+only in block L's LoRA. Depth-uniform loss menu = the v4 screen's axis:
+--local-loss huber|nmse|cosine|delta_cosine|vocab_mse (formulas copied from
+losses.py; delta_cosine anchor = the block's own input h_s[L-1]). Output
+KL/CE vs teacher are EVALUATION ONLY. Solves-by-construction the two v4
+failures: the local residual (censored-self vs passage-informed teacher) is
+large at every layer so the MLPs finally get signal, and there is no teacher
+K/V cache to go stale (context recomputed through current adapters each
+forward). Owner speed insight: --layer-gate topk:N / minfrac:F backprops
+only the biggest per-layer losses each step (per-block backwards are
+independent); selection values are gathered with <=1 sync per device, and
+the loss normalizes by n_layers so gated arms keep the same per-layer
+effective LR as 'all'.
 
 - Data reuse: examples jsonl + gemma4_31b vLLM responses (exact ids);
   censored prompts by text surgery with an exact round-trip gate
@@ -238,16 +253,24 @@ capacity, eval, epoch), stdout in `runs/sbatch_trainv5_<jobid>.out`.
   and student_argmax RISING across epochs while arc_easy stays within ~2
   points of its epoch-0 value. Machado (1490 items) should move before
   Quijote (581) — exposure asymmetry.
-- Read `surprise_profile` in the epoch rows: the per-layer teacher/student
-  discrepancy. Where it CONCENTRATES over epochs is empirically "which layer
-  remembers poetry" — plot it (layer x epoch heatmap) for the owner; this is
-  a headline figure regardless of outcome.
-- If loss falls but recall doesn't: check whether generations degenerate
-  (decode a few in the checkpoint with scripts/trainv5.py logic) before
-  concluding anything — KL can be gamed by mode collapse onto generic text.
-- Success here + failure in B/C = the end-to-end objective was the missing
-  ingredient; next arms: --loss ce contrast, --layer-gate topk:8 (localized
-  training), smaller r (capacity floor), and the vN attention-top-k censor.
+- Read `surprise_profile` in the epoch rows: the per-layer LOCAL LOSS of the
+  censored student vs teacher h_t[L] (this IS the surprise). Where it starts
+  high and falls fastest over epochs is empirically "which layer remembers
+  poetry" — plot it (layer x epoch heatmap) for the owner; this is a
+  headline figure regardless of outcome. `backprop_count` per layer shows
+  what the gate actually trained; check whether selection CONCENTRATES in a
+  depth band — that concentration is the load-balance risk of a future PPP4
+  port (global top-k needs a per-step all-gather there, or an epoch-frozen
+  threshold / stage-local quota instead).
+- If local loss falls but recall doesn't: check whether generations
+  degenerate (decode a few from the checkpoint) before concluding — and
+  compare KL_eval/CE_eval (evaluation-only output metrics in the eval rows)
+  against the v4 baseline drift (2.2284 -> 2.2367 UP).
+- Success here + failure in B/C = the self-trajectory input (large local
+  residual) was the missing ingredient, not the loss kind alone; next arms:
+  --local-loss screen (nmse/cosine/delta_cosine/vocab_mse), --layer-gate
+  topk:8 (speed + localization), smaller r (capacity floor), and the vN
+  attention-top-k censor.
 - OOM watch: micro_batch 8 with ~4k-token teacher prompts on 31B may spike;
   if stage log shows CUDA OOM, relaunch with --micro-batch 4 --grad-accum 8
   (same effective batch), run name suffix _mb4.

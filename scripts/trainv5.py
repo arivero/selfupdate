@@ -1,49 +1,87 @@
 #!/usr/bin/env python
-"""trainv5 — self-distillation with censored context (pipeline v5, experiment 1).
+"""trainv5 — layerwise self-distillation with censored context (pipeline v5).
 
-OWNER-DIRECTED DEPARTURE FROM v4 (2026-07-25). Deliberately a pure monolith:
-no `selfupdate` imports, no shared cache identities, new run names — a v5 run
-cannot collide with or silently reuse any v4 artifact. Code is copied, not
-imported, where v4 had the right idea.
+OWNER-DIRECTED (2026-07-25/26). Deliberately a pure monolith: no
+`selfupdate` imports, no shared cache identities, new run names — a v5 run
+cannot collide with or silently reuse any v4 artifact.
 
-The v5 training law
--------------------
+The v5 training law (owner-corrected 2026-07-26: "backprop only happens
+layerwise" — there is NO end-to-end training graph in v5)
+----------------------------------------------------------------------
 Teacher and student are the SAME base model:
 
-  teacher  = base model, adapters OFF, prompt WITH the privileged passage
-             (frozen: never receives gradient; it is the model's own
-             uncensored self, exactly the vLLM-generation condition).
-  student  = base model + LoRA (all decoder Linears, all layers), prompt
-             WITHOUT the privileged passage (remove-view censorship: the
-             passage text is cut from the prompt, matching deployment,
-             where no retrieval is present).
-  loss     = KL(teacher || student) on the teacher-forced ANSWER positions
-             (default), or CE toward the teacher's own answer tokens
-             (--loss ce). Both are teacher-sourced; the original corpus
-             text is never a training target (branch law).
+  teacher     = base model, adapters OFF, prompt WITH the privileged
+                passage (frozen; it is the model's own uncensored self,
+                exactly the vLLM answer-generation condition). One no-grad
+                pass records its per-layer hidden states h_t[1..N] at the
+                teacher-forced ANSWER positions.
+  student     = base model + LoRA (all decoder Linears, ALL layers),
+                prompt WITHOUT the passage (remove-view censorship =
+                deployment condition). One forward in which every block's
+                INPUT is detached at the boundary: block L transforms the
+                student's OWN censored trajectory state h_s[L-1] (current
+                adapters, current attention context — nothing cached,
+                nothing stale) into y_L.
+  local loss  = distance(y_L[answer], h_t[L][answer]) per layer, one term
+                per block, DEPTH-UNIFORM (same loss kind and weight at
+                every layer). Each term's graph roots only in block L's
+                LoRA weights; a single backward delivers every block its
+                purely local gradient. Cross-block gradient flow is
+                structurally unrepresentable (inputs are detached).
 
-Gradient flows end-to-end through the student — attention AND the post-
-attention MLPs ("the memorization perceptrons") in every layer get real
-output-level signal. This attacks both v4 failures at once: (1) the v4
-block-local hidden loss was near-zero/misaligned so the MLPs never learned;
-(2) v4's precomputed teacher K/V went stale under adaptation — v5 has no
-K/V cache at all: the student recomputes its context through the current
-adapters at every step.
+Teacher-sourced targets only; the original corpus text is never a training
+target.
+
+OWNER APPROVAL GATE (2026-07-26): training on output logits is completely
+forbidden — output-level KL/CE against the teacher exist only inside
+evaluate() under no_grad (optimizer weight structurally zero). The
+embedding and unembedding matrices (and final norm) never move or train:
+asserted at startup (no trainable parameter outside decoder-block LoRA)
+and fingerprint-tripwired every epoch. Plain output distillation is a
+commodity fine-tune; the layerwise law is the project.
+
+The per-layer loss KIND is the project's active research axis (the v4
+campaign screened huber/cosine/delta_cosine; vocab_mse is the historical
+recall recipe's loss): --local-loss huber|nmse|cosine|delta_cosine|
+vocab_mse, formulas copied verbatim from the module. vocab_mse measures
+hidden distance through the frozen unembedding Gram matrix W^T W — a
+measurement device, not logit training. delta_cosine's anchor is the
+block's own detached input (here: the censored student's h_s[L-1]).
+
+Owner speed insight (2026-07-26): the forward pass computes EVERY layer's
+local loss anyway, and each block's backward is independent — so the gate
+may skip the backward of small-surprise layers entirely. --layer-gate
+topk:N backprops only the N largest per-layer losses each step;
+minfrac:F skips layers below F x the step's largest. Per-layer surprise
+and per-layer backprop counts are logged every epoch regardless.
+
+Why this attacks both v4 failures:
+1. v4 fed block L the teacher's exact h[L-1] and exact uncensored K/V, so
+   the local residual was ~0 and the MLPs ("the memorization perceptrons")
+   learned nothing. Here the block input is the student's own CENSORED
+   trajectory — the per-layer residual against the passage-informed teacher
+   is large, and closing it requires storing the passage's contribution in
+   the weights.
+2. v4's precomputed teacher K/V went stale as adapters trained. v5 caches
+   nothing: the student's attention context is recomputed through current
+   adapters at every forward.
 
 Roadmap (vN, owner mental model): censorship generalizes from "remove the
 retrieved passage" to "mask distant tokens whose attention is high" —
 self-distilling the model's own high-attention discoveries into weights,
-i.e. continuous personalization of per-user adapters. This file keeps
-censorship localized (the `censored_ids` construction in build_items) so an
-attention-top-k mode can be added without touching the training loop.
+i.e. continuous personalization of per-user adapters. Censorship is
+localized in build_items so that mode can slot in without touching the
+training loop.
 
 Owner design notes honored:
 - LoRA gives EVERY layer capacity (we do not know which layer memorizes
-  poetry); per-layer teacher-vs-student "surprise" is logged every epoch so
-  the run itself localizes the memorization. --layer-gate topk:N optionally
-  restricts updates to the N layers most surprised in the previous epoch.
-- Capacity check at startup: trainable LoRA params x 3 bits must exceed the
-  gzip-compressed bits of the memorization corpora (Machado + Cervantes).
+  poetry); the per-layer local loss IS the teacher-vs-student surprise and
+  is logged every epoch — the profile itself localizes the memorization.
+  --layer-gate topk:N trains only the N most-surprised layers (their loss
+  terms are simply the only ones formed).
+- Capacity check at startup: trainable LoRA params x 3 bits must exceed
+  the gzip-compressed bits of the memorization corpora (Machado +
+  Cervantes).
 
 Inputs reused from the existing workflow (read-only):
 - data/combined/examples_v5rs_window.jsonl   (questions + privileged passages)
@@ -59,6 +97,7 @@ import json
 import random
 import subprocess
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,9 +220,9 @@ def bucketed_batches(items: list[dict], micro_batch: int, seed: int,
 
 def collate(batch: list[dict], key: str, pad_id: int, device):
     """Right-padded teacher-forced batch. Returns ids, attention mask, and
-    per-row (start, length) of the answer's PREDICTIVE logit rows: the logit
-    at position t predicts token t+1, so an answer occupying positions
-    P..P+A-1 is predicted by rows P-1..P+A-2."""
+    per-row (start, length) of the answer's PREDICTIVE rows: the state at
+    position t predicts token t+1, so an answer occupying positions
+    P..P+A-1 is predicted from rows P-1..P+A-2."""
     import torch
     rows = [it[key] + it["answer_ids"] for it in batch]
     maxlen = max(len(r) for r in rows)
@@ -197,26 +236,136 @@ def collate(batch: list[dict], key: str, pad_id: int, device):
     return ids.to(device), mask.to(device), spans
 
 
-def answer_logits(stack, lm_head, ids, mask, spans, want_hidden: bool):
-    """Forward the bare decoder stack, project ONLY the answer's predictive
-    rows through the frozen lm_head (never materialize full-sequence logits:
-    262k vocab x 4k positions would not fit). Returns per-item logit tensors
-    and, optionally, per-item per-layer hidden slices (kept on their own
-    devices; compare layer-to-layer only, never stacked across devices)."""
-    out = stack(input_ids=ids, attention_mask=mask,
-                output_hidden_states=want_hidden, use_cache=False)
-    h_last = out.last_hidden_state
-    logit_rows, hidden_rows = [], []
-    for i, (start, length) in enumerate(spans):
-        logit_rows.append(lm_head(h_last[i, start:start + length]).float())
-        if want_hidden:
-            hidden_rows.append([h[i, start:start + length].detach()
-                                for h in out.hidden_states])
-    return logit_rows, hidden_rows
+def slice_rows(hidden, spans):
+    """Per-row answer slices [A_i, H] from a [B, S, H] tensor."""
+    return [hidden[i, s:s + l] for i, (s, l) in enumerate(spans)]
+
+
+class LayerwiseTaps:
+    """Hook plumbing for the layerwise law.
+
+    - forward PRE-hook on every decoder layer detaches its input hidden
+      states: each block transforms the real current student trajectory,
+      but no gradient can cross a block boundary (structural, not policy).
+      The detached input is kept (it is the delta_cosine anchor).
+    - forward hook collects each block's differentiable OUTPUT so per-layer
+      local losses can be formed after the single pass.
+    Installed only inside the training step (context manager); evaluation
+    and generation run the unhooked model.
+    """
+
+    def __init__(self, layers):
+        self.layers = layers
+        self.inputs: list = [None] * len(layers)
+        self.outputs: list = [None] * len(layers)
+        self._handles = []
+
+    def _pre(self, idx):
+        def hook(module, args, kwargs):
+            import torch
+            if args and torch.is_tensor(args[0]):
+                det = args[0].detach()
+                self.inputs[idx] = det
+                return (det,) + tuple(args[1:]), kwargs
+            if "hidden_states" in kwargs \
+                    and torch.is_tensor(kwargs["hidden_states"]):
+                kwargs = dict(kwargs)
+                det = kwargs["hidden_states"].detach()
+                self.inputs[idx] = det
+                kwargs["hidden_states"] = det
+                return args, kwargs
+            raise RuntimeError("decoder layer called without hidden states")
+        return hook
+
+    def _post(self, idx):
+        def hook(module, args, output):
+            out = output[0] if isinstance(output, tuple) else output
+            self.outputs[idx] = out
+        return hook
+
+    @contextmanager
+    def active(self):
+        try:
+            for i, layer in enumerate(self.layers):
+                self._handles.append(layer.register_forward_pre_hook(
+                    self._pre(i), with_kwargs=True))
+                self._handles.append(layer.register_forward_hook(
+                    self._post(i)))
+            yield self
+        finally:
+            for h in self._handles:
+                h.remove()
+            self._handles.clear()
+            self.inputs = [None] * len(self.layers)
+            self.outputs = [None] * len(self.layers)
+
+
+class LocalLoss:
+    """Depth-uniform per-layer distance — the loss MENU is the project's
+    active research axis (the v4 campaign screened huber/cosine/delta_cosine;
+    vocab_mse is the historical recall recipe's loss). Formulas are copied
+    verbatim from src/selfupdate/train/losses.py; only the delta_cosine
+    anchor changes meaning: it is the block's own detached input, which in
+    v5 is the CENSORED STUDENT trajectory state h_s[L-1] (in v4 it was
+    teacher h[L-1] because that was the block input there).
+
+    y: [A, H] differentiable block output; target: [A, H] detached teacher
+    h_t[L]; anchor: [A, H] detached block input h_s[L-1].
+    """
+
+    def __init__(self, kind: str, lm_head):
+        self.kind = kind
+        self.lm_head = lm_head
+        self._gram_by_dev: dict = {}
+
+    def _gram(self, device):
+        """M = W^T W of the frozen unembedding, fp32, chunked over vocab
+        rows; cached per device (blocks live on several GPUs)."""
+        import torch
+        if device not in self._gram_by_dev:
+            if not self._gram_by_dev:
+                W = self.lm_head.weight.detach()
+                H = W.shape[1]
+                M = torch.zeros(H, H, dtype=torch.float32, device=W.device)
+                for i in range(0, W.shape[0], 16384):
+                    w = W[i:i + 16384].float()
+                    M += w.T @ w
+                self._gram_by_dev[W.device] = M
+            src = next(iter(self._gram_by_dev.values()))
+            self._gram_by_dev[device] = src.to(device)
+        return self._gram_by_dev[device]
+
+    def __call__(self, y, target, anchor):
+        import torch
+        import torch.nn.functional as F
+        kind = self.kind
+        s, t = y.float(), target.float()
+        if kind == "nmse":
+            return F.mse_loss(s, t) / t.pow(2).mean().clamp_min(1e-8)
+        if kind == "cosine":
+            return 1.0 - F.cosine_similarity(s, t, dim=-1, eps=1e-8).mean()
+        if kind == "huber":
+            scale = t.pow(2).mean().sqrt().clamp_min(1e-8)
+            return F.smooth_l1_loss(s / scale, t / scale, beta=1.0)
+        if kind == "delta_cosine":
+            a = anchor.float()
+            student_delta = s - a
+            with torch.no_grad():
+                teacher_delta = t - a
+            return 1.0 - F.cosine_similarity(
+                student_delta, teacher_delta, dim=-1, eps=1e-8).mean()
+        if kind == "vocab_mse":
+            with torch.autocast(s.device.type, enabled=False):
+                d = s - t
+                M = self._gram(s.device)
+                q = (d @ M * d).sum(-1).mean()
+                denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
+                return q / denom
+        raise SystemExit(f"unknown --local-loss {kind}")
 
 
 # --------------------------------------------------------------------------
-# evaluation (self-contained)
+# evaluation (self-contained; all output-level numbers are EVAL ONLY)
 # --------------------------------------------------------------------------
 
 def word_lcs_acc(reference: str, hypothesis: str) -> float:
@@ -236,9 +385,8 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
                 gen_batch: int, max_new: int, sample_per_corpus: int,
                 seed: int) -> dict:
     """Deployment-condition recall: greedy-generate from the CENSORED prompt
-    (adapters ON, no passage) and score word-LCS against the teacher's
-    uncensored answer — 'is the model now a Machado expert without the book
-    open?'. Deterministic per-corpus samples."""
+    (adapters ON, no passage, ordinary full forward — the student's real
+    trajectory) and score word-LCS against the teacher's uncensored answer."""
     import torch
     rng = random.Random(seed)
     by_corpus: dict[str, list[dict]] = {}
@@ -323,9 +471,14 @@ def main() -> None:
                     default="runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl",
                     help="teacher answers with exact prompt/answer token ids")
     ap.add_argument("--run-name", default="trainv5_g31b_selfdistill")
-    ap.add_argument("--loss", choices=("kl", "ce"), default="kl",
-                    help="kl: full-distribution KL(teacher||student); "
-                         "ce: CE toward the teacher's own answer tokens")
+    ap.add_argument("--local-loss",
+                    choices=("huber", "nmse", "cosine", "delta_cosine",
+                             "vocab_mse"),
+                    default="huber",
+                    help="depth-uniform per-layer distance to teacher h_t[L] "
+                         "(the v4 loss-screen menu; vocab_mse measures hidden "
+                         "distance in frozen-unembedding geometry — a "
+                         "measurement device, NOT logit training)")
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -333,10 +486,18 @@ def main() -> None:
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--layer-gate", default="all",
-                    help="'all' (depth-uniform, default) or 'topk:N' — update "
-                         "only the N layers most surprised last epoch")
-    ap.add_argument("--surprise-every", type=int, default=8,
-                    help="capture per-layer surprise on 1-of-N batches")
+                    help="'all' (depth-uniform, default); 'topk:N' — each "
+                         "STEP, backprop only the N largest per-layer "
+                         "losses; 'minfrac:F' — skip backward for layers "
+                         "whose loss < F x the step's largest (owner speed "
+                         "insight 2026-07-26: forward computes every local "
+                         "loss anyway, and per-block backward is "
+                         "independent, so small-surprise layers can simply "
+                         "not be backpropagated)")
+    ap.add_argument("--grad-checkpoint", action="store_true",
+                    help="enable activation checkpointing (off by default: "
+                         "detached block boundaries already bound memory per "
+                         "block, and hooks+recompute interplay is unproven)")
     ap.add_argument("--eval-every", type=int, default=1)
     ap.add_argument("--recall-samples", type=int, default=24,
                     help="generative recall items per corpus per eval")
@@ -394,12 +555,17 @@ def main() -> None:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT,
                                      text=True).strip()
     log("provenance", source_commit=commit, args=vars(args),
-        training_target="teacher (uncensored self) answer distribution",
+        training_input="detached censored-student h_s[L-1] (own trajectory, "
+                       "current adapters, nothing cached)",
+        differentiable_output="student block L(detached h_s[L-1])",
+        training_target="detached uncensored-teacher h_t[L] at answer rows",
         censorship="remove_view (privileged passage cut from student prompt)",
-        end_to_end_student_training=True, final_logit_training=True,
-        frozen_vocabulary=True,
-        note="v5 owner-directed departure from the v4 block-local law, "
-             "2026-07-25")
+        end_to_end_student_training=False,
+        backprop="layerwise: every block input detached by forward pre-hook; "
+                 "cross-block gradient structurally unrepresentable",
+        final_logit_training=False, frozen_vocabulary=True,
+        output_kl_role="evaluation only, optimizer weight zero",
+        note="v5 law owner-corrected 2026-07-26: backprop only layerwise")
 
     print(f"loading {args.model} (bf16, device_map=auto)", flush=True)
     full = AutoModelForCausalLM.from_pretrained(
@@ -414,9 +580,10 @@ def main() -> None:
                         "gate_proj", "up_proj", "down_proj"],
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
-    full.gradient_checkpointing_enable(
-        gradient_checkpointing_kwargs={"use_reentrant": False})
-    full.enable_input_require_grads()
+    if args.grad_checkpoint:
+        full.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False})
+        full.enable_input_require_grads()
 
     trainable = sum(p.numel() for p in full.parameters() if p.requires_grad)
     cap = capacity_check(trainable)
@@ -429,24 +596,50 @@ def main() -> None:
                          "bound; raise --lora-r")
 
     stack, lm_head = resolve_stack(full.get_base_model())
-    for p in lm_head.parameters():
-        assert not p.requires_grad, "lm_head must stay frozen"
     device = next(stack.parameters()).device
     n_layers = len(stack.layers)
-    # frozen-vocabulary tripwire (law copied from v4): the head never moves
-    head_fp0 = lm_head.weight.detach().float().sum().item()
+    taps = LayerwiseTaps(stack.layers)
+
+    # ---- OWNER APPROVAL GATE (2026-07-26), enforced structurally ----------
+    # 1. No training on output logits: no training-loss term in this file
+    #    projects a differentiable state through lm_head (vocab_mse uses the
+    #    detached Gram W^T W as a frozen metric on hiddens). Output KL/CE
+    #    exist ONLY inside evaluate() under torch.no_grad().
+    # 2. Embedding / unembedding / final norm never move or train:
+    for name, p in full.named_parameters():
+        if p.requires_grad:
+            assert "lora_" in name and ".layers." in name, \
+                f"GATE: trainable parameter outside decoder-block LoRA: {name}"
+    for mod in (lm_head, stack.embed_tokens,
+                getattr(stack, "norm", None)):
+        if mod is not None:
+            for p in mod.parameters():
+                assert not p.requires_grad, "GATE: vocabulary stack trainable"
+    final_norm = getattr(stack, "norm", None)
+    vocab_fp0 = (lm_head.weight.detach().float().sum().item(),
+                 stack.embed_tokens.weight.detach().float().sum().item(),
+                 final_norm.weight.detach().float().sum().item()
+                 if final_norm is not None else 0.0)
+
+    def vocab_tripwire():
+        now = (lm_head.weight.detach().float().sum().item(),
+               stack.embed_tokens.weight.detach().float().sum().item(),
+               final_norm.weight.detach().float().sum().item()
+               if final_norm is not None else 0.0)
+        assert now == vocab_fp0, \
+            f"FROZEN-VOCABULARY TRIPWIRE: {vocab_fp0} -> {now}"
 
     opt = torch.optim.AdamW((p for p in full.parameters() if p.requires_grad),
                             lr=args.lr)
     pad = tok.pad_token_id or 0
 
-    if args.layer_gate == "all":
-        gate_k = 0
-    elif args.layer_gate.startswith("topk:"):
-        gate_k = int(args.layer_gate.split(":", 1)[1])
-    else:
+    gate_mode, gate_val = "all", 0.0
+    if args.layer_gate.startswith("topk:"):
+        gate_mode, gate_val = "topk", int(args.layer_gate.split(":", 1)[1])
+    elif args.layer_gate.startswith("minfrac:"):
+        gate_mode, gate_val = "minfrac", float(args.layer_gate.split(":", 1)[1])
+    elif args.layer_gate != "all":
         raise SystemExit(f"unknown --layer-gate {args.layer_gate}")
-    gate_layers: set[int] | None = None
 
     def evaluate(epoch: int):
         rec = recall_eval(full, tok, items, device, stop_id, args.gen_batch,
@@ -454,102 +647,145 @@ def main() -> None:
                           args.seed + epoch)
         full.eval()
         arc = arc_eval(stack, lm_head, tok, device, args.arc_limit)
-        # teacher-forced argmax acceptance on a fixed probe slice — the
-        # metric that sat frozen at 0.556 through all of v4.
+        # teacher-forced output metrics on a fixed probe slice — EVALUATION
+        # ONLY (v4 convention: optimizer weight structurally zero). Includes
+        # the argmax acceptance that sat frozen at 0.556 through all of v4.
         probe = items[:: max(1, len(items) // 128)][:128]
         agree = total = 0
+        kl_sum = ce_sum = 0.0
         with torch.no_grad():
             for i in range(0, len(probe), args.micro_batch):
                 b = probe[i:i + args.micro_batch]
-                ids, mask, spans = collate(b, "censored_ids", pad, device)
-                lgs, _ = answer_logits(stack, lm_head, ids, mask, spans, False)
-                for it, lg in zip(b, lgs):
-                    tgt = torch.tensor(it["answer_ids"], device=lg.device)
-                    agree += (lg.argmax(-1) == tgt).sum().item()
+                # student logits: ordinary censored forward, adapters ON
+                s_ids, s_mask, s_spans = collate(b, "censored_ids", pad,
+                                                 device)
+                s_out = stack(input_ids=s_ids, attention_mask=s_mask,
+                              use_cache=False)
+                # teacher logits: adapters OFF, WITH passage
+                with full.disable_adapter():
+                    t_ids, t_mask, t_spans = collate(b, "prompt_ids", pad,
+                                                     device)
+                    t_out = stack(input_ids=t_ids, attention_mask=t_mask,
+                                  use_cache=False)
+                for j, it in enumerate(b):
+                    ss, sl_ = s_spans[j]
+                    ts, tl_ = t_spans[j]
+                    sl = lm_head(s_out.last_hidden_state[j, ss:ss + sl_]).float()
+                    tl = lm_head(t_out.last_hidden_state[j, ts:ts + tl_]).float()
+                    tgt = torch.tensor(it["answer_ids"], device=sl.device)
+                    agree += (sl.argmax(-1) == tgt).sum().item()
                     total += len(it["answer_ids"])
+                    tp = torch.log_softmax(tl, -1)
+                    sp = torch.log_softmax(sl, -1)
+                    kl_sum += float((tp.exp() * (tp - sp)).sum())
+                    ce_sum += float(torch.nn.functional.cross_entropy(
+                        sl, tgt, reduction="sum"))
         acc = agree / max(1, total)
+        kl = kl_sum / max(1, total)
+        ce = ce_sum / max(1, total)
         print(f"eval e{epoch}: recall={rec} arc_easy={arc:.3f} "
-              f"student_argmax={acc:.4f}", flush=True)
+              f"student_argmax={acc:.4f} KL_eval={kl:.4f} CE_eval={ce:.4f}",
+              flush=True)
         log("eval", epoch=epoch, recall=rec, arc_easy=arc,
-            student_argmax_acceptance=acc)
+            student_argmax_acceptance=acc, KL_eval_loss=kl, CE_eval_loss=ce,
+            evaluation_only=True, optimizer_weight=0.0)
 
     evaluate(0)  # epoch zero: identical conditions to every checkpoint
 
+    loss_fn = LocalLoss(args.local_loss, lm_head)
     for epoch in range(1, args.epochs + 1):
         full.train()
         t0 = time.time()
         batches = bucketed_batches(items, args.micro_batch, args.seed, epoch,
                                    "censored_ids")
         epoch_loss = 0.0
-        surprise_sum = [0.0] * (n_layers + 1)
-        surprise_n = 0
+        surprise_sum = [0.0] * n_layers   # per-BLOCK local loss (surprise)
+        backprop_count = [0] * n_layers
         opt.zero_grad(set_to_none=True)
         for bi, batch in enumerate(batches):
-            want_h = (bi % args.surprise_every == 0)
-            # teacher: adapters OFF, WITH passage, no grad
+            # teacher: adapters OFF, WITH passage, no grad — per-layer
+            # hidden targets at the answer's predictive rows
             with torch.no_grad(), full.disable_adapter():
                 t_ids, t_mask, t_spans = collate(batch, "prompt_ids", pad,
                                                  device)
-                t_logits, t_hidden = answer_logits(stack, lm_head, t_ids,
-                                                   t_mask, t_spans, want_h)
-            # student: adapters ON, passage REMOVED, grad
+                t_out = stack(input_ids=t_ids, attention_mask=t_mask,
+                              output_hidden_states=True, use_cache=False)
+                # hidden_states[l] is the OUTPUT of block l-1 (index 0 =
+                # embeddings); block L's target is hidden_states[L+1].
+                targets = [slice_rows(t_out.hidden_states[l + 1], t_spans)
+                           for l in range(n_layers)]
+                del t_out
+            # student: adapters ON, passage REMOVED, one forward with every
+            # block input detached (LayerwiseTaps) — the differentiable
+            # output of each block roots only in that block's LoRA weights
             s_ids, s_mask, s_spans = collate(batch, "censored_ids", pad,
                                              device)
-            s_logits, s_hidden = answer_logits(stack, lm_head, s_ids, s_mask,
-                                               s_spans, want_h)
-            loss = 0.0
-            ntok = 0
-            for it, tl, sl in zip(batch, t_logits, s_logits):
-                if args.loss == "kl":
-                    tp = torch.log_softmax(tl.detach(), -1)
-                    sp = torch.log_softmax(sl, -1)
-                    loss = loss + (tp.exp() * (tp - sp)).sum()
-                else:
-                    tgt = torch.tensor(it["answer_ids"], device=sl.device)
-                    loss = loss + torch.nn.functional.cross_entropy(
-                        sl, tgt, reduction="sum")
-                ntok += tl.shape[0]
-            loss = loss / max(1, ntok)
+            with taps.active():
+                stack(input_ids=s_ids, attention_mask=s_mask, use_cache=False)
+                block_out = list(taps.outputs)
+                block_in = list(taps.inputs)
+            # ALL per-layer losses are computed every step (the forward has
+            # already paid for them); the gate then decides which of the
+            # independent per-block backwards to actually run.
+            terms = []
+            for l in range(n_layers):
+                y_rows = slice_rows(block_out[l], s_spans)
+                a_rows = slice_rows(block_in[l], s_spans)
+                term = sum(loss_fn(y, t, a) for y, t, a in
+                           zip(y_rows, targets[l], a_rows)) / len(batch)
+                terms.append(term)
+            # Selection needs the scalar values. Hot-loop law: never one
+            # sync per layer — group terms by device and read each device
+            # ONCE (<=4 syncs/step under the 4-GPU shard). NOTE for the
+            # PPP4 port (owner 2026-07-26): in stage-parallel deployment
+            # this global view costs a per-step all-gather of n_layers
+            # scalars (or degrades to stage-local quotas / an epoch-frozen
+            # threshold); backprop_count below measures whether selection
+            # concentrates by depth — the load-balance risk of that port.
+            by_dev: dict = {}
+            for l, t in enumerate(terms):
+                by_dev.setdefault(t.device, []).append(l)
+            vals = [0.0] * n_layers
+            for dev, idxs in by_dev.items():
+                got = torch.stack([terms[l].detach() for l in idxs]).tolist()
+                for l, v in zip(idxs, got):
+                    vals[l] = v
+            for l in range(n_layers):
+                surprise_sum[l] += vals[l]
+            if gate_mode == "topk":
+                sel = sorted(range(n_layers),
+                             key=lambda l: -vals[l])[:int(gate_val)]
+            elif gate_mode == "minfrac":
+                cut = max(vals) * gate_val
+                sel = [l for l in range(n_layers) if vals[l] >= cut]
+            else:
+                sel = list(range(n_layers))
+            if not sel:
+                sel = [max(range(n_layers), key=lambda l: vals[l])]
+            for l in sel:
+                backprop_count[l] += 1
+            # normalize by n_layers (not len(sel)): a selected layer's
+            # gradient scale is then IDENTICAL under every gate mode, so
+            # gated arms compare to 'all' at the same effective LR
+            loss = torch.stack([terms[l].to(device)
+                                for l in sel]).sum() / n_layers
             (loss / args.grad_accum).backward()
-            epoch_loss += float(loss.detach())
-            if want_h and t_hidden:
-                # per-layer relative discrepancy; each layer's teacher and
-                # student slices share a device, so this never crosses GPUs
-                for th_l, sh_l in zip(t_hidden, s_hidden):
-                    for li, (th, sh) in enumerate(zip(th_l, sh_l)):
-                        d = (th.float() - sh.float()).norm(dim=-1).mean()
-                        n = th.float().norm(dim=-1).mean().clamp_min(1e-6)
-                        surprise_sum[li] += float(d / n)
-                surprise_n += len(t_hidden)
+            epoch_loss += sum(vals) / n_layers
+            del block_out, block_in, targets, terms
             if (bi + 1) % args.grad_accum == 0 or bi + 1 == len(batches):
-                if gate_k and gate_layers is not None:
-                    for name, p in full.named_parameters():
-                        if p.grad is None or "lora_" not in name:
-                            continue
-                        lyr = next((int(t) for t in name.split(".")
-                                    if t.isdigit()), None)
-                        if lyr is not None and lyr not in gate_layers:
-                            p.grad = None
                 torch.nn.utils.clip_grad_norm_(
                     [p for p in full.parameters() if p.requires_grad], 1.0)
                 opt.step()
                 opt.zero_grad(set_to_none=True)
 
-        profile = [s / max(1, surprise_n) for s in surprise_sum]
-        if gate_k:
-            # hidden_states[li] is the OUTPUT of layer li (index 0 = embed),
-            # so layer index li maps to decoder layer li-1's product; gate on
-            # the producing layer.
-            ranked = sorted(range(1, n_layers + 1), key=lambda l: -profile[l])
-            gate_layers = {l - 1 for l in ranked[:gate_k]}
-            log("layer_gate", epoch=epoch, active_layers=sorted(gate_layers))
+        profile = [s / len(batches) for s in surprise_sum]
         mean_loss = epoch_loss / len(batches)
-        print(f"epoch {epoch}: loss={mean_loss:.5f} "
+        print(f"epoch {epoch}: local_loss={mean_loss:.5f} "
               f"({time.time() - t0:.0f}s)", flush=True)
-        log("epoch", epoch=epoch, loss=mean_loss,
-            seconds=time.time() - t0, surprise_profile=profile)
-        assert lm_head.weight.detach().float().sum().item() == head_fp0, \
-            "FROZEN-VOCABULARY TRIPWIRE: lm_head moved"
+        log("epoch", epoch=epoch, loss=mean_loss, loss_kind=args.local_loss,
+            seconds=time.time() - t0, surprise_profile=profile,
+            layer_gate=args.layer_gate, backprop_count=backprop_count)
+        vocab_tripwire()
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             evaluate(epoch)
             full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
