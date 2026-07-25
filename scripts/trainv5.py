@@ -498,6 +498,11 @@ def main() -> None:
                     help="enable activation checkpointing (off by default: "
                          "detached block boundaries already bound memory per "
                          "block, and hooks+recompute interplay is unproven)")
+    ap.add_argument("--teacher-cache", choices=("cpu", "off"), default="cpu",
+                    help="cache teacher answer-row hiddens in host RAM after "
+                         "their first computation (~51 GiB at 31B full "
+                         "corpus) — the teacher is frozen, so epochs 2+ skip "
+                         "its forward entirely; 'off' recomputes every epoch")
     ap.add_argument("--eval-every", type=int, default=1)
     ap.add_argument("--recall-samples", type=int, default=24,
                     help="generative recall items per corpus per eval")
@@ -642,9 +647,10 @@ def main() -> None:
         raise SystemExit(f"unknown --layer-gate {args.layer_gate}")
 
     def evaluate(epoch: int):
+        # fixed seed on purpose: the SAME recall items every eval, so the
+        # epoch-to-epoch recall curve measures learning, not sample churn
         rec = recall_eval(full, tok, items, device, stop_id, args.gen_batch,
-                          args.max_new_tokens, args.recall_samples,
-                          args.seed + epoch)
+                          args.max_new_tokens, args.recall_samples, args.seed)
         full.eval()
         arc = arc_eval(stack, lm_head, tok, device, args.arc_limit)
         # teacher-forced output metrics on a fixed probe slice — EVALUATION
@@ -693,6 +699,36 @@ def main() -> None:
     evaluate(0)  # epoch zero: identical conditions to every checkpoint
 
     loss_fn = LocalLoss(args.local_loss, lm_head)
+    layer_dev = [next(stack.layers[l].parameters()).device
+                 for l in range(n_layers)]
+    teacher_cache: dict | None = ({} if args.teacher_cache == "cpu" else None)
+    if teacher_cache is not None:
+        width = stack.embed_tokens.weight.shape[1]
+        est = n_ans * n_layers * width * 2
+        print(f"teacher-cache: ~{est / 2**30:.1f} GiB host RAM once filled",
+              flush=True)
+
+    def layerwise_isolation_cert(terms):
+        """LAYERWISE TRIPWIRE (the project's name de pila, owner
+        2026-07-26): backward ONE middle layer's local term in isolation
+        and assert the ONLY parameters that received gradient are that
+        block's LoRA. Detects any future edit that lets gradient cross a
+        block boundary. Runs once, on the first batch."""
+        m = n_layers // 2
+        terms[m].backward(retain_graph=True)
+        leaked = [n for n, p in full.named_parameters()
+                  if p.grad is not None and f".layers.{m}." not in n]
+        inside = [n for n, p in full.named_parameters()
+                  if p.grad is not None and f".layers.{m}." in n]
+        assert not leaked, f"LAYERWISE TRIPWIRE: gradient leaked to {leaked[:4]}"
+        assert inside, "LAYERWISE TRIPWIRE: no gradient inside the probed block"
+        opt.zero_grad(set_to_none=True)
+        log("layerwise_certification", probed_layer=m,
+            lora_params_with_grad=len(inside), leaks=0)
+        print(f"layerwise isolation certified on block {m} "
+              f"({len(inside)} LoRA tensors, 0 leaks)", flush=True)
+
+    certified = False
     for epoch in range(1, args.epochs + 1):
         full.train()
         t0 = time.time()
@@ -701,20 +737,43 @@ def main() -> None:
         epoch_loss = 0.0
         surprise_sum = [0.0] * n_layers   # per-BLOCK local loss (surprise)
         backprop_count = [0] * n_layers
+        cache_hits = 0
         opt.zero_grad(set_to_none=True)
         for bi, batch in enumerate(batches):
             # teacher: adapters OFF, WITH passage, no grad — per-layer
-            # hidden targets at the answer's predictive rows
-            with torch.no_grad(), full.disable_adapter():
-                t_ids, t_mask, t_spans = collate(batch, "prompt_ids", pad,
-                                                 device)
-                t_out = stack(input_ids=t_ids, attention_mask=t_mask,
-                              output_hidden_states=True, use_cache=False)
-                # hidden_states[l] is the OUTPUT of block l-1 (index 0 =
-                # embeddings); block L's target is hidden_states[L+1].
-                targets = [slice_rows(t_out.hidden_states[l + 1], t_spans)
-                           for l in range(n_layers)]
-                del t_out
+            # hidden targets at the answer's predictive rows. The teacher is
+            # frozen, so its targets are cacheable: epochs 2+ skip this
+            # forward entirely (the review's main speed win, ~1/3 of step
+            # compute, and the teacher sequence is the LONG one).
+            cached = (teacher_cache is not None
+                      and all(it["example_id"] in teacher_cache
+                              for it in batch))
+            if cached:
+                cache_hits += 1
+                targets = [[teacher_cache[it["example_id"]][l]
+                            .to(layer_dev[l], non_blocking=True)
+                            for it in batch] for l in range(n_layers)]
+            else:
+                with torch.no_grad(), full.disable_adapter():
+                    t_ids, t_mask, t_spans = collate(batch, "prompt_ids",
+                                                     pad, device)
+                    t_out = stack(input_ids=t_ids, attention_mask=t_mask,
+                                  output_hidden_states=True, use_cache=False)
+                    # hidden_states[l] is the OUTPUT of block l-1 (index 0 =
+                    # embeddings); block L's target is hidden_states[L+1].
+                    # clone(): a bare slice is a VIEW that would retain all
+                    # 61 full-sequence hidden tensors through the student
+                    # pass (~8 GiB); clones keep only the answer rows.
+                    targets = [[r.clone() for r in
+                                slice_rows(t_out.hidden_states[l + 1],
+                                           t_spans)]
+                               for l in range(n_layers)]
+                    del t_out
+                if teacher_cache is not None:
+                    for j, it in enumerate(batch):
+                        teacher_cache[it["example_id"]] = [
+                            targets[l][j].to("cpu")
+                            for l in range(n_layers)]
             # student: adapters ON, passage REMOVED, one forward with every
             # block input detached (LayerwiseTaps) — the differentiable
             # output of each block roots only in that block's LoRA weights
@@ -724,6 +783,9 @@ def main() -> None:
                 stack(input_ids=s_ids, attention_mask=s_mask, use_cache=False)
                 block_out = list(taps.outputs)
                 block_in = list(taps.inputs)
+            for l in range(n_layers):  # name-de-pila guard, no sync
+                assert not block_in[l].requires_grad, \
+                    f"LAYERWISE TRIPWIRE: block {l} input carries grad"
             # ALL per-layer losses are computed every step (the forward has
             # already paid for them); the gate then decides which of the
             # independent per-block backwards to actually run.
@@ -752,6 +814,9 @@ def main() -> None:
                     vals[l] = v
             for l in range(n_layers):
                 surprise_sum[l] += vals[l]
+            if not certified:
+                layerwise_isolation_cert(terms)
+                certified = True
             if gate_mode == "topk":
                 sel = sorted(range(n_layers),
                              key=lambda l: -vals[l])[:int(gate_val)]
@@ -784,7 +849,8 @@ def main() -> None:
               f"({time.time() - t0:.0f}s)", flush=True)
         log("epoch", epoch=epoch, loss=mean_loss, loss_kind=args.local_loss,
             seconds=time.time() - t0, surprise_profile=profile,
-            layer_gate=args.layer_gate, backprop_count=backprop_count)
+            layer_gate=args.layer_gate, backprop_count=backprop_count,
+            teacher_cache_hit_frac=cache_hits / len(batches))
         vocab_tripwire()
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             evaluate(epoch)
