@@ -169,3 +169,96 @@ gradient, and there is no teacher K/V cache to go stale.
   eval every epoch. Metrics in runs/trainv5_g31b_selfdistill/metrics.jsonl.
 - vN roadmap in the file header: censorship generalizes to masking distant
   high-attention tokens (continuous personalization).
+
+---
+
+# ANALYSIS PROTOCOL — for the agent that reads these runs (write your verdicts back here)
+
+Four experiment lines are in flight. For each: where the evidence is, what
+counts as success, and what decision follows. General rules: an epoch is the
+full 2071-item traversal; compare arms only at matched epochs; every claim
+needs the metric row cited, not the log line remembered. The v4 baseline
+number to beat everywhere is **student_argmax_acceptance flat at ~0.556** and
+recall frozen at (machado 0.00, q_ch1 0.09, q_ch4 0.02).
+
+## A. r64 campaign (jobs 422979-996) — "does rank fix it?"
+
+Artifacts: `runs/campaign50_*_r64/stage0/metrics.jsonl` (+ report/report.pdf),
+r16 twins without the suffix. Read `student_trajectory_eval` rows:
+`student_argmax_acceptance`, `CE_eval_loss`, and the log-line recall.
+- Expected (from the diagnosis): r64 does NOT move recall/argmax vs r16 —
+  rank was never the binding constraint; the objective was. If confirmed,
+  write one line per model here and close the "is it capacity?" question.
+- If any r64 arm DOES move argmax > +0.02 over its r16 twin at epoch 50:
+  that model's memorization was capacity-bound after all — flag it, it
+  changes the v5 sizing conversation.
+- MoE arms (q35b, g26b_a4b) carry the unexplained numerics caveat
+  (issues.md); do not promote their numbers to claims without repeating the
+  caveat.
+
+## B. 2x2 loss x LR screen (423027/029/031) — "objective or step size?"
+
+Artifacts: `runs/campaign50_q27b_ppp4_r64_{vmse,lr3e5,vmse_lr3e5}/stage0/
+metrics.jsonl` vs baseline `campaign50_q27b_ppp4_r64`. Read the SLOPE of
+`student_argmax_acceptance` and `CE_eval_loss` across epochs 0->50, and
+`standard_eval` for damage on the lr3e5 arms.
+- vmse arms move, lr arms don't  -> loss geometry was the failure; promote
+  vocab_mse to the campaign default and consider vocab_mse+KV-refresh.
+- lr arms move, vmse doesn't     -> under-training; re-tune lr schedule.
+- only vmse_lr3e5 moves          -> both levers needed; screen lr grid at
+  vocab_mse.
+- none move                      -> block-local training with teacher-frozen
+  context cannot compose, whatever the loss; v5 becomes the main line.
+  This is a REPORTABLE negative result, not a failure of the screen.
+
+## C. KV-refresh (423034) — "was stale K/V the composition gap?"
+
+Artifacts: `runs/g26b_a4b_ppp4_scoped_b32_refresh_campaign_j423034/stage*/
+metrics.jsonl`; contrast arm = `runs/g26b_a4b_ppp4_scoped_b32_campaign_j422706`
+(teacher_frozen, same everything else). NOTE: it will hit the 24h wall mid-
+campaign — compare at matched epoch numbers only (422706 reached ~epoch 231).
+- First check the numerics gate PASSED in `runs/sbatch_g26b_a4b_campaign_
+  <jobid>.out` (rtol 1e-7, r16 arms historically ~4e-8). If the gate failed,
+  stop: the refresh path has a sharding bug, file it in issues.md.
+- Then: does student_argmax move off 0.556 where 422706 stayed flat? Even a
+  slow upward slope is a positive — refresh is per-epoch, so improvement
+  compounds late.
+- If flat like 422706: stale K/V was NOT the gap either; combined with B
+  "none move", the v4 local law itself is the negative result.
+
+## D. trainv5 (423052) — "does self-distillation finally learn?"
+
+Artifacts: `runs/trainv5_g31b_selfdistill/metrics.jsonl` (kinds: provenance,
+capacity, eval, epoch), stdout in `runs/sbatch_trainv5_<jobid>.out`.
+- Health first: the data gate must print `items=2071 ... stop_id=106`; the
+  capacity row must be capacity_ok=true; epoch seconds should be minutes-to-
+  ~2h. If epoch 1 exceeds ~3h, the 8-epoch budget won't fit 24h — note how
+  far it got; partial curves are valid (eval runs every epoch).
+- Success = `eval` rows show recall (per corpus, word-LCS vs teacher answer)
+  and student_argmax RISING across epochs while arc_easy stays within ~2
+  points of its epoch-0 value. Machado (1490 items) should move before
+  Quijote (581) — exposure asymmetry.
+- Read `surprise_profile` in the epoch rows: the per-layer teacher/student
+  discrepancy. Where it CONCENTRATES over epochs is empirically "which layer
+  remembers poetry" — plot it (layer x epoch heatmap) for the owner; this is
+  a headline figure regardless of outcome.
+- If loss falls but recall doesn't: check whether generations degenerate
+  (decode a few in the checkpoint with scripts/trainv5.py logic) before
+  concluding anything — KL can be gamed by mode collapse onto generic text.
+- Success here + failure in B/C = the end-to-end objective was the missing
+  ingredient; next arms: --loss ce contrast, --layer-gate topk:8 (localized
+  training), smaller r (capacity floor), and the vN attention-top-k censor.
+- OOM watch: micro_batch 8 with ~4k-token teacher prompts on 31B may spike;
+  if stage log shows CUDA OOM, relaunch with --micro-batch 4 --grad-accum 8
+  (same effective batch), run name suffix _mb4.
+
+## Bookkeeping for the analyst
+
+- Publish updated report.pdf files the same way as before: force-add ONLY
+  `runs/*/report/report.pdf` (runs/ is gitignored), commit, push.
+- trainv5 has no v4_report renderer; its metrics.jsonl is self-describing.
+  A layer-x-epoch surprise heatmap + recall/argmax curves is the minimum
+  deliverable figure set.
+- Write verdicts into THIS file under each section, then update
+  EXPERIMENTS.md only once per closed question, and keep memory files
+  (v4-not-learning-diagnosis, a4b-r64-numerics-discrepancy) in sync.
