@@ -73,6 +73,17 @@ case "$PPP4_ARM" in
     NUMGATE_SP_RUN=g26b_a4b_ppp4_scoped_r64_b16_numgate_sp
     NUMGATE_SHARD_RUN=g26b_a4b_ppp4_scoped_r64_b16_numgate_shard
     CAMPAIGN_RUN=g26b_a4b_ppp4_scoped_r64_b32_campaign ;;
+  scoped_b32_refresh)
+    # KV-refresh experiment (owner [393]): reuse the PROVEN-PASSING r16 no-expert
+    # numgate configs (gate stays intact at ~3.9e-8), swap only the CAMPAIGN to
+    # the student_refresh variant. Single-variable contrast vs the teacher_frozen
+    # scoped_b32 arm. See the refresh campaign config header.
+    NUMGATE_SP_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_b16_numgate_sp.yaml
+    NUMGATE_SHARD_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_b16_numgate_shard.yaml
+    CAMPAIGN_CFG=configs/experiments/gemma4_26b_a4b_ppp4_scoped_b32_refresh_campaign.yaml
+    NUMGATE_SP_RUN=g26b_a4b_ppp4_scoped_b16_refresh_numgate_sp
+    NUMGATE_SHARD_RUN=g26b_a4b_ppp4_scoped_b16_refresh_numgate_shard
+    CAMPAIGN_RUN=g26b_a4b_ppp4_scoped_b32_refresh_campaign ;;
   *) fail "unknown PPP4_ARM=$PPP4_ARM" ;;
 esac
 RUN_SUFFIX="j${SLURM_JOB_ID}"

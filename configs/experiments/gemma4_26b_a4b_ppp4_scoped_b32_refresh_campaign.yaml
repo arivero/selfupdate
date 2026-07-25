@@ -1,0 +1,55 @@
+# KV-REFRESH experiment (owner hypothesis [393], 2026-07-25): adapter-refreshed
+# teacher-anchored context. Single-variable clone of
+# gemma4_26b_a4b_ppp4_scoped_b32_campaign (the r16, cache-path, no-expert arm
+# job 422706 ran under teacher_frozen) with ONLY the K/V source changed:
+#   v4_kv_source: teacher_frozen  ->  student_refresh (+ refresh every 1 epoch).
+#
+# Law-compliant "adapter-refreshed teacher-anchored context": projection inputs
+# and block residual stay teacher h[L-1]; only the detached K/V is regenerated
+# through the CURRENT adapter every epoch boundary, no-grad. It tests whether
+# refreshing the attention context with the adapted K/V matrices lets the
+# composed censored student improve where teacher_frozen leaves student_argmax
+# flat at 0.556 (see WEEKEND_HANDOFF.md diagnosis).
+#
+# r16, expert_parameters OFF on purpose: (1) keeps a single-variable contrast
+# vs 422706; (2) the K/V-generation matrices are attention Linears covered by
+# LoRA regardless of expert_parameters, so the refresh mechanism is exercised;
+# (3) matches the numgate configs that PASS the SP-vs-shard gate at 3.9e-8, so
+# the numerics gate stays intact and is not relaxed (unlike the r64+expert arm).
+run_name: g26b_a4b_ppp4_scoped_b32_refresh_campaign
+model:
+  name: google/gemma-4-26B-A4B-it
+  dtype: bfloat16
+data:
+  examples_path: data/combined/examples_v5rs_window.jsonl
+mask:
+  mode: rag_system
+  compaction: flow_mask
+cache:
+  source_compaction: remove
+  hidden_dtype: bfloat16
+  generation_batch: 64
+  generation_budget_bucket: 32
+  generation_shuffle_seed: 17
+  max_sequence_tokens: 8192
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
+  epochs: 500
+  micro_batch: 32
+  v4_teacher_source: cache
+  v4_teacher_residency: cpu_stream
+  v4_kv_source: student_refresh
+  v4_kv_refresh_epochs: 1
+  v4_stage_scoped: true
+  v4_stage_splits: [8, 15, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+eval:
+  every_epochs: 1
+  recall_corpora: [machado, quijote_ch4]
+  standard_damage_every_epochs: 1
+  standard_damage_limit: 16
+  standard_damage_batch_size: 8
+  generation_batch: 8
+  vllm_uncensored_generation_limit: 8
