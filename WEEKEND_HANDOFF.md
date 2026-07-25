@@ -112,10 +112,30 @@ give gradient where huber sees ~0. The LR axis separates loss-geometry from
 under-training. Read `student_argmax_acceptance` / `CE_eval_loss` slope vs the
 baseline; watch `standard_damage` for the higher-LR arms.
 
-**Next, not yet launched** — if the loss axis wins, the deeper fix for the
-composition gap is the owner's own hypothesis [393]: adapter-refreshed
-teacher-anchored K/V (`v4_kv_source: student_refresh`), which needs the **cache**
-path (`validate.py:80` forbids it on the store path) — a heavier separate launch.
+## FIRED: KV-refresh experiment (owner hypothesis [393]) — job 423034
+
+The deeper fix for the composition gap, now launched. New spec arm
+`scoped_b32_refresh` (`PPP4_ARM=scoped_b32_refresh`,
+`scripts/spec_g26b_a4b_campaign.sbatch`): A4B r16, cache path,
+`v4_kv_source: student_refresh` + `v4_kv_refresh_epochs: 1`. It regenerates the
+detached training K/V through the CURRENT adapter every epoch (projection
+inputs and residual stay teacher h[L-1]; no-grad refresh) — law-compliant
+adapter-refreshed teacher-anchored context.
+
+- **Gate stays intact:** it reuses the r16 no-expert numgate configs that PASS
+  the SP-vs-shard gate at ~3.9e-8. Not relaxed. (The r64+expert path is the one
+  with the open discrepancy; this arm avoids it by design.)
+- **Single-variable contrast:** identical to the teacher_frozen `scoped_b32`
+  arm (job 422706) except the K/V source. Reads: does `student_argmax` move off
+  0.556 under refresh where it stayed flat under teacher_frozen?
+- **Run dir:** `runs/g26b_a4b_ppp4_scoped_b32_refresh_campaign_j423034`; report
+  `423035` (afterany). A4B is slow + cache path (~day pipeline: fresh vLLM gen →
+  cache build → numerics gate → 500-epoch campaign, will hit the 24 h wall).
+  Compare against 422706 at matched epochs.
+
+Caveat: cache-path vs store-path differs from the store-path baselines, but the
+matched contrast is against the cache-path teacher_frozen 422706, so the K/V
+source is the only moved variable.
 
 ## Node state when I left
 
