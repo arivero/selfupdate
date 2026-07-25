@@ -69,6 +69,54 @@ gate run is the cheap discriminator) are in `issues.md` under
 - **Full fine-tuning arm** and **adapter-refreshed Q/K/V for r64**: both are
   logged as priority issues in `issues.md`, not weekend-automatable.
 
+## Root-cause diagnosis: why nothing is learning (2026-07-25, from the finished q27b r64)
+
+Pulled the full `metrics.jsonl` of the completed `campaign50_q27b_ppp4_r64`:
+
+- **Composed censored student is flat.** `student_argmax_acceptance` = 0.556 at
+  epoch 0 and 0.556 at epoch 50 (bit-flat every eval); `CE_eval_loss` drifts
+  *up* 2.2284 → 2.2367; corpus recall identical to the digit every epoch
+  (machado 0.00, quijote_ch1 0.09, quijote_ch4 0.02). `teacher_argmax` = 0.9994
+  throughout — the cache/ceiling is perfect, so this is a training failure, not
+  an eval/ceiling artifact.
+- **The block-local objective is near-trivial.** Hidden (huber) loss starts
+  near zero (layer-16 ≈ 0.009, most layers 1e-4) because each block is fed the
+  *exact* teacher context (`teacher_frozen` uncensored K/V + teacher h[L-1]);
+  reconstructing teacher h[L] from that is almost free. It descends only
+  ~5–13% over 50 epochs.
+- **The adapter moves anyway, into noise.** Effective LoRA delta grows ~52×
+  (layer-16 rel-L2 6e-6 → 3.2e-4) and grad norms on the high-loss layers rise,
+  yet none of it improves the end-to-end student. The near-zero hidden-geometry
+  residual is both too small to give useful gradient and misaligned with the
+  output distribution `argmax` reads.
+
+Flat-to-the-digit recall + monotonic CE rise rules out "just needs more
+epochs." The lever is the objective and/or the step size, not the epoch count.
+
+## Designed + queued experiment: Qwen-27B r64 2×2 (loss × LR)
+
+A/B against the finished `campaign50_q27b_ppp4_r64` (huber @ 3e-6), on the fast
+dense model so we get a read in ~5 h/arm:
+
+| run_name | loss | lr | train / report |
+|---|---|---:|---|
+| campaign50_q27b_ppp4_r64 (baseline, done) | huber | 3e-6 | — |
+| campaign50_q27b_ppp4_r64_lr3e5 | huber | 3e-5 | 423029 / 423030 |
+| campaign50_q27b_ppp4_r64_vmse | vocab_mse | 3e-6 | 423027 / 423028 |
+| campaign50_q27b_ppp4_r64_vmse_lr3e5 | vocab_mse | 3e-5 | 423031 / 423032 |
+
+`vocab_mse` = MSE in logit space through the frozen unembedding Gram matrix
+(stage-scoped-safe; the historical recall recipe's loss family; memory-flagged
+low-intrusion). It measures distance where the head amplifies it, so it should
+give gradient where huber sees ~0. The LR axis separates loss-geometry from
+under-training. Read `student_argmax_acceptance` / `CE_eval_loss` slope vs the
+baseline; watch `standard_damage` for the higher-LR arms.
+
+**Next, not yet launched** — if the loss axis wins, the deeper fix for the
+composition gap is the owner's own hypothesis [393]: adapter-refreshed
+teacher-anchored K/V (`v4_kv_source: student_refresh`), which needs the **cache**
+path (`validate.py:80` forbids it on the store path) — a heavier separate launch.
+
 ## Node state when I left
 
 agpuh01 / agpuh02 busy with the r16 arms (Gemma-31B `422811`, Qwen-35B
