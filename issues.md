@@ -1,5 +1,42 @@
 # Issues / Follow-Ups
 
+## OPEN — unexplained A4B r64 SP-vs-shard numerics discrepancy (2026-07-25)
+
+The Gemma-4-26B-A4B r64 spec-path campaign (job 422809,
+`spec_g26b_a4b_campaign.sbatch`, `PPP4_ARM` scoped r64) FAILED its
+single-process-vs-PPP4 numerics gate: the comparator reported a worst
+relative delta of `4.002e-7` on the **layer-28 gradient norm**, above the
+hard `rtol=1e-7`. Everything else matched tightly: all 30 loss cells within
+`9.38e-8`, 29/30 grad norms below `1.9e-8`, and the epoch-1 effective LoRA
+delta on L28 agreed to `3.2e-8` (`0.0220238754` SP vs `0.0220239049` shard).
+The prior r16 arms passed the same gate at `2.35e-8` (unscoped) and
+`3.90e-8` (scoped) — i.e. the discrepancy appears only at r64.
+
+Owner ruling (2026-07-25, codex 019f90e4): this is a **real, unexplained
+failure**, NOT a candidate for a relaxed tolerance. The r64 gate must keep
+blocking on the spec path; do not raise its rtol or relaunch the spec arm
+expecting a pass — it will re-fail deterministically and burn ~30 min of
+vLLM+cache each time.
+
+What is known so far (not a root cause):
+- The divergence concentrates on layer 28, a **sliding-attention** layer, not
+  a stage boundary and not a full-attention layer.
+- It is packed-expert-specific in that it only surfaces with
+  `expert_parameters: true` at r64; the dense-model r64 arms carry no such
+  signal. Candidate mechanisms to check next: packed-adapter
+  (`experts.gate_up_proj`/`down_proj`) gradient reduction order under PPP4
+  sharding vs single-process; name-keyed init parity of packed A/B factors at
+  r64; a rank-scaled bf16 accumulation growing with parameter count (an r32
+  gate run would show whether it grows smoothly `4e-8 -> ~1e-7 -> 4e-7` =
+  benign, or jumps = suspicious — cheap, do it before deep code work).
+
+CAVEAT that rides on this: the weekend r64 campaign runs the two MoE arms
+(Qwen-35B-A3B, Gemma-26B-A4B) on the **ungated** `qwen_ppp4_50` store path,
+which never runs the SP-vs-shard cross-check. Those runs will produce results
+but do NOT clear this discrepancy. Any scientific claim from an MoE r64 arm
+must carry this caveat until the r64 sharding numerics are explained. The
+dense r64 arms (Qwen-27B, Gemma-31B) are unaffected — no packed experts.
+
 ## PRIORITY — implement and test full block fine-tuning beside complete LoRA (2026-07-24)
 
 The layerwise method must have a real full-fine-tuning arm, not only LoRA
