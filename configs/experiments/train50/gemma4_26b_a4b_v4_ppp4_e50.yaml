@@ -1,0 +1,36 @@
+# Gemma-4-26B-A4B r16 baseline (matched control for campaign50_g26b_a4b_ppp4_r64).
+#
+# The A4B has no clean r16 complete-adapter run on this store path: the old
+# spec-path A4B runs (jobs 422703/422706) predate the packed-expert LoRA
+# coverage fix (c9a00be), so their adapters did not cover the experts.  This
+# config is the r16, expert-complete, store-path twin of the r64 A4B arm so
+# the r16-vs-r64 comparison on the flagship MoE-memorization model is
+# controlled.  Identical to gemma4_26b_a4b_v4_ppp4_r64_e50 except rank 64->16
+# / alpha 128->32.
+run_name: campaign50_g26b_a4b_ppp4
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 50
+  seed: 17
+  hidden_loss: huber
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0, expert_parameters: true}
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_stage_splits: [8, 15, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5
