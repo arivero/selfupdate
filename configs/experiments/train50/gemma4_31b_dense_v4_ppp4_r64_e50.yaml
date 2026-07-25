@@ -1,0 +1,33 @@
+# Gemma-4-31B dense r64 arm of the complete-decoder-matrix LoRA campaign.
+# Identical to campaign50_g31b_dense_ppp4 (huber, e50) except LoRA rank
+# 16 -> 64.  31B is DENSE (7 matrices/block: Q/K/V/O + gate/up/down), so
+# expert_parameters stays false and the r64 numerics question that blocks the
+# A4B MoE arm does not apply.  Controlled r16-vs-r64 comparison on the ungated
+# store path.
+run_name: campaign50_g31b_dense_ppp4_r64
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  batching: bucketed
+  micro_batch: 8
+  epochs: 50
+  seed: 17
+  hidden_loss: huber
+  lora: {enabled: true, r: 64, alpha: 128, dropout: 0.0, expert_parameters: false}
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_stage_splits: [15, 30, 45]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5

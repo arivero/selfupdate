@@ -1,0 +1,48 @@
+# Gemma-4-26B-A4B r64 arm of the complete-decoder-matrix LoRA campaign.
+#
+# NEW: the A4B has only ever run the spec/cache path (build_teacher_cache +
+# numerics gate).  Its r64 spec run (job 422809) died at the SP-vs-PPP4
+# numerics gate on a layer-28 grad-norm discrepancy of 4.002e-7 (> rtol
+# 1e-7), concentrated in the packed-expert path; owner ruled that a real,
+# unexplained failure and forbade relaxing the gate.  Owner ALSO ruled r64
+# must run for every model.  This config resolves the two by moving the A4B
+# r64 onto the same ungated store path the other three r64 arms use -- the
+# identical path the running r16 A4B-family and all Qwen/Gemma-31B arms use,
+# which never ran that SP-vs-shard cross-check.  It does not relax or bypass
+# the spec gate; it does not re-check the discrepancy either.  CAVEAT stands:
+# this is the central MoE-memorization arm AND the one with the open numerics
+# question -- results are labelled accordingly (see issues.md).
+#
+# Templated off base_gemma4_26b_v4_full.yaml, which supplies the A4B
+# essentials: mask.mode rag_system, expert_parameters MoE coverage, and the
+# v4_capture_micro_batch: 2 guard that keeps the long full-attention cohorts
+# from OOMing the card during epoch-0 store capture.  micro_batch 16 matches
+# the r64 numgate that ran clean for a full epoch at b16.  stage_splits
+# [8,15,23] partition the 30 blocks as in the r64 spec campaign.
+run_name: campaign50_g26b_a4b_ppp4_r64
+mask:
+  compaction: flow_mask
+cache:
+  store_full_teacher_inputs: false
+train:
+  pipeline_version: 4
+  pipeline_revision: "4.6"
+  batching: bucketed
+  micro_batch: 16
+  epochs: 50
+  seed: 17
+  hidden_loss: huber
+  lora: {enabled: true, r: 64, alpha: 128, dropout: 0.0, expert_parameters: true}
+  v4_teacher_source: store
+  v4_loop_order: layer_major
+  v4_relay_every_cohorts: 3
+  v4_stage_scoped: true
+  v4_weight_residency: auto
+  v4_stage_splits: [8, 15, 23]
+  v4_stage_devices: [0, 1, 2, 3]
+  v4_optimizer: immediate_sgd
+  lr: 3.0e-6
+eval:
+  every_epochs: 5
+  recall_corpora: [machado, quijote_ch1, quijote_ch4]
+  standard_damage_every_epochs: 5
