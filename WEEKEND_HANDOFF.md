@@ -431,3 +431,18 @@ output to a norm-transformed target. L0-L58 values remain valid. Re-read the
 destroyed runs' profiles with L59 excluded; the first uncontaminated profile
 comes from run trainv5_g31b_vmse (job 423314, fixed code). Any conclusion
 about "which layer memorizes" must cite post-f35f74a runs only.
+
+### Profile-reading rule (owner, 2026-07-27 night)
+
+A v5 surprise profile decomposes as: (1) a MONOTONE drift envelope — trivial,
+mechanical consequence of translating the student's own trajectory (each
+layer inherits its input's accumulated divergence); (2) a SPAN-PERIODIC
+component from the attention pattern (full-attention layers spike: mod-4 in
+Qwen3.6 — see the real q27b r64 profile, L4/8/12/16 elevated ~10-100x over
+neighbors — mod-6 in Gemma-4); (3) the RESIDUAL, which is the only science.
+Do not interpret (1) or (2) as memorization localization. To strip (1),
+read per-layer INCREMENTS (what the block ADDS vs what it should add) — the
+delta_cosine loss is exactly that instrument; the EMA-relative gate
+approximates the same normalization dynamically for any loss kind. When
+reading 423314's profile, first verify the mod-6 signature is visible
+(instrument sanity), then analyze the residual.
