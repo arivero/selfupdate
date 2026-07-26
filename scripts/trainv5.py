@@ -277,6 +277,18 @@ def slice_rows(hidden, spans):
     return [hidden[i, s:s + l] for i, (s, l) in enumerate(spans)]
 
 
+def head_logits(lm_head, h, softcap):
+    """Frozen-head logits AS THE DEPLOYED MODEL PRODUCES THEM: Gemma4
+    applies final_logit_softcapping=30 (30*tanh(x/30)) after lm_head;
+    skipping it distorted CE/KL_eval and the arc choice ranking
+    (independent review finding 3). Evaluation-only path."""
+    import torch
+    lg = lm_head(h).float()
+    if softcap:
+        lg = softcap * torch.tanh(lg / softcap)
+    return lg
+
+
 class LayerwiseTaps:
     """Hook plumbing for the layerwise law.
 
@@ -384,7 +396,10 @@ class LocalLoss:
             scale = t.pow(2).mean().sqrt().clamp_min(1e-8)
             return F.smooth_l1_loss(s / scale, t / scale, beta=1.0)
         if kind == "delta_cosine":
-            a = anchor.float()
+            # the anchor (block input) lives on the PREVIOUS layer's GPU at
+            # shard boundaries (pre-hook fires before accelerate's device
+            # alignment) — align it (independent review finding 2)
+            a = anchor.float().to(s.device)
             student_delta = s - a
             with torch.no_grad():
                 teacher_delta = t - a
@@ -456,7 +471,8 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
     return {c: round(sum(v) / len(v), 4) for c, v in scores.items() if v}
 
 
-def arc_eval(stack, lm_head, tok, device, limit: int) -> float:
+def arc_eval(stack, lm_head, tok, device, limit: int,
+             softcap: float | None = None) -> float:
     """Standard-damage guard: arc_easy accuracy (vendored fixed items, mean
     per-token choice log-prob, adapters ON — the deployed student)."""
     import torch
@@ -482,7 +498,9 @@ def arc_eval(stack, lm_head, tok, device, limit: int) -> float:
                         use_cache=False)
             best, best_lp = -1, -1e30
             for j, (start, length) in enumerate(spans):
-                lg = lm_head(out.last_hidden_state[j, start:start + length]).float()
+                lg = head_logits(lm_head,
+                                 out.last_hidden_state[j, start:start + length],
+                                 softcap)
                 tgt = torch.tensor(rows[j][start + 1:start + 1 + length],
                                    device=lg.device)
                 lp = torch.log_softmax(lg, -1).gather(
@@ -596,8 +614,11 @@ def main() -> None:
         # cache stays valid across epochs)
         pr = len(it["censored_ids"])
         rng = random.Random(f"anchor-{it['example_id']}-{args.seed}")
-        k = min(args.anchor_rows, max(1, pr - 1))
-        it["anchor_rows"] = sorted(rng.sample(range(1, pr), k))
+        # exclusive of pr-1: that row is the FIRST predictive answer row and
+        # must not carry both "match teacher" and "stay at base" (review f5)
+        hi = max(2, pr - 1)
+        k = min(args.anchor_rows, hi - 1)
+        it["anchor_rows"] = sorted(rng.sample(range(1, hi), k))
     print("corpora:", by_c, flush=True)
     if args.dry_data:
         ex = items[0]
@@ -679,9 +700,11 @@ def main() -> None:
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
     if args.grad_checkpoint:
-        full.gradient_checkpointing_enable(
-            gradient_checkpointing_kwargs={"use_reentrant": False})
-        full.enable_input_require_grads()
+        raise SystemExit(
+            "GATE: --grad-checkpoint breaks the layerwise law — backward-"
+            "time recompute runs WITHOUT the detach pre-hooks (taps are "
+            "removed by then), reconnecting blocks. The isolation cert "
+            "would crash anyway; refuse upfront (independent review f4).")
 
     trainable = sum(p.numel() for p in full.parameters() if p.requires_grad)
     cap = capacity_check(trainable)
@@ -731,6 +754,8 @@ def main() -> None:
                             lr=args.lr)
     pad = tok.pad_token_id or 0
 
+    softcap = getattr(stack.config, "final_logit_softcapping", None)
+    print(f"final_logit_softcapping={softcap}", flush=True)
     baseline_argmax: dict = {}
     gate_mode, gate_val = "all", 0.0
     if args.layer_gate.startswith("topk:"):
@@ -756,7 +781,8 @@ def main() -> None:
         rec = recall_eval(full, tok, items, device, stop_id, args.gen_batch,
                           args.max_new_tokens, args.recall_samples, args.seed)
         full.eval()
-        arc = arc_eval(stack, lm_head, tok, device, args.arc_limit)
+        arc = arc_eval(stack, lm_head, tok, device, args.arc_limit,
+                       softcap)
         # teacher-forced output metrics on a fixed probe slice — EVALUATION
         # ONLY (v4 convention: optimizer weight structurally zero). Includes
         # the argmax acceptance that sat frozen at 0.556 through all of v4.
@@ -781,8 +807,12 @@ def main() -> None:
                 for j, it in enumerate(b):
                     ss, sl_ = s_spans[j]
                     ts, tl_ = t_spans[j]
-                    sl = lm_head(s_out.last_hidden_state[j, ss:ss + sl_]).float()
-                    tl = lm_head(t_out.last_hidden_state[j, ts:ts + tl_]).float()
+                    sl = head_logits(lm_head,
+                                     s_out.last_hidden_state[j, ss:ss + sl_],
+                                     softcap)
+                    tl = head_logits(lm_head,
+                                     t_out.last_hidden_state[j, ts:ts + tl_],
+                                     softcap)
                     tgt = torch.tensor(it["answer_ids"], device=sl.device)
                     agree += (sl.argmax(-1) == tgt).sum().item()
                     total += len(it["answer_ids"])
@@ -848,6 +878,7 @@ def main() -> None:
 
     certified = False
     destroyed_evals = 0
+    aborted_at = None
     for epoch in range(1, args.epochs + 1):
         full.train()
         t0 = time.time()
@@ -887,34 +918,41 @@ def main() -> None:
                 with torch.no_grad(), full.disable_adapter():
                     t_ids, t_mask, _tp, t_spans = collate(
                         batch, "prompt_ids", pad, device)
-                    t_out = stack(input_ids=t_ids, attention_mask=t_mask,
-                                  output_hidden_states=True, use_cache=False)
-                    # hidden_states[l] is the OUTPUT of block l-1 (index 0 =
-                    # embeddings); block L's target is hidden_states[L+1].
+                    # RAW block outputs via the same taps, NOT
+                    # output_hidden_states: transformers 5.12.1 ties the
+                    # LAST hidden_states entry to the post-final-norm state
+                    # (tie_last_hidden_states), so hidden_states[-1] is NOT
+                    # block 59's output — using it trained the deepest block
+                    # toward an unreachable norm-transformed target and
+                    # poisoned the gates (independent review, 2026-07-27).
+                    # taps under no_grad capture exact raw outputs; the
+                    # detach pre-hook is a no-op on values.
+                    with taps.active():
+                        stack(input_ids=t_ids, attention_mask=t_mask,
+                              use_cache=False)
+                        t_raw = list(taps.outputs)
                     # clone(): a bare slice is a VIEW that would retain all
-                    # 61 full-sequence hidden tensors through the student
+                    # 60 full-sequence output tensors through the student
                     # pass (~8 GiB); clones keep only the answer rows.
                     targets = [[r.clone() for r in
-                                slice_rows(t_out.hidden_states[l + 1],
-                                           t_spans)]
+                                slice_rows(t_raw[l], t_spans)]
                                for l in range(n_layers)]
-                    del t_out
+                    del t_raw
                     anchors = None
                     if args.anchor_weight:
                         # self-anchor targets: the adapters-OFF BASE model on
                         # the SAME censored sequence, at the fixed sampled
                         # prompt rows — "change nothing where there is no
                         # signal". Frozen like the teacher, hence cacheable.
-                        b_out = stack(input_ids=s_ids,
-                                      attention_mask=s_mask,
-                                      position_ids=s_pos,
-                                      output_hidden_states=True,
-                                      use_cache=False)
-                        anchors = [[b_out.hidden_states[l + 1][j,
+                        with taps.active():
+                            stack(input_ids=s_ids, attention_mask=s_mask,
+                                  position_ids=s_pos, use_cache=False)
+                            b_raw = list(taps.outputs)
+                        anchors = [[b_raw[l][j,
                                     batch[j]["anchor_rows"]].clone()
                                     for j in range(len(batch))]
                                    for l in range(n_layers)]
-                        del b_out
+                        del b_raw
                 if teacher_cache is not None:
                     for j, it in enumerate(batch):
                         teacher_cache[it["example_id"]] = [
@@ -939,11 +977,13 @@ def main() -> None:
             # already paid for them); the gate then decides which of the
             # independent per-block backwards to actually run.
             terms = []
+            ans_vals_t = []
             for l in range(n_layers):
                 y_rows = slice_rows(block_out[l], s_spans)
                 a_rows = slice_rows(block_in[l], s_spans)
                 term = sum(loss_fn(y, t, a) for y, t, a in
                            zip(y_rows, targets[l], a_rows)) / len(batch)
+                ans_vals_t.append(term.detach())
                 if anchors is not None:
                     # self-anchor: same block, same forward, PROMPT rows —
                     # output must stay near the adapters-off base states.
@@ -972,8 +1012,15 @@ def main() -> None:
                 got = torch.stack([terms[l].detach() for l in idxs]).tolist()
                 for l, v in zip(idxs, got):
                     vals[l] = v
-            for l in range(n_layers):
-                surprise_sum[l] += vals[l]
+            # pure teacher-distance profile (anchor excluded): grouped
+            # per-device reads, same hot-loop law as the selection sync
+            by_dev2: dict = {}
+            for l, t in enumerate(ans_vals_t):
+                by_dev2.setdefault(t.device, []).append(l)
+            for dev, idxs in by_dev2.items():
+                got = torch.stack([ans_vals_t[l] for l in idxs]).tolist()
+                for l, v in zip(idxs, got):
+                    surprise_sum[l] += v
             if not certified:
                 layerwise_isolation_cert(terms)
                 certified = True
@@ -1044,13 +1091,18 @@ def main() -> None:
                     print("ABORT: two consecutive destroyed evals — kill "
                           "doomed runs fast (owner rule); checkpoints and "
                           "metrics preserved", flush=True)
+                    aborted_at = epoch
                     break
             else:
                 destroyed_evals = 0
 
     full.save_pretrained(str(out_dir / "checkpoint"))
-    log("done", epochs=args.epochs)
-    print(f"run complete: {out_dir}", flush=True)
+    if aborted_at is None:
+        log("done", epochs=args.epochs)
+        print(f"run complete: {out_dir}", flush=True)
+    else:
+        log("done_aborted", last_epoch=aborted_at)
+        print(f"run ABORTED at epoch {aborted_at}: {out_dir}", flush=True)
 
 
 if __name__ == "__main__":
