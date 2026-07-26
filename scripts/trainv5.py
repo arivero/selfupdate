@@ -704,8 +704,18 @@ def main() -> None:
         gate_mode, gate_val = "topk", int(args.layer_gate.split(":", 1)[1])
     elif args.layer_gate.startswith("minfrac:"):
         gate_mode, gate_val = "minfrac", float(args.layer_gate.split(":", 1)[1])
+    elif args.layer_gate.startswith("surprise_ema:"):
+        # owner concept (2026-07-26): surprise = loss EXCEEDING the layer's
+        # own expectation. Each layer keeps an EMA of its loss; only layers
+        # whose current loss > F x their EMA backprop this step —
+        # prediction-error gating, the continuous-learning trigger in
+        # miniature. Selection reads the PREVIOUS expectation; the EMA then
+        # absorbs the new value for every layer.
+        gate_mode, gate_val = "surprise_ema", float(
+            args.layer_gate.split(":", 1)[1])
     elif args.layer_gate != "all":
         raise SystemExit(f"unknown --layer-gate {args.layer_gate}")
+    loss_ema: list = [None] * n_layers
 
     def evaluate(epoch: int):
         # fixed seed on purpose: the SAME recall items every eval, so the
@@ -936,8 +946,16 @@ def main() -> None:
             elif gate_mode == "minfrac":
                 cut = max(vals) * gate_val
                 sel = [l for l in range(n_layers) if vals[l] >= cut]
+            elif gate_mode == "surprise_ema":
+                sel = [l for l in range(n_layers)
+                       if loss_ema[l] is None
+                       or vals[l] > gate_val * loss_ema[l]]
             else:
                 sel = list(range(n_layers))
+            if gate_mode == "surprise_ema":
+                for l in range(n_layers):
+                    loss_ema[l] = (vals[l] if loss_ema[l] is None
+                                   else 0.9 * loss_ema[l] + 0.1 * vals[l])
             if not sel:
                 sel = [max(range(n_layers), key=lambda l: vals[l])]
             for l in sel:
