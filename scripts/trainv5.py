@@ -963,9 +963,11 @@ def main() -> None:
         print(f"epoch {epoch}: local_loss={mean_loss:.5f} "
               f"({time.time() - t0:.0f}s)", flush=True)
         with torch.no_grad():
-            adapter_norm = float(sum(
-                p.detach().float().norm() ** 2
-                for p in full.parameters() if p.requires_grad) ** 0.5)
+            # python-float accumulation: parameters live on FOUR devices,
+            # tensor sum() would cross devices (crashed 423279 at epoch 1)
+            adapter_norm = sum(
+                float(p.detach().float().norm()) ** 2
+                for p in full.parameters() if p.requires_grad) ** 0.5
         log("epoch", epoch=epoch, loss=mean_loss, loss_kind=args.local_loss,
             seconds=time.time() - t0, surprise_profile=profile,
             layer_gate=args.layer_gate, backprop_count=backprop_count,
