@@ -420,3 +420,14 @@ now sharply posed: v4's teacher-frozen context gives a trivial objective
 (nothing learns), v5's self-trajectory gives a real objective whose naive
 optimization destroys the model through depth-compounding drift. The loss
 menu, the anchor, the gating, and the LR ladder are the search space between.
+
+### RE-EVAL REQUIRED (2026-07-27, after independent-review finding f1)
+
+All v5 depth-profile analyses written before f35f74a are contaminated at the
+LAST LAYER: hidden_states[-1] in transformers 5.12.1 is the post-final-norm
+state, so every logged L59 surprise value (the ~0.58 "burning tail" spike in
+both destruction analyses) was partly an artifact of comparing a raw block
+output to a norm-transformed target. L0-L58 values remain valid. Re-read the
+destroyed runs' profiles with L59 excluded; the first uncontaminated profile
+comes from run trainv5_g31b_vmse (job 423314, fixed code). Any conclusion
+about "which layer memorizes" must cite post-f35f74a runs only.
