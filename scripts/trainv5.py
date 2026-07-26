@@ -1059,14 +1059,19 @@ def main() -> None:
                 layerwise_isolation_cert(terms)
                 certified = True
             # GATES RANK RELATIVE SURPRISE avals[l]/EMA[l], never absolute
-            # loss (Opus review f2/f6): absolute per-layer loss is depth-
-            # monotone (divergence compounds along the student trajectory),
-            # so absolute topk/minfrac degenerate into a TAIL-ONLY window —
-            # forbidden on this branch under any subterfuge. Relative
-            # surprise asks "which layers exceed their own recent
-            # expectation" — depth-fair, and exactly the owner's
-            # prediction-error concept. Gating reads the ANSWER-only term
-            # (teacher surprise), not the anchor drift.
+            # loss. Owner correction (2026-07-27): absolute per-layer loss
+            # is NOT inherently depth-monotone — it is SPAN-STRUCTURED by
+            # the attention pattern (v4 teacher-anchored profiles spike at
+            # every full-attention layer: mod-4 in Qwen3.6, mod-6 in
+            # Gemma-4). In the v5 self-trajectory regime a compounding
+            # drift term is superimposed, which is what made the measured
+            # profiles monotone. EITHER structure breaks absolute ranking:
+            # depth-drift collapses topk into a forbidden tail-only window,
+            # and span structure would over-select full-attention layers.
+            # Relative surprise (each layer vs its own EMA) normalizes both
+            # and implements the owner's prediction-error concept. Gating
+            # reads the ANSWER-only term (teacher surprise), not anchor
+            # drift.
             rel = [avals[l] / loss_ema[l] if loss_ema[l] else 1.0
                    for l in range(n_layers)]
             skip_step = False
