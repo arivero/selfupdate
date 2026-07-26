@@ -32,17 +32,19 @@ Teacher and student are the SAME base model:
 Teacher-sourced targets only; the original corpus text is never a training
 target.
 
-STABILITY LAW (learned the hard way, 2026-07-26, run
-trainv5_g31b_selfdistill_lr1e4_destroyed): the answer-row objective alone is
-satisfiable while destroying the model — at lr 1e-4 the blocks wrecked every
-unconstrained position within ONE epoch (argmax 0.43->0.0, CE 11->123, arc
-to chance) while the mean local loss fell. Two defenses, both default-on:
-lr 1e-5, and a SELF-ANCHOR term (--anchor-weight, --anchor-rows): at fixed
-sampled PROMPT rows of the same censored sequence, each block's output must
-stay near the adapters-OFF base model's states — learn the passage at answer
-rows, change nothing where there is no signal. The anchor targets are frozen
-(base model) and cached like the teacher's. This is also the continuous-
-learning requirement: personalization must never lobotomize the base.
+STABILITY LEDGER (see docs/trainv5_destruction_evidence.md for raw data):
+the answer-row objective alone is satisfiable while destroying the model —
+at lr 1e-4 one epoch sufficed (argmax 0.43->0.0). lr 1e-5 plus the
+SELF-ANCHOR term (--anchor-weight/--anchor-rows: block outputs at fixed
+sampled PROMPT rows must stay near the adapters-OFF base states) SLOWED the
+destruction but did NOT stop it (run trainv5_g31b_selfdistill_huber_anchor_
+destroyed: blurring at e2 — CE toward the teacher while argmax fell — then
+collapse by e4). These mitigations are kept as defaults but are FALSIFIED as
+sufficient under huber + natural positions; untried levers, in order:
+vocab_mse metric, --positions aligned, a clip near the observed grad scale
+(~0.01, the 1.0 default never binds at grad norms ~0.001), relative-surprise
+gating. The blurring phase is the evidence the gradient DIRECTION is right —
+destruction is overshoot, not misdirection (owner thesis, 2026-07-27).
 
 OWNER APPROVAL GATE (2026-07-26): training on output logits is completely
 forbidden — output-level KL/CE against the teacher exist only inside
@@ -551,17 +553,21 @@ def main() -> None:
                          " 0 disables")
     ap.add_argument("--anchor-rows", type=int, default=64,
                     help="sampled prompt rows per item for the anchor term")
+    ap.add_argument("--clip", type=float, default=1.0,
+                    help="grad clip max-norm. NOTE (Opus review f4): observed "
+                         "grad norms are ~0.001-0.003, so 1.0 never binds; "
+                         "~0.01 turns clipping into a real trust region")
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--layer-gate", default="all",
-                    help="'all' (depth-uniform, default); 'topk:N' — each "
-                         "STEP, backprop only the N largest per-layer "
-                         "losses; 'minfrac:F' — skip backward for layers "
-                         "whose loss < F x the step's largest (owner speed "
-                         "insight 2026-07-26: forward computes every local "
-                         "loss anyway, and per-block backward is "
-                         "independent, so small-surprise layers can simply "
-                         "not be backpropagated)")
+                    help="'all' (depth-uniform, default); 'topk:N' / "
+                         "'minfrac:F' / 'surprise_ema:F'. ALL gated modes "
+                         "rank RELATIVE surprise (answer-only loss / that "
+                         "layer's own EMA): absolute per-layer loss is "
+                         "depth-monotone, so absolute ranking degenerates "
+                         "into a tail-only window, forbidden on this "
+                         "branch (Opus review f2). surprise_ema with an "
+                         "empty selection performs NO update that step.")
     ap.add_argument("--grad-checkpoint", action="store_true",
                     help="REFUSED at startup — see the gate message; taps "
                          "must stay registered through backward first")
@@ -610,6 +616,10 @@ def main() -> None:
     tok = AutoTokenizer.from_pretrained(args.model)
     items, stop_id = build_items(ROOT / args.examples, ROOT / args.responses,
                                  tok, args.limit)
+    if stop_id is None:
+        raise SystemExit("responses artifact lacks stop_token_id — recall "
+                         "generation would run to max tokens and score "
+                         "garbage (Opus review f9)")
     n_ans = sum(len(it["answer_ids"]) for it in items)
     cut = sum(len(it["prompt_ids"]) - len(it["censored_ids"]) for it in items)
     print(f"items={len(items)} answer_tokens={n_ans} "
@@ -624,10 +634,13 @@ def main() -> None:
         pr = len(it["censored_ids"])
         rng = random.Random(f"anchor-{it['example_id']}-{args.seed}")
         # exclusive of pr-1: that row is the FIRST predictive answer row and
-        # must not carry both "match teacher" and "stay at base" (review f5)
-        hi = max(2, pr - 1)
-        k = min(args.anchor_rows, hi - 1)
-        it["anchor_rows"] = sorted(rng.sample(range(1, hi), k))
+        # must not carry both "match teacher" and "stay at base" (review f5).
+        # pr<4 would degenerate to that same row / an empty-tensor NaN (f8).
+        if pr < 4:
+            it["anchor_rows"] = []
+        else:
+            k = min(args.anchor_rows, pr - 2)
+            it["anchor_rows"] = sorted(rng.sample(range(1, pr - 1), k))
     print("corpora:", by_c, flush=True)
     if args.dry_data:
         ex = items[0]
@@ -701,6 +714,14 @@ def main() -> None:
                 "refuse to guess")
     if not target_names:
         raise SystemExit("GATE: no LoRA targets found in the text decoder")
+    moe = [n for n, _ in full.named_parameters()
+           if n.startswith(stack_prefix + ".layers.")
+           and (".experts." in n or ".router." in n)]
+    if moe:
+        raise SystemExit(
+            f"GATE: {len(moe)} MoE expert/router matrices present that this "
+            "monolith cannot LoRA-target — dense models only; an MoE run "
+            "would silently train attention-only (Opus review f10)")
     print(f"lora targets: {len(target_names)} Linears under "
           f"{stack_prefix}.layers (vision tower excluded)", flush=True)
     lcfg = LoraConfig(
@@ -762,7 +783,9 @@ def main() -> None:
             f"FROZEN-VOCABULARY TRIPWIRE: {vocab_fp0} -> {now}"
 
     opt = torch.optim.AdamW((p for p in full.parameters() if p.requires_grad),
-                            lr=args.lr)
+                            lr=args.lr, weight_decay=0.0)
+    # weight_decay=0 EXPLICITLY: AdamW's default 0.01 decays only params that
+    # received grad that step — depth-asymmetric under layer gating (f7)
     pad = tok.pad_token_id or 0
 
     softcap = getattr(stack.config, "final_logit_softcapping", None)
@@ -899,6 +922,7 @@ def main() -> None:
         surprise_sum = [0.0] * n_layers   # per-BLOCK local loss (surprise)
         backprop_count = [0] * n_layers
         cache_hits = 0
+        gate_skipped = 0
         grad_norm_sum = 0.0
         grad_norm_n = 0
         opt.zero_grad(set_to_none=True)
@@ -1000,12 +1024,15 @@ def main() -> None:
                     # output must stay near the adapters-off base states.
                     # The lr1e4 run proved answer-only constraints let the
                     # blocks destroy general function (arc -> chance).
-                    anc = sum(
-                        loss_fn(block_out[l][j, batch[j]["anchor_rows"]],
-                                anchors[l][j],
-                                block_in[l][j, batch[j]["anchor_rows"]])
-                        for j in range(len(batch))) / len(batch)
-                    term = term + args.anchor_weight * anc
+                    aj = [j for j in range(len(batch))
+                          if batch[j]["anchor_rows"]]
+                    if aj:
+                        anc = sum(
+                            loss_fn(block_out[l][j, batch[j]["anchor_rows"]],
+                                    anchors[l][j],
+                                    block_in[l][j, batch[j]["anchor_rows"]])
+                            for j in aj) / len(aj)
+                        term = term + args.anchor_weight * anc
                 terms.append(term)
             # Selection needs the scalar values. Hot-loop law: never one
             # sync per layer — group terms by device and read each device
@@ -1018,53 +1045,71 @@ def main() -> None:
             by_dev: dict = {}
             for l, t in enumerate(terms):
                 by_dev.setdefault(t.device, []).append(l)
-            vals = [0.0] * n_layers
+            vals = [0.0] * n_layers    # combined answer+anchor (logged loss)
+            avals = [0.0] * n_layers   # answer-only teacher surprise
             for dev, idxs in by_dev.items():
                 got = torch.stack([terms[l].detach() for l in idxs]).tolist()
-                for l, v in zip(idxs, got):
+                agot = torch.stack([ans_vals_t[l] for l in idxs]).tolist()
+                for l, v, a in zip(idxs, got, agot):
                     vals[l] = v
-            # pure teacher-distance profile (anchor excluded): reuse the
-            # by_dev grouping — ans_vals_t[l] lives on terms[l]'s device
-            for dev, idxs in by_dev.items():
-                got = torch.stack([ans_vals_t[l] for l in idxs]).tolist()
-                for l, v in zip(idxs, got):
-                    surprise_sum[l] += v
+                    avals[l] = a
+            for l in range(n_layers):
+                surprise_sum[l] += avals[l]
             if not certified:
                 layerwise_isolation_cert(terms)
                 certified = True
+            # GATES RANK RELATIVE SURPRISE avals[l]/EMA[l], never absolute
+            # loss (Opus review f2/f6): absolute per-layer loss is depth-
+            # monotone (divergence compounds along the student trajectory),
+            # so absolute topk/minfrac degenerate into a TAIL-ONLY window —
+            # forbidden on this branch under any subterfuge. Relative
+            # surprise asks "which layers exceed their own recent
+            # expectation" — depth-fair, and exactly the owner's
+            # prediction-error concept. Gating reads the ANSWER-only term
+            # (teacher surprise), not the anchor drift.
+            rel = [avals[l] / loss_ema[l] if loss_ema[l] else 1.0
+                   for l in range(n_layers)]
+            skip_step = False
             if gate_mode == "topk":
                 sel = sorted(range(n_layers),
-                             key=lambda l: -vals[l])[:int(gate_val)]
+                             key=lambda l: -rel[l])[:int(gate_val)]
             elif gate_mode == "minfrac":
-                cut = max(vals) * gate_val
-                sel = [l for l in range(n_layers) if vals[l] >= cut]
+                cut = max(rel) * gate_val
+                sel = [l for l in range(n_layers) if rel[l] >= cut]
             elif gate_mode == "surprise_ema":
                 sel = [l for l in range(n_layers)
                        if loss_ema[l] is None
-                       or vals[l] > gate_val * loss_ema[l]]
+                       or avals[l] > gate_val * loss_ema[l]]
+                if not sel:
+                    # nothing exceeded expectation: the honest semantics is
+                    # NO update this step (the continuous-learning trigger
+                    # stayed silent) — never a fallback to the deepest layer
+                    skip_step = True
+                    gate_skipped += 1
             else:
                 sel = list(range(n_layers))
-            if gate_mode == "surprise_ema":
-                for l in range(n_layers):
-                    loss_ema[l] = (vals[l] if loss_ema[l] is None
-                                   else 0.9 * loss_ema[l] + 0.1 * vals[l])
-            if not sel:
-                sel = [max(range(n_layers), key=lambda l: vals[l])]
-            for l in sel:
-                backprop_count[l] += 1
-            # normalize by n_layers (not len(sel)): a selected layer's
-            # gradient scale is then IDENTICAL under every gate mode, so
-            # gated arms compare to 'all' at the same effective LR
-            loss = torch.stack([terms[l].to(device)
-                                for l in sel]).sum() / n_layers
-            (loss / args.grad_accum).backward()
+            for l in range(n_layers):  # EMA maintained under every mode
+                loss_ema[l] = (avals[l] if loss_ema[l] is None
+                               else 0.9 * loss_ema[l] + 0.1 * avals[l])
+            if not skip_step:
+                if not sel:
+                    sel = [max(range(n_layers), key=lambda l: rel[l])]
+                for l in sel:
+                    backprop_count[l] += 1
+                # normalize by n_layers (not len(sel)): a selected layer's
+                # gradient scale is then IDENTICAL under every gate mode, so
+                # gated arms compare to 'all' at the same effective LR
+                loss = torch.stack([terms[l].to(device)
+                                    for l in sel]).sum() / n_layers
+                (loss / args.grad_accum).backward()
             epoch_loss += sum(vals) / n_layers
             del block_out, block_in, targets, terms
             if anchors is not None:
                 del anchors
             if (bi + 1) % args.grad_accum == 0 or bi + 1 == len(batches):
                 gn = torch.nn.utils.clip_grad_norm_(
-                    [p for p in full.parameters() if p.requires_grad], 1.0)
+                    [p for p in full.parameters() if p.requires_grad],
+                    args.clip)
                 grad_norm_sum += float(gn)
                 grad_norm_n += 1
                 opt.step()
@@ -1086,7 +1131,8 @@ def main() -> None:
             teacher_cache_hit_frac=cache_hits / len(batches),
             mean_grad_norm=grad_norm_sum / max(1, grad_norm_n),
             adapter_l2_norm=adapter_norm,
-            anchor_weight=args.anchor_weight)
+            anchor_weight=args.anchor_weight,
+            gate_skipped_steps=gate_skipped)
         vocab_tripwire()
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             acc = evaluate(epoch)
