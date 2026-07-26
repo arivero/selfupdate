@@ -382,3 +382,41 @@ vendored), topk:8 gating (fewer layers move per step = bounded composition
 drift), lr 1e-6. If vocab_mse holds argmax while recall climbs, the loss-
 metric hypothesis is confirmed and the paced arms should be re-pointed at
 vocab_mse variants.
+
+---
+
+# VERDICTS (written 2026-07-26 night, per the analysis protocol)
+
+## A. r64 campaign — CLOSED: rank was not the constraint; MoE r64 actively harms
+
+All arms completed. First->last eval:
+- Dense flat: q27b r64 huber/cosine argmax 0.5560->0.5561; g31b r64 0.4678->0.4678. Recall frozen everywhere.
+- MoE degraded: q35b r64 huber 0.5433->0.4445 (CE 2.32->2.92), q35b r64
+  delta_cosine 0.5433->0.3674 (CE ->3.49) — extra expert-bank rank = extra
+  damage, zero learning (numerics caveat stands).
+- A4B r64 vs r16 control: 0.4796 vs 0.4793, CE 6.02 vs 5.94 — rank changed
+  nothing. The "is it capacity?" question is closed: NO.
+
+## B. 2x2 loss x LR screen — CLOSED: none move (the reportable negative)
+
+vocab_mse@3e-6 flat (0.5561, recall frozen); huber@3e-5 degrades
+(0.5368, CE 2.37, q1 recall down to 0.05); vmse@3e-5 slight decline.
+Block-local training with TEACHER-FROZEN context cannot compose into
+behavior change, whatever the loss or step size. v5 is the main line.
+
+## C. KV-refresh — relaunched as an expert-complete pair
+
+423034 died at dispatch: the reused r16 numgate configs predate c9a00be's
+refusal of no-expert MoE LoRA. All four A4B r16 cache-path configs now pin
+expert_parameters: true (b5a2f61). Relaunched as a clean modern pair:
+refresh 423306 (report 423307) + teacher_frozen twin 423308 (report 423309).
+Bonus datum: if the r16+experts SP-vs-shard gate fails, the open r64
+discrepancy is expert-path-driven, not rank-driven.
+
+## D. v5 — two destructions diagnosed, vocab_mse attempt running (423303)
+
+See the attempt-1/attempt-2 sections above. The project's central tension is
+now sharply posed: v4's teacher-frozen context gives a trivial objective
+(nothing learns), v5's self-trajectory gives a real objective whose naive
+optimization destroys the model through depth-compounding drift. The loss
+menu, the anchor, the gating, and the LR ladder are the search space between.
