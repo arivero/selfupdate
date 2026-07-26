@@ -577,12 +577,39 @@ def main() -> None:
         args.model, torch_dtype=torch.bfloat16, device_map="auto",
         attn_implementation="sdpa")
     full.config.use_cache = False
-    # every ordinary Linear in the decoder blocks — attention AND MLP, ALL
-    # layers: capacity everywhere, since we don't know where poetry lives.
+    # every ordinary Linear in the TEXT decoder blocks — attention AND MLP,
+    # ALL layers: capacity everywhere, since we don't know where poetry
+    # lives. Targets are EXACT module names enumerated inside the resolved
+    # text stack, never bare suffixes: suffix matching also hits the vision
+    # tower, whose projections are Gemma4ClippableLinear wrappers PEFT
+    # cannot wrap (job 423052 failed exactly there). If a text projection
+    # is itself wrapped, its inner plain .linear is targeted instead.
+    proj_leaves = ("q_proj", "k_proj", "v_proj", "o_proj",
+                   "gate_proj", "up_proj", "down_proj")
+    raw_stack, _ = resolve_stack(full)
+    stack_prefix = next(n for n, m in full.named_modules() if m is raw_stack)
+    target_names = []
+    for mname, mod in full.named_modules():
+        if not mname.startswith(stack_prefix + ".layers."):
+            continue
+        if mname.rsplit(".", 1)[-1] not in proj_leaves:
+            continue
+        if isinstance(mod, torch.nn.Linear):
+            target_names.append(mname)
+        elif isinstance(getattr(mod, "linear", None), torch.nn.Linear):
+            target_names.append(mname + ".linear")
+        else:
+            raise SystemExit(
+                f"GATE: text-decoder projection {mname} is a "
+                f"{type(mod).__name__} with no plain .linear inside — "
+                "refuse to guess")
+    if not target_names:
+        raise SystemExit("GATE: no LoRA targets found in the text decoder")
+    print(f"lora targets: {len(target_names)} Linears under "
+          f"{stack_prefix}.layers (vision tower excluded)", flush=True)
     lcfg = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
+        target_modules=target_names,
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
     if args.grad_checkpoint:
