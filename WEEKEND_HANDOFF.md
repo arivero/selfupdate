@@ -314,3 +314,21 @@ detached-input assertions and the per-epoch frozen-vocabulary fingerprint;
 teacher hiddens host-RAM cached after first computation (epochs 2+ skip the
 teacher forward, ~1/3 of step compute); fixed a view-retention leak (~8 GiB)
 and per-epoch recall resampling churn.
+
+### v5 launch verification (2026-07-26, job 423270) + a coverage footnote
+
+Relaunch after the 423052 vision-tower LoRA failure (fixed in 106edc0) came up
+healthy: 410-target LoRA injected (244,858,880 params, capacity ratio 649.6),
+epoch-0 baselines recall mach 0.173 / quij 0.180, arc_easy 0.330,
+student_argmax 0.4290, KL/CE_eval ~= 11.15 (the passage content really is
+near-unpredictable censored — the headroom v5 trains against; v4's flow-mask
+CE started at 2.23 with nothing to learn). Teacher cache ~47.4 GiB. The
+LAYERWISE ISOLATION CERTIFICATION passed on hardware: block 30's term put
+gradient in exactly its 14 LoRA tensors, zero leaks.
+
+Coverage footnote for the analyst: 410 targets, not 60x7=420 — Gemma-4-31B's
+ten FULL-attention layers (5,11,...,59; the 5-sliding:1-full pattern) have no
+v_proj Linear at all (KV-sharing attention). 410 is therefore complete
+coverage of every existing decoder Linear; expect those ten layers to show 12
+adapted tensors instead of 14 in per-layer accounting, and read their
+surprise-profile rows with that in mind.
