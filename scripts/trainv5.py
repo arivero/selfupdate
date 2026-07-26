@@ -553,6 +553,20 @@ def main() -> None:
                          " 0 disables")
     ap.add_argument("--anchor-rows", type=int, default=64,
                     help="sampled prompt rows per item for the anchor term")
+    ap.add_argument("--weight-decay", type=float, default=0.01,
+                    help="decoupled decay-toward-zero on the adapters, "
+                         "applied MANUALLY and UNIFORMLY to all trainable "
+                         "params at each optimizer step (owner ruling "
+                         "2026-07-27: decay is a principled forgetting "
+                         "pressure, zero is not a good idea; manual "
+                         "application keeps it depth-uniform under gating, "
+                         "fixing the asymmetry AdamW's built-in decay has "
+                         "when gated layers receive no grad)")
+    ap.add_argument("--gate-signal", choices=("answer", "combined"),
+                    default="answer",
+                    help="quantity the layer gate ranks/EMAs: 'answer' = "
+                         "teacher surprise only; 'combined' = answer + "
+                         "anchor drift (owner: both to be experimented)")
     ap.add_argument("--clip", type=float, default=1.0,
                     help="grad clip max-norm. NOTE (Opus review f4): observed "
                          "grad norms are ~0.001-0.003, so 1.0 never binds; "
@@ -784,10 +798,11 @@ def main() -> None:
         assert now == vocab_fp0, \
             f"FROZEN-VOCABULARY TRIPWIRE: {vocab_fp0} -> {now}"
 
-    opt = torch.optim.AdamW((p for p in full.parameters() if p.requires_grad),
-                            lr=args.lr, weight_decay=0.0)
-    # weight_decay=0 EXPLICITLY: AdamW's default 0.01 decays only params that
-    # received grad that step — depth-asymmetric under layer gating (f7)
+    trainable_params = [p for p in full.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(trainable_params, lr=args.lr, weight_decay=0.0)
+    # AdamW's own decay stays 0: it would decay only params that received
+    # grad that step (depth-asymmetric under gating, review f7). The real
+    # decay is applied manually and uniformly below (--weight-decay).
     pad = tok.pad_token_id or 0
 
     softcap = getattr(stack.config, "final_logit_softcapping", None)
@@ -931,6 +946,7 @@ def main() -> None:
         backprop_count = [0] * n_layers
         cache_hits = 0
         gate_skipped = 0
+        updates_this_epoch = 0
         grad_norm_sum = 0.0
         grad_norm_n = 0
         opt.zero_grad(set_to_none=True)
@@ -1080,12 +1096,13 @@ def main() -> None:
             # and implements the owner's prediction-error concept. Gating
             # reads the ANSWER-only term (teacher surprise), not anchor
             # drift.
-            rel = [avals[l] / loss_ema[l] if loss_ema[l] else 1.0
+            gvals = avals if args.gate_signal == "answer" else vals
+            rel = [gvals[l] / loss_ema[l] if loss_ema[l] else 1.0
                    for l in range(n_layers)]
             skip_step = False
             if gate_mode == "topk_abs":
                 sel = sorted(range(n_layers),
-                             key=lambda l: -avals[l])[:int(gate_val)]
+                             key=lambda l: -gvals[l])[:int(gate_val)]
             elif gate_mode == "topk":
                 sel = sorted(range(n_layers),
                              key=lambda l: -rel[l])[:int(gate_val)]
@@ -1095,7 +1112,7 @@ def main() -> None:
             elif gate_mode == "surprise_ema":
                 sel = [l for l in range(n_layers)
                        if loss_ema[l] is None
-                       or avals[l] > gate_val * loss_ema[l]]
+                       or gvals[l] > gate_val * loss_ema[l]]
                 if not sel:
                     # nothing exceeded expectation: the honest semantics is
                     # NO update this step (the continuous-learning trigger
@@ -1105,9 +1122,10 @@ def main() -> None:
             else:
                 sel = list(range(n_layers))
             for l in range(n_layers):  # EMA maintained under every mode
-                loss_ema[l] = (avals[l] if loss_ema[l] is None
-                               else 0.9 * loss_ema[l] + 0.1 * avals[l])
+                loss_ema[l] = (gvals[l] if loss_ema[l] is None
+                               else 0.9 * loss_ema[l] + 0.1 * gvals[l])
             if not skip_step:
+                updates_this_epoch += 1
                 if not sel:
                     sel = [max(range(n_layers), key=lambda l: rel[l])]
                 for l in sel:
@@ -1123,12 +1141,16 @@ def main() -> None:
             if anchors is not None:
                 del anchors
             if (bi + 1) % args.grad_accum == 0 or bi + 1 == len(batches):
-                gn = torch.nn.utils.clip_grad_norm_(
-                    [p for p in full.parameters() if p.requires_grad],
-                    args.clip)
+                gn = torch.nn.utils.clip_grad_norm_(trainable_params,
+                                                    args.clip)
                 grad_norm_sum += float(gn)
                 grad_norm_n += 1
                 opt.step()
+                if args.weight_decay:
+                    with torch.no_grad():
+                        shrink = 1.0 - args.lr * args.weight_decay
+                        for p_ in trainable_params:
+                            p_.mul_(shrink)
                 opt.zero_grad(set_to_none=True)
 
         profile = [s / len(batches) for s in surprise_sum]
@@ -1150,6 +1172,17 @@ def main() -> None:
             anchor_weight=args.anchor_weight,
             gate_skipped_steps=gate_skipped)
         vocab_tripwire()
+        if gate_mode == "surprise_ema" and updates_this_epoch == 0:
+            # owner ruling (2026-07-27): a whole epoch in which nothing
+            # exceeded expectation is CONVERGENCE of prediction-error
+            # learning — the natural stop, not a failure.
+            log("converged_no_surprise", epoch=epoch)
+            print(f"CONVERGED: no layer exceeded its surprise expectation "
+                  f"for the whole of epoch {epoch} — stopping.", flush=True)
+            evaluate(epoch)
+            full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
+            aborted_at = None
+            break
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             acc = evaluate(epoch)
             full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
