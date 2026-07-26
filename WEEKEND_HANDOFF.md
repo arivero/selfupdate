@@ -356,3 +356,29 @@ other scheduled arms inherit the new defaults automatically.
 Analyst note for ALL v5 runs: read `surprise_profile` by DEPTH, never the
 mean; check `mean_grad_norm`/`adapter_l2_norm` growth; any argmax below half
 of epoch-0 is the destruction signature — kill and diagnose, don't wait.
+
+### v5 attempt 2 (423293, huber + anchor + lr 1e-5): destroyed again — metric mismatch identified
+
+Slower death, richer data (evidence: runs/trainv5_g31b_selfdistill_huber_
+anchor_destroyed): e2 showed a BLURRING phase — CE_eval fell 11.2->9.9
+(toward the teacher!) while argmax fell 0.43->0.13 — then collapse (CE 66 at
+e4, 142 by e8). Telemetry acquits weight explosion (adapter L2 66.28->67.22,
+init-dominated; grad_norm ~0.001; clip never binds): tiny coherent drift
+compounds through the 60-layer composition. Deep huber falls (L59 0.58->0.56)
+while output-relevant directions worsen: huber weighs all channels equally,
+the frozen head does not. This is the loss-metric mismatch the loss menu
+exists to probe.
+
+Attempt 3 = single-variable change vs attempt 2: --local-loss vocab_mse
+(distance in the frozen unembedding's own metric W^T W). Job 423303, run
+trainv5_g31b_vmse; the redundant Jul-28 scheduled twin 423062 was cancelled.
+Auto-abort added (2be0a28): any v5 arm now exits cleanly after two
+consecutive destroyed evals (argmax < half of epoch-0) — scheduled arms can
+no longer burn 24 h on a corpse.
+
+If vocab_mse also destroys: next candidates in order — generic-text anchor
+(wikitext rows, pins general function, data/eval/wikitext2_val_v1.txt is
+vendored), topk:8 gating (fewer layers move per step = bounded composition
+drift), lr 1e-6. If vocab_mse holds argmax while recall climbs, the loss-
+metric hypothesis is confirmed and the paced arms should be re-pointed at
+vocab_mse variants.
