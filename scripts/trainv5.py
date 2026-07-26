@@ -563,9 +563,8 @@ def main() -> None:
                          "independent, so small-surprise layers can simply "
                          "not be backpropagated)")
     ap.add_argument("--grad-checkpoint", action="store_true",
-                    help="enable activation checkpointing (off by default: "
-                         "detached block boundaries already bound memory per "
-                         "block, and hooks+recompute interplay is unproven)")
+                    help="REFUSED at startup — see the gate message; taps "
+                         "must stay registered through backward first")
     ap.add_argument("--positions", choices=("natural", "aligned"),
                     default="natural",
                     help="censored-student RoPE numbering: 'natural' (0..L) "
@@ -592,6 +591,16 @@ def main() -> None:
     ap.add_argument("--dry-data", action="store_true",
                     help="CPU-only: build/verify items, print stats, exit")
     args = ap.parse_args()
+
+    if args.grad_checkpoint:
+        raise SystemExit(
+            "GATE: --grad-checkpoint is refused. Verified mechanism (Opus "
+            "review, 2026-07-27): with use_reentrant=False the detach is "
+            "baked into the graph at forward time, so isolation would "
+            "survive — but trainv5 removes the tap hooks before backward, "
+            "and checkpoint recompute then fails loudly with mismatched "
+            "metadata. Keeping taps registered through backward is a "
+            "measured-working path; implement that before re-enabling.")
 
     out_dir = ROOT / "runs" / args.run_name
     if out_dir.exists() and not args.dry_data:
@@ -699,12 +708,6 @@ def main() -> None:
         target_modules=target_names,
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
-    if args.grad_checkpoint:
-        raise SystemExit(
-            "GATE: --grad-checkpoint breaks the layerwise law — backward-"
-            "time recompute runs WITHOUT the detach pre-hooks (taps are "
-            "removed by then), reconnecting blocks. The isolation cert "
-            "would crash anyway; refuse upfront (independent review f4).")
 
     trainable = sum(p.numel() for p in full.parameters() if p.requires_grad)
     cap = capacity_check(trainable)
@@ -719,6 +722,14 @@ def main() -> None:
     stack, lm_head = resolve_stack(full.get_base_model())
     device = next(stack.parameters()).device
     n_layers = len(stack.layers)
+    # LAW GUARD (Opus review, latent): Gemma4 KV-sharing routes DIFFERENTIABLE
+    # K/V from a producer layer into consumer layers, bypassing the detach
+    # pre-hook — cross-block gradient the isolation cert (middle layer) would
+    # not catch. Inactive on 31B/26B/12B (0 shared layers); real on E4B.
+    shared_kv = getattr(stack.config, "num_kv_shared_layers", 0) or 0
+    assert shared_kv == 0, \
+        f"LAYERWISE GATE: model has num_kv_shared_layers={shared_kv}; the " \
+        "detach taps do not cover shared_kv_states — extend them first"
     taps = LayerwiseTaps(stack.layers)
 
     # ---- OWNER APPROVAL GATE (2026-07-26), enforced structurally ----------
@@ -1012,12 +1023,9 @@ def main() -> None:
                 got = torch.stack([terms[l].detach() for l in idxs]).tolist()
                 for l, v in zip(idxs, got):
                     vals[l] = v
-            # pure teacher-distance profile (anchor excluded): grouped
-            # per-device reads, same hot-loop law as the selection sync
-            by_dev2: dict = {}
-            for l, t in enumerate(ans_vals_t):
-                by_dev2.setdefault(t.device, []).append(l)
-            for dev, idxs in by_dev2.items():
+            # pure teacher-distance profile (anchor excluded): reuse the
+            # by_dev grouping — ans_vals_t[l] lives on terms[l]'s device
+            for dev, idxs in by_dev.items():
                 got = torch.stack([ans_vals_t[l] for l in idxs]).tolist()
                 for l, v in zip(idxs, got):
                     surprise_sum[l] += v
