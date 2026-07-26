@@ -32,6 +32,18 @@ Teacher and student are the SAME base model:
 Teacher-sourced targets only; the original corpus text is never a training
 target.
 
+STABILITY LAW (learned the hard way, 2026-07-26, run
+trainv5_g31b_selfdistill_lr1e4_destroyed): the answer-row objective alone is
+satisfiable while destroying the model — at lr 1e-4 the blocks wrecked every
+unconstrained position within ONE epoch (argmax 0.43->0.0, CE 11->123, arc
+to chance) while the mean local loss fell. Two defenses, both default-on:
+lr 1e-5, and a SELF-ANCHOR term (--anchor-weight, --anchor-rows): at fixed
+sampled PROMPT rows of the same censored sequence, each block's output must
+stay near the adapters-OFF base model's states — learn the passage at answer
+rows, change nothing where there is no signal. The anchor targets are frozen
+(base model) and cached like the teacher's. This is also the continuous-
+learning requirement: personalization must never lobotomize the base.
+
 OWNER APPROVAL GATE (2026-07-26): training on output logits is completely
 forbidden — output-level KL/CE against the teacher exist only inside
 evaluate() under no_grad (optimizer weight structurally zero). The
@@ -481,8 +493,22 @@ def main() -> None:
                          "measurement device, NOT logit training)")
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
-    ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--epochs", type=int, default=8)
+    ap.add_argument("--lr", type=float, default=1e-5,
+                    help="AdamW on LoRA. 1e-4 destroyed the model inside one "
+                         "epoch (run trainv5_g31b_selfdistill_lr1e4_destroyed:"
+                         " argmax 0.43->0.0, CE 11->123, arc to chance)")
+    ap.add_argument("--epochs", type=int, default=40,
+                    help="epochs are ~2 min once the teacher cache is warm")
+    ap.add_argument("--anchor-weight", type=float, default=1.0,
+                    help="weight of the self-anchor term: at sampled PROMPT "
+                         "rows of the same censored sequence, each block's "
+                         "output must stay near the adapters-OFF base states "
+                         "— learn the passage at answer rows, change nothing "
+                         "elsewhere (the lr1e4 run proved answer-only "
+                         "constraints let the blocks wreck general function)."
+                         " 0 disables")
+    ap.add_argument("--anchor-rows", type=int, default=64,
+                    help="sampled prompt rows per item for the anchor term")
     ap.add_argument("--micro-batch", type=int, default=8)
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--layer-gate", default="all",
@@ -503,7 +529,7 @@ def main() -> None:
                          "their first computation (~51 GiB at 31B full "
                          "corpus) — the teacher is frozen, so epochs 2+ skip "
                          "its forward entirely; 'off' recomputes every epoch")
-    ap.add_argument("--eval-every", type=int, default=1)
+    ap.add_argument("--eval-every", type=int, default=2)
     ap.add_argument("--recall-samples", type=int, default=24,
                     help="generative recall items per corpus per eval")
     ap.add_argument("--arc-limit", type=int, default=100)
@@ -532,6 +558,13 @@ def main() -> None:
     by_c: dict[str, int] = {}
     for it in items:
         by_c[it["corpus"]] = by_c.get(it["corpus"], 0) + 1
+        # fixed per-item prompt rows for the self-anchor term (block OUTPUT
+        # rows inside the censored prompt; deterministic so the base-state
+        # cache stays valid across epochs)
+        pr = len(it["censored_ids"])
+        rng = random.Random(f"anchor-{it['example_id']}-{args.seed}")
+        k = min(args.anchor_rows, max(1, pr - 1))
+        it["anchor_rows"] = sorted(rng.sample(range(1, pr), k))
     print("corpora:", by_c, flush=True)
     if args.dry_data:
         ex = items[0]
@@ -665,6 +698,7 @@ def main() -> None:
                             lr=args.lr)
     pad = tok.pad_token_id or 0
 
+    baseline_argmax: dict = {}
     gate_mode, gate_val = "all", 0.0
     if args.layer_gate.startswith("topk:"):
         gate_mode, gate_val = "topk", int(args.layer_gate.split(":", 1)[1])
@@ -719,6 +753,14 @@ def main() -> None:
         print(f"eval e{epoch}: recall={rec} arc_easy={arc:.3f} "
               f"student_argmax={acc:.4f} KL_eval={kl:.4f} CE_eval={ce:.4f}",
               flush=True)
+        if epoch == 0:
+            baseline_argmax["e0"] = acc
+        elif acc < 0.5 * baseline_argmax.get("e0", 0.0):
+            print(f"WARNING: DESTRUCTION SIGNATURE — student_argmax {acc:.4f}"
+                  f" < half of epoch-0 {baseline_argmax['e0']:.4f}; the "
+                  "lr1e4 run died exactly like this (see "
+                  "runs/trainv5_g31b_selfdistill_lr1e4_destroyed)",
+                  flush=True)
         log("eval", epoch=epoch, recall=rec, arc_easy=arc,
             student_argmax_acceptance=acc, KL_eval_loss=kl, CE_eval_loss=ce,
             evaluation_only=True, optimizer_weight=0.0)
@@ -729,10 +771,14 @@ def main() -> None:
     layer_dev = [next(stack.layers[l].parameters()).device
                  for l in range(n_layers)]
     teacher_cache: dict | None = ({} if args.teacher_cache == "cpu" else None)
+    anchor_cache: dict = {}
     if teacher_cache is not None:
         width = stack.embed_tokens.weight.shape[1]
         est = n_ans * n_layers * width * 2
-        print(f"teacher-cache: ~{est / 2**30:.1f} GiB host RAM once filled",
+        est_anchor = (len(items) * args.anchor_rows * n_layers * width * 2
+                      if args.anchor_weight else 0)
+        print(f"teacher-cache: ~{est / 2**30:.1f} GiB + anchors "
+              f"~{est_anchor / 2**30:.1f} GiB host RAM once filled",
               flush=True)
 
     def layerwise_isolation_cert(terms):
@@ -765,8 +811,13 @@ def main() -> None:
         surprise_sum = [0.0] * n_layers   # per-BLOCK local loss (surprise)
         backprop_count = [0] * n_layers
         cache_hits = 0
+        grad_norm_sum = 0.0
+        grad_norm_n = 0
         opt.zero_grad(set_to_none=True)
         for bi, batch in enumerate(batches):
+            # censored batch first: the anchor forward reuses it
+            s_ids, s_mask, s_spans = collate(batch, "censored_ids", pad,
+                                             device)
             # teacher: adapters OFF, WITH passage, no grad — per-layer
             # hidden targets at the answer's predictive rows. The teacher is
             # frozen, so its targets are cacheable: epochs 2+ skip this
@@ -780,6 +831,11 @@ def main() -> None:
                 targets = [[teacher_cache[it["example_id"]][l]
                             .to(layer_dev[l], non_blocking=True)
                             for it in batch] for l in range(n_layers)]
+                anchors = None
+                if args.anchor_weight:
+                    anchors = [[anchor_cache[it["example_id"]][l]
+                                .to(layer_dev[l], non_blocking=True)
+                                for it in batch] for l in range(n_layers)]
             else:
                 with torch.no_grad(), full.disable_adapter():
                     t_ids, t_mask, t_spans = collate(batch, "prompt_ids",
@@ -796,16 +852,33 @@ def main() -> None:
                                            t_spans)]
                                for l in range(n_layers)]
                     del t_out
+                    anchors = None
+                    if args.anchor_weight:
+                        # self-anchor targets: the adapters-OFF BASE model on
+                        # the SAME censored sequence, at the fixed sampled
+                        # prompt rows — "change nothing where there is no
+                        # signal". Frozen like the teacher, hence cacheable.
+                        b_out = stack(input_ids=s_ids,
+                                      attention_mask=s_mask,
+                                      output_hidden_states=True,
+                                      use_cache=False)
+                        anchors = [[b_out.hidden_states[l + 1][j,
+                                    batch[j]["anchor_rows"]].clone()
+                                    for j in range(len(batch))]
+                                   for l in range(n_layers)]
+                        del b_out
                 if teacher_cache is not None:
                     for j, it in enumerate(batch):
                         teacher_cache[it["example_id"]] = [
                             targets[l][j].to("cpu")
                             for l in range(n_layers)]
+                        if anchors is not None:
+                            anchor_cache[it["example_id"]] = [
+                                anchors[l][j].to("cpu")
+                                for l in range(n_layers)]
             # student: adapters ON, passage REMOVED, one forward with every
             # block input detached (LayerwiseTaps) — the differentiable
             # output of each block roots only in that block's LoRA weights
-            s_ids, s_mask, s_spans = collate(batch, "censored_ids", pad,
-                                             device)
             with taps.active():
                 stack(input_ids=s_ids, attention_mask=s_mask, use_cache=False)
                 block_out = list(taps.outputs)
@@ -822,6 +895,17 @@ def main() -> None:
                 a_rows = slice_rows(block_in[l], s_spans)
                 term = sum(loss_fn(y, t, a) for y, t, a in
                            zip(y_rows, targets[l], a_rows)) / len(batch)
+                if anchors is not None:
+                    # self-anchor: same block, same forward, PROMPT rows —
+                    # output must stay near the adapters-off base states.
+                    # The lr1e4 run proved answer-only constraints let the
+                    # blocks destroy general function (arc -> chance).
+                    anc = sum(
+                        loss_fn(block_out[l][j, batch[j]["anchor_rows"]],
+                                anchors[l][j],
+                                block_in[l][j, batch[j]["anchor_rows"]])
+                        for j in range(len(batch))) / len(batch)
+                    term = term + args.anchor_weight * anc
                 terms.append(term)
             # Selection needs the scalar values. Hot-loop law: never one
             # sync per layer — group terms by device and read each device
@@ -864,9 +948,13 @@ def main() -> None:
             (loss / args.grad_accum).backward()
             epoch_loss += sum(vals) / n_layers
             del block_out, block_in, targets, terms
+            if anchors is not None:
+                del anchors
             if (bi + 1) % args.grad_accum == 0 or bi + 1 == len(batches):
-                torch.nn.utils.clip_grad_norm_(
+                gn = torch.nn.utils.clip_grad_norm_(
                     [p for p in full.parameters() if p.requires_grad], 1.0)
+                grad_norm_sum += float(gn)
+                grad_norm_n += 1
                 opt.step()
                 opt.zero_grad(set_to_none=True)
 
@@ -874,10 +962,17 @@ def main() -> None:
         mean_loss = epoch_loss / len(batches)
         print(f"epoch {epoch}: local_loss={mean_loss:.5f} "
               f"({time.time() - t0:.0f}s)", flush=True)
+        with torch.no_grad():
+            adapter_norm = float(sum(
+                p.detach().float().norm() ** 2
+                for p in full.parameters() if p.requires_grad) ** 0.5)
         log("epoch", epoch=epoch, loss=mean_loss, loss_kind=args.local_loss,
             seconds=time.time() - t0, surprise_profile=profile,
             layer_gate=args.layer_gate, backprop_count=backprop_count,
-            teacher_cache_hit_frac=cache_hits / len(batches))
+            teacher_cache_hit_frac=cache_hits / len(batches),
+            mean_grad_norm=grad_norm_sum / max(1, grad_norm_n),
+            adapter_l2_norm=adapter_norm,
+            anchor_weight=args.anchor_weight)
         vocab_tripwire()
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             evaluate(epoch)
