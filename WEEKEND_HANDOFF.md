@@ -332,3 +332,27 @@ v_proj Linear at all (KV-sharing attention). 410 is therefore complete
 coverage of every existing decoder Linear; expect those ten layers to show 12
 adapted tensors instead of 14 in per-layer accounting, and read their
 surprise-profile rows with that in mind.
+
+### v5 FIRST RESULT (2026-07-26, job 423270, killed): answer-only local loss destroys the model at lr 1e-4
+
+Epochs were FAST (117-131 s — the teacher cache works) but ONE epoch at AdamW
+1e-4 lobotomized the model: argmax 0.4290 -> 0.0000, CE 11.15 -> 122.7, arc to
+chance, recall 0 — while the mean local huber FELL 0.044 -> 0.028. The
+surprise profile was decisive: depth-skewed (L45-59 0.09-0.28, max block 59,
+barely improving) — 50 trivial shallow layers averaged away a burning tail,
+and the blocks warped every position outside the answer rows (unconstrained)
+to satisfy the objective. Evidence preserved in
+`runs/trainv5_g31b_selfdistill_lr1e4_destroyed/metrics.jsonl`.
+
+Patch (e78db32, defaults changed): lr 1e-5; epochs 40 / eval-every 2; a
+SELF-ANCHOR term (--anchor-weight 1.0, --anchor-rows 64) pinning each block's
+output at fixed sampled PROMPT rows to the adapters-OFF base states (frozen,
+cached ~+80 GiB) — learn the passage at answer rows, change nothing
+elsewhere; grad-norm + adapter-norm telemetry; a DESTRUCTION SIGNATURE
+warning in eval. Baseline relaunched as 423279; the Aug-15 step-size arm was
+rebased (423071 cancelled -> 423280, lr 3e-5 vs the new 1e-5 default). All
+other scheduled arms inherit the new defaults automatically.
+
+Analyst note for ALL v5 runs: read `surprise_profile` by DEPTH, never the
+mean; check `mean_grad_norm`/`adapter_l2_norm` growth; any argmax below half
+of epoch-0 is the destruction signature — kill and diagnose, don't wait.
