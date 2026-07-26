@@ -158,7 +158,14 @@ def build_items(examples_path: Path, responses_path: Path, tok,
             bad_cut += 1
             continue
         censored_ids = tok.encode(censored_text, add_special_tokens=False)
+        cut_at = 0
+        for a, b in zip(prompt_ids, censored_ids):
+            if a != b:
+                break
+            cut_at += 1
         items.append({
+            "cut_at": cut_at,
+            "pos_gap": len(prompt_ids) - len(censored_ids),
             "example_id": r["example_id"],
             "corpus": ex.get("corpus", "?"),
             "prompt_ids": prompt_ids,
@@ -524,6 +531,15 @@ def main() -> None:
                     help="enable activation checkpointing (off by default: "
                          "detached block boundaries already bound memory per "
                          "block, and hooks+recompute interplay is unproven)")
+    ap.add_argument("--positions", choices=("natural", "aligned"),
+                    default="natural",
+                    help="censored-student RoPE numbering: 'natural' (0..L) "
+                         "or 'aligned' — as if the removed passage were "
+                         "present (flow_mask-equivalent positions; removes "
+                         "the ~215-position shift between teacher targets "
+                         "and student states). Teacher-forced paths only; "
+                         "generation stays natural (HF generate derives its "
+                         "own positions)")
     ap.add_argument("--teacher-cache", choices=("cpu", "off"), default="cpu",
                     help="cache teacher answer-row hiddens in host RAM after "
                          "their first computation (~51 GiB at 31B full "
@@ -734,14 +750,15 @@ def main() -> None:
             for i in range(0, len(probe), args.micro_batch):
                 b = probe[i:i + args.micro_batch]
                 # student logits: ordinary censored forward, adapters ON
-                s_ids, s_mask, s_spans = collate(b, "censored_ids", pad,
-                                                 device)
+                s_ids, s_mask, s_pos, s_spans = collate(
+                    b, "censored_ids", pad, device,
+                    aligned_positions=(args.positions == "aligned"))
                 s_out = stack(input_ids=s_ids, attention_mask=s_mask,
-                              use_cache=False)
+                              position_ids=s_pos, use_cache=False)
                 # teacher logits: adapters OFF, WITH passage
                 with full.disable_adapter():
-                    t_ids, t_mask, t_spans = collate(b, "prompt_ids", pad,
-                                                     device)
+                    t_ids, t_mask, _tp, t_spans = collate(b, "prompt_ids",
+                                                          pad, device)
                     t_out = stack(input_ids=t_ids, attention_mask=t_mask,
                                   use_cache=False)
                 for j, it in enumerate(b):
@@ -828,8 +845,9 @@ def main() -> None:
         opt.zero_grad(set_to_none=True)
         for bi, batch in enumerate(batches):
             # censored batch first: the anchor forward reuses it
-            s_ids, s_mask, s_spans = collate(batch, "censored_ids", pad,
-                                             device)
+            s_ids, s_mask, s_pos, s_spans = collate(
+                batch, "censored_ids", pad, device,
+                aligned_positions=(args.positions == "aligned"))
             # teacher: adapters OFF, WITH passage, no grad — per-layer
             # hidden targets at the answer's predictive rows. The teacher is
             # frozen, so its targets are cacheable: epochs 2+ skip this
@@ -850,8 +868,8 @@ def main() -> None:
                                 for it in batch] for l in range(n_layers)]
             else:
                 with torch.no_grad(), full.disable_adapter():
-                    t_ids, t_mask, t_spans = collate(batch, "prompt_ids",
-                                                     pad, device)
+                    t_ids, t_mask, _tp, t_spans = collate(
+                        batch, "prompt_ids", pad, device)
                     t_out = stack(input_ids=t_ids, attention_mask=t_mask,
                                   output_hidden_states=True, use_cache=False)
                     # hidden_states[l] is the OUTPUT of block l-1 (index 0 =
@@ -872,6 +890,7 @@ def main() -> None:
                         # signal". Frozen like the teacher, hence cacheable.
                         b_out = stack(input_ids=s_ids,
                                       attention_mask=s_mask,
+                                      position_ids=s_pos,
                                       output_hidden_states=True,
                                       use_cache=False)
                         anchors = [[b_out.hidden_states[l + 1][j,
@@ -892,7 +911,8 @@ def main() -> None:
             # block input detached (LayerwiseTaps) — the differentiable
             # output of each block roots only in that block's LoRA weights
             with taps.active():
-                stack(input_ids=s_ids, attention_mask=s_mask, use_cache=False)
+                stack(input_ids=s_ids, attention_mask=s_mask,
+                      position_ids=s_pos, use_cache=False)
                 block_out = list(taps.outputs)
                 block_in = list(taps.inputs)
             for l in range(n_layers):  # name-de-pila guard, no sync
