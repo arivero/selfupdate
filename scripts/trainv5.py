@@ -561,13 +561,15 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--layer-gate", default="all",
                     help="'all' (depth-uniform, default); 'topk:N' / "
-                         "'minfrac:F' / 'surprise_ema:F'. ALL gated modes "
-                         "rank RELATIVE surprise (answer-only loss / that "
-                         "layer's own EMA): absolute per-layer loss is "
-                         "depth-monotone, so absolute ranking degenerates "
-                         "into a tail-only window, forbidden on this "
-                         "branch (Opus review f2). surprise_ema with an "
-                         "empty selection performs NO update that step.")
+                         "'minfrac:F' rank RELATIVE surprise (answer loss /"
+                         " the layer's own EMA — normalizes both the span-"
+                         "periodic structure and the self-trajectory drift "
+                         "envelope); 'topk_abs:N' ranks ABSOLUTE answer "
+                         "loss (owner arm: attack the biggest divergence "
+                         "generator; backprop_count records where it "
+                         "concentrates); 'surprise_ema:F' trains layers "
+                         "above F x their own expectation and performs NO "
+                         "update on an empty selection.")
     ap.add_argument("--grad-checkpoint", action="store_true",
                     help="REFUSED at startup — see the gate message; taps "
                          "must stay registered through backward first")
@@ -792,7 +794,13 @@ def main() -> None:
     print(f"final_logit_softcapping={softcap}", flush=True)
     baseline_argmax: dict = {}
     gate_mode, gate_val = "all", 0.0
-    if args.layer_gate.startswith("topk:"):
+    if args.layer_gate.startswith("topk_abs:"):
+        # owner arm (2026-07-27): rank ABSOLUTE answer loss — attack the
+        # layer generating the most divergence. Kept alongside relative
+        # ranking; backprop_count records where it concentrates, and the
+        # report must show that distribution (tail-ban evidence either way).
+        gate_mode, gate_val = "topk_abs", int(args.layer_gate.split(":", 1)[1])
+    elif args.layer_gate.startswith("topk:"):
         gate_mode, gate_val = "topk", int(args.layer_gate.split(":", 1)[1])
     elif args.layer_gate.startswith("minfrac:"):
         gate_mode, gate_val = "minfrac", float(args.layer_gate.split(":", 1)[1])
@@ -1075,7 +1083,10 @@ def main() -> None:
             rel = [avals[l] / loss_ema[l] if loss_ema[l] else 1.0
                    for l in range(n_layers)]
             skip_step = False
-            if gate_mode == "topk":
+            if gate_mode == "topk_abs":
+                sel = sorted(range(n_layers),
+                             key=lambda l: -avals[l])[:int(gate_val)]
+            elif gate_mode == "topk":
                 sel = sorted(range(n_layers),
                              key=lambda l: -rel[l])[:int(gate_val)]
             elif gate_mode == "minfrac":
