@@ -86,6 +86,8 @@ Supporting facts from the same tables:
   computed without Gemma4's final_logit_softcapping=30, so they overstate
   large divergences; trends and comparisons within/between these two runs
   remain valid (same convention), but do not compare these absolute CE
-  values against post-f35f74a runs.
+  values against post-f35f74a runs. Measured anchor for the discontinuity
+  (Opus review): the SAME untrained model's e0 KL_eval is 11.143 under the
+  old convention and 5.709 under the new one (job 423314).
 - First clean-run comparison point: run `trainv5_g31b_vmse` (job 423314,
   vocab_mse, all fixes).
