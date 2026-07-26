@@ -764,6 +764,7 @@ def main() -> None:
         log("eval", epoch=epoch, recall=rec, arc_easy=arc,
             student_argmax_acceptance=acc, KL_eval_loss=kl, CE_eval_loss=ce,
             evaluation_only=True, optimizer_weight=0.0)
+        return acc
 
     evaluate(0)  # epoch zero: identical conditions to every checkpoint
 
@@ -802,6 +803,7 @@ def main() -> None:
               f"({len(inside)} LoRA tensors, 0 leaks)", flush=True)
 
     certified = False
+    destroyed_evals = 0
     for epoch in range(1, args.epochs + 1):
         full.train()
         t0 = time.time()
@@ -977,8 +979,19 @@ def main() -> None:
             anchor_weight=args.anchor_weight)
         vocab_tripwire()
         if epoch % args.eval_every == 0 or epoch == args.epochs:
-            evaluate(epoch)
+            acc = evaluate(epoch)
             full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
+            if acc < 0.5 * baseline_argmax.get("e0", 0.0):
+                destroyed_evals += 1
+                if destroyed_evals >= 2:
+                    log("aborted_destruction", epoch=epoch,
+                        student_argmax=acc, e0=baseline_argmax["e0"])
+                    print("ABORT: two consecutive destroyed evals — kill "
+                          "doomed runs fast (owner rule); checkpoints and "
+                          "metrics preserved", flush=True)
+                    break
+            else:
+                destroyed_evals = 0
 
     full.save_pretrained(str(out_dir / "checkpoint"))
     log("done", epochs=args.epochs)
