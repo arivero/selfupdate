@@ -6,7 +6,7 @@ cache: {source_compaction: remove, hidden_dtype: bfloat16, generation_batch: 64,
 train:
   pipeline_version: 4
   pipeline_revision: "4.6"
-  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0, expert_parameters: true}
   epochs: 1
   micro_batch: 16
   v4_teacher_source: cache

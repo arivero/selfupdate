@@ -35,7 +35,7 @@ cache:
 train:
   pipeline_version: 4
   pipeline_revision: "4.6"
-  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0}
+  lora: {enabled: true, r: 16, alpha: 32, dropout: 0.0, expert_parameters: true}
   epochs: 500
   micro_batch: 32
   v4_teacher_source: cache
