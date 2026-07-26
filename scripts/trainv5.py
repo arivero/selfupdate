@@ -237,22 +237,39 @@ def bucketed_batches(items: list[dict], micro_batch: int, seed: int,
     return batches
 
 
-def collate(batch: list[dict], key: str, pad_id: int, device):
-    """Right-padded teacher-forced batch. Returns ids, attention mask, and
-    per-row (start, length) of the answer's PREDICTIVE rows: the state at
-    position t predicts token t+1, so an answer occupying positions
-    P..P+A-1 is predicted from rows P-1..P+A-2."""
+def collate(batch: list[dict], key: str, pad_id: int, device,
+            aligned_positions: bool = False):
+    """Right-padded teacher-forced batch. Returns ids, attention mask,
+    position ids (None unless aligned), and per-row (start, length) of the
+    answer's PREDICTIVE rows: the state at position t predicts token t+1,
+    so an answer occupying positions P..P+A-1 is predicted from rows
+    P-1..P+A-2.
+
+    aligned_positions (censored rows only): number RoPE positions AS IF the
+    removed passage were still present — tokens before the cut keep their
+    positions, tokens after it shift by the item's pos_gap. An unattendable
+    passage differs from a deleted one only in position numbering, so this
+    makes remove-view positionally equivalent to v4's flow_mask and removes
+    the ~215-position shift between teacher targets and student states."""
     import torch
     rows = [it[key] + it["answer_ids"] for it in batch]
     maxlen = max(len(r) for r in rows)
     ids = torch.full((len(rows), maxlen), pad_id, dtype=torch.long)
     mask = torch.zeros((len(rows), maxlen), dtype=torch.long)
+    pos = torch.zeros((len(rows), maxlen), dtype=torch.long) \
+        if aligned_positions else None
     spans = []
     for i, (it, row) in enumerate(zip(batch, rows)):
         ids[i, :len(row)] = torch.tensor(row, dtype=torch.long)
         mask[i, :len(row)] = 1
+        if pos is not None:
+            c, g = it["cut_at"], it["pos_gap"]
+            p_row = list(range(c)) + [c + g + k for k in range(len(row) - c)]
+            pos[i, :len(row)] = torch.tensor(p_row, dtype=torch.long)
+            pos[i, len(row):] = p_row[-1] if p_row else 0
         spans.append((len(it[key]) - 1, len(it["answer_ids"])))
-    return ids.to(device), mask.to(device), spans
+    return (ids.to(device), mask.to(device),
+            pos.to(device) if pos is not None else None, spans)
 
 
 def slice_rows(hidden, spans):
