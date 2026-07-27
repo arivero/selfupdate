@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=claude-review
 #SBATCH --partition=agustina_thin
-#SBATCH --time=04:00:00
+#SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=8G
 #SBATCH --output=runs/sbatch_claude_review_%j.out
@@ -28,7 +28,7 @@ CLAUDE="/fs/agustina/arivero/supercomplex/.local/bin/claude"
 echo "==== claude review start $(date -Is) session=$SESSION ===="
 "$CLAUDE" -p --resume "$SESSION" --dangerously-skip-permissions \
 "Scheduled self-review checkpoint (installed 2026-07-27; you are resumed on
-an agustina_thin node with full permissions and ~4h). The owner is likely
+an agustina_thin node with full permissions and a HARD 60-minute Slurm wall). The owner is likely
 AFK. Do, in order:
 1. squeue/sacct review of every v5 paced arm and v4 A4B job that ran since
    your last checkpoint; read their metrics.jsonl and stage logs.
@@ -45,8 +45,8 @@ AFK. Do, in order:
    push everything; sync memory files.
 5. If something is broken (crashed arms, stuck queue, code bug), diagnose
    and patch trainv5.py per its tripwire discipline before relaunching.
-Keep total runtime under ~3.5h; end with a clean tree and an updated
-handoff. Do not start interactive waits; use begin-time scheduling."
+The wall kills you at 60 minutes: commit early and often, verdicts first,
+reroutes second, polish never; end with a clean tree and an updated handoff. Do not start interactive waits; use begin-time scheduling."
 rc=$?
 echo "==== claude review end rc=$rc $(date -Is) ===="
 exit $rc
