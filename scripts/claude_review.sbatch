@@ -46,7 +46,11 @@ AFK. Do, in order:
 5. If something is broken (crashed arms, stuck queue, code bug), diagnose
    and patch trainv5.py per its tripwire discipline before relaunching.
 The wall kills you at 60 minutes: commit early and often, verdicts first,
-reroutes second, polish never; end with a clean tree and an updated handoff. Do not start interactive waits; use begin-time scheduling."
+reroutes second, polish never; end with a clean tree and an updated handoff.
+Do not start interactive waits; use begin-time scheduling. When you judge
+the review complete before the wall, release the node immediately by
+cancelling your own job: scancel \$SLURM_JOB_ID (the variable is exported
+in your environment)."
 rc=$?
 echo "==== claude review end rc=$rc $(date -Is) ===="
 exit $rc
