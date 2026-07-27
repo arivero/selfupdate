@@ -446,3 +446,59 @@ delta_cosine loss is exactly that instrument; the EMA-relative gate
 approximates the same normalization dynamically for any loss kind. When
 reading 423314's profile, first verify the mod-6 signature is visible
 (instrument sanity), then analyze the residual.
+
+---
+
+# NIGHT RESULTS (2026-07-27, 23:20–06:45) — the band was found
+
+Four arms on the vocab_mse base, two lanes, all auto-abort protected. The
+full arc: dip -> recovery -> (baseline crossing) -> slow erosion, with two
+stabilizers measured against the erosion. Raw curves in each run dir's
+metrics.jsonl (runs/trainv5_g31b_vmse{,_aligned,_al_clip001,_al_sema1});
+key numbers:
+
+| arm | positions | stabilizer | fate | peak mach recall (base 0.171) | argmax@end |
+|---|---|---|---|---|---|
+| 423314 | natural | none | ABORT e26 | 0.156 (never crossed) | 0.213 |
+| 423325 | aligned | none | ABORT e28 | 0.190 @e13 (CROSSED) | 0.207 |
+| 423340 | aligned | clip 0.01 | COMPLETED e30 | 0.177 @e15 (crossed) | 0.212 |
+| 423350 | aligned | surprise_ema:1.0 | COMPLETED e30 | **0.194 @e30, STILL RISING** | 0.220 |
+
+Verdicts:
+- vocab_mse found the non-destructive band (huber destroyed identically-
+  configured runs by e4). METRIC IS THE FIRST-ORDER LEVER.
+- aligned positions beat natural (crossing vs no crossing); base recipe =
+  vocab_mse + aligned.
+- Erosion (slow argmax decline post-recovery) is the remaining dragon. Both
+  stabilizers work: clip 0.01 flattens the slope (completed, recall pinned
+  near baseline); surprise_ema:1.0 is BEST — completed, healthiest arc,
+  ~28/60 layers written per step, and recall RISING at e30 (0.169->0.179->
+  0.194) — late growth, not peak-and-decay. The owner's prediction-error
+  gate is the closest thing yet to consolidation dynamics.
+- Deployment recipe as of tonight: vocab_mse + aligned + surprise_ema, with
+  best-checkpoint selection (max recall s.t. argmax >= 0.8 x e0); every
+  eval epoch checkpoints, so the artifacts exist.
+
+## Final two-week schedule (all vocab_mse + aligned base, 24h caps, 20:00)
+
+| begin | run | axis | job |
+|---|---|---|---|
+| Jul 30 | v5p_topkabs1_long | owner arm: absolute divergence-generator, 300ep | 423387 |
+| Aug 01 | v5p_surprise_long | owner arm: surprise_ema 300ep (+convergence stop) | 423388 |
+| Aug 03 | v5p_dcos_topkabs1 | increment-purist divergence attack | 423389 |
+| Aug 05 | v5p_topk8_rel | relative-gate comparison | 423390 |
+| Aug 07 | v5p_signal_combined | owner q#1: gate on answer+anchor | 423391 |
+| Aug 09 | v5p_sema_clip_long | combo: surprise + clip, 300ep | 423392 |
+| Aug 11 | v5p_r8 | capacity floor | 423393 |
+| Aug 13 | v5p_r128 | capacity abundance | 423394 |
+| Aug 15 | v5p_lr3e5 | step size | 423395 |
+
+Also queued: A4B pair (KV-refresh 423323 + frozen twin 423315) both begin
+TODAY 10:00 on the freed nodes; claude self-review appointments 423369/70/71
+(Aug 1/6/12, 09:00, thin queue, 60-min wall, full permissions, self-scancel).
+Old huber-era arms 423063-423070 and 423280 cancelled.
+
+Reading order for the reviews: long-arm curves first (does surprise_ema's
+late growth continue past e30 x10?), backprop_count depth distribution for
+topk_abs (the tail-ban evidence), convergence events, then the r8 arm (does
+the capacity floor change the crossing?).
