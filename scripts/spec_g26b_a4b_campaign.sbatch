@@ -256,7 +256,14 @@ require_stage_completion() {
   for k in $(seq 0 $((stages - 1))); do
     [[ -s "runs/$run/stage$k/checkpoint/adapter_model.safetensors" ]] \
       || fail "$run stage $k exited without publishing its LoRA checkpoint"
-    rg -q "run complete:" "runs/${run}_stage${k}.log" \
+    # the marker can trail the pid exit by seconds (nohup log-buffer flush;
+    # cost both 2026-07-27 A4B arms at 10:01:24-vs-10:01:37) — retry briefly
+    local ok=""
+    for _try in 1 2 3 4 5 6; do
+      rg -q "run complete:" "runs/${run}_stage${k}.log" && { ok=1; break; }
+      sleep 10
+    done
+    [[ -n "$ok" ]] \
       || fail "$run stage $k exited without a run-complete marker"
   done
 }
