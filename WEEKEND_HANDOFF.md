@@ -502,3 +502,41 @@ Reading order for the reviews: long-arm curves first (does surprise_ema's
 late growth continue past e30 x10?), backprop_count depth distribution for
 topk_abs (the tail-ban evidence), convergence events, then the r8 arm (does
 the capacity floor change the crossing?).
+
+---
+
+# SELF-REVIEW #1 (Aug 1, 09:00, job 423369) — verdicts
+
+## topk_abs:1 long arm (423387, Jul 30-31): COMPLETED 300 epochs
+
+- **The tail-ban evidence is now measured**: absolute-loss selection
+  concentrated 99.8% in L50-59 — 67.5% of ALL selections on L58, 32.0% on
+  L57 (77,700 total). The absolute gate IS a de-facto tail-only trainer in
+  the drift regime, as theorized. This is the referee-ready datum.
+- Yet remarkably stable: argmax ~0.405 at e300 (vs 0.429 e0 — negligible
+  erosion over 300 epochs; ~1 layer written/step = minimal disturbance),
+  arc ~0.29-0.30, KL steady 6.5-6.6.
+- Crossed baseline only briefly and late: peak mach 0.1755 @e150 (evals
+  above baseline: e130/140/150 only), then hovered ~0.16.
+- VERDICT: stability-without-enough-learning. surprise_ema (0.194 rising
+  @e30, depth-distributed ~28 layers/step) remains decisively superior.
+  The Aug-3 delta_cosine+topk_abs arm is now the key question: does the
+  INCREMENT metric redistribute selection off the tail (owner thesis)?
+
+## A4B pair (423315/423323, Jul 27): infrastructure race, not science
+
+Both died at "stage 0 exited without a run-complete marker" while the
+marker WAS in the log — written ~13s after pid exit (nohup buffer flush).
+The numerics gate never ran; no science lost, no gate datum gained. Fixed
+(completion grep retries 60s) and RELAUNCHED immediately on the idle
+H100s: refresh=428453 (report 428454), frozen twin=428455 (report 428456).
+Gates ~1h in; walls Aug 2 ~09:15.
+
+## Schedule: unchanged
+
+Tonight 20:00: v5p_surprise_long (423388) — the star arm x300 epochs, with
+the converged_no_surprise stop live. Remaining arms as scheduled through
+Aug 15. Next self-review: Aug 6.
+
+Note: pushes from thin nodes fail (no git remote-https helper); commits
+made locally, pushed via login node at review end.
