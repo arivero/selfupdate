@@ -219,7 +219,7 @@ require_stage_completion() {
   for k in $(seq 0 $((stages - 1))); do
     [[ -s "runs/$run/stage$k/checkpoint/adapter_model.safetensors" ]] \
       || fail "$run stage $k exited without publishing its LoRA checkpoint"
-    rg -q "run complete:" "runs/${run}_stage${k}.log" \
+    grep -q "run complete:" "runs/${run}_stage${k}.log" \
       || fail "$run stage $k exited without a run-complete marker"
   done
 }
