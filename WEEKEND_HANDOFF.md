@@ -540,3 +540,47 @@ Aug 15. Next self-review: Aug 6.
 
 Note: pushes from thin nodes fail (no git remote-https helper); commits
 made locally, pushed via login node at review end.
+
+---
+
+# SELF-REVIEW #2 (Aug 6, 09:00, job 423370) — verdicts
+
+## THE INCREMENT THESIS CONFIRMED — dcos_topkabs1 is the new best arm
+
+Three-point tail-ban measurement now complete (aggregate backprop shares
+L0-19 / L20-49 / L50-59):
+- topk_abs + vocab_mse (absolute state distance): 0/0/99.8% — tail collapse.
+- **topk_abs + delta_cosine (increment distance): 14/52/34%, top layer L54
+  at 26.8% — the owner's "attack the divergence GENERATOR" redistributes
+  into the mid-stack as predicted.**
+- topk:8 relative: 38/50/12% — depth-fair by construction.
+
+And the increment arm is the campaign's best result: **sustained
+above-baseline recall 0.1875-0.1878 across e36/38/40 (baseline 0.171),
+stable — NOT eroding — completed without abort.** Above-baseline evals:
+e16, e18, e36, e38, e40. Cost: arc slid to ~0.22-0.23 (worst of the arms;
+the increment objective buys memory at more general-behavior cost).
+
+## surprise_ema long (423388): erosion persists at long horizons
+
+Aborted e60 (argmax ~0.207 under threshold at e50/e60); peak 0.1795@e30;
+403 gate-skipped steps; never converged. Surprise gating delays erosion
+~2x vs ungated but does not eliminate it. Combined with review #1's
+topk_abs stability, the pattern: LESS writing = less erosion; the
+increment metric appears to write in better places.
+
+## topk8_rel (423390): depth-fair, modest (peak 0.1755@e26, completed).
+
+## A4B pair: root cause found at last — rg missing on compute nodes
+
+428453/428455 stderr: 'rg: command not found' inside
+require_stage_completion. All three pair failures were THIS, not a race.
+Fixed (grep), pair relaunched take-3: refresh 429743 (rpt 429744) /
+frozen 429745 (rpt 429746). Gates ~1h in; walls Aug 7 ~09:15.
+
+## Reroute
+
+Aug-9 slot re-pointed (423392 sema_clip cancelled): **v5p_dcos_topkabs1_long
+(429747)** — 300 epochs of the winning increment arm; the question is
+whether the sustained crossing GROWS with horizon. Aug 7 signal_combined,
+Aug 11 r8, Aug 13 r128, Aug 15 lr3e5 unchanged. Next review: Aug 12.
