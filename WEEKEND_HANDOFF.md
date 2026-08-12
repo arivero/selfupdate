@@ -584,3 +584,47 @@ Aug-9 slot re-pointed (423392 sema_clip cancelled): **v5p_dcos_topkabs1_long
 (429747)** — 300 epochs of the winning increment arm; the question is
 whether the sustained crossing GROWS with horizon. Aug 7 signal_combined,
 Aug 11 r8, Aug 13 r128, Aug 15 lr3e5 unchanged. Next review: Aug 12.
+
+---
+
+# SELF-REVIEW #3 (Aug 12, 09:00, job 423371) — final scheduled checkpoint
+
+## C-LINE CLOSED: KV-refresh does NOT fix v4 (hypothesis [393] falsified)
+
+The A4B pair finally ran clean (take 3), both gates PASSED, both campaigns
+to the 24h wall (~220-233 epochs each). At matched epochs the arms are
+indistinguishable: refresh argmax 0.4472->0.3591 (CE 6.35->7.73) vs frozen
+0.4508->0.3612 (CE 6.31->7.65); recall 0.00/0.00 in both. Adapter-refreshed
+teacher-anchored K/V changes NOTHING — context staleness was never the
+binding problem; the v4 teacher-anchored objective itself is (consistent
+with the B-line "none move" verdict). The v4 question is now fully closed:
+neither loss, LR, rank, nor KV freshness makes the teacher-frozen local law
+compose into behavior. v5's self-trajectory law is the only line that
+learned.
+
+## Numerics side-datum: the r64 discrepancy is RANK-driven
+
+r16+experts passed the SP-vs-shard gate TWICE (4.305e-08 / 3.835e-08) —
+comfortably at the r16 no-expert level. With r64+experts failing at
+4.002e-07, the open discrepancy is rank-driven, not expert-path-driven.
+(The cheap r32 probe remains the next discriminator if anyone pursues it.)
+
+## v5 arms Aug 7-11: all three died in 5s — corrupted node venv (fixed)
+
+A broken _cuda_bindings_redirector.pth in agpuh01's /tmp venv failed
+venv_check while venv_setup skipped the existing dir. Node venvs wiped;
+trainv5.sbatch now self-heals (wipe+rebuild on check failure). Lost arms
+recovered: dcos_topkabs1_long relaunched IMMEDIATELY (431670 — the
+campaign's key question, sustained-crossing growth over 300 epochs),
+signal_combined tonight 20:00 (431671), r8 Aug 14 (431672); r128 Aug 13
+(423394) and lr3e5 Aug 15 (423395) unchanged.
+
+## Standing verdict of the campaign so far
+
+Best recipe: delta_cosine + topk_abs:1 + aligned (sustained 0.1875 recall,
+mid-stack selection). v4: closed negative on every axis. Erosion: universal
+but slowed by write-sparsity; increment-metric writing is the best-placed.
+The 300-epoch dcos long arm (finishing ~Aug 13 morning) is the campaign's
+concluding measurement; whoever reads it: peak recall, epochs-above-
+baseline, arc trajectory, and the backprop depth distribution vs the 40-
+epoch run (14/52/34%).
