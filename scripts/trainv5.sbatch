@@ -34,7 +34,14 @@ export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-torchinductor"
 MODEL="google/gemma-4-31B-it"
 echo "==== trainv5 start model=$MODEL commit=$(git rev-parse HEAD) $(date -Is) ===="
 scripts/venv_setup.sh || fail "venv setup"
-scripts/venv_check.sh || fail "venv check"
+if ! scripts/venv_check.sh; then
+  # a stale/corrupted node-local venv is disposable, never repaired
+  # (three arms died in 5s each to a broken .pth, 2026-08-07..11)
+  echo "venv check failed — force rebuild" >&2
+  rm -rf "/tmp/$USER/selfupdate-venv"
+  scripts/venv_setup.sh || fail "venv rebuild"
+  scripts/venv_check.sh || fail "venv check after rebuild"
+fi
 PY="/tmp/$USER/selfupdate-venv/bin/python"
 scripts/stage_hf_cache.sh --shm "$MODEL" || fail "model staging"
 # consume the RAM stage (same contract as launch_v4_stages.sh): snapshots
