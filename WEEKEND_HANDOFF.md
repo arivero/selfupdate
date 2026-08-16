@@ -715,12 +715,13 @@ eval-every-2, 300-epoch longs with eval-every-10. Run prefix `v5w2_`.
    ranking (the profile rule's "strip the drift envelope" instrument).
 2. NEW loss `mix`: 0.5*vocab_mse + 0.5*delta_cosine (gradient-level fusion,
    the nonlinear alternative to 1).
-3. NEW flag `--train-norms`: mark the 7 block-local non-Linear params
-   trainable (input/post_attention/pre_ffw/post_ffw layernorms, q_norm,
-   k_norm, layer_scalar). Legal: all inside block L; embeddings, FINAL
-   norm, unembedding stay frozen (tripwire unchanged). Requires updating
-   the isolation-certification expected-tensor count and per-block
-   optimizer groups/backprop accounting.
+3. NEW flag `--train-norms`: mark the block-local norm params trainable
+   (input/post_attention/pre_ffw/post_ffw layernorms, q_norm, k_norm —
+   6 real params/layer; smoke-corrected 2026-08-16 night: layer_scalar is
+   a registered BUFFER, untrainable, and the first predicate also swept
+   vision-tower norms — now exact text-stack names, gate 360/360, cert
+   reads 14 LoRA + 6 norm = 20 tensors). Legal: all inside block L;
+   embeddings, FINAL norm, unembedding stay frozen (tripwire unchanged).
 4. NEW flag `--dora`: LoraConfig(use_dora=True) (peft 0.19.1 supports it) —
    per-target magnitude vector = different update geometry at same r.
 
