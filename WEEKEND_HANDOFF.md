@@ -691,3 +691,83 @@ thresholds) and does that beat emergent L54-only?; (2) checkpoint-selection
 deployment: best artifacts by the max-recall-s.t.-argmax>=0.8*e0 rule are
 in the run dirs (every eval epoch is checkpointed) — the long arm's
 e160/e170 checkpoints are the campaign's best deliverable.
+
+---
+
+# CAMPAIGN v5-WEEK-2 PLAN (designed 2026-08-16, owner directions: alternate
+# losses + more LoRA room; one week continuous, two H100 lanes)
+
+Queue state at design time: agpuh01/agpuh02 IDLE (4xH100 each), nothing
+queued; agpuh03 drained. Two lanes, chained `afterany` per lane so each node
+runs continuously; auto-abort frees a lane early on a corpse. All arms:
+Gemma-4-31B, aligned positions, lr 1e-5, alpha=2r, 40-epoch screens with
+eval-every-2, 300-epoch longs with eval-every-10. Run prefix `v5w2_`.
+
+## Code work before launch (trainv5.py, small diffs)
+
+1. NEW loss `delta_vmse`: increment-normalized vocab_mse — same Gram
+   residual q = (s-t) M (s-t), but denominator = teacher INCREMENT energy
+   (t-a) M (t-a) instead of state energy. Rationale: for quadratic losses
+   the delta residual identity (s-a)-(t-a) = s-t means the gradient
+   direction stays vocab_mse's (the non-destructive band); only the
+   per-layer normalization changes — which is exactly what topk_abs ranks
+   on. It fuses the two measured winners: head-metric gradient + increment
+   ranking (the profile rule's "strip the drift envelope" instrument).
+2. NEW loss `mix`: 0.5*vocab_mse + 0.5*delta_cosine (gradient-level fusion,
+   the nonlinear alternative to 1).
+3. NEW flag `--train-norms`: mark the 7 block-local non-Linear params
+   trainable (input/post_attention/pre_ffw/post_ffw layernorms, q_norm,
+   k_norm, layer_scalar). Legal: all inside block L; embeddings, FINAL
+   norm, unembedding stay frozen (tripwire unchanged). Requires updating
+   the isolation-certification expected-tensor count and per-block
+   optimizer groups/backprop accounting.
+4. NEW flag `--dora`: LoraConfig(use_dora=True) (peft 0.19.1 supports it) —
+   per-target magnitude vector = different update geometry at same r.
+
+## Phase 1 — screens, launch immediately (40 ep, ~3-3.5 h each, day 1)
+
+Lane A (agpuh01) — ALTERNATE LOSSES (r32):
+| arm | loss | gate |
+|---|---|---|
+| v5w2_nmse | nmse (never run post-huber) | all |
+| v5w2_cos | cosine (never run post-huber) | all |
+| v5w2_dvmse | delta_vmse (new) | all |
+| v5w2_dvmse_tka | delta_vmse | topk_abs:1 |
+| v5w2_mix | mix (new) | all |
+| v5w2_mix_tka | mix | topk_abs:1 |
+
+Lane B (agpuh02) — LoRA ROOM (base recipe = delta_cosine + topk_abs:1,
+the campaign winner; rank was never tested under sparse writing):
+| arm | change vs winner |
+|---|---|
+| v5w2_dcos_tka_r8 | r8/a16 (floor) |
+| v5w2_dcos_tka_r64 | r64/a128 |
+| v5w2_dcos_tka_r128 | r128/a256 (abundance) |
+| v5w2_norms | + --train-norms (7 new block-local params) |
+| v5w2_vmse_norms | vocab_mse + all + --train-norms (norm effect under dense writing) |
+| v5w2_dora | + --dora at r32 |
+
+## Phase 2 — promotion longs (300 ep, ~13.5 h, days 2-4)
+
+Review #1 (Aug 18 09:00) promotes the best TWO arms per lane by: peak
+recall, evals-above-baseline persistence, argmax slope after recovery, arc
+damage. Criteria guardrail: an arm must beat dcos_topkabs1_long's screen
+window (0.1878 sustained @e36-40) or show a qualitatively healthier argmax
+arc to earn a long slot.
+
+## Phase 3 — combination + horizon (days 4-6)
+
+Review #2 (Aug 20 09:00) launches: (i) best-loss x best-capacity combined
+long; (ii) seed-43 replication of the current champion; (iii) a 500-epoch
+horizon run of the champion (fits 24 h wall at ~2.4 min/ep). If Phase 1/2
+produced nothing above the incumbent, slots go to the L54-question instead
+(epoch-frozen threshold gate — the review may implement `topk_abs_frozen`).
+
+## Phase 4 — close (day 7)
+
+Review #3 (Aug 23 09:00): final verdicts here, regenerate the joint PDF
+report with the new arms, commit, release the nodes.
+
+Reviews are claude-review thin-queue appointments (60-min wall, self-scancel
+— the proven 423369-71 pattern) with relaunch/promotion authority; the
+owner can preempt any decision in-session.
