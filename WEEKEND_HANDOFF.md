@@ -771,3 +771,20 @@ report with the new arms, commit, release the nodes.
 Reviews are claude-review thin-queue appointments (60-min wall, self-scancel
 — the proven 423369-71 pattern) with relaunch/promotion authority; the
 owner can preempt any decision in-session.
+
+## Steady-prefill invariant (owner, 2026-08-16 evening)
+
+The H100 lanes must NEVER drain while planned science remains: keep at
+least one runnable (pending-on-dependency) job queued per lane at all
+times, so a lane rolls into its next arm the moment the previous ends —
+reviews ADJUST a prefilled queue, they do not create one from scratch.
+Installed at launch: two safe-bet 300-epoch longs per lane chained behind
+the screens (lane A: v5w2_dvmse_tka_long 435187 -> v5w2_mix_tka_long
+435188; lane B: v5w2_dcos_tka_r64_long 435189 -> v5w2_norms_long 435190;
+24h caps, eval-every 10, knobs pinned). These cover the gap from screen
+completion (~Aug 17 evening) through review #1 and beyond; every review
+must (a) scancel/replace prefill arms the screen evidence has obsoleted
+(a not-yet-started pending job costs nothing to replace), and (b) top up
+the chains so the prefill horizon always reaches past the NEXT review.
+Launched jobs (smoke 435170; lane A screens 435171-176; lane B screens
+435177-182; reviews 435183/184/185 = Aug 18/20/23 09:00).
