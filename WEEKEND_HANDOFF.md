@@ -628,3 +628,66 @@ The 300-epoch dcos long arm (finishing ~Aug 13 morning) is the campaign's
 concluding measurement; whoever reads it: peak recall, epochs-above-
 baseline, arc trajectory, and the backprop depth distribution vs the 40-
 epoch run (14/52/34%).
+
+---
+
+# POST-HOLIDAY REVIEW #4 (Aug 16, owner + Claude) — campaign concluded
+
+All five post-review-#3 arms completed; no jobs queued; the schedule is
+exhausted. The Aug-12 venv self-heal worked: zero 5-second failures since.
+
+## dcos_topkabs1_long (431670, 300 epochs, COMPLETED) — the concluding measurement
+
+- **Crossing sustained ~200 epochs, does not grow.** Above baseline
+  (0.1731) at 19/30 evals; plateau 0.18-0.19 from e60-e230; peak mach
+  0.1921 @e160/e170; then fades back to baseline (e240-e300 ~0.170,
+  final 0.1738). Best-of-campaign but horizon does not compound it.
+- **The mid-stack redistribution is TRANSIENT.** Depth shares by phase:
+  e1-40 = 14.3/52.0/33.6% top L54=26.9% (exact replication of the
+  40-epoch run); e41-80 = 2.3/18.1/79.6% top L54=74.4%; from e81 on it
+  is pinned at ~1.6/10/88% with **L54 alone taking 83-84% of all
+  selections**. In the drift regime topk_abs+delta_cosine converges to a
+  de-facto single-layer (L54) trainer. The increment metric moves the
+  attractor off L57/L58 (vocab_mse's collapse point) into L54 but does
+  not prevent collapse. Selection is data-driven, not scheduled, so the
+  depth-uniform law is respected — but any claim about this arm must
+  state the emergent concentration.
+- Stability tracks write-sparsity, as predicted: argmax degrades
+  0.4213 -> ~0.23 by e40 then holds ~0.228-0.237 for 260 epochs (never
+  crossing the 0.2107 abort line); arc erodes slowly 0.32 -> 0.20; local
+  loss 0.44 -> 0.34. The above-baseline recall plateau coincides with the
+  L54-concentrated phase.
+
+## The four ungated arms: all destroyed on schedule (auto-abort worked)
+
+All vocab_mse + aligned + layer_gate 'all'; same dip->recovery->crossing->
+erosion arc as the night-results arms, ending in the destruction abort:
+
+| arm | axis | peak mach | above-baseline evals | abort |
+|---|---|---|---|---|
+| signal_combined (431671) | gate_signal answer+anchor | 0.1901 @e12 | e12,e16 | e30 |
+| r8 (431672) | capacity floor | 0.1815 @e30 | e30 | e34 |
+| r128 (423394) | capacity abundance | 0.1900 @e16 | 7 evals e4-e22 | e38 |
+| lr3e5 (423395) | step size 3e-5 | 0.1774 @e10 | e10 | e16 |
+
+- **Capacity axis CLOSED for v5 (matching the v4 A-line):** r8, r32
+  (vmse_aligned, night results), and r128 share the same fate and
+  similar peaks; r128 erodes furthest (final mach 0.1178, quij 0.1040 —
+  well below baseline). Rank is not the lever; abundance actively hurts.
+- **Step size CLOSED:** 3e-5 roughly doubles the erosion rate (abort e16
+  vs e30-e38 at 1e-5). Consistent with the lr-1e-4 lobotomy.
+- **combined gate signal (owner q#1): no effect** — indistinguishable
+  arc from the answer-signal twin (peak 0.1901 vs 0.19-class peaks,
+  abort e30 vs e28 for vmse_aligned).
+
+## Campaign final standing
+
+The v5 self-trajectory law learns (crossings in every arm) but every
+dense-writing recipe erodes to destruction; only extreme write-sparsity
+survives long horizons, and the surviving gate concentrates emergently on
+L54. The sharpest open pair for a next campaign: (1) can a schedule hold
+the e1-40 mid-stack distribution (e.g. per-layer quotas / epoch-frozen
+thresholds) and does that beat emergent L54-only?; (2) checkpoint-selection
+deployment: best artifacts by the max-recall-s.t.-argmax>=0.8*e0 rule are
+in the run dirs (every eval epoch is checkpointed) — the long arm's
+e160/e170 checkpoints are the campaign's best deliverable.
