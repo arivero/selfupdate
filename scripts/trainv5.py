@@ -814,6 +814,24 @@ def main() -> None:
             "would silently train attention-only (Opus review f10)")
     print(f"lora targets: {len(target_names)} Linears under "
           f"{stack_prefix}.layers (vision tower excluded)", flush=True)
+    # v5w2 --train-norms: the block-local non-Linear parameters LoRA cannot
+    # reach. Exact names enumerated inside the resolved TEXT stack only —
+    # bare '.layers.' suffix matching ALSO hits the vision tower (same trap
+    # as the LoRA targets above; caught live on the first --train-norms
+    # smoke, 2026-08-16: 522 matches instead of 420, the surplus being
+    # vision-encoder norms). Every listed leaf lives INSIDE a decoder
+    # block, so gradient stays block-local under the detach taps; the
+    # vocabulary stack (embed / FINAL norm / lm_head) is outside .layers.
+    NORM_LEAVES = ("input_layernorm.weight", "post_attention_layernorm.weight",
+                   "pre_feedforward_layernorm.weight",
+                   "post_feedforward_layernorm.weight",
+                   "self_attn.q_norm.weight", "self_attn.k_norm.weight",
+                   "layer_scalar")
+    norm_param_names = {
+        n for n, _ in full.named_parameters()
+        if n.startswith(stack_prefix + ".layers.")
+        and n.endswith(NORM_LEAVES)}
+
     lcfg = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0,
         target_modules=target_names,
@@ -821,24 +839,20 @@ def main() -> None:
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
 
-    # v5w2 --train-norms: the block-local non-Linear parameters LoRA cannot
-    # reach. Every leaf here lives INSIDE a decoder block (".layers." guard),
-    # so gradient stays block-local under the detach taps; the vocabulary
-    # stack (embed / FINAL norm / lm_head) is outside .layers. and untouched.
-    NORM_LEAVES = ("input_layernorm.weight", "post_attention_layernorm.weight",
-                   "pre_feedforward_layernorm.weight",
-                   "post_feedforward_layernorm.weight",
-                   "self_attn.q_norm.weight", "self_attn.k_norm.weight",
-                   "layer_scalar")
+    def _unwrap(name: str) -> str:
+        # PEFT prefixes every parameter with "base_model.model."
+        return name.split("base_model.model.", 1)[-1]
+
     if args.train_norms:
         n_norm = 0
         for name, p in full.named_parameters():
-            if ".layers." in name and name.endswith(NORM_LEAVES):
+            if _unwrap(name) in norm_param_names:
                 p.requires_grad_(True)
                 n_norm += 1
-        if not n_norm:
-            raise SystemExit("GATE: --train-norms matched no block-local "
-                             "norm/scalar parameters in this architecture")
+        if n_norm != len(norm_param_names) or not n_norm:
+            raise SystemExit(
+                f"GATE: --train-norms enabled {n_norm} of "
+                f"{len(norm_param_names)} text-stack norm parameters")
         print(f"--train-norms: {n_norm} block-local norm/scalar tensors "
               "trainable (decay-toward-init)", flush=True)
 
@@ -875,7 +889,8 @@ def main() -> None:
         if p.requires_grad:
             assert ".layers." in name and (
                 "lora_" in name
-                or (args.train_norms and name.endswith(NORM_LEAVES))), \
+                or (args.train_norms
+                    and _unwrap(name) in norm_param_names)), \
                 f"GATE: trainable parameter outside decoder-block " \
                 f"LoRA/norms: {name}"
     for mod in (lm_head, stack.embed_tokens,
