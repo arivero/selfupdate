@@ -57,9 +57,13 @@ commodity fine-tune; the layerwise law is the project.
 The per-layer loss KIND is the project's active research axis (the v4
 campaign screened huber/cosine/delta_cosine; vocab_mse is the historical
 recall recipe's loss): --local-loss huber|nmse|cosine|delta_cosine|
-vocab_mse, formulas copied verbatim from the module. vocab_mse measures
-hidden distance through the frozen unembedding Gram matrix W^T W — a
-measurement device, not logit training. delta_cosine's anchor is the
+vocab_mse|delta_vmse|mix, formulas copied verbatim from the module.
+vocab_mse measures hidden distance through the frozen unembedding Gram
+matrix W^T W — a measurement device, not logit training. delta_vmse
+(v5w2) keeps the identical Gram residual but normalizes by the teacher
+INCREMENT energy, so the gradient direction stays vocab_mse's while
+per-layer magnitudes (what topk_abs ranks) become increment-relative;
+mix (v5w2) is 0.5*vocab_mse + 0.5*delta_cosine. delta_cosine's anchor is the
 block's own detached input (here: the censored student's h_s[L-1]).
 
 Owner speed insight (2026-07-26): the forward pass computes EVERY layer's
@@ -414,6 +418,39 @@ class LocalLoss:
                 q = (d @ M * d).sum(-1).mean()
                 denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
+        if kind == "delta_vmse":
+            # increment-normalized vocab_mse (v5w2). Quadratic identity:
+            # (s-a)-(t-a) = s-t, so the Gram residual — and the gradient
+            # DIRECTION — is exactly vocab_mse's; only the denominator
+            # changes to the teacher-increment energy. That rescales each
+            # layer's loss magnitude by what its block should ADD, which is
+            # the quantity topk_abs ranks on (the profile rule's
+            # drift-envelope-stripping instrument in loss form).
+            a = anchor.float().to(s.device)
+            with torch.autocast(s.device.type, enabled=False):
+                d = s - t
+                M = self._gram(s.device)
+                q = (d @ M * d).sum(-1).mean()
+                with torch.no_grad():
+                    dt = t - a
+                    denom = (dt @ M * dt).sum(-1).mean().clamp_min(1e-8)
+                return q / denom
+        if kind == "mix":
+            # gradient-level fusion of the two measured winners (v5w2):
+            # head-metric distance + increment direction, equal weights.
+            a = anchor.float().to(s.device)
+            with torch.autocast(s.device.type, enabled=False):
+                d = s - t
+                M = self._gram(s.device)
+                q = (d @ M * d).sum(-1).mean()
+                denom = (t @ M * t).sum(-1).mean().clamp_min(1e-8)
+                vm = q / denom
+            student_delta = s - a
+            with torch.no_grad():
+                teacher_delta = t - a
+            dc = 1.0 - F.cosine_similarity(
+                student_delta, teacher_delta, dim=-1, eps=1e-8).mean()
+            return 0.5 * vm + 0.5 * dc
         raise SystemExit(f"unknown --local-loss {kind}")
 
 
@@ -529,14 +566,29 @@ def main() -> None:
     ap.add_argument("--run-name", default="trainv5_g31b_selfdistill")
     ap.add_argument("--local-loss",
                     choices=("huber", "nmse", "cosine", "delta_cosine",
-                             "vocab_mse"),
+                             "vocab_mse", "delta_vmse", "mix"),
                     default="huber",
                     help="depth-uniform per-layer distance to teacher h_t[L] "
                          "(the v4 loss-screen menu; vocab_mse measures hidden "
                          "distance in frozen-unembedding geometry — a "
-                         "measurement device, NOT logit training)")
+                         "measurement device, NOT logit training; delta_vmse "
+                         "= increment-normalized vocab_mse; mix = "
+                         "0.5*vocab_mse + 0.5*delta_cosine)")
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
+    ap.add_argument("--train-norms", action="store_true",
+                    help="also train the 7 BLOCK-LOCAL non-Linear params per "
+                         "layer (input/post_attention/pre_ffw/post_ffw "
+                         "layernorms, q_norm, k_norm, layer_scalar). Legal "
+                         "under the layerwise law: all live inside block L; "
+                         "embeddings, FINAL norm and unembedding stay frozen "
+                         "(tripwire unchanged). They weight-decay toward "
+                         "their INITIAL values, not zero")
+    ap.add_argument("--dora", action="store_true",
+                    help="use DoRA (weight-decomposed LoRA, peft use_dora): "
+                         "adds a per-target magnitude vector — different "
+                         "update geometry at the same rank. Magnitude "
+                         "vectors decay toward init, not zero")
     ap.add_argument("--lr", type=float, default=1e-5,
                     help="AdamW on LoRA. 1e-4 destroyed the model inside one "
                          "epoch (run trainv5_g31b_selfdistill_lr1e4_destroyed:"
@@ -743,8 +795,30 @@ def main() -> None:
     lcfg = LoraConfig(
         r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=0.0,
         target_modules=target_names,
+        use_dora=args.dora,
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
+
+    # v5w2 --train-norms: the block-local non-Linear parameters LoRA cannot
+    # reach. Every leaf here lives INSIDE a decoder block (".layers." guard),
+    # so gradient stays block-local under the detach taps; the vocabulary
+    # stack (embed / FINAL norm / lm_head) is outside .layers. and untouched.
+    NORM_LEAVES = ("input_layernorm.weight", "post_attention_layernorm.weight",
+                   "pre_feedforward_layernorm.weight",
+                   "post_feedforward_layernorm.weight",
+                   "self_attn.q_norm.weight", "self_attn.k_norm.weight",
+                   "layer_scalar")
+    if args.train_norms:
+        n_norm = 0
+        for name, p in full.named_parameters():
+            if ".layers." in name and name.endswith(NORM_LEAVES):
+                p.requires_grad_(True)
+                n_norm += 1
+        if not n_norm:
+            raise SystemExit("GATE: --train-norms matched no block-local "
+                             "norm/scalar parameters in this architecture")
+        print(f"--train-norms: {n_norm} block-local norm/scalar tensors "
+              "trainable (decay-toward-init)", flush=True)
 
     trainable = sum(p.numel() for p in full.parameters() if p.requires_grad)
     cap = capacity_check(trainable)
@@ -777,8 +851,11 @@ def main() -> None:
     # 2. Embedding / unembedding / final norm never move or train:
     for name, p in full.named_parameters():
         if p.requires_grad:
-            assert "lora_" in name and ".layers." in name, \
-                f"GATE: trainable parameter outside decoder-block LoRA: {name}"
+            assert ".layers." in name and (
+                "lora_" in name
+                or (args.train_norms and name.endswith(NORM_LEAVES))), \
+                f"GATE: trainable parameter outside decoder-block " \
+                f"LoRA/norms: {name}"
     for mod in (lm_head, stack.embed_tokens,
                 getattr(stack, "norm", None)):
         if mod is not None:
@@ -803,6 +880,15 @@ def main() -> None:
     # AdamW's own decay stays 0: it would decay only params that received
     # grad that step (depth-asymmetric under gating, review f7). The real
     # decay is applied manually and uniformly below (--weight-decay).
+    # Decay-toward-ZERO is only correct for delta-parameterized tensors
+    # (LoRA A/B, where zero = base model). Norm scales, layer_scalar and
+    # DoRA magnitude vectors ARE the base function — decaying them to zero
+    # would destroy it. Those decay toward their initial value instead.
+    decay_to_init = {
+        id(p): p.detach().clone()
+        for name, p in full.named_parameters()
+        if p.requires_grad and ("lora_magnitude_vector" in name
+                                or "lora_" not in name)}
     pad = tok.pad_token_id or 0
 
     softcap = getattr(stack.config, "final_logit_softcapping", None)
@@ -1150,7 +1236,11 @@ def main() -> None:
                     with torch.no_grad():
                         shrink = 1.0 - args.lr * args.weight_decay
                         for p_ in trainable_params:
-                            p_.mul_(shrink)
+                            init = decay_to_init.get(id(p_))
+                            if init is None:
+                                p_.mul_(shrink)
+                            else:
+                                p_.copy_(init + (p_ - init) * shrink)
                 opt.zero_grad(set_to_none=True)
 
         profile = [s / len(batches) for s in surprise_sum]
