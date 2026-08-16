@@ -788,3 +788,58 @@ must (a) scancel/replace prefill arms the screen evidence has obsoleted
 the chains so the prefill horizon always reaches past the NEXT review.
 Launched jobs (smoke 435170; lane A screens 435171-176; lane B screens
 435177-182; reviews 435183/184/185 = Aug 18/20/23 09:00).
+
+## Per-corpus localization telemetry (owner question, 2026-08-16 night)
+
+The corpus is Machado (1490 items) + Quijote CHAPTERS 1-4 (581 items:
+q1 123 / q2 150 / q3 147 / q4 161 — recovered by passage-matching against
+raw_ch16's chapter segments; boundary windows tagged by start chapter;
+sidecar data/combined/quij_chapter_map.json, loaded defensively at data
+load). The owner's hypothesis: different texts may be STORED at different
+depths. Instrumentation (live from the v5w2 screens onward):
+- `surprise_by_corpus` in every epoch row: answer-only per-layer local
+  loss split mach/q1/q2/q3/q4 (ITEM-mean; the aggregate surprise_profile
+  stays batch-mean — do not mix the two normalizations).
+- recall now reports per chapter (mach, q1..q4) plus a pooled `quij` key
+  for curve continuity with all pre-v5w2 runs. The mach recall sample is
+  UNCHANGED (same seed, first sorted group) — mach curves stay comparable
+  across the whole v5 era; per-chapter quijote curves start fresh here.
+- Analysis rule: apply the drift/span/residual decomposition PER CORPUS
+  and compare RESIDUALS across corpora at matched epochs; a corpus whose
+  residual falls fastest in a different depth band than another's is the
+  localization signal. Exposure differs (~2.6x mach vs each chapter) —
+  compare shapes and normalized slopes, not absolute values.
+
+## Literature grounding (2026-08-16 review; for reports and referees)
+
+- Closest relative: Deep Context Distillation (arXiv:2503.08727, COLM
+  2025) — LoRA modules trained to match hidden states + logits of a
+  document-in-context teacher; also found next-token prediction inferior.
+  DIFFERENTIATOR of this project: our law is LAYERWISE (detached block
+  inputs, no cross-block gradient, runtime-certified); all published
+  context-distillation work backprops end-to-end. Related: on-policy
+  context distillation; knowledge injection via self-distillation
+  (arXiv:2412.14964); "When Context Returns" (arXiv:2606.11627) shows
+  internalization succeeds at the representation level — our
+  student_argmax metric measures exactly that.
+- Local/blockwise training literature (blockwise SSL for video ViTs
+  arXiv:2601.09040; DiffusionBlocks ICLR 2026; LoCA arXiv:2608.03020)
+  trains from scratch or post-trains vision models; layerwise KNOWLEDGE
+  INJECTION into a pretrained 31B LLM is unmapped territory.
+- Capacity: Allen-Zhu & Li ~2 bits/param (ICLR'25), Morris et al. 2025
+  ~3.6 bits/param — our 3-bits/param gate sits inside the literature
+  range; at ratio ~650 rank should NOT bind (consistent with every rank
+  result so far).
+- Rank vs forgetting: 2025 work reports r64 LoRA/DoRA catastrophically
+  forgetting in 3 epochs without mitigation — independent support for
+  "abundance hurts"; sharpens the lane-B prior that rank amplifies
+  erosion unless write-sparsity shields it.
+- Norm tuning: LayerNorm-only fine-tuning (~0.004% params) can beat full
+  FT in vision-language work (arXiv:2312.11420, ICLR'24; arXiv:2403.20284)
+  — strong prior for the --train-norms arms.
+- Localization: editing literature (ROME/MEMIT) places atomic facts in
+  EARLY-TO-MID MLPs, while our topk_abs gate concentrates at L54/60;
+  reconciliations: verbatim recitation may differ from relational facts,
+  the L54 signal partly reflects accumulated drift (our decomposition),
+  and Hase et al. showed causal localization correlates poorly with where
+  editing works. The per-corpus telemetry above is our direct probe.

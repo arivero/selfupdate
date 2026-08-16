@@ -180,6 +180,23 @@ def build_items(examples_path: Path, responses_path: Path, tok,
             "answer_text": r.get("answer_text", ""),
             "teacher_word_acc": r.get("word_acc"),
         })
+    # v5w2 per-chapter refinement (owner, 2026-08-16): the dataset builder
+    # collapsed the four Quijote chapters into one 'quij' tag. The sidecar
+    # map (passage-matched against raw_ch16 chapter segments; boundary
+    # windows tagged by their START chapter) restores q1..q4 so recall and
+    # surprise telemetry can localize per-text storage. Missing map file =
+    # old merged behavior, never a failure.
+    chmap_path = ROOT / "data/combined/quij_chapter_map.json"
+    if chmap_path.exists():
+        chmap = json.loads(chmap_path.read_text())
+        n_ref = 0
+        for it in items:
+            ch = chmap.get(it["example_id"])
+            if ch:
+                it["corpus"] = ch
+                n_ref += 1
+        print(f"corpus refinement: {n_ref} quij items tagged by chapter",
+              flush=True)
     if bad_roundtrip or bad_cut:
         raise SystemExit(
             f"FATAL: prompt reconstruction failed — round-trip mismatches: "
@@ -507,7 +524,12 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
                                   skip_special_tokens=True).strip()
                 scores.setdefault(it["corpus"], []).append(
                     word_lcs_acc(it["answer_text"], text))
-    return {c: round(sum(v) / len(v), 4) for c, v in scores.items() if v}
+    out = {c: round(sum(v) / len(v), 4) for c, v in scores.items() if v}
+    # pooled 'quij' kept for curve continuity with the merged-tag era
+    qv = [x for c, v in scores.items() if c.startswith("q") for x in v]
+    if qv and "quij" not in out:
+        out["quij"] = round(sum(qv) / len(qv), 4)
+    return out
 
 
 def arc_eval(stack, lm_head, tok, device, limit: int,
@@ -1029,6 +1051,11 @@ def main() -> None:
                                    "censored_ids")
         epoch_loss = 0.0
         surprise_sum = [0.0] * n_layers   # per-BLOCK local loss (surprise)
+        # v5w2 localization telemetry: answer-only surprise split by corpus
+        # (mach/q1..q4). GPU-tensor accumulators per (corpus, layer) — the
+        # sync-bound lesson: no .item() in the walk, one flush per epoch.
+        corpus_sum_t: dict = {}    # corpus -> [tensor|None] * n_layers
+        corpus_items: dict = {}    # corpus -> items seen this epoch
         backprop_count = [0] * n_layers
         cache_hits = 0
         gate_skipped = 0
@@ -1121,14 +1148,24 @@ def main() -> None:
             # ALL per-layer losses are computed every step (the forward has
             # already paid for them); the gate then decides which of the
             # independent per-block backwards to actually run.
+            cidx: dict = {}
+            for j_, it_ in enumerate(batch):
+                cidx.setdefault(it_["corpus"], []).append(j_)
+            for c_, js_ in cidx.items():
+                corpus_items[c_] = corpus_items.get(c_, 0) + len(js_)
             terms = []
             ans_vals_t = []
             for l in range(n_layers):
                 y_rows = slice_rows(block_out[l], s_spans)
                 a_rows = slice_rows(block_in[l], s_spans)
-                term = sum(loss_fn(y, t, a) for y, t, a in
-                           zip(y_rows, targets[l], a_rows)) / len(batch)
+                ivals = [loss_fn(y, t, a) for y, t, a in
+                         zip(y_rows, targets[l], a_rows)]
+                term = sum(ivals) / len(batch)
                 ans_vals_t.append(term.detach())
+                for c_, js_ in cidx.items():
+                    v_ = sum(ivals[j] for j in js_).detach()
+                    row = corpus_sum_t.setdefault(c_, [None] * n_layers)
+                    row[l] = v_ if row[l] is None else row[l] + v_
                 if anchors is not None:
                     # self-anchor: same block, same forward, PROMPT rows —
                     # output must stay near the adapters-off base states.
@@ -1253,8 +1290,15 @@ def main() -> None:
             adapter_norm = sum(
                 float(p.detach().float().norm()) ** 2
                 for p in full.parameters() if p.requires_grad) ** 0.5
+        # one sync per (corpus, layer), once per epoch. ITEM-mean (unlike
+        # surprise_profile's batch-mean) — the per-corpus batch counts vary.
+        surprise_by_corpus = {
+            c: [round(float(v) / max(1, corpus_items.get(c, 1)), 6)
+                if v is not None else None for v in row]
+            for c, row in corpus_sum_t.items()}
         log("epoch", epoch=epoch, loss=mean_loss, loss_kind=args.local_loss,
             seconds=time.time() - t0, surprise_profile=profile,
+            surprise_by_corpus=surprise_by_corpus,
             layer_gate=args.layer_gate, backprop_count=backprop_count,
             teacher_cache_hit_frac=cache_hits / len(batches),
             mean_grad_norm=grad_norm_sum / max(1, grad_norm_n),
