@@ -599,10 +599,11 @@ def main() -> None:
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
     ap.add_argument("--train-norms", action="store_true",
-                    help="also train the 7 BLOCK-LOCAL non-Linear params per "
+                    help="also train the 6 BLOCK-LOCAL norm params per "
                          "layer (input/post_attention/pre_ffw/post_ffw "
-                         "layernorms, q_norm, k_norm, layer_scalar). Legal "
-                         "under the layerwise law: all live inside block L; "
+                         "layernorms, q_norm, k_norm; layer_scalar is a "
+                         "buffer and untrainable). Legal under the "
+                         "layerwise law: all live inside block L; "
                          "embeddings, FINAL norm and unembedding stay frozen "
                          "(tripwire unchanged). They weight-decay toward "
                          "their INITIAL values, not zero")
@@ -815,18 +816,21 @@ def main() -> None:
     print(f"lora targets: {len(target_names)} Linears under "
           f"{stack_prefix}.layers (vision tower excluded)", flush=True)
     # v5w2 --train-norms: the block-local non-Linear parameters LoRA cannot
-    # reach. Exact names enumerated inside the resolved TEXT stack only —
-    # bare '.layers.' suffix matching ALSO hits the vision tower (same trap
-    # as the LoRA targets above; caught live on the first --train-norms
-    # smoke, 2026-08-16: 522 matches instead of 420, the surplus being
-    # vision-encoder norms). Every listed leaf lives INSIDE a decoder
-    # block, so gradient stays block-local under the detach taps; the
-    # vocabulary stack (embed / FINAL norm / lm_head) is outside .layers.
+    # reach — 6 per decoder layer, 360 total on Gemma-4-31B. Exact names
+    # enumerated inside the resolved TEXT stack only — bare '.layers.'
+    # suffix matching ALSO hits the vision tower (same trap as the LoRA
+    # targets above; caught live on the first --train-norms smoke,
+    # 2026-08-16). layer_scalar is deliberately absent: it is a registered
+    # BUFFER (torch.ones(1)), not a Parameter — it cannot be trained and
+    # never matches named_parameters. Every listed leaf lives INSIDE a
+    # decoder block, so gradient stays block-local under the detach taps;
+    # the vocabulary stack (embed / FINAL norm / lm_head) is outside
+    # .layers. The isolation cert therefore reads 14 LoRA + 6 norm = 20
+    # tensors on the probed block.
     NORM_LEAVES = ("input_layernorm.weight", "post_attention_layernorm.weight",
                    "pre_feedforward_layernorm.weight",
                    "post_feedforward_layernorm.weight",
-                   "self_attn.q_norm.weight", "self_attn.k_norm.weight",
-                   "layer_scalar")
+                   "self_attn.q_norm.weight", "self_attn.k_norm.weight")
     norm_param_names = {
         n for n, _ in full.named_parameters()
         if n.startswith(stack_prefix + ".layers.")

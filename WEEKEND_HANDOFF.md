@@ -743,7 +743,7 @@ the campaign winner; rank was never tested under sparse writing):
 | v5w2_dcos_tka_r8 | r8/a16 (floor) |
 | v5w2_dcos_tka_r64 | r64/a128 |
 | v5w2_dcos_tka_r128 | r128/a256 (abundance) |
-| v5w2_norms | + --train-norms (7 new block-local params) |
+| v5w2_norms | + --train-norms (6 norm params per block) |
 | v5w2_vmse_norms | vocab_mse + all + --train-norms (norm effect under dense writing) |
 | v5w2_dora | + --dora at r32 |
 
