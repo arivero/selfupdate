@@ -790,6 +790,43 @@ the chains so the prefill horizon always reaches past the NEXT review.
 Launched jobs (smoke 435170; lane A screens 435171-176; lane B screens
 435177-182; reviews 435183/184/185 = Aug 18/20/23 09:00).
 
+## TINC: teacher-own-increment targets (owner-approved 2026-08-16 night)
+
+Diagnosis accepted by the owner after the "+0.02 is disappointing" review:
+every v5 loss so far asks EACH block to close the FULL censored-vs-teacher
+gap (target h_t[L] against input h_s[L-1] — delta_cosine included, its
+teacher delta being h_t[L]-h_s[L-1]). Sixty blocks each doing the whole
+job compose into over-correction — the measured depth-compounding
+destruction — while gating to ~1 layer/step survives but stores almost
+nothing. Destruction and timidity are the two ends of one target
+inconsistency.
+
+Fix implemented: `tinc_cos` / `tinc_vmse` match the block's ADDED vector
+(y_L - h_s[L-1]) to the teacher's OWN increment (h_t[L] - h_t[L-1]).
+Consistency proof: if every block matches its increment the composition
+telescopes to the exact teacher state at answer rows (embeddings agree
+under aligned positions) — each layer owns 1/60th of the job,
+depth-uniform BY CONSTRUCTION. Anchor term falls back to the absolute
+twin (same-trajectory target, already consistent). Block 0's h_t[-1] is
+the embedding = the student's own block-0 input at answer rows.
+
+Also implemented (live for all runs from ~21:30 on): `recitation` (share
+of recall items with word-LCS >= 0.9) and `recall_items` (raw per-item
+values) in every eval row — a mean of 0.19 cannot distinguish ten
+perfect recitations among baseline noise from uniform formulaic overlap;
+these can. Judge future arms on recitation first, mean second.
+
+Queue surgery: prefill longs 435188 (mix_tka_long) and 435190
+(norms_long) CANCELLED, replaced by tinc smoke 435199 (afterany:435187;
+micro-validates both tinc losses + recitation metric) gating
+v5w2_tinc_cos_long 435200 and v5w2_tinc_vmse_long 435201 (300 ep,
+UNGATED dense writing — the consistency hypothesis predicts no
+destruction; auto-abort protects the downside). Expected: smoke Mon
+~09:30, longs Mon midday -> Tue, read at review #2 (Aug 20).
+Prediction to check first: does ungated tinc survive past e10 where
+every previous ungated arm was already eroding? Reviews own supervision
+of the 4352xx jobs (the session monitor's glob covers 4351xx only).
+
 ## Per-corpus localization telemetry (owner question, 2026-08-16 night)
 
 The corpus is Machado (1490 items) + Quijote CHAPTERS 1-4 (581 items:

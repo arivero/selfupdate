@@ -406,10 +406,23 @@ class LocalLoss:
             self._gram_by_dev[device] = src.to(device)
         return self._gram_by_dev[device]
 
-    def __call__(self, y, target, anchor):
+    def __call__(self, y, target, anchor, target_prev=None):
         import torch
         import torch.nn.functional as F
         kind = self.kind
+        # tinc_* (teacher-own-increment, v5w2 owner-approved 2026-08-16):
+        # match the block's ADDED vector y - h_s[L-1] to the teacher's OWN
+        # increment h_t[L] - h_t[L-1] — NOT the full cross-trajectory gap
+        # h_t[L] - h_s[L-1] that every earlier loss used. Consistency: if
+        # all blocks match their increments the composition telescopes to
+        # the exact teacher state at answer rows (embeddings agree under
+        # aligned positions), so each layer owns only its share — the
+        # depth-compounding over-correction that destroyed dense-writing
+        # arms is structurally absent. On the ANCHOR term (target_prev is
+        # None) the target is a same-trajectory base state, which is
+        # already consistent — fall back to the absolute-form twin.
+        if kind.startswith("tinc_") and target_prev is None:
+            kind = {"tinc_cos": "cosine", "tinc_vmse": "vocab_mse"}[kind]
         s, t = y.float(), target.float()
         if kind == "nmse":
             return F.mse_loss(s, t) / t.pow(2).mean().clamp_min(1e-8)
@@ -451,6 +464,23 @@ class LocalLoss:
                 with torch.no_grad():
                     dt = t - a
                     denom = (dt @ M * dt).sum(-1).mean().clamp_min(1e-8)
+                return q / denom
+        if kind == "tinc_cos":
+            a = anchor.float().to(s.device)
+            sd = s - a
+            with torch.no_grad():
+                td = t - target_prev.float().to(s.device)
+            return 1.0 - F.cosine_similarity(
+                sd, td, dim=-1, eps=1e-8).mean()
+        if kind == "tinc_vmse":
+            a = anchor.float().to(s.device)
+            with torch.autocast(s.device.type, enabled=False):
+                with torch.no_grad():
+                    td = t - target_prev.float().to(s.device)
+                d = (s - a) - td
+                M = self._gram(s.device)
+                q = (d @ M * d).sum(-1).mean()
+                denom = (td @ M * td).sum(-1).mean().clamp_min(1e-8)
                 return q / denom
         if kind == "mix":
             # gradient-level fusion of the two measured winners (v5w2):
@@ -529,7 +559,14 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
     qv = [x for c, v in scores.items() if c.startswith("q") for x in v]
     if qv and "quij" not in out:
         out["quij"] = round(sum(qv) / len(qv), 4)
-    return out
+    # v5w2 owner finding (2026-08-16): a mean LCS can hide a few perfectly
+    # recited items among many at baseline, or credit only formulaic
+    # overlap. Recitation rate (LCS >= 0.9) + the raw per-item values make
+    # "is anything actually memorized?" answerable from the metrics alone.
+    recite = {c: round(sum(1 for x in v if x >= 0.9) / len(v), 4)
+              for c, v in scores.items() if v}
+    per_item = {c: [round(x, 3) for x in v] for c, v in scores.items() if v}
+    return {"mean": out, "recite": recite, "items": per_item}
 
 
 def arc_eval(stack, lm_head, tok, device, limit: int,
@@ -588,7 +625,8 @@ def main() -> None:
     ap.add_argument("--run-name", default="trainv5_g31b_selfdistill")
     ap.add_argument("--local-loss",
                     choices=("huber", "nmse", "cosine", "delta_cosine",
-                             "vocab_mse", "delta_vmse", "mix"),
+                             "vocab_mse", "delta_vmse", "mix",
+                             "tinc_cos", "tinc_vmse"),
                     default="huber",
                     help="depth-uniform per-layer distance to teacher h_t[L] "
                          "(the v4 loss-screen menu; vocab_mse measures hidden "
@@ -1008,7 +1046,8 @@ def main() -> None:
         acc = agree / max(1, total)
         kl = kl_sum / max(1, total)
         ce = ce_sum / max(1, total)
-        print(f"eval e{epoch}: recall={rec} arc_easy={arc:.3f} "
+        print(f"eval e{epoch}: recall={rec['mean']} "
+              f"recite={rec['recite']} arc_easy={arc:.3f} "
               f"student_argmax={acc:.4f} KL_eval={kl:.4f} CE_eval={ce:.4f}",
               flush=True)
         if epoch == 0:
@@ -1019,7 +1058,9 @@ def main() -> None:
                   "lr1e4 run died exactly like this (see "
                   "runs/trainv5_g31b_selfdistill_lr1e4_destroyed)",
                   flush=True)
-        log("eval", epoch=epoch, recall=rec, arc_easy=arc,
+        log("eval", epoch=epoch, recall=rec["mean"],
+            recitation=rec["recite"], recall_items=rec["items"],
+            arc_easy=arc,
             student_argmax_acceptance=acc, KL_eval_loss=kl, CE_eval_loss=ce,
             evaluation_only=True, optimizer_weight=0.0)
         return acc
@@ -1177,8 +1218,13 @@ def main() -> None:
             for l in range(n_layers):
                 y_rows = slice_rows(block_out[l], s_spans)
                 a_rows = slice_rows(block_in[l], s_spans)
-                ivals = [loss_fn(y, t, a) for y, t, a in
-                         zip(y_rows, targets[l], a_rows)]
+                # tinc target_prev: teacher h_t[L-1] at the same rows; for
+                # block 0 the previous teacher state IS the embedding, which
+                # equals the student's block-0 input at answer rows (same
+                # tokens, aligned positions) — so a_rows serves as h_t[-1].
+                tprev = targets[l - 1] if l > 0 else a_rows
+                ivals = [loss_fn(y, t, a, tp) for y, t, a, tp in
+                         zip(y_rows, targets[l], a_rows, tprev)]
                 term = sum(ivals) / len(batch)
                 ans_vals_t.append(term.detach())
                 for c_, js_ in cidx.items():
