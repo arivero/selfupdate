@@ -825,7 +825,16 @@ destruction; auto-abort protects the downside). Expected: smoke Mon
 ~09:30, longs Mon midday -> Tue, read at review #2 (Aug 20).
 Prediction to check first: does ungated tinc survive past e10 where
 every previous ungated arm was already eroding? Reviews own supervision
-of the 4352xx jobs (the session monitor's glob covers 4351xx only).
+of the 4352xx+ jobs (the session monitor's glob covers 4351xx only).
+
+INCIDENT (Aug 17 ~11:00): v5w2_dora (435180) CUDA-OOM'd 52 min in, zero
+epochs done — DoRA's merged-weight norm computation adds per-step memory
+LoRA doesn't have, and a long-sequence batch tipped GPU 1 (the 48-item
+smoke missed it). Chain advanced cleanly (afterany). Relaunched per the
+§D protocol as v5w2_dora_mb4 (435527, --micro-batch 4 --grad-accum 8,
+same effective batch, afterany:435201 -> runs Tue). If mb4 also OOMs,
+drop the DoRA axis rather than shrink further — batch-shape variance is
+the confound.
 
 ## Per-corpus localization telemetry (owner question, 2026-08-16 night)
 
