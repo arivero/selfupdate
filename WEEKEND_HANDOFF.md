@@ -827,6 +827,45 @@ Prediction to check first: does ungated tinc survive past e10 where
 every previous ungated arm was already eroding? Reviews own supervision
 of the 4352xx+ jobs (the session monitor's glob covers 4351xx only).
 
+## SCREEN PHASE VERDICTS (all 12 arms, written Aug 17 evening, live session)
+
+Baselines: mach 0.173 / argmax 0.421 / arc 0.32. Recitation (LCS>=0.9)
+was 0.0 in every arm that logged it — nothing verbatim anywhere yet.
+
+Lane A (losses): delta_cosine remains the only storing loss.
+- dvmse_tka: PRESERVATION TOOL — argmax 0.394/arc 0.32 at e40 (best ever)
+  but recall never crossed baseline. Selection fully mid-stack (24/64/11,
+  top L22=14.5%): increment-relative RANKING confirmed as the placement
+  mechanism; placement alone does not store.
+- dvmse ungated: destroyed e18 (full-gap target, as diagnosed).
+- mix_tka: worse than both parents (0.159 end; vmse magnitudes dominate
+  the ranking -> 65% tail L58; gradient blend dilutes storage). Fusions
+  at the loss level FAIL.
+- mix/nmse/cos ungated: destroyed e4 each. With historical huber: ALL
+  isotropic hidden losses kill in <=4 epochs; only frozen-head-geometry
+  losses reach the survivable band. Loss-menu table CLOSED.
+
+Lane B (LoRA room): rank moves the clock and the damage, not the ceiling.
+- r64: campaign-best 0.2024 at e40, RISING; erosion equal to r32.
+- r8: same peak (0.2036@e32) with the least damage (argmax 0.30 at e40)
+  and the most distributed selection (18% deep, L54=12.7%) — but
+  peak-and-decay within 40 epochs.
+- r128: flat (never crossed), erosion cost paid anyway; selection
+  collapse ACCELERATES with rank (L54=47% by e40 vs 27% at r32/r64).
+- ALL viable ranks touch the same ~0.19-0.20 recall wall (r32 long
+  0.1921 / r64 0.2024 / r8 0.2036) — the dcos+topk_abs recipe has an
+  intrinsic ceiling; rank selects when you hit it and what you pay.
+- norms (+360 params, gated): null (ends 0.167, selection unchanged).
+  vmse_norms (ungated): destroyed e20, FASTER than without norms. The
+  LayerNorm-tuning literature prior does NOT transfer to this objective.
+- dora: OOM incident (see below), retried as mb4.
+
+Standing synthesis: a storage/preservation FRONTIER — every storing arm
+writes deep and pays damage; every preserving arm stores nothing; fusion
+gets neither. Only a target change can move the frontier -> the tinc
+longs (Mon) are the decisive experiment; the r8/r64 longs measure the
+wall precisely.
+
 ## Horizon extensions for the successful arms (owner, Aug 17 afternoon)
 
 Screen evidence (r64 final 0.2024 RISING; r8 0.1952@e30 with argmax 0.35 —
