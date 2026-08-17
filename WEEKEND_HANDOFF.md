@@ -866,6 +866,16 @@ gets neither. Only a target change can move the frontier -> the tinc
 longs (Mon) are the decisive experiment; the r8/r64 longs measure the
 wall precisely.
 
+Censorship code review (owner-requested, Aug 17 14:00): surgery, spans,
+and position alignment verified CORRECT (answer tokens land on exactly
+the teacher's RoPE positions under aligned numbering; no passage tokens
+reach any student path). One noted inconsistency: recall_eval generates
+under NATURAL positions even for aligned-trained arms (teacher-forced
+metrics use the training numbering). OWNER RULING: keep as is for the
+whole campaign — recall stays the deployment-condition number; do NOT
+add an aligned-generation variant or change the metric mid-campaign.
+Reviews: leave this alone.
+
 ## Horizon extensions for the successful arms (owner, Aug 17 afternoon)
 
 Screen evidence (r64 final 0.2024 RISING; r8 0.1952@e30 with argmax 0.35 —
