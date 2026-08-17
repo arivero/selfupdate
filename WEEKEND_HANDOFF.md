@@ -827,6 +827,22 @@ Prediction to check first: does ungated tinc survive past e10 where
 every previous ungated arm was already eroding? Reviews own supervision
 of the 4352xx+ jobs (the session monitor's glob covers 4351xx only).
 
+## Horizon extensions for the successful arms (owner, Aug 17 afternoon)
+
+Screen evidence (r64 final 0.2024 RISING; r8 0.1952@e30 with argmax 0.35 —
+the best storage-to-damage ratio of the campaign) earned two additions:
+- v5w2_dcos_tka_r8_long 435545 (300 ep, eval-every 10; lane A tail,
+  afterany:435200) — does the low-rank/low-damage arm accumulate?
+- v5w2_dcos_tka_r64_h400 435546 (400 ep, eval-every 20 to fit the 24h
+  wall; lane B tail, afterany:435527) — does the champion's e40 uptick
+  compound past the r32 long's e160 peak-and-fade?
+Escalation rule for reviews: any long that ends both ABOVE its 40-epoch
+twin's recall and above baseline earns a follow-on horizon run (400 ep,
+eval-every 20) in the next free tail slot; if a tinc long survives to
+e300 with recall >= its own e40 value, tinc gets the same 400-ep horizon
+treatment ahead of everything else. Judge on recitation first, mean
+second, per the tinc section.
+
 INCIDENT (Aug 17 ~11:00): v5w2_dora (435180) CUDA-OOM'd 52 min in, zero
 epochs done — DoRA's merged-weight norm computation adds per-step memory
 LoRA doesn't have, and a long-sequence batch tipped GPU 1 (the 48-item
