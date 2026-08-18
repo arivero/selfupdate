@@ -696,7 +696,13 @@ def main() -> None:
                          "generator; backprop_count records where it "
                          "concentrates); 'surprise_ema:F' trains layers "
                          "above F x their own expectation and performs NO "
-                         "update on an empty selection.")
+                         "update on an empty selection; 'fixed:L[,L2,...]' "
+                         "pins writing to explicit layers (ablation probe "
+                         "of the selection mechanism).")
+    ap.add_argument("--gate-freeze-epoch", type=int, default=0,
+                    help="with topk_abs/topk gates: after this epoch "
+                         "completes, freeze selection to the K layers most "
+                         "often chosen so far (0 = never freeze)")
     ap.add_argument("--grad-checkpoint", action="store_true",
                     help="REFUSED at startup — see the gate message; taps "
                          "must stay registered through backward first")
@@ -984,6 +990,16 @@ def main() -> None:
         gate_mode, gate_val = "topk", int(args.layer_gate.split(":", 1)[1])
     elif args.layer_gate.startswith("minfrac:"):
         gate_mode, gate_val = "minfrac", float(args.layer_gate.split(":", 1)[1])
+    elif args.layer_gate.startswith("fixed:"):
+        # v5w2 review-1 pivot (2026-08-18): pin writing to explicit layers.
+        # This is the causal probe of the topk_abs selection question (the
+        # L54 collapse): same depth-uniform loss and LoRA capacity on every
+        # block; only the per-step scheduling is pinned. Ablation/diagnostic
+        # use — reports must show the written-layer distribution next to the
+        # topk_abs arms (tail-ban evidence either way, as with topk_abs).
+        gate_mode = "fixed"
+        fixed_sel = sorted(int(x) for x in
+                           args.layer_gate.split(":", 1)[1].split(","))
     elif args.layer_gate.startswith("surprise_ema:"):
         # owner concept (2026-07-26): surprise = loss EXCEEDING the layer's
         # own expectation. Each layer keeps an EMA of its loss; only layers
@@ -995,6 +1011,17 @@ def main() -> None:
             args.layer_gate.split(":", 1)[1])
     elif args.layer_gate != "all":
         raise SystemExit(f"unknown --layer-gate {args.layer_gate}")
+    if gate_mode == "fixed" and any(
+            l < 0 or l >= n_layers for l in fixed_sel):
+        raise SystemExit(f"fixed gate layer out of range 0..{n_layers - 1}")
+    if args.gate_freeze_epoch and gate_mode not in ("topk_abs", "topk"):
+        raise SystemExit("--gate-freeze-epoch requires a topk_abs/topk gate")
+    # gate-freeze (v5w2 review-1 pivot): dynamic ranking until the named
+    # epoch completes, then the selection is FROZEN to the K layers most
+    # often chosen so far — tests whether per-step selection churn (chasing
+    # its own drift) is what caps recall, separately from placement.
+    gate_count_total = [0] * n_layers
+    frozen_sel: list | None = None
     loss_ema: list = [None] * n_layers
 
     def evaluate(epoch: int):
@@ -1288,7 +1315,11 @@ def main() -> None:
             rel = [gvals[l] / loss_ema[l] if loss_ema[l] else 1.0
                    for l in range(n_layers)]
             skip_step = False
-            if gate_mode == "topk_abs":
+            if frozen_sel is not None:
+                sel = list(frozen_sel)
+            elif gate_mode == "fixed":
+                sel = list(fixed_sel)
+            elif gate_mode == "topk_abs":
                 sel = sorted(range(n_layers),
                              key=lambda l: -gvals[l])[:int(gate_val)]
             elif gate_mode == "topk":
@@ -1318,6 +1349,7 @@ def main() -> None:
                     sel = [max(range(n_layers), key=lambda l: rel[l])]
                 for l in sel:
                     backprop_count[l] += 1
+                    gate_count_total[l] += 1
                 # normalize by n_layers (not len(sel)): a selected layer's
                 # gradient scale is then IDENTICAL under every gate mode, so
                 # gated arms compare to 'all' at the same effective LR
@@ -1370,6 +1402,15 @@ def main() -> None:
             adapter_l2_norm=adapter_norm,
             anchor_weight=args.anchor_weight,
             gate_skipped_steps=gate_skipped)
+        if (args.gate_freeze_epoch and frozen_sel is None
+                and epoch >= args.gate_freeze_epoch):
+            frozen_sel = sorted(sorted(
+                range(n_layers),
+                key=lambda l: -gate_count_total[l])[:int(gate_val)])
+            log("gate_frozen", epoch=epoch, frozen_layers=frozen_sel,
+                gate_count_total=gate_count_total)
+            print(f"gate frozen after epoch {epoch}: layers {frozen_sel}",
+                  flush=True)
         vocab_tripwire()
         if gate_mode == "surprise_ema" and updates_this_epoch == 0:
             # owner ruling (2026-07-27): a whole epoch in which nothing

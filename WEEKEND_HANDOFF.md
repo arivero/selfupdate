@@ -995,3 +995,63 @@ depths. Instrumentation (live from the v5w2 screens onward):
   the L54 signal partly reflects accumulated drift (our decomposition),
   and Hase et al. showed causal localization correlates poorly with where
   editing works. The per-corpus telemetry above is our direct probe.
+
+# QUEUE FILL Aug 19-21 (Aug 18 22:45, live session; owner: "review the
+# results and fill the queue for the next three days")
+
+## Tonight's ground truth
+
+- **r8_long (435545, 300 ep, COMPLETED 21:47)**: NULL. quij never beats
+  its e0 baseline (peak 0.196@e40 vs 0.189); mach peaks 0.201@e160
+  (+0.03, noise band) then decays to 0.161; argmax erodes 0.42->0.22,
+  arc 0.32->0.21, CE 5.6->11 then slow drift back to 9.9. The screen's
+  "best storage-to-damage ratio" did NOT accumulate. Rank axis now closed
+  in BOTH directions: r8/r32/r64 all live at the same ~0.19 wall; r8 just
+  pays the damage more slowly. Recitation still ~0 (one 0.042 item flickers).
+- **dora_mb4 (435527, started 21:48)**: healthy — e0 eval + layerwise
+  certification (21 tensors, 0 leaks) passed, training walk underway at
+  ~48/81 GB per GPU. The mb4 protocol cleared the DoRA OOM.
+- agpuh02 still held by another user; agpuh03 still drained. Worst-case
+  planning is single-node serial on agpuh01.
+
+## The fill: execute the review-2 pivot early (L54/churn question)
+
+Nothing beat the 0.1878 guardrail and every planned axis except gated
+tinc is closed, so the pre-registered pivot starts now instead of at
+review #2. Central question, split into mechanism vs placement:
+is the ~0.192 wall caused by per-step topk_abs re-ranking CHURN (the
+gate chasing the drift its own writes create), by WHERE it writes, or
+by neither (a capacity/objective ceiling)?
+
+Trainer additions (this commit): `--layer-gate fixed:L[,L2...]` (pinned
+selection; ablation probe, same depth-uniform loss and LoRA on every
+block, reports must show written-layer distribution alongside topk_abs
+arms) and `--gate-freeze-epoch N` (topk_abs/topk dynamic until epoch N
+completes, then selection frozen to the K most-chosen layers;
+`gate_frozen` row logs the frozen set and cumulative counts).
+
+Submitted (all delta_cosine, incumbent knobs pinned; smoke gates the
+new code paths):
+- smoke_gate2 437121 (afterany:436939) — micro fixed:22 + freeze-after-e1,
+  asserts the gate_frozen row exists.
+- Chain 1 (mechanism): f54 437122 -> tka_frz10 437123 ->
+  tka_frz10_long 437124 (300 ep). fixed:54 = collapse layer without
+  churn; frz10 = 10 epochs of exploration then no churn.
+- Chain 2 (placement/width): f22 437125 -> tka2 437126 ->
+  f54_long 437127 (300 ep). fixed:22 = mid-stack write (where
+  delta_vmse's increment-relative ranking pointed); topk_abs:2 = the
+  untested middle between 1 (wall) and dense (destroys).
+
+Predictions (register before data): if churn is the cap, frz10/f54
+should pass 0.192 somewhere in e40-300 with less argmax erosion per
+recall point; if placement is the cap, f22 diverges from f54; if the
+wall is intrinsic, both longs replay the r32 long's peak-and-fade and
+the campaign closes on "frontier is objective-limited, not
+scheduling-limited" — publishable either way.
+
+Queue horizon: serial worst case runs dora_mb4 -> tinc_cos_tka ->
+r64_h400 -> smoke_gate2 -> 4 screens -> 2 longs ≈ through Aug 22
+morning, past review #2 (Aug 20 09:00) with review #3 (Aug 23) able to
+prune the longs. Standing rules unchanged: recall metric stays
+natural-position; tinc escalation rule from the horizon section applies
+if 436939 stores.
