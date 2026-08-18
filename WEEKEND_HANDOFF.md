@@ -892,6 +892,46 @@ e300 with recall >= its own e40 value, tinc gets the same 400-ep horizon
 treatment ahead of everything else. Judge on recitation first, mean
 second, per the tinc section.
 
+# SELF-REVIEW #1 (Aug 18, 09:00, job 435183) — verdicts
+
+## The wall is confirmed at every rank; dvmse never stores; NAIVE DENSE TINC DESTROYS
+
+- **r64_long (435189, 300 ep, COMPLETED)**: peak mach 0.1919 @e250,
+  15/30 evals above baseline, final 0.1754, arc 0.20. Replicates the r32
+  long's 0.1921 @e160 almost to the digit, just later. THE ~0.192 WALL IS
+  RANK-INDEPENDENT — the screen's e40 spike (0.2024) was sample noise.
+- **dvmse_tka_long (435187, 300 ep, COMPLETED)**: peak 0.1746 @e50, only
+  2/30 evals above baseline, argmax leaked 0.394->0.259 over 300 ep.
+  The dvmse line stores NOTHING at any horizon — CLOSED as a storage
+  candidate (remains the best preservation datum).
+- **tinc smoke 435199 PASSED (15 min)**; then BOTH ungated tinc longs
+  DESTROYED at e20 (tinc_cos: argmax 0.42->0.07, CE 5.6->21; tinc_vmse:
+  0.42->0.08, CE ->24 — worse than every band loss, similar to isotropic
+  kills). The telescoping fixed point is correct but unreachable by naive
+  dense descent: away from the fixed point each block adds an increment
+  computed for a DIFFERENT input state, so composition still drifts, and
+  the increment targets are large at every layer (they carry the
+  passage's attention output), giving huber-class step sizes. Consistency
+  of the target does not imply stability of the dynamics.
+- Recitation: 0.0 in every run of the campaign so far.
+- Infrastructure: zero failures overnight; auto-abort saved ~2x20h on the
+  tinc pair; dora_mb4 pending on Resources (agpuh02 taken by another
+  user — not an idle-lane fault); r8_long running on agpuh01.
+
+## Actions (review 1)
+
+- No further promotions: NOTHING beat the 0.1878 guardrail; the queued
+  r8_long / r64_h400 already cover the remaining screen-derived value.
+- NEW ARM: v5w2_tinc_cos_tka screen (436939, afterany:r8_long, 40 ep) —
+  gated tinc. Rationale: sparse writing is the only regime every loss
+  survives; topk_abs on increment mismatch is the natural
+  increment-relative ranking (the mechanism dvmse validated); one block
+  moving per step is where the telescoping argument is least violated.
+  If tinc_cos_tka also fails to store, the tinc line closes and review 2
+  goes to the L54 epoch-frozen-gate question per plan.
+- Queue after this review: r8_long (running) -> tinc_cos_tka; dora_mb4 ->
+  r64_h400 on the other lane. Prefill horizon reaches past review 2.
+
 INCIDENT (Aug 17 ~11:00): v5w2_dora (435180) CUDA-OOM'd 52 min in, zero
 epochs done — DoRA's merged-weight norm computation adds per-step memory
 LoRA doesn't have, and a long-sequence batch tipped GPU 1 (the 48-item
