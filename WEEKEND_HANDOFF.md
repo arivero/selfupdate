@@ -1084,3 +1084,57 @@ if 436939 stores.
   r64_h400. Gate screens therefore start ~05:30 Aug 20 — review #2
   (09:00) lands mid-chain 1/2 screens, which is fine; longs run Aug
   20-21 and review #3 prunes.
+
+## Teacher-ceiling calibration (owner question, Aug 19 ~14:45)
+
+The recall metric's scale is now anchored. `answer_text` (the scoring
+reference) is the teacher's own vLLM generation from the uncensored
+prompt; the responses artifact stores each answer's quality against the
+ORIGINAL text under the same reference-word-LCS family:
+teacher-with-passage = 0.9915 mach / 0.9839 quij, recite-rate ~0.98
+(n=1822; the 249 cloze items are containment-scored). Censored base
+(epoch 0) = ~0.17 mach / ~0.19 quij, recitation 0. So the ~0.192 wall
+closes only ~2-4% of the censorship gap, and the teacher's entire
+advantage is verbatim recitation — a regime no student arm has entered
+for even one item. The one unmeasured number — HF-side reproduction of
+the vLLM answers under recall_eval's exact decode path — is queued as
+scripts/v5_teacher_ceiling_probe.py (job 438230, --nice=1000, fills the
+first queue hole; writes runs/v5_teacher_ceiling/ceiling.json).
+
+## ULTRAREVIEW #1 verdicts + actions (Aug 19 ~15:00, autonomous per owner)
+
+Cloud review of v5-review-base(f1ce504)..HEAD returned 2 findings; both
+verified real against the code and fixed on this branch.
+
+1. **bug_002 (normal): --train-norms broke the frozen-teacher law.** The
+   6 per-block norm tensors are trained BASE params; PEFT's
+   disable_adapter() only gates the LoRA delta, so the teacher-target
+   capture, the self-anchor capture, and evaluate()'s teacher logits all
+   saw progressively drifted norms (epoch-1 caches froze targets against
+   different optimizer states). FIX: frozen_base() context manager swaps
+   in the decay_to_init snapshots around every adapters-off forward;
+   no-op when --train-norms is off, so queued gate arms are numerically
+   untouched.
+   CAMPAIGN CONSEQUENCES:
+   - v5w2_norms (delta_cosine+tka+norms, peak quij 0.2039@e20 — the best
+     quij peak of the campaign) is CONTAMINATED: it trained against a
+     moving teacher, not the v5 law. Its recall numbers stand as a
+     deployment measurement of an UNintended recipe; the "norms help"
+     reading is voided. Clean re-run queued: smoke 438233
+     (afterany:437127, exercises frozen_base end-to-end) -> v5w2_norms_fix
+     438234 (afterok:438233, same knobs as the contaminated arm). If the
+     clean arm reproduces ~0.204, norms genuinely help and the moving
+     teacher was harmless; if it regresses to ~0.196 (norms-free level),
+     the campaign's best quij peak was a moving-target artifact.
+   - vmse_norms's "norms accelerate destruction" verdict is RETRACTED,
+     not re-tested: ungated vocab_mse destroys with or without norms
+     (that axis closed on the base loss), so a clean re-run would not
+     change any decision.
+2. **bug_001 (nit): 2-node PPP8 sbatch lacked the marker retry loop**
+   its PPP4 sibling got after the 2026-07-27 double loss (nohup flush
+   trails pid exit ~13s). Copied verbatim. Path is deprioritized; fixed
+   to stop sibling drift.
+
+Queue after this pass: ... 437124/437127 longs -> ceiling probe 438230
+(nice) / smoke_normsfix 438233 -> norms_fix 438234. Prefill now reaches
+~Aug 22 evening; review #3 (Aug 23 09:00) closes.
