@@ -1166,6 +1166,27 @@ Pre-registered decision points and criteria:
   consider 400ep for the winning gate arm; fades like r32 -> peak-and-
   fade is horizon-universal, longs lose priority.
 
+### DECISION #1 TAKEN (Aug 19 20:12, autonomous): r64_h400 FADES —
+### killed at e320, node released to the gate chain ~4h early
+
+Evidence: peak quij 0.1924@e120; e260 high (mach 0.1844/quij 0.1846)
+then three consecutive declining evals — e280 0.1709/0.1779, e300
+0.1649/0.1825, e320 0.1661/0.1762 — ending with BOTH corpora below
+their epoch-0 baselines (quij e0 0.1885, mach e0 0.1715). This
+replicates the r32 long's peak-and-fade ~60 epochs later: VERDICT
+peak-and-fade is horizon-universal for churny topk_abs:1 at every
+tested rank (32, 64) and horizon (300, 400). scancel 435546 at e320
+(>12k-item rule satisfied ~200x over; kill-doomed-runs: the remaining
+80 epochs could only re-describe a confirmed fade while the decisive
+gate screens waited on the node).
+Consequences applied: smoke_gate2 starts ~20:15 Aug 19 instead of
+~05:30 Aug 20; screens land tonight, longs decision lands with them.
+Reweighting (not yet a scancel): f54_long 437127 loses priority —
+partially redundant with frz10_long 437124, which KEEPS priority
+because the fade sharpens its question (does freezing the gate stop
+the fade? the fade is now the phenomenon churn-freezing must cure,
+not just the wall).
+
 ## The recitation-zero question (owner, Aug 19 ~15:10) — REVIEW-2 AGENDA
 
 Owner: "ask yourself why recitation score is zero. It makes no sense and
