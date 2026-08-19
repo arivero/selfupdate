@@ -643,6 +643,12 @@ def main() -> None:
                          "0.5*vocab_mse + 0.5*delta_cosine)")
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
+    ap.add_argument("--init-adapter", default="",
+                    help="warm-start: load a saved checkpoint dir "
+                         "(adapter_model.safetensors + adapter_config.json) "
+                         "into the fresh LoRA before training; r/alpha must "
+                         "match. Epoch-0 eval then measures the warm state "
+                         "(a consistency check against the source run).")
     ap.add_argument("--train-norms", action="store_true",
                     help="also train the 6 BLOCK-LOCAL norm params per "
                          "layer (input/post_attention/pre_ffw/post_ffw "
@@ -893,6 +899,38 @@ def main() -> None:
         use_dora=args.dora,
         bias="none", task_type="CAUSAL_LM")
     full = get_peft_model(full, lcfg)
+
+    if args.init_adapter:
+        # Warm-start (owner design, 2026-08-19): continue from another
+        # run's saved adapter instead of zeros — e.g. pin fixed:54 from the
+        # churny run's PEAK checkpoint, isolating churn as the fade cause
+        # (the churny continuation from the same checkpoint is the control).
+        import json as _json
+        from safetensors.torch import load_file
+        from peft.utils import set_peft_model_state_dict
+        ck = Path(args.init_adapter)
+        acfg = _json.loads((ck / "adapter_config.json").read_text())
+        if acfg.get("r") != args.lora_r or \
+                acfg.get("lora_alpha") != args.lora_alpha:
+            raise SystemExit(
+                f"GATE: --init-adapter r={acfg.get('r')}/"
+                f"alpha={acfg.get('lora_alpha')} does not match "
+                f"--lora-r {args.lora_r}/--lora-alpha {args.lora_alpha}")
+        sd = load_file(str(ck / "adapter_model.safetensors"))
+        res = set_peft_model_state_dict(full, sd)
+        bad = getattr(res, "unexpected_keys", [])
+        if bad:
+            raise SystemExit(f"GATE: --init-adapter unexpected keys: "
+                             f"{list(bad)[:5]} (+{max(0, len(bad)-5)})")
+        # lora_A is random at fresh init, so only lora_B distinguishes a
+        # trained checkpoint (PEFT zero-inits B; trained B is nonzero)
+        n_b = sum(1 for n, p in full.named_parameters()
+                  if "lora_B" in n and p.detach().abs().sum().item() > 0)
+        print(f"--init-adapter {ck}: loaded {len(sd)} tensors, "
+              f"{n_b} nonzero lora_B tensors", flush=True)
+        if not n_b:
+            raise SystemExit("GATE: --init-adapter loaded but every lora_B "
+                             "is zero — untrained or mismatched checkpoint")
 
     def _unwrap(name: str) -> str:
         # PEFT prefixes every parameter with "base_model.model."
