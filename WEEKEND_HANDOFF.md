@@ -1138,3 +1138,35 @@ verified real against the code and fixed on this branch.
 Queue after this pass: ... 437124/437127 longs -> ceiling probe 438230
 (nice) / smoke_normsfix 438233 -> norms_fix 438234. Prefill now reaches
 ~Aug 22 evening; review #3 (Aug 23 09:00) closes.
+
+## The recitation-zero question (owner, Aug 19 ~15:10) — REVIEW-2 AGENDA
+
+Owner: "ask yourself why recitation score is zero. It makes no sense and
+could hide real bugs." Item-level analysis (recall_items, no GPU needed)
+across r8 / norms / r64_h400:
+
+- The recite machinery is alive: one q2 item scores LCS 1.00 at epoch 0
+  from priors — it IS the constant 0.0417 recitation flicker.
+- Items DO learn individually: q4 item 7 and mach item 16 go 0.0 -> 0.5,
+  REPLICATED across independent arms on the same seeded items; several
+  more gain 0.15-0.35. The +0.02-0.03 mean gains are concentrated, not
+  uniform fuzz.
+- But NO learned item ever crosses ~0.5. Recitation-zero is a threshold
+  reading of a real HALF-RECITATION CEILING: generations apparently
+  start right and stall/derail mid-answer.
+
+Registered hypotheses (texts now logged as recall_texts in every eval
+row, commit above; ceiling probe 438230 anchors the teacher end):
+(a) derailment — greedy decoding loses the thread mid-answer without
+    context anchoring (self-conditioning on its own weak continuation);
+(b) early stop-token emission (would show as short texts);
+(c) word-LCS formatting/punctuation depression (teacher probe recite
+    << 0.98 would indict the eval path itself);
+(d) POSITION-KEYED STORAGE: aligned-position training may write content
+    addressable at teacher positions, not at the natural positions the
+    generation loop uses — if true, the wall partly measures an
+    addressing mismatch, not a storage limit. Diagnostic would be an
+    ADDITIONAL aligned-position generation column next to the untouched
+    natural-position deployment metric (owner ruling stands). DECISION
+    BELONGS TO REVIEW #2, with the first recall_texts from the gate
+    screens in hand.

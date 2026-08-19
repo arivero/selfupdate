@@ -95,6 +95,11 @@ def main() -> None:
         "censored_recite": censored["recite"],
         "teacher_items": teacher["items"],
         "censored_items": censored["items"],
+        # recitation-zero question (owner, Aug 19): keep the generations so
+        # teacher-side reproduction failures (decode/formatting/early-stop)
+        # are directly inspectable next to the student runs' recall_texts
+        "teacher_texts": teacher.get("texts", {}),
+        "censored_texts": censored.get("texts", {}),
         "artifact_word_acc_vs_original": {
             "mach": 0.9915, "quij": 0.9839,
             "note": "vLLM answer vs original text, from responses artifact; "
