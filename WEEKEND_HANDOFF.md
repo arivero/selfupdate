@@ -1203,6 +1203,49 @@ because the fade sharpens its question (does freezing the gate stop
 the fade? the fade is now the phenomenon churn-freezing must cure,
 not just the wall).
 
+## CAMPAIGN v5w2 CLOSED (Decision #2 under grant, Aug 19 22:26)
+
+Stopped the training campaign: scancel f54 437122 (mid-run, ~e22), f22
+437125, dense_dcos 438298 (my own 20-minute-old submit — queued under
+continuation logic that did not survive the objective-level analysis),
+normsfix smoke 438233, norms_fix 438234. KEPT: ceiling probe 438230
+(eval-only metric calibration, needed for the writeup) and the review
+jobs 435184/435185 — #2 (Aug 20 09:00) is repurposed to synthesis +
+successor design, #3 (Aug 23) to final close-out.
+
+Basis (objective-level, NOT f54's short evening — f54 ran only ~2h,
+e0-e22, enough for its mechanism datum):
+1. Content recall across the campaign: ~0.12 -> ~0.13 vs teacher 0.99
+   (scaffold-stripped LCS; full-LCS movement was assistant-register
+   scaffold shared with the teacher's answers).
+2. The optimization WORKS: 50/60 per-layer losses fall monotonically
+   over 320 epochs (mean 0.44 -> 0.26; L54 -48% churny, -67% pinned).
+   Ergo the objective is satisfiable without storing the sequence —
+   per-position hidden proximity is too weak a proxy for content. No
+   queued arm changed the objective; all were same-family cells.
+3. Every axis closed: loss menu, rank (8-128), LR, horizon (40/300/400,
+   peak-and-fade universal), gate schedule (churny/pinned/frozen),
+   norms (contaminated + best peak was scaffold), tinc (destroys),
+   dense isotropic (destroys), DoRA (null).
+4. f54's evening datum: pinning the write layer reaches the same
+   scaffold band with NO damage (argmax 0.41-0.42, ARC flat) while
+   L58's loss rises (untrained downstream drift) — churn was the
+   damage mechanism, placement was not the storage limiter.
+
+Deliverables in hand for the writeup: calibrated metric (teacher 0.99 /
+base 0.19 / scale decomposed into scaffold vs content), the loss-recall
+dissociation, the damage mechanism (churn), the fade law (peak-and-fade
+at every rank/horizon), the tinc instability result, recall_texts
+tooling, and the frozen-teacher repair from ultrareview.
+
+Successor directions (DESIGN questions for review #2, not launches):
+an objective that couples per-layer states to token identity within the
+law (teacher-sourced per-layer distributions through the frozen head —
+note [[loss-safety-law]]'s intrusion warning), sequence-level local
+targets, exposure/spacing regimes, retrieval-practice curricula. Whether
+a v5w3 opens is an owner call on the science; the grant covers running
+it, not deciding the program's continuation past this campaign.
+
 ## The recitation-zero question (owner, Aug 19 ~15:10) — REVIEW-2 AGENDA
 
 Owner: "ask yourself why recitation score is zero. It makes no sense and
