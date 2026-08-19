@@ -1139,6 +1139,33 @@ Queue after this pass: ... 437124/437127 longs -> ceiling probe 438230
 (nice) / smoke_normsfix 438233 -> norms_fix 438234. Prefill now reaches
 ~Aug 22 evening; review #3 (Aug 23 09:00) closes.
 
+## OWNER GRANT (Aug 19 15:05): independent-researcher mode
+
+The agent takes the review #2 decisions AUTONOMOUSLY as soon as the data
+suffices — the Aug 20 09:00 scheduled review job is a backstop, not the
+decision point — and continues as independent researcher through review
+#3 (Aug 23). No owner confirmation between decisions; every decision and
+its rationale is documented in commits and in this file. Standing
+constraints unchanged (layerwise law, frozen vocabulary, natural-position
+deployment recall, tail ban, kill-doomed-runs, launch verification,
+timestamped reports).
+
+Pre-registered decision points and criteria:
+- f54 vs f22 vs frz10 vs tka2 screens (land ~Aug 20 midday-evening):
+  promote past the 0.1878 guardrail; prune/replace the two prefilled
+  longs (437124/437127) if their screen arm underperforms churny
+  topk_abs:1 — scancel pending is free.
+- recall_texts from the first screens + ceiling probe 438230: decide the
+  half-recitation-ceiling hypothesis (derailment / early-stop /
+  formatting / position-keyed); if position-keyed is live, ADD an
+  aligned-generation diagnostic column (deployment metric untouched).
+- norms_fix 438234: reproduce ~0.204 -> norms axis reopens (queue a
+  norms long); regress ~0.196 -> best-peak was moving-target artifact,
+  norms axis closes.
+- r64_h400 e240-400 tail: plateau holds -> horizon axis positive,
+  consider 400ep for the winning gate arm; fades like r32 -> peak-and-
+  fade is horizon-universal, longs lose priority.
+
 ## The recitation-zero question (owner, Aug 19 ~15:10) — REVIEW-2 AGENDA
 
 Owner: "ask yourself why recitation score is zero. It makes no sense and
