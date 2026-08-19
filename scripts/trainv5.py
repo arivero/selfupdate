@@ -976,6 +976,38 @@ def main() -> None:
                                 or "lora_" not in name)}
     pad = tok.pad_token_id or 0
 
+    # FROZEN-TEACHER REPAIR (ultrareview, 2026-08-19): under --train-norms
+    # the 6 per-block norm tensors are TRAINED BASE PARAMS, and PEFT's
+    # disable_adapter() only gates the LoRA delta — it never restores base
+    # params. Every adapters-off forward (teacher targets, self-anchor,
+    # evaluate()'s teacher logits) therefore saw progressively drifted
+    # norms: epoch-1 caches mixed targets from different optimizer steps,
+    # and KL/CE eval was non-comparable with non-norm arms. frozen_base()
+    # swaps the init snapshots (already held by decay_to_init) in for the
+    # duration of any adapters-off block and restores the trained values
+    # after. With --train-norms off, norm_restore is empty and this is
+    # exactly full.disable_adapter() — queued non-norm arms are unaffected.
+    norm_restore = [(p, decay_to_init[id(p)])
+                    for name, p in full.named_parameters()
+                    if p.requires_grad and "lora_" not in name]
+
+    @contextmanager
+    def frozen_base():
+        saved = []
+        if norm_restore:
+            with torch.no_grad():
+                saved = [p.detach().clone() for p, _ in norm_restore]
+                for (p, init) in norm_restore:
+                    p.copy_(init)
+        try:
+            with full.disable_adapter():
+                yield
+        finally:
+            if norm_restore:
+                with torch.no_grad():
+                    for (p, _), s in zip(norm_restore, saved):
+                        p.copy_(s)
+
     softcap = getattr(stack.config, "final_logit_softcapping", None)
     print(f"final_logit_softcapping={softcap}", flush=True)
     baseline_argmax: dict = {}
@@ -1048,7 +1080,7 @@ def main() -> None:
                 s_out = stack(input_ids=s_ids, attention_mask=s_mask,
                               position_ids=s_pos, use_cache=False)
                 # teacher logits: adapters OFF, WITH passage
-                with full.disable_adapter():
+                with frozen_base():
                     t_ids, t_mask, _tp, t_spans = collate(b, "prompt_ids",
                                                           pad, device)
                     t_out = stack(input_ids=t_ids, attention_mask=t_mask,
@@ -1174,7 +1206,7 @@ def main() -> None:
                                 .to(layer_dev[l], non_blocking=True)
                                 for it in batch] for l in range(n_layers)]
             else:
-                with torch.no_grad(), full.disable_adapter():
+                with torch.no_grad(), frozen_base():
                     t_ids, t_mask, _tp, t_spans = collate(
                         batch, "prompt_ids", pad, device)
                     # RAW block outputs via the same taps, NOT
