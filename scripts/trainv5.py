@@ -534,6 +534,7 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
         chosen += rng.sample(group, min(sample_per_corpus, len(group)))
     pad = tok.pad_token_id or 0
     scores: dict[str, list[float]] = {}
+    texts: dict[str, list[str]] = {}
     peft_model.eval()
     with torch.no_grad():
         for i in range(0, len(chosen), gen_batch):
@@ -554,6 +555,12 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
                                   skip_special_tokens=True).strip()
                 scores.setdefault(it["corpus"], []).append(
                     word_lcs_acc(it["answer_text"], text))
+                # owner question (2026-08-19): learned items cap at LCS~0.5
+                # and recitation stays 0 — WHY is invisible without the
+                # generations. Keep them (~150 chars each) so derailment
+                # point, early-stop, and formatting mismatch are inspectable
+                # from metrics.jsonl alone.
+                texts.setdefault(it["corpus"], []).append(text)
     out = {c: round(sum(v) / len(v), 4) for c, v in scores.items() if v}
     # pooled 'quij' kept for curve continuity with the merged-tag era
     qv = [x for c, v in scores.items() if c.startswith("q") for x in v]
@@ -566,7 +573,7 @@ def recall_eval(peft_model, tok, items: list[dict], device, stop_id: int,
     recite = {c: round(sum(1 for x in v if x >= 0.9) / len(v), 4)
               for c, v in scores.items() if v}
     per_item = {c: [round(x, 3) for x in v] for c, v in scores.items() if v}
-    return {"mean": out, "recite": recite, "items": per_item}
+    return {"mean": out, "recite": recite, "items": per_item, "texts": texts}
 
 
 def arc_eval(stack, lm_head, tok, device, limit: int,
@@ -1119,6 +1126,7 @@ def main() -> None:
                   flush=True)
         log("eval", epoch=epoch, recall=rec["mean"],
             recitation=rec["recite"], recall_items=rec["items"],
+            recall_texts=rec["texts"],
             arc_easy=arc,
             student_argmax_acceptance=acc, KL_eval_loss=kl, CE_eval_loss=ce,
             evaluation_only=True, optimizer_weight=0.0)
