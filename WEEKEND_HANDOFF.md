@@ -1155,6 +1155,22 @@ Pre-registered decision points and criteria:
   promote past the 0.1878 guardrail; prune/replace the two prefilled
   longs (437124/437127) if their screen arm underperforms churny
   topk_abs:1 — scancel pending is free.
+
+  CRITERIA HARDENED (Aug 19 ~23:05, owner correction on optimistic
+  reporting): the deployment metric is unchanged, but MY decision lens
+  is now CONTENT-LEVEL. Full-LCS recall carries ~0.19 of free
+  assistant-register scaffold (generation and teacher answer share the
+  same preamble formulae); content-only LCS (inside «»/**** quotes,
+  reconstruction verified 24/24 vs stored per-item scores) is
+  0.108-0.168 at e0 and moved ~+0.01 at f54 e16 (q4 DOWN). Campaign
+  content learning to date is ~0.12 -> ~0.13 vs teacher 0.99.
+  Therefore: a screen is PROMOTABLE only on content-LCS gain >= +0.03
+  over its own e0 by e40; if ALL FOUR gate screens fail that bar, BOTH
+  prefilled longs (437124/437127) are pruned — a churn-free replay of
+  scaffold oscillation for 300 epochs answers nothing — and the freed
+  ~48 GPU-h go to review-#2-designed arms attacking content storage
+  itself (exposure/spacing axis, or answer-row curriculum), or the
+  campaign closes on the characterized null.
 - recall_texts from the first screens + ceiling probe 438230: decide the
   half-recitation-ceiling hypothesis (derailment / early-stop /
   formatting / position-keyed); if position-keyed is live, ADD an
