@@ -1055,3 +1055,32 @@ morning, past review #2 (Aug 20 09:00) with review #3 (Aug 23) able to
 prune the longs. Standing rules unchanged: recall metric stays
 natural-position; tinc escalation rule from the horizon section applies
 if 436939 stores.
+
+## Overnight verdicts (Aug 19 14:40 check)
+
+- **TINC LINE CLOSED.** v5w2_tinc_cos_tka (436939) auto-aborted at e10
+  after 1h28: gated tinc destroys exactly like dense tinc, only slower
+  (argmax 0.42 -> 0.096, CE 5.6 -> 20.5, recall -> 0 by e8; healthy
+  through e4, collapse visible at e6). The escalation rule is moot.
+  Verdict: target-inconsistency repair does not rescue increment
+  matching at ANY gate width — increment-class targets are dynamically
+  unstable, period. No further tinc arms, ever.
+- **DoRA AXIS CLOSED (null).** v5w2_dora_mb4 (435527) hit its 6h
+  TIMEOUT at e18/40 (mb4 is ~2x slower per epoch). Trajectory through
+  e18 is indistinguishable from plain-LoRA erosion: quij peak
+  0.1942@e12 vs 0.1914 e0 (noise), mach declining 0.1697 -> 0.1432,
+  argmax 0.42 -> 0.27, CE 5.7 -> 11.3. No relaunch: with the rank axis
+  closed both ways, DoRA showing the same wall shape and no early
+  advantage means nothing more is extractable (kill-doomed-runs rule).
+- **r64_h400 (435546) mid-flight, plateau NOT fading so far:** at
+  ~e180/400 (9.3h elapsed, ~20 ep/h -> finishes right at its 24h cap
+  ~05:15 Aug 20). quij oscillates 0.187-0.192 at the wall, mach
+  recovered to 0.1738 (near e0), argmax stable ~0.23, CE slowly
+  IMPROVING 10.0 -> 9.8. The r32 long faded by e240; whether r64_h400
+  holds its plateau through e240-400 is exactly the horizon question it
+  was queued for. Keep running.
+- Node reality: agpuh02 held by another user, agpuh03 drained, so
+  smoke_gate2 (437121, deps satisfied) waits on agpuh01 behind
+  r64_h400. Gate screens therefore start ~05:30 Aug 20 — review #2
+  (09:00) lands mid-chain 1/2 screens, which is fine; longs run Aug
+  20-21 and review #3 prunes.
