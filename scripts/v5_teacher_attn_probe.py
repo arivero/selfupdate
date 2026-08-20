@@ -48,12 +48,17 @@ def main() -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     torch.set_num_threads(int(os.environ.get("SELFUPDATE_CPU_THREADS", "56")))
-    model_id = "google/gemma-4-31B-it"
+    # cross-model use (owner question 2026-08-20: is sparse-global Gemma
+    # the wrong substrate?): override via env; responses must be the SAME
+    # model's artifact (build_items' roundtrip gate enforces the tokenizer)
+    model_id = os.environ.get("ATTN_MODEL", "google/gemma-4-31B-it")
+    responses = os.environ.get(
+        "ATTN_RESPONSES", "runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl")
+    out_name = os.environ.get("ATTN_OUT", "attn_by_layer.json")
     tok = AutoTokenizer.from_pretrained(model_id)
     items, _stop = trainv5.build_items(
         ROOT / "data/combined/examples_v5rs_window.jsonl",
-        ROOT / "runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl",
-        tok, limit=0)
+        ROOT / responses, tok, limit=0)
 
     rng = random.Random(17)  # same seeded sample as every campaign eval
     by: dict[str, list[dict]] = {}
@@ -74,9 +79,9 @@ def main() -> None:
     n_layers = model.config.text_config.num_hidden_layers \
         if hasattr(model.config, "text_config") \
         else model.config.num_hidden_layers
-    layer_types = getattr(
-        getattr(model.config, "text_config", model.config),
-        "layer_types", None)
+    tcfg = getattr(model.config, "text_config", model.config)
+    layer_types = getattr(tcfg, "layer_types", None)
+    window = getattr(tcfg, "sliding_window", None) or 1024
 
     # accumulators: per layer, split by passage->answer distance vs window
     acc = {k: {"mass": [0.0] * n_layers, "top5": [0.0] * n_layers, "n": 0}
@@ -88,7 +93,7 @@ def main() -> None:
             p0, plen = it["cut_at"], it["pos_gap"]
             a0 = len(it["prompt_ids"])
             dist = a0 - (p0 + plen)  # passage end -> first answer token
-            key = "near" if dist <= 1024 else "far"
+            key = "near" if dist <= window else "far"
             ids = torch.tensor([seq], dtype=torch.long)
             out = model(input_ids=ids, output_attentions=True,
                         use_cache=False)
@@ -108,7 +113,8 @@ def main() -> None:
 
     result = {"model": model_id, "per_corpus": PER_CORPUS,
               "max_seq": MAX_SEQ, "layer_types": layer_types,
-              "sliding_window": 1024, "items": {k: acc[k]["n"] for k in acc}}
+              "sliding_window": window,
+              "items": {k: acc[k]["n"] for k in acc}}
     for k in acc:
         n = max(acc[k]["n"], 1)
         result[f"{k}_passage_mass_by_layer"] = \
@@ -117,8 +123,8 @@ def main() -> None:
             [round(x / n, 4) for x in acc[k]["top5"]]
     out_dir = ROOT / "runs/v5_teacher_attn"
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "attn_by_layer.json").write_text(json.dumps(result, indent=1))
-    print("wrote", out_dir / "attn_by_layer.json", flush=True)
+    (out_dir / out_name).write_text(json.dumps(result, indent=1))
+    print("wrote", out_dir / out_name, flush=True)
     for k in acc:
         if not acc[k]["n"]:
             continue
