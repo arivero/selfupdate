@@ -1281,6 +1281,36 @@ superseded, and review #3 435185 should read THIS section first).
    pending). Mid-stack (fact territory per ROME/MEMIT) was never the
    gate's choice and the placement cell (f22) was cancelled at closure.
 
+### E. PARTIAL TEACHER CENSORSHIP (owner design, Aug 20 night) — the
+### refloat candidate, supersedes A-D framing if licensed
+
+Idea: mask the passage from the TEACHER's attention at all layers except
+retrieval set S (same hooks as the layer-censor probe). Why it answers
+the measured failure: under the current law every layer's target embeds
+passage contributions injected by all upstream globals — unreachable for
+a passage-blind student at every depth, so gradient buys register
+alignment (the scaffold null). With passage@S-only, targets outside S
+are exactly reachable (they ARE passage-blind computations) and the
+storage burden concentrates at S: target consistency achieved by
+modifying the frozen teacher, not the loss (tinc done right). Law-clean:
+teacher-sourced, block-local, depth-uniform; minimal-patch story
+sharpens (single-injection-layer -> single-layer LoRA per memory).
+
+LICENSE CONDITION (tonight's probes): censor-probe `only_S` must hold
+teacher CE/acc near baseline (sufficiency) — that IS the feasibility
+test; attention maps (Gemma 438970 / Qwen3.6 438972) pick S. If only_S
+degrades badly, the idea dies before any GPU is spent — either way the
+probes decide.
+
+Candidate arms when GPUs free (implement --teacher-passage-layers in
+trainv5 teacher capture, reusing the probe hooks):
+  w3-1 passage@S teacher + all-layer delta_cosine (the consistency
+       argument predicts dense writing stops destroying — a strong,
+       falsifiable prediction);
+  w3-2 passage@single-global (probe's strongest layer) + fixed:that
+       layer — the minimal-patch cell;
+  judged CONTENT-FIRST (scaffold-stripped LCS), null-first reporting.
+
 ### Successor design (v5w3 candidates — OWNER DECISION, not launches)
 
 A successor must change the OBJECTIVE, not the schedule. Ranked:
