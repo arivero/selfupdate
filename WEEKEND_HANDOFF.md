@@ -1246,6 +1246,58 @@ targets, exposure/spacing regimes, retrieval-practice curricula. Whether
 a v5w3 opens is an owner call on the science; the grant covers running
 it, not deciding the program's continuation past this campaign.
 
+## REVIEW #2 (Aug 20 09:00, thin node) — CAMPAIGN SYNTHESIS
+
+No GPU movement since closure (probe 438230 + warm 438302 still pending
+behind other users on every cluster GPU). Warm-verdict backstop review
+installed: job 438537, Aug 21 09:07 (scripts/claude_review_v5w2_warm.sbatch
+— post-closure prompt; the Aug-16 prompt in claude_review_v5w2.sbatch is
+superseded, and review #3 435185 should read THIS section first).
+
+### What v5w2 established (the laws, null-first)
+
+1. CONTENT NULL (the headline): scaffold-stripped content recall moved
+   ~0.12 -> ~0.13 vs teacher 0.99 across ~40 arms. Full-LCS "recall"
+   carries ~0.19 of assistant-register scaffold shared with the teacher's
+   answers; every screen-level "gain" was scaffold oscillation plus
+   <=+0.01 content.
+2. THE DISSOCIATION: the optimization works — 50/60 per-layer losses fall
+   monotonically over 320 epochs (mean 0.44->0.26), L54 -48% churny /
+   -67% pinned — while content stays flat. Per-position hidden proximity
+   (delta_cosine and every tested variant) is satisfiable WITHOUT storing
+   the token sequence. This is objective-level, not a tuning failure.
+3. DAMAGE = CHURN: pinned writing (fixed:54) reaches the same band with
+   NO argmax/ARC erosion; per-step re-ranking (topk_abs) pays 0.42->0.23
+   argmax for the same band. Placement was not the storage limiter.
+4. FADE LAW: churny arms peak and fade at every rank (8/32/64/128) and
+   horizon (40/300/400 ep); r64_h400 fell below its own e0 by e320. The
+   warm-start run (fixed:54 from the e120 peak adapter, churny
+   continuation as built-in control) decides churn-vs-intrinsic.
+5. INSTABILITIES: increment-target losses (tinc_*) destroy at any gate
+   width; dense isotropic losses destroy; distribution/norm variants
+   null or contaminated (frozen-teacher bug, since repaired).
+6. GEOGRAPHY: the objective's divergence concentrates near-tail (L54 of
+   0-59) — register territory — with a suspicious ~0 loss at L59 (audit
+   pending). Mid-stack (fact territory per ROME/MEMIT) was never the
+   gate's choice and the placement cell (f22) was cancelled at closure.
+
+### Successor design (v5w3 candidates — OWNER DECISION, not launches)
+
+A successor must change the OBJECTIVE, not the schedule. Ranked:
+A. Token-identity-bearing local target: match the teacher's per-layer
+   next-token distribution through the frozen head at answer rows
+   (teacher-sourced, depth-uniform, law-compliant; [[loss-safety-law]]
+   warns distribution losses amplified intrusion in the readout era —
+   needs the intrusion battery from day one).
+B. Mid-stack placement of (A): combine with fixed:20-25 vs fixed:54 to
+   test the ROME/MEMIT prior at content level.
+C. Sequence-consistency target: per-layer states along the student's own
+   generated trajectory pulled to teacher states (kills the
+   exposure-bias mismatch between teacher-forced training rows and
+   free-running eval; needs a generation loop in training — costly).
+D. Exposure/spacing regime on whatever objective survives (massed
+   40-300 ep was the only schedule ever tested).
+
 ## The recitation-zero question (owner, Aug 19 ~15:10) — REVIEW-2 AGENDA
 
 Owner: "ask yourself why recitation score is zero. It makes no sense and
