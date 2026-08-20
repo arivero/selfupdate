@@ -31,7 +31,9 @@ export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=erro
 export TRITON_CACHE_DIR="/tmp/$USER/selfupdate-triton"
 export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-torchinductor"
 
-MODEL="google/gemma-4-31B-it"
+# cross-model (2026-08-20): stage whatever model the args train. TRAIN_MODEL
+# env overrides; default stays the campaign model.
+MODEL="${TRAIN_MODEL:-google/gemma-4-31B-it}"
 echo "==== trainv5 start model=$MODEL commit=$(git rev-parse HEAD) $(date -Is) ===="
 scripts/venv_setup.sh || fail "venv setup"
 if ! scripts/venv_check.sh; then
