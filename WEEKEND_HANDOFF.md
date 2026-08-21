@@ -1302,6 +1302,23 @@ test; attention maps (Gemma 438970 / Qwen3.6 438972) pick S. If only_S
 degrades badly, the idea dies before any GPU is spent — either way the
 probes decide.
 
+**V3 VERDICT (Aug 22 00:53, retrieval-only mask — passage encodes
+itself, only post-passage queries blocked): LICENSE GRANTED ON GEMMA.**
+only_S (passage visible only at the 8 top globals [5,17,23,29,35,41,
+47,53]) = CE 0.0282 / acc 0.990 vs baseline 0.0031/0.999 — the globals
+are SUFFICIENT for recitation; the v2 collapse (4.88) was pure encoding
+confound, empirically confirmed. Qwen3.6 v3 complete: only_S 0.141/
+0.966 (top-8 softmax near-sufficient), no_S 0.938/0.726 (necessary-
+ish), and the recurrent-only cell none = 1.577/0.649 — blocking ALL 16
+softmax layers still leaves ~65% verbatim token accuracy carried by the
+GatedDeltaNet state alone (gist pathway holds most of the recitation;
+softmax retrieval supplies the last third). Lesion s1 corroborates
+redundancy: random 8-subsets with <=1 global cost CE 0.004-0.39 only.
+Gemma no_S/none still running (~04:00) for the necessity side.
+CONSEQUENCE: design E (partial teacher censorship, passage@globals-only
+teacher) is LICENSED on Gemma with S = the 8 globals; w3-1/w3-2 arms
+become concrete. Owner decision on reopening still applies.
+
 **RETRACTION (Aug 21 ~19:50, owner caught it): the v2 verdict below is
 CONFOUNDED and retracted.** The v2 mask blocked passage KEY columns for
 ALL query rows — including the passage's own rows — so at blocked
