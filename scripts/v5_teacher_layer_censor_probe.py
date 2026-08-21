@@ -67,7 +67,22 @@ def derive_S(attn_json: Path) -> list[int]:
     # sufficiency test, caught live 2026-08-21 on job 439017). The
     # question is whether a SMALL set suffices.
     k = int(os.environ.get("S_TOP_K", "8"))
-    S = sorted(sorted(range(len(mass)), key=lambda l: -mass[l])[:k])
+    S = sorted(range(len(mass)), key=lambda l: -mass[l])[:k]
+    # HYBRID REMAP (caught 2026-08-21 on Qwen3.6): output_attentions only
+    # returns weights for softmax-attention layers, so the probe's arrays
+    # index the FULL-ATTENTION list, not the stack — e.g. Qwen idx 12 is
+    # real layer 51. Detect: nonzero mass confined to the first
+    # len(full_ids) slots of a longer array.
+    lt = d.get("layer_types")
+    if lt:
+        full_ids = [i for i, t in enumerate(lt) if "full" in t]
+        nz = [i for i, x in enumerate(mass) if x > 0]
+        if (len(full_ids) < len(mass) and nz
+                and max(nz) < len(full_ids)):
+            S = [full_ids[i] for i in S]
+            print(f"hybrid remap: attn indices -> real layers via "
+                  f"{len(full_ids)} full-attention layers", flush=True)
+    S = sorted(S)
     print(f"deriving S from '{bucket}' bucket (n={counts.get(bucket)}): "
           f"top-{k} by passage mass = {S}", flush=True)
     return S
@@ -158,6 +173,17 @@ def main() -> None:
     softcap = getattr(stack.config, "final_logit_softcapping", None)
     results: dict[str, dict] = {}
     t0 = time.time()
+    # hybrid stacks (Qwen3.5/3.6): linear-attention layers have no
+    # self_attn and NO attention matrix — a column mask cannot ablate
+    # their (recurrent) passage processing. Maskable retrieval exists
+    # only at softmax layers; blocked sets intersect with them.
+    maskable = [l for l in range(n_layers)
+                if hasattr(stack.layers[l], "self_attn")]
+    if len(maskable) < n_layers:
+        print(f"hybrid stack: {len(maskable)}/{n_layers} maskable "
+              f"(softmax) layers; conditions intersect", flush=True)
+        conditions = {c: [l for l in b if l in maskable]
+                      for c, b in conditions.items()}
     for cond, blocked in conditions.items():
         handles = [stack.layers[l].self_attn.register_forward_pre_hook(
             make_hook(), with_kwargs=True) for l in blocked]
