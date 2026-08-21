@@ -37,8 +37,31 @@ spec = importlib.util.spec_from_file_location(
 trainv5 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trainv5)
 
-PER_CORPUS = 12
-MAX_SEQ = 1600  # bounds the 60*H*T^2 attention RAM and CPU time
+PER_CORPUS = int(os.environ.get("ATTN_PER_CORPUS", "12"))
+# bounds the 60*H*T^2 attention RAM and, on CPU, the QUADRATIC eager-
+# attention time: measured 2026-08-21 on afat01, ~55s at T~200 but up to
+# ~26 min at T~1100 — the original 12x5 items @1600 missed an 8h wall
+MAX_SEQ = int(os.environ.get("ATTN_MAX_SEQ", "1600"))
+
+
+def _flush(model_id, layer_types, window, acc, out_name,
+           done: int, final: bool = False) -> None:
+    result = {"model": model_id, "per_corpus": PER_CORPUS,
+              "max_seq": MAX_SEQ, "layer_types": layer_types,
+              "sliding_window": window, "items_done": done,
+              "final": final,
+              "items": {k: acc[k]["n"] for k in acc}}
+    for k in acc:
+        n = max(acc[k]["n"], 1)
+        result[f"{k}_passage_mass_by_layer"] = \
+            [round(x / n, 4) for x in acc[k]["mass"]]
+        result[f"{k}_top5_in_passage_by_layer"] = \
+            [round(x / n, 4) for x in acc[k]["top5"]]
+    out_dir = ROOT / "runs/v5_teacher_attn"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp = out_dir / (out_name + ".tmp")
+    tmp.write_text(json.dumps(result, indent=1))
+    tmp.replace(out_dir / out_name)
 
 
 def main() -> None:
@@ -110,26 +133,21 @@ def main() -> None:
             del out
             print(f"item {idx + 1}/{len(chosen)} ({key}, dist={dist}, "
                   f"T={len(seq)}) {time.time() - t0:.0f}s", flush=True)
+            # incremental flush: a wall-time kill costs one item, not the
+            # run (the 2026-08-21 timeout lost 41 items' work)
+            _flush(model_id, layer_types, window, acc, out_name,
+                   done=idx + 1)
 
-    result = {"model": model_id, "per_corpus": PER_CORPUS,
-              "max_seq": MAX_SEQ, "layer_types": layer_types,
-              "sliding_window": window,
-              "items": {k: acc[k]["n"] for k in acc}}
-    for k in acc:
-        n = max(acc[k]["n"], 1)
-        result[f"{k}_passage_mass_by_layer"] = \
-            [round(x / n, 4) for x in acc[k]["mass"]]
-        result[f"{k}_top5_in_passage_by_layer"] = \
-            [round(x / n, 4) for x in acc[k]["top5"]]
-    out_dir = ROOT / "runs/v5_teacher_attn"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / out_name).write_text(json.dumps(result, indent=1))
-    print("wrote", out_dir / out_name, flush=True)
+    _flush(model_id, layer_types, window, acc, out_name,
+           done=len(chosen), final=True)
+    result = json.loads((ROOT / "runs/v5_teacher_attn" / out_name)
+                        .read_text())
+    print("wrote", ROOT / "runs/v5_teacher_attn" / out_name, flush=True)
     for k in acc:
         if not acc[k]["n"]:
             continue
         m = result[f"{k}_passage_mass_by_layer"]
-        top = sorted(range(n_layers), key=lambda l: -m[l])[:8]
+        top = sorted(range(len(m)), key=lambda l: -m[l])[:8]
         print(f"{k} (n={acc[k]['n']}): top passage-mass layers: "
               f"{[(l, m[l]) for l in top]}", flush=True)
 

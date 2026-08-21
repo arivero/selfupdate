@@ -49,10 +49,18 @@ def derive_S(attn_json: Path) -> list[int]:
     if env:
         return sorted(int(x) for x in env.split(","))
     d = json.loads(attn_json.read_text())
-    mass = d.get("far_passage_mass_by_layer") or \
-        d.get("near_passage_mass_by_layer")
+    # pick the bucket that actually has items: an empty bucket's array is
+    # all zeros but truthy, and 0.2*max(0)=0 would select ALL layers
+    # (bug caught 2026-08-21 when every corpus item landed "near")
+    counts = d.get("items", {})
+    bucket = "far" if counts.get("far") else "near"
+    if not counts.get(bucket):
+        raise SystemExit("attn_by_layer.json has no items in any bucket")
+    mass = d.get(f"{bucket}_passage_mass_by_layer")
     if not mass:
         raise SystemExit("attn_by_layer.json lacks passage-mass arrays")
+    print(f"deriving S from '{bucket}' bucket "
+          f"(n={counts.get(bucket)})", flush=True)
     thr = 0.2 * max(mass)
     S = [l for l, m in enumerate(mass) if m >= thr]
     if not S:
