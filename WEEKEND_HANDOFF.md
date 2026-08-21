@@ -1302,7 +1302,22 @@ test; attention maps (Gemma 438970 / Qwen3.6 438972) pick S. If only_S
 degrades badly, the idea dies before any GPU is spent — either way the
 probes decide.
 
-**LICENSE VERDICT, GEMMA (Aug 21 ~18:50, censor v2 439429, 17 items,
+**RETRACTION (Aug 21 ~19:50, owner caught it): the v2 verdict below is
+CONFOUNDED and retracted.** The v2 mask blocked passage KEY columns for
+ALL query rows — including the passage's own rows — so at blocked
+layers the passage could not attend to itself and was never properly
+ENCODED. only_S therefore measured encoding destruction, not retrieval
+locus; no_S likewise. Additionally the attention maps rank by HEAD-MEAN
+mass, which dilutes few-head retrieval (retrieval-heads literature:
+~5% of heads) — S itself may be mis-picked; if v3 only_S still
+collapses, the next iteration selects S by per-head MAX mass. Censor v3
+(retrieval-only masking: passage keys blocked only for queries at rows
+>= passage end, passage self-attention intact) resubmitted for BOTH
+models: Gemma 439748 (S=[5,17,23,29,35,41,47,53]), Qwen3.6 439749
+(S=top-8 early). v2 numbers remain below as a record of the encoding
+result they actually measured (baseline 0.0031 stays valid).
+
+**[RETRACTED v2] LICENSE VERDICT, GEMMA (Aug 21 ~18:50, censor v2 439429, 17 items,
 S = top-8 = exactly the 8 strongest globals [5,17,23,29,35,41,47,53]):
 FAILED — retrieval is DISTRIBUTED.** baseline CE 0.0031/acc 0.999;
 only_S CE 4.88/acc 0.46 (near censored-level ~5.6 — the 8 globals are

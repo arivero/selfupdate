@@ -115,6 +115,22 @@ def main() -> None:
     conditions = {"baseline": [], "only_S": [l for l in range(n_layers)
                                              if l not in S],
                   "no_S": list(S), "none": list(range(n_layers))}
+    # Random-lesion mode (owner design 2026-08-21): map-FREE importance.
+    # N seeded random k-subsets are blocked (retrieval-only mask); per-
+    # layer importance = mean CE over subsets containing the layer minus
+    # mean CE over those not containing it. Baseline/none stay as
+    # anchors; the attention-guided only_S/no_S are skipped.
+    n_rand = int(os.environ.get("CENSOR_RANDOM_SUBSETS", "0"))
+    if n_rand:
+        k = int(os.environ.get("CENSOR_SUBSET_K", "8"))
+        seed = int(os.environ.get("CENSOR_SEED", "1"))
+        rrng = random.Random(seed)
+        conditions = {"baseline": [], "none": list(range(n_layers))}
+        for i in range(n_rand):
+            sub = sorted(rrng.sample(range(n_layers), k))
+            conditions[f"rand{seed}_{i}_" + "-".join(map(str, sub))] = sub
+        print(f"random-lesion mode: {n_rand} subsets of k={k}, "
+              f"seed={seed}", flush=True)
 
     state = {"span": (0, 0), "seen_mask": False}
 
@@ -128,7 +144,13 @@ def main() -> None:
             state["seen_mask"] = True
             p0, p1 = state["span"]
             m = m.clone()
-            m[..., :, p0:p1] = torch.finfo(m.dtype).min
+            # RETRIEVAL-ONLY masking (v3, 2026-08-21): block passage KEYS
+            # only for queries AFTER the passage (rows >= p1). v1/v2
+            # blocked all rows, which also severed the passage's own
+            # self-attention — the passage was never ENCODED at blocked
+            # layers, so only_S measured encoding damage, not retrieval
+            # locus (owner caught it: "perhaps we missed something").
+            m[..., p1:, p0:p1] = torch.finfo(m.dtype).min
             kwargs["attention_mask"] = m
             return (args, kwargs)
         return hook
