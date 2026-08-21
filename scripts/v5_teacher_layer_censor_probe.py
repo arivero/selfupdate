@@ -43,6 +43,7 @@ spec.loader.exec_module(trainv5)
 # eager forwards on CPU cost ~250s at T~500 and grow quadratically; the
 # 8x5-item 4-condition version paced ~10h vs an 8h wall (killed 439017)
 PER_CORPUS = int(os.environ.get("CENSOR_PER_CORPUS", "4"))
+OUT_NAME = "layer_censor.json"
 MAX_SEQ = int(os.environ.get("CENSOR_MAX_SEQ", "800"))
 
 
@@ -79,15 +80,22 @@ def main() -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     torch.set_num_threads(int(os.environ.get("SELFUPDATE_CPU_THREADS", "56")))
-    model_id = "google/gemma-4-31B-it"
-    S = derive_S(ROOT / "runs/v5_teacher_attn/attn_by_layer.json")
+    # cross-model (2026-08-21): Qwen3.6's retrieval is far more
+    # concentrated than Gemma's — env overrides mirror the attn probe's
+    model_id = os.environ.get("CENSOR_MODEL", "google/gemma-4-31B-it")
+    responses = os.environ.get(
+        "CENSOR_RESPONSES",
+        "runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl")
+    attn_json = os.environ.get("CENSOR_ATTN_JSON", "attn_by_layer.json")
+    global OUT_NAME
+    OUT_NAME = os.environ.get("CENSOR_OUT", "layer_censor.json")
+    S = derive_S(ROOT / "runs/v5_teacher_attn" / attn_json)
     print(f"retrieval set S = {S}", flush=True)
 
     tok = AutoTokenizer.from_pretrained(model_id)
     items, _stop = trainv5.build_items(
         ROOT / "data/combined/examples_v5rs_window.jsonl",
-        ROOT / "runs/vllm_h100/gemma4_31b_it/responses_bs256.jsonl",
-        tok, limit=0)
+        ROOT / responses, tok, limit=0)
     rng = random.Random(17)
     by: dict[str, list[dict]] = {}
     for it in items:
@@ -161,7 +169,7 @@ def main() -> None:
               f"acc={results[cond]['argmax_acc']} "
               f"({time.time() - t0:.0f}s)", flush=True)
         # per-condition flush: a wall-time kill keeps completed conditions
-        out = ROOT / "runs/v5_teacher_attn/layer_censor.json"
+        out = ROOT / "runs/v5_teacher_attn" / OUT_NAME
         tmp = out.with_suffix(".json.tmp")
         tmp.write_text(json.dumps({"model": model_id, "S": S,
                                    "final": False,
@@ -173,7 +181,7 @@ def main() -> None:
             "GATE: blocking the passage at ALL layers barely moved CE "
             f"({results['baseline']['CE']} -> {results['none']['CE']}) — "
             "masking is not reaching the passage span; results invalid")
-    out = ROOT / "runs/v5_teacher_attn/layer_censor.json"
+    out = ROOT / "runs/v5_teacher_attn" / OUT_NAME
     out.write_text(json.dumps({"model": model_id, "S": S, "final": True,
                                "results": results}, indent=1))
     print("wrote", out, flush=True)

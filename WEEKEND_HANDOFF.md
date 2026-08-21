@@ -1302,6 +1302,25 @@ test; attention maps (Gemma 438970 / Qwen3.6 438972) pick S. If only_S
 degrades badly, the idea dies before any GPU is spent — either way the
 probes decide.
 
+**LICENSE VERDICT, GEMMA (Aug 21 ~18:50, censor v2 439429, 17 items,
+S = top-8 = exactly the 8 strongest globals [5,17,23,29,35,41,47,53]):
+FAILED — retrieval is DISTRIBUTED.** baseline CE 0.0031/acc 0.999;
+only_S CE 4.88/acc 0.46 (near censored-level ~5.6 — the 8 globals are
+NOT sufficient); no_S CE 3.54/acc 0.56 (blocking just those 8 also
+craters — they are necessary too). No compact injection locus exists on
+Gemma: recitation is a cooperative computation across globals AND
+sliding layers. Consequences: (a) design E as small-S teacher
+censorship is NOT licensed on Gemma; (b) this independently strengthens
+the campaign's objective-level null explanation — context enters at
+every depth, so per-layer targets were unreachable everywhere for a
+censored student; (c) the compact-locus question moves to Qwen3.6,
+whose retrieval is far more concentrated (0.5-0.7 mass early-stack vs
+Gemma's 0.32-0.49 spread): censor probe 439731 launched with S = its
+top-8 early layers. Attention maps: Gemma retrieval rides its globals
+at all depths, deep-weighted (47/23/41/53 top); Qwen3.6 concentrates at
+layers 2-14. Geography is model-specific — substrate choice matters for
+any injection-targeted design.
+
 Candidate arms when GPUs free (implement --teacher-passage-layers in
 trainv5 teacher capture, reusing the probe hooks):
   w3-1 passage@S teacher + all-layer delta_cosine (the consistency
