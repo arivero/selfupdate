@@ -40,8 +40,10 @@ spec = importlib.util.spec_from_file_location(
 trainv5 = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(trainv5)
 
-PER_CORPUS = 8
-MAX_SEQ = 1600
+# eager forwards on CPU cost ~250s at T~500 and grow quadratically; the
+# 8x5-item 4-condition version paced ~10h vs an 8h wall (killed 439017)
+PER_CORPUS = int(os.environ.get("CENSOR_PER_CORPUS", "4"))
+MAX_SEQ = int(os.environ.get("CENSOR_MAX_SEQ", "800"))
 
 
 def derive_S(attn_json: Path) -> list[int]:
@@ -59,12 +61,14 @@ def derive_S(attn_json: Path) -> list[int]:
     mass = d.get(f"{bucket}_passage_mass_by_layer")
     if not mass:
         raise SystemExit("attn_by_layer.json lacks passage-mass arrays")
-    print(f"deriving S from '{bucket}' bucket "
-          f"(n={counts.get(bucket)})", flush=True)
-    thr = 0.2 * max(mass)
-    S = [l for l, m in enumerate(mass) if m >= thr]
-    if not S:
-        raise SystemExit("derived empty retrieval set S")
+    # TOP-K, not a threshold: in the near regime every sliding layer sees
+    # some passage mass, and 0.2*max selected 59/60 layers (degenerate
+    # sufficiency test, caught live 2026-08-21 on job 439017). The
+    # question is whether a SMALL set suffices.
+    k = int(os.environ.get("S_TOP_K", "8"))
+    S = sorted(sorted(range(len(mass)), key=lambda l: -mass[l])[:k])
+    print(f"deriving S from '{bucket}' bucket (n={counts.get(bucket)}): "
+          f"top-{k} by passage mass = {S}", flush=True)
     return S
 
 
@@ -156,6 +160,13 @@ def main() -> None:
         print(f"{cond}: CE={results[cond]['CE']} "
               f"acc={results[cond]['argmax_acc']} "
               f"({time.time() - t0:.0f}s)", flush=True)
+        # per-condition flush: a wall-time kill keeps completed conditions
+        out = ROOT / "runs/v5_teacher_attn/layer_censor.json"
+        tmp = out.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"model": model_id, "S": S,
+                                   "final": False,
+                                   "results": results}, indent=1))
+        tmp.replace(out)
 
     if results["none"]["CE"] < 2 * results["baseline"]["CE"]:
         raise SystemExit(
@@ -163,7 +174,7 @@ def main() -> None:
             f"({results['baseline']['CE']} -> {results['none']['CE']}) — "
             "masking is not reaching the passage span; results invalid")
     out = ROOT / "runs/v5_teacher_attn/layer_censor.json"
-    out.write_text(json.dumps({"model": model_id, "S": S,
+    out.write_text(json.dumps({"model": model_id, "S": S, "final": True,
                                "results": results}, indent=1))
     print("wrote", out, flush=True)
 
