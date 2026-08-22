@@ -1314,7 +1314,13 @@ softmax layers still leaves ~65% verbatim token accuracy carried by the
 GatedDeltaNet state alone (gist pathway holds most of the recitation;
 softmax retrieval supplies the last third). Lesion s1 corroborates
 redundancy: random 8-subsets with <=1 global cost CE 0.004-0.39 only.
-Gemma no_S/none still running (~04:00) for the necessity side.
+Gemma no_S/none COMPLETE (03:50): no_S CE 3.6643/acc 0.567 — blocking
+retrieval at just the 8 globals craters recitation; none 5.0908/0.469.
+FINAL GEMMA PICTURE: the 8 globals are BOTH sufficient (0.028) AND
+necessary (3.66) — a compact, fully identified retrieval locus.
+(Notable: v3 no_S ~= v2 no_S 3.54, i.e. the encoding confound was
+negligible for no_S — passage encoding rides the sliding layers — while
+it dominated only_S; the pair of numbers cross-validates the mask.)
 CONSEQUENCE: design E (partial teacher censorship, passage@globals-only
 teacher) is LICENSED on Gemma with S = the 8 globals; w3-1/w3-2 arms
 become concrete. Owner decision on reopening still applies.
