@@ -1139,6 +1139,30 @@ Queue after this pass: ... 437124/437127 longs -> ceiling probe 438230
 (nice) / smoke_normsfix 438233 -> norms_fix 438234. Prefill now reaches
 ~Aug 22 evening; review #3 (Aug 23 09:00) closes.
 
+## REVIEW #3 CLOSE-OUT (Aug 23 09:00, thin node 435185) — WEEK CLOSED
+
+Final report published: runs/v5_campaign_report/report.pdf (4 pages:
+answers/laws, recall+damage curves, per-layer loss profiles, attention
+map + censor bars; generator lives in the session scratchpad per the
+no-standalone-report-scripts policy). All verdicts were already
+committed incrementally; nothing ran on GPUs since Aug 19 (cluster
+fully occupied by other groups).
+
+Deliberately LEFT QUEUED (owner: "we will cultivate patience") — five
+short GPU addenda that dispatch on any free H100: 438230 ceiling
+calibration, 438302 warm-start fade test (e0 must reproduce source e120
+~quij 0.1924), 438979->438980 Qwen3.6 recall control, 438981 ALIA
+answers artifact. Durable watch: warm-verdict backstop review 440330
+(Aug 25 09:07, self-pattern; reinstall again if still starved). Session
+monitors die with each session — re-arm on resume (see memory
+launch-verification-every-15min).
+
+OPEN OWNER DECISION: convert design E's license (passage@8-globals
+teacher, causally verified) into a v5w3 campaign — arms w3-1/w3-2
+sketched under "Design E"; substrate note: Gemma has the compact locus,
+Qwen holds 65% verbatim in its recurrent state, ALIA (fully global,
+Spanish-native) awaits its artifact.
+
 ## OWNER GRANT (Aug 19 15:05): independent-researcher mode
 
 The agent takes the review #2 decisions AUTONOMOUSLY as soon as the data
