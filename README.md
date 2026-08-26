@@ -101,6 +101,14 @@ vocabulary stack.
 Migration from removed evaluator entry points is documented in
 [`docs/v4_6_migration.md`](docs/v4_6_migration.md).
 
+## Experimental v6 monolith
+
+[`scripts/trainv6.py`](scripts/trainv6.py) is an isolated experimental
+successor for Gemma-4-31B and Qwen3.6-27B. It is not imported by, dispatched
+from, or described as pipeline v4.6. Its causal laws, strict launch gates, and
+content-first metric schema are documented in
+[`docs/trainv6_monolith.md`](docs/trainv6_monolith.md).
+
 Historical experiment evidence remains in `EXPERIMENTS.md`, `issues.md`, and
 the dated report documents.  It is evidence about retired protocols, not a
 way to re-enable them in this checkout.

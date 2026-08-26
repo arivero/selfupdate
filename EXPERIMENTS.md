@@ -1,5 +1,35 @@
 # Experiment Plan & Status Board
 
+## Experimental v6 readiness (2026-08-24)
+
+`scripts/trainv6.py` is ready for preflight as a deliberately standalone
+monolith; it does not change the supported v4.6 runtime below. It pins the
+existing Gemma-4-31B and Qwen3.6-27B 2,071-item answer artifacts and exposes
+two owner-selected successor laws: same-input `causal_residual` and licensed
+`partial_teacher`. Qwen censorship covers both its 16 softmax layers and 48
+GatedDeltaNet layers; every launch must pass passage-replacement invariance,
+layerwise-gradient isolation, and frozen-vocabulary gates before training.
+
+The v6 decision surface is content-first. Canonical corpus content recall,
+first-token/prefix/recitation metrics, exact-path teacher ceilings, whole-set
+CE/KL coverage, all three vendored standard-damage tasks, paired uncertainty,
+and per-objective/per-layer gradient attribution are emitted in-pipeline under
+schema `v6_metrics_v1`. No v6 scientific run has been launched or certified;
+`--preflight` output is mechanics only. Protocol and commands:
+`docs/trainv6_monolith.md`.
+
+Queue state (2026-08-25): the complete seed-17 model-by-law preflight matrix
+is queued for three hours per job: Gemma causal-residual `443195`, Gemma
+partial-teacher `443196`, Qwen causal-residual `443197`, and Qwen
+partial-teacher `443198`. All four pin `scripts/trainv6.py` SHA-256
+`b80327437a6410b40ae006b8a8d9c9a15d0d50ebf07cf5b910ed5e8bef9d64dd`.
+They are eligible and accruing age, but deliberately exclude the complete
+Hopper partition node set (`ExcNodeList=agpuh[01-03]`), so they cannot
+dispatch. Do not clear that exclusion until v5 jobs `438230`, `438302`,
+`438979` -> `438980`, and `438981` have reached terminal states and their
+artifacts have been reviewed. Thin-node v5 backstop `442712` remains intact.
+No v6 preflight has started and no v6 log is expected before that gate.
+
 CURRENT FOCUS (branch lwteacher, 2026-07-17): **pipeline-v4** — blockwise
 teacher-forced training with frozen teacher KV and attention censorship.
 Protocol: docs/training_pipeline_v4.md. Trainer:
