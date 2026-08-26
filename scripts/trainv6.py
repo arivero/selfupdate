@@ -1749,8 +1749,8 @@ def main():
             seed=args.seed + epoch * 1009,
         ), rows
 
-    def evaluate(epoch: int, full_gate: bool):
-        nonlocal baseline_output, baseline_standard
+    def evaluate(epoch: int, mean_local=None, epoch1_loss=None):
+        nonlocal baseline_output, baseline_standard, destructive_intervals
         full.eval()
         output = output_eval(
             stack, lm_head, items, device, pad_id, softcap,
@@ -1761,6 +1761,13 @@ def main():
         if output["answer_token_count"] != output["expected_answer_token_count"]:
             raise RuntimeError("EVAL GATE: teacher-token coverage mismatch")
         log("teacher_output_eval", epoch=epoch, **output)
+        at_eval = (
+            epoch == 0 or epoch % args.eval_every == 0
+            or epoch == args.epochs
+        )
+        if not at_eval:
+            return False
+
         standard = standard_eval(
             stack, lm_head, tokenizer, device, softcap, args.standard_limit
         )
@@ -1786,32 +1793,135 @@ def main():
             used_for_backward=False,
             optimizer_weight=0.0,
         )
-        selected = items if full_gate else choose_panel(
-            items, args.panel_per_corpus, args.seed
-        )
-        generation, generation_delta, _generation_rows = log_generation(
-            epoch, selected, "whole_set" if full_gate else "fixed_panel",
-            include_teacher=(epoch == 0),
-            include_aligned=full_gate,
-        )
-        if baseline_output is None:
+
+        if epoch == 0:
+            generation, _generation_delta, _generation_rows = log_generation(
+                epoch, items, "whole_set",
+                include_teacher=True, include_aligned=True,
+            )
             baseline_output = output
-        print(
-            f"eval e{epoch}: content={generation['overall']['content_lcs']:.4f} "
-            f"CE={output['CE_eval_loss']:.4f} "
-            f"argmax={output['student_argmax_acceptance']:.4f} "
-            f"standard={standard['macro_accuracy']:.3f}",
-            flush=True,
+            print(
+                f"eval e{epoch}: content={generation['overall']['content_lcs']:.4f} "
+                f"CE={output['CE_eval_loss']:.4f} "
+                f"argmax={output['student_argmax_acceptance']:.4f} "
+                f"standard={standard['macro_accuracy']:.3f}",
+                flush=True,
+            )
+            return False
+
+        panel = choose_panel(items, args.panel_per_corpus, args.seed)
+        panel_summary, panel_delta, panel_rows = log_generation(
+            epoch, panel, "fixed_panel",
+            include_teacher=False, include_aligned=False,
         )
-        return output, standard, generation, generation_delta
+        candidate = (
+            panel_delta["delta"] is not None
+            and panel_delta["delta"] >= 0.03
+        )
+        full_gate = epoch == args.epochs or candidate
+        if full_gate:
+            _generation, generation_delta, generation_rows = log_generation(
+                epoch, items, "whole_set",
+                include_teacher=False, include_aligned=True,
+            )
+        else:
+            _generation, generation_delta, generation_rows = (
+                panel_summary, panel_delta, panel_rows
+            )
+        full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
+
+        argmax_ratio = (
+            output["student_argmax_acceptance"]
+            / max(1e-30, baseline_output["student_argmax_acceptance"])
+        )
+        damage = (
+            argmax_ratio < 0.8
+            or standard["worst_delta"] <= -0.05
+            or standard["macro_delta"] <= -0.03
+        )
+        flat = (
+            generation_delta["delta"] is not None
+            and generation_delta["delta"] < 0.01
+            and generation_delta["ci95"][0] <= 0
+            <= generation_delta["ci95"][1]
+        )
+        loss_improved = mean_local <= 0.9 * (
+            epoch1_loss if epoch1_loss is not None else mean_local
+        )
+        if items_seen >= 12000 and loss_improved and flat and damage:
+            destructive_intervals += 1
+        else:
+            destructive_intervals = 0
+        base_detail = baseline_generation_detail.get("sufficient", {})
+        comparable_rows = [
+            row for row in generation_rows
+            if row["example_id"] in base_detail
+        ]
+        new_recitation = any(
+            row["recitation"]
+            and not base_detail[row["example_id"]]["recitation"]
+            for row in comparable_rows
+        )
+        prefix_delta = sum(
+            row["longest_correct_prefix_fraction"]
+            - base_detail[row["example_id"]][
+                "longest_correct_prefix_fraction"
+            ]
+            for row in comparable_rows
+        ) / max(1, len(comparable_rows))
+        promotion = {
+            "content_delta_at_least_0p03": (
+                generation_delta["delta"] is not None
+                and generation_delta["delta"] >= 0.03
+            ),
+            "content_ci_excludes_zero": (
+                generation_delta["ci95"][0] is not None
+                and generation_delta["ci95"][0] > 0
+            ),
+            "argmax_at_least_0p8_epoch0": argmax_ratio >= 0.8,
+            "standard_worst_delta_above_minus_0p05": (
+                standard["worst_delta"] > -0.05
+            ),
+            "standard_macro_delta_above_minus_0p03": (
+                standard["macro_delta"] > -0.03
+            ),
+            "new_recitation_or_prefix_gain": (
+                new_recitation or prefix_delta >= 0.03
+            ),
+            "replication": "pending_second_training_seed",
+        }
+        log(
+            "promotion_gate",
+            epoch=epoch,
+            scope="whole_set" if full_gate else "fixed_panel",
+            criteria=promotion,
+            new_recitation=new_recitation,
+            mean_prefix_fraction_delta=prefix_delta,
+            eligible_this_run=(
+                full_gate
+                and all(value for key, value in promotion.items()
+                        if key != "replication")
+            ),
+            final_promotion=False,
+        )
+        if destructive_intervals < 2:
+            return False
+        log(
+            "aborted_stop_rule",
+            epoch=epoch,
+            items_seen=items_seen,
+            local_loss_improved_at_least_10pct=loss_improved,
+            content_flat=flat,
+            damage=True,
+        )
+        print("ABORT: preregistered post-12k stop rule", flush=True)
+        return True
 
     # The intervention is a mandatory launch gate, not an optional test.
     certify_intervention()
 
     # Epoch zero is measured under precisely the same student path.
-    eval_output, eval_standard, eval_generation, eval_delta = evaluate(
-        0, full_gate=True
-    )
+    evaluate(0)
 
     last_epoch = 0
     aborted = False
@@ -2095,150 +2205,12 @@ def main():
             f"seconds={time.time() - started:.0f}",
             flush=True,
         )
-        # CE/KL are mandatory every completed epoch.
-        full.eval()
-        eval_output = output_eval(
-            stack, lm_head, items, device, pad_id, softcap,
-            frozen_base, output_teacher_cache, args.micro_batch,
-            "whole_training_set_once_per_completed_epoch",
-        )
-        log("teacher_output_eval", epoch=epoch, **eval_output)
-
-        at_eval = epoch % args.eval_every == 0 or epoch == args.epochs
-        if at_eval:
-            # First run the fixed panel.  A +0.03 panel candidate receives the
-            # whole-set promotion gate immediately; final is always full.
-            eval_standard = standard_eval(
-                stack, lm_head, tokenizer, device, softcap, args.standard_limit
-            )
-            standard_deltas = {
-                task: (
-                    eval_standard["tasks"][task]["accuracy"]
-                    - baseline_standard["tasks"][task]["accuracy"]
-                )
-                for task in eval_standard["tasks"]
-            }
-            eval_standard["epoch0_deltas"] = standard_deltas
-            eval_standard["worst_delta"] = min(standard_deltas.values())
-            eval_standard["macro_delta"] = (
-                eval_standard["macro_accuracy"]
-                - baseline_standard["macro_accuracy"]
-            )
-            log(
-                "standard_eval", epoch=epoch, **eval_standard,
-                evaluation_only=True, used_for_backward=False,
-                optimizer_weight=0.0,
-            )
-            panel = choose_panel(items, args.panel_per_corpus, args.seed)
-            panel_summary, panel_delta, panel_rows = log_generation(
-                epoch, panel, "fixed_panel",
-                include_teacher=False, include_aligned=False,
-            )
-            candidate = (
-                panel_delta["delta"] is not None
-                and panel_delta["delta"] >= 0.03
-            )
-            full_gate = epoch == args.epochs or candidate
-            if full_gate:
-                eval_generation, eval_delta, eval_rows = log_generation(
-                    epoch, items, "whole_set",
-                    include_teacher=False, include_aligned=True,
-                )
-            else:
-                eval_generation, eval_delta, eval_rows = (
-                    panel_summary, panel_delta, panel_rows
-                )
-            full.save_pretrained(str(out_dir / f"checkpoint_e{epoch}"))
-
-            argmax_ratio = (
-                eval_output["student_argmax_acceptance"]
-                / max(1e-30, baseline_output["student_argmax_acceptance"])
-            )
-            damage = (
-                argmax_ratio < 0.8
-                or eval_standard["worst_delta"] <= -0.05
-                or eval_standard["macro_delta"] <= -0.03
-            )
-            flat = (
-                eval_delta["delta"] is not None
-                and eval_delta["delta"] < 0.01
-                and eval_delta["ci95"][0] <= 0 <= eval_delta["ci95"][1]
-            )
-            loss_improved = mean_local <= 0.9 * (
-                # Use epoch one as the stable, post-cache reference.
-                epoch1_loss if epoch1_loss is not None else mean_local
-            )
-            if items_seen >= 12000 and loss_improved and flat and damage:
-                destructive_intervals += 1
-            else:
-                destructive_intervals = 0
-            base_detail = baseline_generation_detail.get("sufficient", {})
-            comparable_rows = [
-                row for row in eval_rows if row["example_id"] in base_detail
-            ]
-            new_recitation = any(
-                row["recitation"]
-                and not base_detail[row["example_id"]]["recitation"]
-                for row in comparable_rows
-            )
-            prefix_delta = (
-                sum(
-                    row["longest_correct_prefix_fraction"]
-                    - base_detail[row["example_id"]][
-                        "longest_correct_prefix_fraction"
-                    ]
-                    for row in comparable_rows
-                ) / max(1, len(comparable_rows))
-            )
-            prefix_material = prefix_delta >= 0.03
-            promotion = {
-                "content_delta_at_least_0p03": (
-                    eval_delta["delta"] is not None
-                    and eval_delta["delta"] >= 0.03
-                ),
-                "content_ci_excludes_zero": (
-                    eval_delta["ci95"][0] is not None
-                    and eval_delta["ci95"][0] > 0
-                ),
-                "argmax_at_least_0p8_epoch0": argmax_ratio >= 0.8,
-                "standard_worst_delta_above_minus_0p05": (
-                    eval_standard["worst_delta"] > -0.05
-                ),
-                "standard_macro_delta_above_minus_0p03": (
-                    eval_standard["macro_delta"] > -0.03
-                ),
-                "new_recitation_or_prefix_gain": (
-                    new_recitation or prefix_material
-                ),
-                "replication": "pending_second_training_seed",
-            }
-            log(
-                "promotion_gate",
-                epoch=epoch,
-                scope="whole_set" if full_gate else "fixed_panel",
-                criteria=promotion,
-                new_recitation=new_recitation,
-                mean_prefix_fraction_delta=prefix_delta,
-                eligible_this_run=(
-                    full_gate
-                    and all(value for key, value in promotion.items()
-                            if key != "replication")
-                ),
-                final_promotion=False,
-            )
-            if destructive_intervals >= 2:
-                log(
-                    "aborted_stop_rule",
-                    epoch=epoch,
-                    items_seen=items_seen,
-                    local_loss_improved_at_least_10pct=loss_improved,
-                    content_flat=flat,
-                    damage=True,
-                )
-                print("ABORT: preregistered post-12k stop rule", flush=True)
-                aborted = True
-                last_epoch = epoch
-                break
+        # CE/KL remain mandatory every completed epoch; the same funnel owns
+        # the less-frequent generation and standard-capability gates.
+        if evaluate(epoch, mean_local, epoch1_loss):
+            aborted = True
+            last_epoch = epoch
+            break
         last_epoch = epoch
 
     full.save_pretrained(str(out_dir / "checkpoint"))
