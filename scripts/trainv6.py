@@ -861,36 +861,56 @@ def choose_panel(items: list[dict], per_corpus: int, seed: int) -> list[dict]:
 
 def generate_rows(model, tokenizer, items: list[dict], device, stop_id: int,
                   batch_size: int, input_key: str, condition: str,
-                  deployment_budget: int = 96) -> tuple[list[dict], list[dict]]:
+                  deployment_budget: int = 96, aligned: bool = False
+                  ) -> tuple[list[dict], list[dict]]:
+    """One decoding engine for natural/teacher/budgeted/aligned conditions."""
     import torch
 
     model.eval()
     pad_id = tokenizer.pad_token_id
-    if pad_id is None:
+    if aligned:
+        pad_id = pad_id or tokenizer.eos_token_id
+    elif pad_id is None:
         pad_id = tokenizer.eos_token_id
-    sufficient_budget = max(
+    sufficient_budget = deployment_budget if aligned else max(
         deployment_budget,
         max(len(item["answer_ids"]) for item in items) + 16,
     )
     full_rows, deployment_rows = [], []
     with torch.no_grad():
-        for first in range(0, len(items), batch_size):
-            batch = items[first:first + batch_size]
+        for first in range(0, len(items), 1 if aligned else batch_size):
+            batch = items[first:first + (1 if aligned else batch_size)]
             width = max(len(item[input_key]) for item in batch)
-            ids = torch.full((len(batch), width), pad_id, dtype=torch.long)
-            mask = torch.zeros_like(ids)
-            for row, item in enumerate(batch):
-                prompt = item[input_key]
-                ids[row, width - len(prompt):] = torch.tensor(prompt)
-                mask[row, width - len(prompt):] = 1
+            if aligned:
+                prompt = batch[0][input_key]
+                cut, gap = batch[0]["passage_start"], batch[0]["position_gap"]
+                ids = torch.tensor([prompt])
+                mask = torch.ones_like(ids)
+                positions = list(range(cut)) + [
+                    cut + gap + offset for offset in range(len(prompt) - cut)
+                ]
+            else:
+                ids = torch.full((len(batch), width), pad_id, dtype=torch.long)
+                mask = torch.zeros_like(ids)
+                for row, item in enumerate(batch):
+                    prompt = item[input_key]
+                    ids[row, width - len(prompt):] = torch.tensor(prompt)
+                    mask[row, width - len(prompt):] = 1
+            generation_args = {
+                "input_ids": ids.to(device),
+                "attention_mask": mask.to(device),
+                "max_new_tokens": sufficient_budget,
+                "do_sample": False,
+                "use_cache": True,
+                "eos_token_id": stop_id,
+                "pad_token_id": pad_id,
+            }
+            if aligned:
+                generation_args["position_ids"] = torch.tensor(
+                    [positions], device=device
+                )
             output = model.generate(
-                input_ids=ids.to(device),
-                attention_mask=mask.to(device),
-                max_new_tokens=sufficient_budget,
-                do_sample=False,
-                use_cache=True,
-                eos_token_id=stop_id,
-                pad_token_id=pad_id,
+                **generation_args,
             )
             generated = output[:, width:].detach().cpu().tolist()
             for item, token_ids in zip(batch, generated):
@@ -908,6 +928,8 @@ def generate_rows(model, tokenizer, items: list[dict], device, stop_id: int,
                 row["condition"] = condition
                 row["generation_budget"] = sufficient_budget
                 full_rows.append(row)
+                if aligned:
+                    continue
                 limited = usable[:deployment_budget]
                 limited_text = tokenizer.decode(
                     limited, skip_special_tokens=True
@@ -923,50 +945,6 @@ def generate_rows(model, tokenizer, items: list[dict], device, stop_id: int,
                 drow["generation_budget"] = deployment_budget
                 deployment_rows.append(drow)
     return full_rows, deployment_rows
-
-
-def aligned_generate_rows(model, tokenizer, items: list[dict], device,
-                          stop_id: int, deployment_budget: int = 96) -> list[dict]:
-    """Diagnostic only: explicit full-prefix positions through HF generation."""
-    import torch
-
-    model.eval()
-    pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-    rows = []
-    with torch.no_grad():
-        for item in items:
-            prompt = item["censored_ids"]
-            cut, gap = item["passage_start"], item["position_gap"]
-            positions = (
-                list(range(cut))
-                + [cut + gap + offset for offset in range(len(prompt) - cut)]
-            )
-            ids = torch.tensor([prompt], device=device)
-            pos = torch.tensor([positions], device=device)
-            output = model.generate(
-                input_ids=ids,
-                attention_mask=torch.ones_like(ids),
-                position_ids=pos,
-                max_new_tokens=deployment_budget,
-                do_sample=False,
-                use_cache=True,
-                eos_token_id=stop_id,
-                pad_token_id=pad_id,
-            )
-            generated = output[0, len(prompt):].detach().cpu().tolist()
-            if stop_id in generated:
-                end = generated.index(stop_id)
-                generated, finish = generated[:end], "stop"
-            else:
-                finish = "length"
-            text = tokenizer.decode(
-                generated, skip_special_tokens=True
-            ).strip()
-            row = score_generation(item, text, len(generated), finish)
-            row["condition"] = "student_censored_aligned_diagnostic"
-            row["generation_budget"] = deployment_budget
-            rows.append(row)
-    return rows
 
 
 def write_item_artifact(out_dir: Path, epoch: int, label: str,
@@ -1725,7 +1703,6 @@ def main():
         ):
             artifact = write_item_artifact(out_dir, epoch, label, result)
             summary = summarize_generation(result)
-            key = (label.split("_natural_", 1)[-1],)
             baseline_key = label.split("_natural_", 1)[-1]
             current = {
                 row["example_id"]: row["content_lcs"] for row in result
@@ -1787,8 +1764,9 @@ def main():
                 )
         if include_aligned:
             panel = choose_panel(selected, args.panel_per_corpus, args.seed)
-            aligned = aligned_generate_rows(
-                full, tokenizer, panel, device, stop_id
+            aligned, _unused_budget = generate_rows(
+                full, tokenizer, panel, device, stop_id, 1, "censored_ids",
+                "student_censored_aligned_diagnostic", aligned=True,
             )
             artifact = write_item_artifact(
                 out_dir, epoch, f"{scope}_aligned_diagnostic", aligned
