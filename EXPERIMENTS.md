@@ -18,17 +18,35 @@ schema `v6_metrics_v1`. No v6 scientific run has been launched or certified;
 `--preflight` output is mechanics only. Protocol and commands:
 `docs/trainv6_monolith.md`.
 
-Queue state (2026-08-25): the complete seed-17 model-by-law preflight matrix
-is queued for three hours per job: Gemma causal-residual `443195`, Gemma
-partial-teacher `443196`, Qwen causal-residual `443197`, and Qwen
-partial-teacher `443198`. All four pin `scripts/trainv6.py` SHA-256
+Subtractive refactor state (2026-08-26): four independently reviewed commits
+(`090eb5e`, `ea39276`, `0f4407b`, `9ed8ea7`) reduce the monolith from 2,255 to
+2,149 lines without changing its presets, intervention topology, local
+objective, metric denominators, or evaluation coverage. Current
+`scripts/trainv6.py` SHA-256 is
+`245a44441258c6380ab5aa1d9dd36b470a3779acc8b4853e0bc296eee8c77442`.
+The proposed orchestration-spine extraction was rejected because it would
+relocate unique stateful code or add a framework rather than subtract code.
+No foldable sections were added. These are source-review findings only: no
+local runtime test or Slurm preflight has completed on the refactored file.
+
+Queue state (2026-08-26): the current-hash seed-17 model-by-law preflight
+matrix is queued for three hours per job: Gemma causal-residual `443579`,
+Gemma partial-teacher `443580`, Qwen causal-residual `443581`, and Qwen
+partial-teacher `443582`. Each was submitted held, assigned
+`ExcNodeList=agpuh[01-03]`, verified, and only then released from the hold so
+it can accrue priority while remaining impossible to dispatch. All four pin
+the current SHA-256 above. Do not clear that exclusion until v5 jobs `438230`,
+`438302`, `438979` -> `438980`, and `438981` have reached terminal states and
+their artifacts have been reviewed. Thin-node v5 backstop `442712` remains
+intact. No v6 preflight has started and no v6 log is expected before that
+gate.
+
+The original pre-refactor placeholders `443195`--`443198` remain pending and
+fully excluded, but pin the obsolete SHA-256
 `b80327437a6410b40ae006b8a8d9c9a15d0d50ebf07cf5b910ed5e8bef9d64dd`.
-They are eligible and accruing age, but deliberately exclude the complete
-Hopper partition node set (`ExcNodeList=agpuh[01-03]`), so they cannot
-dispatch. Do not clear that exclusion until v5 jobs `438230`, `438302`,
-`438979` -> `438980`, and `438981` have reached terminal states and their
-artifacts have been reviewed. Thin-node v5 backstop `442712` remains intact.
-No v6 preflight has started and no v6 log is expected before that gate.
+They cannot test current source and their exclusions must never be cleared;
+cancel them only as an explicit queue-cleanup action after preserving the
+current-hash replacements above.
 
 CURRENT FOCUS (branch lwteacher, 2026-07-17): **pipeline-v4** — blockwise
 teacher-forced training with frozen teacher KV and attention censorship.
