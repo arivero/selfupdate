@@ -1497,8 +1497,7 @@ def main():
     destructive_intervals = 0
     certified = False
 
-    def frozen_forward_targets(batch, ids, mask, answer_spans,
-                               passage_spans, blocked):
+    def frozen_targets(ids, mask, passage_spans, blocked, selectors):
         with torch.no_grad(), frozen_base(), PassageBlocker(
             layers, blocked, passage_spans
         ) as blocker, taps.active():
@@ -1507,25 +1506,24 @@ def main():
         blocker.assert_fired()
         taps.reset()
         return [
-            [row.clone() for row in slice_rows(outputs[index], answer_spans)]
+            [outputs[index][row, selector].clone()
+             for row, selector in enumerate(selectors)]
             for index in all_layers
         ]
 
-    def frozen_anchor_targets(batch, ids, mask, passage_spans):
-        with torch.no_grad(), frozen_base(), PassageBlocker(
-            layers, all_layers, passage_spans
-        ) as blocker, taps.active():
-            stack(input_ids=ids, attention_mask=mask, use_cache=False)
-            outputs = list(taps.outputs)
-        blocker.assert_fired()
-        taps.reset()
-        return [
-            [
-                outputs[index][row, item["anchor_rows"]].clone()
-                for row, item in enumerate(batch)
+    def cached_frozen_rows(cache, batch, build):
+        if all(item["example_id"] in cache for item in batch):
+            return [[
+                cache[item["example_id"]][index].to(
+                    next(layers[index].parameters()).device
+                ) for item in batch
+            ] for index in all_layers]
+        rows = build()
+        for row, item in enumerate(batch):
+            cache[item["example_id"]] = [
+                rows[index][row].detach().cpu() for index in all_layers
             ]
-            for index in all_layers
-        ]
+        return rows
 
     def student_forward(ids, mask, passage_spans):
         with PassageBlocker(
@@ -1984,27 +1982,14 @@ def main():
                 batch, "prompt_ids", pad_id, device
             )
             if args.method == "partial_teacher":
-                cached = all(item["example_id"] in partial_cache for item in batch)
-                if cached:
-                    targets = [
-                        [
-                            partial_cache[item["example_id"]][index].to(
-                                next(layers[index].parameters()).device
-                            )
-                            for item in batch
-                        ]
-                        for index in all_layers
-                    ]
-                else:
-                    targets = frozen_forward_targets(
-                        batch, ids, mask, answer_spans,
-                        passage_spans, blocked_teacher,
+                targets = cached_frozen_rows(
+                    partial_cache, batch,
+                    lambda: frozen_targets(
+                        ids, mask, passage_spans, blocked_teacher,
+                        [slice(start, start + length)
+                         for start, length in answer_spans],
                     )
-                    for row, item in enumerate(batch):
-                        partial_cache[item["example_id"]] = [
-                            targets[index][row].detach().cpu()
-                            for index in all_layers
-                        ]
+                )
             outputs, inputs, calls = student_forward(
                 ids, mask, passage_spans
             )
@@ -2015,28 +2000,13 @@ def main():
             else:
                 effects = None
             if args.anchor_weight:
-                anchors_cached = all(
-                    item["example_id"] in anchor_cache for item in batch
-                )
-                if anchors_cached:
-                    anchors = [
-                        [
-                            anchor_cache[item["example_id"]][index].to(
-                                next(layers[index].parameters()).device
-                            )
-                            for item in batch
-                        ]
-                        for index in all_layers
-                    ]
-                else:
-                    anchors = frozen_anchor_targets(
-                        batch, ids, mask, passage_spans
+                anchors = cached_frozen_rows(
+                    anchor_cache, batch,
+                    lambda: frozen_targets(
+                        ids, mask, passage_spans, all_layers,
+                        [item["anchor_rows"] for item in batch],
                     )
-                    for row, item in enumerate(batch):
-                        anchor_cache[item["example_id"]] = [
-                            anchors[index][row].detach().cpu()
-                            for index in all_layers
-                        ]
+                )
             else:
                 anchors = [[] for _ in all_layers]
 
