@@ -93,10 +93,80 @@ CORPUS_PATHS = {
     "quij": "data/quijote/raw_ch4.txt",
 }
 
+EVAL_ONLY = {"evaluation_only": True, "used_for_backward": False, "optimizer_weight": 0.0}
+
+PROFILE_SPECS = {
+    "hidden_huber": ("hidden_huber_profile", "answer_tokens", "answer_token_weighted_mean"),
+    "lens_js": ("lens_js_profile", "answer_tokens", "answer_token_weighted_mean"),
+    "anchor": ("anchor_profile", "anchor_rows", "anchor_row_weighted_mean"),
+    "causal_effect_rms": ("causal_effect_rms_profile", "items", "item_weighted_mean"),
+}
+
 
 # ---------------------------------------------------------------------------
 # Small pure-Python primitives: data identity and metrics
 # ---------------------------------------------------------------------------
+
+class LayerMetricLedger:
+    """GPU-resident per-layer numerators with explicit epoch denominators."""
+
+    def __init__(self, layer_count: int):
+        self.sums = {name: [None] * layer_count for name in PROFILE_SPECS}
+        self.counts = {denominator: 0 for _, denominator, _ in PROFILE_SPECS.values()}
+
+    def count(self, answer_tokens: int, anchor_rows: int, items: int):
+        self.counts["answer_tokens"] += answer_tokens
+        self.counts["anchor_rows"] += anchor_rows
+        self.counts["items"] += items
+
+    def add(self, index: int, **numerators):
+        for name, value in numerators.items():
+            previous = self.sums[name][index]
+            self.sums[name][index] = value if previous is None else previous + value
+
+    def finish(self) -> tuple[dict, dict]:
+        profiles = {}
+        for name, (field, denominator, _aggregation) in PROFILE_SPECS.items():
+            values = self.sums[name]
+            profiles[field] = None if values[0] is None else [
+                float(value) / max(1, self.counts[denominator]) for value in values
+            ]
+        return profiles, {name: spec[2] for name, spec in PROFILE_SPECS.items()}
+
+
+def objective_gradient_attribution(objectives: dict, parameters, device) -> dict:
+    """Norm, share, and pairwise cosine for the three local objectives."""
+    import torch
+
+    grads = {
+        name: (torch.autograd.grad(value, parameters, retain_graph=True,
+                                   allow_unused=True)
+               if value is not None else tuple(None for _ in parameters))
+        for name, value in objectives.items()
+    }
+    zero = torch.zeros((), device=device)
+    squared = {
+        name: sum((grad.float().pow(2).sum() for grad in values
+                   if grad is not None), zero)
+        for name, values in grads.items()
+    }
+    norms = {name: value.sqrt() for name, value in squared.items()}
+    total = sum(norms.values(), zero).clamp_min(1e-30)
+    result = {
+        f"{name}_norm": norm.detach() for name, norm in norms.items()
+    } | {
+        f"{name}_share": (norm / total).detach() for name, norm in norms.items()
+    }
+    for left, right in (("hidden", "lens_js"), ("hidden", "anchor"),
+                        ("lens_js", "anchor")):
+        dot = sum((a.float().mul(b.float()).sum()
+                   for a, b in zip(grads[left], grads[right])
+                   if a is not None and b is not None), zero)
+        result[f"{left}_{right}_cosine"] = (
+            dot / (norms[left] * norms[right]).clamp_min(1e-30)
+        ).detach()
+    return result
+
 
 def load_jsonl(path: Path) -> list[dict]:
     with path.open(encoding="utf-8") as handle:
@@ -1001,10 +1071,8 @@ def output_eval(stack, lm_head, items, device, pad_id, softcap,
         "dataset_coverage": dataset_coverage,
         "token_coverage": "every_teacher_realized_answer_token",
         "answer_only": True,
-        "evaluation_only": True,
+        **EVAL_ONLY,
         "validation_subset": False,
-        "used_for_backward": False,
-        "optimizer_weight": 0.0,
         "aggregation": "token_weighted_mean",
         "inference_semantics": "teacher_forced_fixed_sequence_scoring",
         "teacher_forced": True,
@@ -1690,9 +1758,7 @@ def main():
                 paired_epoch0_groups=grouped_delta,
                 artifact=artifact,
                 evaluated_item_count=len(result),
-                evaluation_only=True,
-                used_for_backward=False,
-                optimizer_weight=0.0,
+                **EVAL_ONLY,
                 inference_semantics="autoregressive_greedy_rollout",
             )
         if include_teacher:
@@ -1717,9 +1783,7 @@ def main():
                     artifact=artifact,
                     exact_student_path=True,
                     evaluated_item_count=len(result),
-                    evaluation_only=True,
-                    used_for_backward=False,
-                    optimizer_weight=0.0,
+                    **EVAL_ONLY,
                 )
         if include_aligned:
             panel = choose_panel(selected, args.panel_per_corpus, args.seed)
@@ -1739,9 +1803,7 @@ def main():
                 summary=summarize_generation(aligned),
                 artifact=artifact,
                 evaluated_item_count=len(aligned),
-                evaluation_only=True,
-                used_for_backward=False,
-                optimizer_weight=0.0,
+                **EVAL_ONLY,
             )
         return summarize_generation(rows), paired_bootstrap(
             {row["example_id"]: row["content_lcs"] for row in rows},
@@ -1789,9 +1851,7 @@ def main():
             "standard_eval",
             epoch=epoch,
             **standard,
-            evaluation_only=True,
-            used_for_backward=False,
-            optimizer_weight=0.0,
+            **EVAL_ONLY,
         )
 
         if epoch == 0:
@@ -1937,15 +1997,9 @@ def main():
             for first in range(0, len(ordered), args.micro_batch)
         ]
         random.Random(args.seed * 1000 + epoch).shuffle(batches)
-        hidden_sums = [None] * len(layers)
-        js_sums = [None] * len(layers)
-        anchor_sums = [None] * len(layers)
-        causal_sums = [None] * len(layers)
+        layer_metrics = LayerMetricLedger(len(layers))
         grad_attr = [None] * len(layers)
         grad_norm_sum, grad_steps = 0.0, 0
-        answer_metric_rows = 0
-        anchor_metric_rows = 0
-        effect_metric_items = 0
         optimizer.zero_grad(set_to_none=True)
         for batch_index, batch in enumerate(batches):
             ids, mask, answer_spans, passage_spans, _lengths = collate(
@@ -2024,9 +2078,9 @@ def main():
             anchor_rows_this_batch = sum(
                 len(item["anchor_rows"]) for item in batch
             )
-            answer_metric_rows += answer_rows_this_batch
-            anchor_metric_rows += anchor_rows_this_batch
-            effect_metric_items += len(batch)
+            layer_metrics.count(
+                answer_rows_this_batch, anchor_rows_this_batch, len(batch)
+            )
             for index in all_layers:
                 hidden, js, anchor, total = layer_loss(
                     index, outputs, inputs, targets, anchors,
@@ -2034,91 +2088,28 @@ def main():
                 )
                 if attribute:
                     parameters = trainable_by_layer[index]
-                    gh = torch.autograd.grad(
-                        args.hidden_weight * hidden,
+                    grad_attr[index] = objective_gradient_attribution(
+                        {
+                            "hidden": args.hidden_weight * hidden,
+                            "lens_js": args.lens_js_weight * js,
+                            "anchor": (args.anchor_weight * anchor
+                                       if args.anchor_weight
+                                       and anchor.requires_grad else None),
+                        },
                         parameters,
-                        retain_graph=True,
-                        allow_unused=True,
+                        hidden.device,
                     )
-                    gj = torch.autograd.grad(
-                        args.lens_js_weight * js,
-                        parameters,
-                        retain_graph=True,
-                        allow_unused=True,
-                    )
-                    ga = (
-                        torch.autograd.grad(
-                            args.anchor_weight * anchor,
-                            parameters,
-                            retain_graph=True,
-                            allow_unused=True,
-                        )
-                        if args.anchor_weight and anchor.requires_grad
-                        else tuple(None for _ in parameters)
-                    )
-                    zero = torch.zeros((), device=hidden.device)
-                    h2 = sum((
-                        grad.float().pow(2).sum()
-                        for grad in gh if grad is not None
-                    ), zero)
-                    j2 = sum((
-                        grad.float().pow(2).sum()
-                        for grad in gj if grad is not None
-                    ), zero)
-                    a2 = sum((
-                        grad.float().pow(2).sum()
-                        for grad in ga if grad is not None
-                    ), zero)
-                    dot_hj = sum((
-                        left.float().mul(right.float()).sum()
-                        for left, right in zip(gh, gj)
-                        if left is not None and right is not None
-                    ), zero)
-                    dot_ha = sum((
-                        left.float().mul(right.float()).sum()
-                        for left, right in zip(gh, ga)
-                        if left is not None and right is not None
-                    ), zero)
-                    dot_ja = sum((
-                        left.float().mul(right.float()).sum()
-                        for left, right in zip(gj, ga)
-                        if left is not None and right is not None
-                    ), zero)
-                    hn, jn, an = h2.sqrt(), j2.sqrt(), a2.sqrt()
-                    norm_sum = (hn + jn + an).clamp_min(1e-30)
-                    grad_attr[index] = {
-                        "hidden_norm": hn.detach(),
-                        "lens_js_norm": jn.detach(),
-                        "anchor_norm": an.detach(),
-                        "hidden_share": (hn / norm_sum).detach(),
-                        "lens_js_share": (jn / norm_sum).detach(),
-                        "anchor_share": (an / norm_sum).detach(),
-                        "hidden_lens_js_cosine": (
-                            dot_hj / (hn * jn).clamp_min(1e-30)
-                        ).detach(),
-                        "hidden_anchor_cosine": (
-                            dot_ha / (hn * an).clamp_min(1e-30)
-                        ).detach(),
-                        "lens_js_anchor_cosine": (
-                            dot_ja / (jn * an).clamp_min(1e-30)
-                        ).detach(),
-                    }
                 (
                     total / (len(layers) * args.grad_accum)
                 ).backward()
-                for store, value in (
-                    (hidden_sums, hidden.detach() * answer_rows_this_batch),
-                    (js_sums, js.detach() * answer_rows_this_batch),
-                    (anchor_sums, anchor.detach() * anchor_rows_this_batch),
-                ):
-                    store[index] = value if store[index] is None else (
-                        store[index] + value
-                    )
-                if effects is not None:
-                    value = sum(effects[index])
-                    causal_sums[index] = value if causal_sums[index] is None else (
-                        causal_sums[index] + value
-                    )
+                layer_metrics.add(
+                    index,
+                    hidden_huber=hidden.detach() * answer_rows_this_batch,
+                    lens_js=js.detach() * answer_rows_this_batch,
+                    anchor=anchor.detach() * anchor_rows_this_batch,
+                    **({"causal_effect_rms": sum(effects[index])}
+                       if effects is not None else {}),
+                )
             items_seen += len(batch)
             if (
                 (batch_index + 1) % args.grad_accum == 0
@@ -2136,19 +2127,10 @@ def main():
                 optimizer.zero_grad(set_to_none=True)
             del outputs, inputs, calls, targets, anchors
 
-        hidden_profile = [
-            float(value) / max(1, answer_metric_rows) for value in hidden_sums
-        ]
-        js_profile = [
-            float(value) / max(1, answer_metric_rows) for value in js_sums
-        ]
-        anchor_profile = [
-            float(value) / max(1, anchor_metric_rows) for value in anchor_sums
-        ]
-        causal_profile = (
-            [float(value) / max(1, effect_metric_items) for value in causal_sums]
-            if args.method == "causal_residual" else None
-        )
+        profiles, profile_aggregation = layer_metrics.finish()
+        hidden_profile = profiles["hidden_huber_profile"]
+        js_profile = profiles["lens_js_profile"]
+        anchor_profile = profiles["anchor_profile"]
         grad_attr = [
             ({name: float(value) for name, value in row.items()}
              if row is not None else None)
@@ -2179,10 +2161,7 @@ def main():
             items_seen=items_seen,
             seconds=time.time() - started,
             mean_local_loss=mean_local,
-            hidden_huber_profile=hidden_profile,
-            lens_js_profile=js_profile,
-            anchor_profile=anchor_profile,
-            causal_effect_rms_profile=causal_profile,
+            **profiles,
             gradient_attribution=grad_attr,
             adapter_delta_l2_profile=deltas,
             mean_preclip_grad_norm=grad_norm_sum / max(1, grad_steps),
@@ -2191,12 +2170,7 @@ def main():
                 "lens_js": args.lens_js_weight,
                 "anchor": args.anchor_weight,
             },
-            profile_aggregation={
-                "hidden_huber": "answer_token_weighted_mean",
-                "lens_js": "answer_token_weighted_mean",
-                "anchor": "anchor_row_weighted_mean",
-                "causal_effect_rms": "item_weighted_mean",
-            },
+            profile_aggregation=profile_aggregation,
             depth_uniform=True,
         )
         vocab_tripwire()
