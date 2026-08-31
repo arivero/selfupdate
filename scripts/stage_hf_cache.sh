@@ -28,12 +28,56 @@ snapshot_dir() {
   fi
 }
 
+snapshot_has_weights() {
+  local snapshot="$1" candidate
+  for candidate in \
+    "$snapshot/model.safetensors" \
+    "$snapshot/model.safetensors.index.json" \
+    "$snapshot/pytorch_model.bin" \
+    "$snapshot/pytorch_model.bin.index.json"; do
+    [[ -s "$candidate" ]] && return 0
+  done
+  return 1
+}
+
+select_weight_revision() {
+  local model_root="$1" revision candidate
+  local candidates=()
+  if [[ -s "$model_root/refs/main" ]]; then
+    read -r revision < "$model_root/refs/main"
+    if [[ "$revision" =~ ^[0-9a-f]{40}$ ]] \
+        && snapshot_has_weights "$model_root/snapshots/$revision"; then
+      printf '%s\n' "$revision"
+      return 0
+    fi
+  fi
+
+  # Tokenizer-only Hub accesses can advance refs/main without downloading the
+  # corresponding weights.  Fall back only when the cache has one unambiguous
+  # weight-bearing snapshot; multiple candidates require an explicit cache fix
+  # rather than a silent revision choice.
+  shopt -s nullglob
+  for candidate in "$model_root"/snapshots/*; do
+    snapshot_has_weights "$candidate" && candidates+=("$(basename "$candidate")")
+  done
+  shopt -u nullglob
+  if [[ ${#candidates[@]} -ne 1 ]]; then
+    echo "cannot select unique weight snapshot in $model_root: ${candidates[*]:-(none)}" >&2
+    return 1
+  fi
+  printf '%s\n' "${candidates[0]}"
+}
+
+declare -A MODEL_REVISIONS
+
 for model in "${MODELS[@]}"; do
   snap="$(snapshot_dir "$model")"
   [[ -d "$SOURCE/hub/$snap" ]] || {
     echo "missing source snapshot: $SOURCE/hub/$snap" >&2
     exit 2
   }
+  MODEL_REVISIONS["$snap"]="$(select_weight_revision "$SOURCE/hub/$snap")" \
+    || exit 2
 done
 
 if [[ "$SHM_MODE" -eq 1 && "${SELFUPDATE_SHM_LEASE_GC:-0}" == 1 ]]; then
@@ -57,8 +101,24 @@ flock 9
 rm -f "$DEST/.selfupdate-hf-stage-ready"
 for model in "${MODELS[@]}"; do
   snap="$(snapshot_dir "$model")"
+  revision="${MODEL_REVISIONS[$snap]}"
   echo "staging $model -> $DEST" >&2
   rsync -aH --partial "$SOURCE/hub/$snap" "$DEST/hub/"
+  staged_root="$DEST/hub/$snap"
+  staged_snapshot="$staged_root/snapshots/$revision"
+  snapshot_has_weights "$staged_snapshot" || {
+    echo "staged snapshot has no model weights: $staged_snapshot" >&2
+    exit 2
+  }
+  if find "$staged_snapshot" -xtype l -print -quit | grep -q .; then
+    echo "staged snapshot contains broken links: $staged_snapshot" >&2
+    exit 2
+  fi
+  mkdir -p "$staged_root/refs"
+  ref_tmp="$(mktemp "$staged_root/refs/.main.XXXXXX")"
+  printf '%s\n' "$revision" > "$ref_tmp"
+  mv -f "$ref_tmp" "$staged_root/refs/main"
+  echo "staged revision: $model@$revision" >&2
 done
 touch "$DEST/.selfupdate-hf-stage-ready"
 echo "ready: $DEST (point HF_HOME at this cache to use it)"
