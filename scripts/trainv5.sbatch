@@ -52,8 +52,10 @@ export HF_HOME="/dev/shm/$USER/selfupdate-hf-cache"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 [[ -f "$HF_HOME/.selfupdate-hf-stage-ready" ]] || fail "HF SHM stage not ready"
 
-# data-path gate before touching the GPUs: the round-trip guard must pass
-"$PY" scripts/trainv5.py --dry-data || fail "data reconstruction gate"
+# Data-path gate before touching the GPUs: validate the exact model and
+# artifacts named by this launch.  A cross-model Qwen job must not silently
+# certify the default Gemma inputs and then train different arguments.
+"$PY" scripts/trainv5.py "$@" --dry-data || fail "data reconstruction gate"
 
 "$PY" scripts/trainv5.py "$@" || fail "trainv5"
 echo "==== trainv5 complete $(date -Is) ===="
