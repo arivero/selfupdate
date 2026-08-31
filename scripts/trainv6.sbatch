@@ -53,8 +53,12 @@ export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1
 export HF_HUB_DISABLE_PROGRESS_BARS=1
 export TRANSFORMERS_VERBOSITY=error
-export TRITON_CACHE_DIR="/tmp/$USER/selfupdate-v6-triton"
-export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-v6-torchinductor"
+source scripts/job_tmp_runtime.sh
+selfupdate_job_tmp_init selfupdate-v6
+
+# v6 owns its vendored ARC/HellaSwag evaluator and imports neither datasets
+# nor selfupdate.eval.standard.  Avoid installing obsolete evaluator extras.
+export SELFUPDATE_VENV_CORE_ONLY=1
 
 echo "==== trainv6 start preset=$PRESET model=$MODEL commit=$(git rev-parse HEAD) $(date -Is) ===="
 
@@ -70,8 +74,8 @@ fi
 
 scripts/venv_setup.sh || fail "venv setup"
 scripts/venv_check.sh || fail "venv check"
+selfupdate_job_tmp_prune_install_cache
 PY="/tmp/$USER/selfupdate-venv/bin/python"
-export PYTHONPYCACHEPREFIX="/tmp/$USER/selfupdate-v6-pycache-$SLURM_JOB_ID"
 
 scripts/stage_hf_cache.sh --shm "$MODEL" || fail "model staging"
 export HF_HOME="/dev/shm/$USER/selfupdate-hf-cache"

@@ -28,13 +28,15 @@ fi
 export SSL_CERT_FILE="${SELFUPDATE_SSL_CERT_FILE:?set in .campaign_env.sh}"
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 export TQDM_DISABLE=1 HF_HUB_DISABLE_PROGRESS_BARS=1 TRANSFORMERS_VERBOSITY=error
-export TRITON_CACHE_DIR="/tmp/$USER/selfupdate-triton"
-export TORCHINDUCTOR_CACHE_DIR="/tmp/$USER/selfupdate-torchinductor"
+source scripts/job_tmp_runtime.sh
+selfupdate_job_tmp_init selfupdate-v5
+export SELFUPDATE_VENV_CORE_ONLY=0
 
 MODEL="google/gemma-4-31B-it"
 echo "==== teacher ceiling probe start commit=$(git rev-parse HEAD) $(date -Is) ===="
 scripts/venv_setup.sh || fail "venv setup"
 scripts/venv_check.sh || fail "venv check"
+selfupdate_job_tmp_prune_install_cache
 PY="/tmp/$USER/selfupdate-venv/bin/python"
 scripts/stage_hf_cache.sh --shm "$MODEL" || fail "model staging"
 export HF_HOME="/dev/shm/$USER/selfupdate-hf-cache"

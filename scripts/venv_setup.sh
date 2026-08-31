@@ -40,6 +40,7 @@ PYTHON_VERSION="${SELFUPDATE_PYTHON_VERSION:-3.12}"
 # restricted to this user's node-local /tmp subtree.
 VENV="$(realpath -m -- "$VENV")"
 VENV_PARENT="$(realpath -m -- "/tmp/$USER")"
+mkdir -p -- "$VENV_PARENT"
 remove_disposable_venv() {
   if [[ "$VENV" == "$VENV_PARENT" || "$VENV" != "$VENV_PARENT/"* ]]; then
     echo "error: refusing to delete venv outside $VENV_PARENT: $VENV" >&2
@@ -62,14 +63,50 @@ export SSL_CERT_FILE="${SSL_CERT_FILE:-/fs/agustina/arivero/supercomplex/.local/
 # Keep the uv download cache node-local as well; it is disposable.
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/$USER/uv-cache}"
 
+# Several full-node jobs can transition within seconds on the same host.  A
+# node-local lock prevents one launch from checking a venv while another is
+# deleting or populating it.
+exec 9>"$VENV_PARENT/.selfupdate-venv-setup.lock"
+flock -x 9
+
+venv_has_core() {
+  [[ -x "$VENV/bin/python" && -f "$VENV/pyvenv.cfg" ]] || return 1
+  "$VENV/bin/python" - <<'PY' >/dev/null 2>&1
+from importlib.metadata import version
+
+expected = {
+    "torch": "2.11.0+cu128",
+    "transformers": "5.12.1",
+    "kernels": "0.12.0",
+    "safetensors": "0.8.0",
+    "accelerate": "1.14.0",
+    "peft": "0.19.1",
+}
+raise SystemExit(any(version(name) != want for name, want in expected.items()))
+PY
+}
+
+venv_has_optional() {
+  "$VENV/bin/python" - <<'PY' >/dev/null 2>&1
+from importlib.metadata import version
+
+expected = {"datasets": "5.0.0", "nvidia-ml-py": "13.610.43"}
+raise SystemExit(any(version(name) != want for name, want in expected.items()))
+PY
+}
+
 if [[ "${1:-}" == "--force" ]]; then
   remove_disposable_venv
 fi
-if [[ -x "$VENV/bin/python" && -f "$VENV/pyvenv.cfg" ]]; then
-  echo "venv already present: $VENV  (use --force to rebuild)"
-  exit 0
-fi
-if [[ -e "$VENV" || -L "$VENV" ]]; then
+CORE_READY=0
+venv_has_core && CORE_READY=1
+if [[ "$CORE_READY" == 1 ]]; then
+  if [[ "${SELFUPDATE_VENV_CORE_ONLY:-0}" == 1 ]] || venv_has_optional; then
+    echo "venv already present: $VENV  (use --force to rebuild)"
+    exit 0
+  fi
+  echo "core venv present; installing missing optional runtime" >&2
+elif [[ -e "$VENV" || -L "$VENV" ]]; then
   echo "removing incomplete node-local venv: $VENV" >&2
   remove_disposable_venv
 fi
@@ -96,23 +133,29 @@ fi
 # pinned in the requirements file, which is what actually bounds the risk.
 UV_INDEX_ARGS=(--index-strategy unsafe-best-match)
 
-echo "building $VENV (python $PYTHON_VERSION) from $(basename "$REQS") ..."
-"$UV" venv "$VENV" --python "$PYTHON_VERSION"
-"$UV" pip install --python "$VENV/bin/python" "${UV_INDEX_ARGS[@]}" -r "$REQS"
+if [[ "$CORE_READY" == 0 ]]; then
+  echo "building $VENV (python $PYTHON_VERSION) from $(basename "$REQS") ..."
+  "$UV" venv "$VENV" --python "$PYTHON_VERSION"
+  "$UV" pip install --python "$VENV/bin/python" "${UV_INDEX_ARGS[@]}" -r "$REQS"
+  venv_has_core || { echo "error: core venv install did not validate" >&2; exit 1; }
+fi
 
-# requirements-optional.txt is named "optional" but is NOT optional for
-# training: src/selfupdate/eval/standard.py does a module-level
+# requirements-optional.txt is named "optional" but is NOT optional for the
+# supported trainer: src/selfupdate/eval/standard.py does a module-level
 # `from datasets import load_dataset`, and any config with
 # eval.standard_damage_every_epochs > 0 (i.e. the normal ones) reaches it
 # during epoch-zero telemetry. Skipping it dies with
 # "ModuleNotFoundError: No module named 'datasets'" AFTER model load, teacher
 # cache load and epoch-zero recall -- minutes of GPU time in. Installed by
-# default; set SELFUPDATE_VENV_CORE_ONLY=1 for a deliberately eval-free node.
+# default. Set SELFUPDATE_VENV_CORE_ONLY=1 only for a self-contained entry
+# point (currently trainv6.py) that owns its vendored standard evaluator and
+# does not import selfupdate.eval.standard.
 # The library is needed even though the standard subsets are vendored under
 # data/eval/ at pinned revisions; vendoring removes the DOWNLOAD, not the
 # import.
 if [[ "${SELFUPDATE_VENV_CORE_ONLY:-0}" != "1" ]]; then
   "$UV" pip install --python "$VENV/bin/python" "${UV_INDEX_ARGS[@]}" -r "$ROOT/requirements-optional.txt"
+  venv_has_optional || { echo "error: optional venv install did not validate" >&2; exit 1; }
 fi
 
 echo
