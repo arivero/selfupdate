@@ -27,26 +27,35 @@ objective, metric denominators, or evaluation coverage. Current
 The proposed orchestration-spine extraction was rejected because it would
 relocate unique stateful code or add a framework rather than subtract code.
 No foldable sections were added. These are source-review findings only: no
-local runtime test or Slurm preflight has completed on the refactored file.
+local runtime test was used. Queued launches have passed Python compilation
+and the v6 metric self-test, but no model-matched v6 preflight has yet
+completed.
 
-Queue state (2026-08-26): the current-hash seed-17 model-by-law preflight
-matrix is queued for three hours per job: Gemma causal-residual `443579`,
-Gemma partial-teacher `443580`, Qwen causal-residual `443581`, and Qwen
-partial-teacher `443582`. Each was submitted held, assigned
-`ExcNodeList=agpuh[01-03]`, verified, and only then released from the hold so
-it can accrue priority while remaining impossible to dispatch. All four pin
-the current SHA-256 above. Do not clear that exclusion until v5 jobs `438230`,
-`438302`, `438979` -> `438980`, and `438981` have reached terminal states and
-their artifacts have been reviewed. Thin-node v5 backstop `442712` remains
-intact. No v6 preflight has started and no v6 log is expected before that
-gate.
+Queue state (2026-08-31): v6 is independent of v5. The current independent,
+unheld seed-17 model-by-law preflight matrix is Gemma causal-residual
+`447893`, Gemma partial-teacher `447894`, Qwen causal-residual `447895`, and
+Qwen partial-teacher `447896`. Each requests exactly one `agpuh01` node and
+four H100s for three hours, has no Slurm dependency, and pins the current
+`trainv6.py` SHA-256 above. They are waiting for resources and accruing their
+own priority. Their run names end in `_s17_r4`, keeping artifacts separate
+from failed bootstrap attempts.
 
-The original pre-refactor placeholders `443195`--`443198` remain pending and
-fully excluded, but pin the obsolete SHA-256
-`b80327437a6410b40ae006b8a8d9c9a15d0d50ebf07cf5b910ed5e8bef9d64dd`.
-They cannot test current source and their exclusions must never be cleared;
-cancel them only as an explicit queue-cleanup action after preserving the
-current-hash replacements above.
+The active v5 recovery chain remains operationally prior but is not a v6
+dependency: warm continuation `447881` is running on `agpuh02`; Qwen smoke
+`447882` has `afterany:447881`; Qwen long `447883` has `afterok:447882`; and
+the independent low-priority teacher ceiling `447884` waits on `agpuh01`.
+The first three are routed to `agpuh02` so the dependency chain can retain a
+working node-local runtime.
+
+Bootstrap incident record: old matrices `443195`--`443198`,
+`443579`--`443582`, and their failed replacements were cancelled or reached
+terminal failure. They exposed a full shared `/tmp`, concurrent incomplete
+venv construction, and a staged Hugging Face `refs/main` line terminator.
+The runtime is now serialized and job-local except for the reusable venv;
+staging selects a weight-bearing revision and writes the Hub ref as the exact
+40-byte commit. Queued gate `447892` verified offline resolution of config,
+tokenizer, and weight index plus `Gemma4Config`/`GemmaTokenizer` construction.
+No network download was required.
 
 CURRENT FOCUS (branch lwteacher, 2026-07-17): **pipeline-v4** — blockwise
 teacher-forced training with frozen teacher KV and attention censorship.
