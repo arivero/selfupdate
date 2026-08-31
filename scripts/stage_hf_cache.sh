@@ -116,8 +116,15 @@ for model in "${MODELS[@]}"; do
   fi
   mkdir -p "$staged_root/refs"
   ref_tmp="$(mktemp "$staged_root/refs/.main.XXXXXX")"
-  printf '%s\n' "$revision" > "$ref_tmp"
+  # huggingface_hub reads refs verbatim (without stripping whitespace) before
+  # comparing them with snapshot directory names.  Its own cache writer emits
+  # the commit without a line terminator, so preserve that exact contract.
+  printf '%s' "$revision" > "$ref_tmp"
   mv -f "$ref_tmp" "$staged_root/refs/main"
+  cmp -s <(printf '%s' "$revision") "$staged_root/refs/main" || {
+    echo "staged ref is not the exact revision: $staged_root/refs/main" >&2
+    exit 2
+  }
   echo "staged revision: $model@$revision" >&2
 done
 touch "$DEST/.selfupdate-hf-stage-ready"
