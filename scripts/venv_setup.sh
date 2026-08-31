@@ -33,6 +33,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV="${SELFUPDATE_VENV:-/tmp/$USER/selfupdate-venv}"
 PYTHON_VERSION="${SELFUPDATE_PYTHON_VERSION:-3.12}"
 
+# A cancelled build can leave the target directory behind before uv has
+# written pyvenv.cfg/bin/python.  uv deliberately refuses to overlay that
+# directory, so recognize and discard this one disposable state here rather
+# than making every batch wrapper special-case it.  Automatic deletion is
+# restricted to this user's node-local /tmp subtree.
+VENV="$(realpath -m -- "$VENV")"
+VENV_PARENT="$(realpath -m -- "/tmp/$USER")"
+remove_disposable_venv() {
+  if [[ "$VENV" == "$VENV_PARENT" || "$VENV" != "$VENV_PARENT/"* ]]; then
+    echo "error: refusing to delete venv outside $VENV_PARENT: $VENV" >&2
+    exit 1
+  fi
+  rm -rf -- "$VENV"
+}
+
 # uv resolves and installs far faster than pip and is already on this cluster.
 UV="${UV:-$(command -v uv || true)}"
 if [[ -z "$UV" ]]; then
@@ -48,11 +63,15 @@ export SSL_CERT_FILE="${SSL_CERT_FILE:-/fs/agustina/arivero/supercomplex/.local/
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/$USER/uv-cache}"
 
 if [[ "${1:-}" == "--force" ]]; then
-  rm -rf "$VENV"
+  remove_disposable_venv
 fi
-if [[ -x "$VENV/bin/python" ]]; then
+if [[ -x "$VENV/bin/python" && -f "$VENV/pyvenv.cfg" ]]; then
   echo "venv already present: $VENV  (use --force to rebuild)"
   exit 0
+fi
+if [[ -e "$VENV" || -L "$VENV" ]]; then
+  echo "removing incomplete node-local venv: $VENV" >&2
+  remove_disposable_venv
 fi
 
 # requirements-cu128.txt is the ONE source of truth for the pins -- do not
