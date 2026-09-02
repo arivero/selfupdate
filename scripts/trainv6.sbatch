@@ -81,6 +81,11 @@ scripts/stage_hf_cache.sh --shm "$MODEL" || fail "model staging"
 export HF_HOME="/dev/shm/$USER/selfupdate-hf-cache"
 export HF_HUB_OFFLINE=1
 [[ -f "$HF_HOME/.selfupdate-hf-stage-ready" ]] || fail "HF SHM stage not ready"
+MODEL_CACHE_ROOT="$HF_HOME/hub/models--${MODEL//\//--}"
+SELFUPDATE_HF_MODEL_REVISION="$(< "$MODEL_CACHE_ROOT/refs/main")"
+[[ "$SELFUPDATE_HF_MODEL_REVISION" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "staged model ref is not an exact commit"
+export SELFUPDATE_HF_MODEL_REVISION
 
 "$PY" -m py_compile scripts/trainv6.py \
   || fail "monolith compile gate"
