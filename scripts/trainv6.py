@@ -140,7 +140,7 @@ class LayerMetricLedger:
 
 
 def objective_gradient_attribution(objectives: dict, parameters, device) -> dict:
-    """Norm, share, and pairwise cosine for the three local objectives."""
+    """Return additive statistics for objective attribution."""
     import torch
 
     grads = {
@@ -155,21 +155,44 @@ def objective_gradient_attribution(objectives: dict, parameters, device) -> dict
                    if grad is not None), zero)
         for name, values in grads.items()
     }
-    norms = {name: value.sqrt() for name, value in squared.items()}
-    total = sum(norms.values(), zero).clamp_min(1e-30)
     result = {
-        f"{name}_norm": norm.detach() for name, norm in norms.items()
-    } | {
-        f"{name}_share": (norm / total).detach() for name, norm in norms.items()
+        f"{name}_norm_sq": value.detach()
+        for name, value in squared.items()
     }
     for left, right in (("hidden", "lens_js"), ("hidden", "anchor"),
                         ("lens_js", "anchor")):
         dot = sum((a.float().mul(b.float()).sum()
                    for a, b in zip(grads[left], grads[right])
                    if a is not None and b is not None), zero)
+        result[f"{left}_{right}_dot"] = dot.detach()
+    return result
+
+
+def finish_gradient_attribution(sums: dict, count: int) -> dict:
+    """Derive RMS norms, shares, and concatenated-gradient cosines."""
+    names = ("hidden", "lens_js", "anchor")
+    pairs = (("hidden", "lens_js"), ("hidden", "anchor"),
+             ("lens_js", "anchor"))
+    mean_sq = {
+        name: max(0.0, float(sums[f"{name}_norm_sq"] / count))
+        for name in names
+    }
+    norms = {name: math.sqrt(value) for name, value in mean_sq.items()}
+    total = sum(norms.values())
+    defined = total > 0.0
+    result = {
+        **{f"{name}_norm": norms[name] for name in names},
+        **{f"{name}_share": norms[name] / total if defined else None
+           for name in names},
+        "total_norm": total,
+        "share_defined": defined,
+    }
+    for left, right in pairs:
+        denominator = norms[left] * norms[right]
+        mean_dot = float(sums[f"{left}_{right}_dot"] / count)
         result[f"{left}_{right}_cosine"] = (
-            dot / (norms[left] * norms[right]).clamp_min(1e-30)
-        ).detach()
+            mean_dot / denominator if denominator > 0.0 else None
+        )
     return result
 
 
@@ -483,6 +506,22 @@ def self_test_metrics() -> None:
         "uno dos", 2, "stop",
     )
     assert direct["first_content_word_correct"]
+    zero = finish_gradient_attribution({
+        "hidden_norm_sq": 0.0, "lens_js_norm_sq": 0.0,
+        "anchor_norm_sq": 0.0, "hidden_lens_js_dot": 0.0,
+        "hidden_anchor_dot": 0.0, "lens_js_anchor_dot": 0.0,
+    }, 1)
+    assert not zero["share_defined"] and zero["total_norm"] == 0.0
+    assert all(zero[f"{name}_share"] is None
+               for name in ("hidden", "lens_js", "anchor"))
+    signal = finish_gradient_attribution({
+        "hidden_norm_sq": 4.0, "lens_js_norm_sq": 1.0,
+        "anchor_norm_sq": 0.0, "hidden_lens_js_dot": 1.0,
+        "hidden_anchor_dot": 0.0, "lens_js_anchor_dot": 0.0,
+    }, 1)
+    assert signal["share_defined"]
+    assert abs(signal["hidden_share"] - 2 / 3) < 1e-12
+    assert abs(signal["hidden_lens_js_cosine"] - 0.5) < 1e-12
     print("v6 metric self-test: PASS")
 
 
@@ -2225,24 +2264,41 @@ def main():
                 set(grad_attr_batch_keys_seen) != attribution_batch_keys):
             raise RuntimeError("METRIC GATE: attribution panel coverage mismatch")
         grad_attr = [
-            ({name: float(value / len(grad_attr_batch_keys_seen))
-              for name, value in row.items()}
+            (finish_gradient_attribution(row, len(grad_attr_batch_keys_seen))
              if row is not None else None)
             for row in grad_attr_sums
         ]
         for row in (entry for entry in grad_attr if entry is not None):
-            if not all(math.isfinite(value) for value in row.values()):
+            numeric = [
+                value for value in row.values()
+                if isinstance(value, (int, float))
+                and not isinstance(value, bool)
+            ]
+            if not all(math.isfinite(value) for value in numeric):
                 raise RuntimeError("METRIC GATE: non-finite gradient attribution")
-            share = sum(
-                row[f"{name}_share"] for name in ("hidden", "lens_js", "anchor")
-            )
-            norm = sum(
-                row[f"{name}_norm"] for name in ("hidden", "lens_js", "anchor")
-            )
-            if norm > 0 and abs(share - 1.0) > 1e-4:
+            shares = [
+                row[f"{name}_share"]
+                for name in ("hidden", "lens_js", "anchor")
+            ]
+            if row["share_defined"] and (
+                    any(value is None for value in shares)
+                    or abs(sum(shares) - 1.0) > 1e-4):
                 raise RuntimeError(
-                    f"METRIC GATE: objective gradient shares sum to {share}"
+                    f"METRIC GATE: invalid objective gradient shares {shares}"
                 )
+            if not row["share_defined"] and (
+                    row["total_norm"] != 0.0
+                    or any(value is not None for value in shares)):
+                raise RuntimeError("METRIC GATE: zero-signal shares are defined")
+            cosines = [
+                row[f"{left}_{right}_cosine"]
+                for left, right in (("hidden", "lens_js"),
+                                    ("hidden", "anchor"),
+                                    ("lens_js", "anchor"))
+            ]
+            if any(value is not None and abs(value) > 1.0001
+                   for value in cosines):
+                raise RuntimeError("METRIC GATE: gradient cosine outside [-1, 1]")
         deltas = [0.0] * len(layers)
         with torch.no_grad():
             for name, parameter in named_trainable:
@@ -2272,7 +2328,9 @@ def main():
             gradient_attribution=grad_attr,
             gradient_attribution_scope={
                 "selection": "fixed_one_item_per_corpus_or_chapter_stratum",
-                "aggregation": "mean_of_fixed_batch_gradient_summaries",
+                "aggregation": (
+                    "rms_norms_and_concatenated_cosines_over_fixed_batches"
+                ),
                 "trigger_item_ids": attribution_probe_ids,
                 "evaluated_item_ids": sorted(grad_attr_item_ids),
                 "evaluated_item_count": len(grad_attr_item_ids),
