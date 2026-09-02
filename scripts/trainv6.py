@@ -36,6 +36,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import subprocess
@@ -124,14 +125,18 @@ class LayerMetricLedger:
             previous = self.sums[name][index]
             self.sums[name][index] = value if previous is None else previous + value
 
-    def finish(self) -> tuple[dict, dict]:
+    def finish(self) -> tuple[dict, dict, dict]:
         profiles = {}
         for name, (field, denominator, _aggregation) in PROFILE_SPECS.items():
             values = self.sums[name]
             profiles[field] = None if values[0] is None else [
                 float(value) / max(1, self.counts[denominator]) for value in values
             ]
-        return profiles, {name: spec[2] for name, spec in PROFILE_SPECS.items()}
+        return (
+            profiles,
+            {name: spec[2] for name, spec in PROFILE_SPECS.items()},
+            dict(self.counts),
+        )
 
 
 def objective_gradient_attribution(objectives: dict, parameters, device) -> dict:
@@ -205,19 +210,6 @@ def words(text: str) -> list[str]:
     if current:
         out.append("".join(current))
     return out
-
-
-def words_with_blanks(text: str) -> list[str]:
-    """Tokenize a cloze fragment like words(), retaining each ___ marker."""
-    marker = "\u0000blank\u0000"
-    protected = text.replace("___", f" {marker} ")
-    result = []
-    for piece in protected.split():
-        if piece == marker:
-            result.append("___")
-        else:
-            result.extend(words(piece))
-    return result
 
 
 def lcs_length(left: list[str], right: list[str]) -> int:
@@ -361,7 +353,13 @@ def score_generation(item: dict, text: str, token_count: int,
         "teacher_answer_lcs": round(teacher, 6),
         "content_exact": output_words == canonical_words,
         "recitation": content >= 0.9,
-        "first_content_token_correct": bool(prefix),
+        "first_content_word_correct": bool(
+            canonical_words and output_words
+            and output_words[0] == canonical_words[0]
+        ),
+        "canonical_first_word_present": bool(
+            canonical_words and canonical_words[0] in output_words
+        ),
         "longest_correct_prefix_words": prefix,
         "longest_correct_prefix_fraction": round(
             prefix / max(1, len(canonical_words)), 6
@@ -400,8 +398,8 @@ def summarize_generation(rows: list[dict]) -> dict:
                 / max(1, len(group)),
                 6,
             ),
-            "first_content_token_rate": round(
-                sum(row["first_content_token_correct"] for row in group)
+            "first_content_word_rate": round(
+                sum(row["first_content_word_correct"] for row in group)
                 / max(1, len(group)),
                 6,
             ),
@@ -474,6 +472,17 @@ def self_test_metrics() -> None:
     )
     assert scored["content_lcs"] == 1.0
     assert scored["longest_correct_prefix_words"] == 2
+    assert not scored["first_content_word_correct"]
+    assert scored["canonical_first_word_present"]
+    direct = score_generation(
+        {
+            "example_id": "y", "corpus": "mach", "kind": "next",
+            "canonical_text": "uno dos", "canonical_ids": [1, 2],
+            "answer_text": "uno dos",
+        },
+        "uno dos", 2, "stop",
+    )
+    assert direct["first_content_word_correct"]
     print("v6 metric self-test: PASS")
 
 
@@ -949,6 +958,9 @@ def generate_rows(model, tokenizer, items: list[dict], device, stop_id: int,
 
 def write_item_artifact(out_dir: Path, epoch: int, label: str,
                         rows: list[dict]) -> dict:
+    ids = [row["example_id"] for row in rows]
+    if len(ids) != len(set(ids)):
+        raise RuntimeError(f"METRIC GATE: duplicate generation ids in {label}")
     path = out_dir / f"eval_items_e{epoch}_{label}.jsonl"
     with path.open("w", encoding="utf-8") as handle:
         for row in rows:
@@ -1074,6 +1086,10 @@ def standard_eval(stack, lm_head, tokenizer, device, softcap, limit: int) -> dic
         for task, relative in files.items():
             payload = json.loads((ROOT / relative).read_text(encoding="utf-8"))
             examples = payload["items"][:limit]
+            if len(examples) != limit:
+                raise RuntimeError(
+                    f"METRIC GATE: {task} has {len(examples)} items, want {limit}"
+                )
             correct = 0
             for example in examples:
                 prompt_ids = tokenizer.encode(
@@ -1196,6 +1212,15 @@ def main():
         self_test_metrics()
         return
     preset = PRESETS[args.preset]
+    model_revision = os.environ.get("SELFUPDATE_HF_MODEL_REVISION")
+    if model_revision is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", model_revision):
+        raise SystemExit("GATE: malformed SELFUPDATE_HF_MODEL_REVISION")
+    if not args.dry_data and model_revision is None:
+        raise SystemExit(
+            "GATE: training requires the staged model revision from "
+            "scripts/trainv6.sbatch"
+        )
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.run_name):
         raise SystemExit(
             "GATE: --run-name must contain only letters, digits, _, ., or -"
@@ -1276,6 +1301,9 @@ def main():
         rng = random.Random(f"v6-anchor-{item['example_id']}-{args.seed}")
         count = min(args.anchor_rows, len(prompt_positions))
         item["anchor_rows"] = sorted(rng.sample(prompt_positions, count))
+    attribution_probe_ids = [
+        item["example_id"] for item in choose_panel(items, 1, args.seed)
+    ]
     print(json.dumps({
         "gate": "data",
         "preset": args.preset,
@@ -1286,6 +1314,8 @@ def main():
         "corpora": corpus_counts,
         "examples_sha256": sha256_file(examples_path),
         "responses_sha256": sha256_file(responses_path),
+        "model_revision": model_revision,
+        "gradient_attribution_probe_ids": attribution_probe_ids,
         "canonical_targets": "complete",
         "tokenizer_roundtrip": "complete",
     }, ensure_ascii=False), flush=True)
@@ -1321,9 +1351,11 @@ def main():
     log(
         "provenance",
         source_commit=commit,
+        monolith_sha256=sha256_file(Path(__file__)),
         args=vars(args),
         preset=args.preset,
         model=preset["model"],
+        model_revision=model_revision,
         method=args.method,
         examples_sha256=sha256_file(examples_path),
         responses_sha256=sha256_file(responses_path),
@@ -1358,6 +1390,12 @@ def main():
         device_map="auto",
         attn_implementation="sdpa",
     )
+    loaded_revision = getattr(full.config, "_commit_hash", None)
+    if loaded_revision is not None and loaded_revision != model_revision:
+        raise SystemExit(
+            f"GATE: loaded model revision {loaded_revision} != staged "
+            f"revision {model_revision}"
+        )
     full.config.use_cache = False
     raw_stack, _raw_head = resolve_stack(full)
     stack_prefix = next(
@@ -1482,6 +1520,8 @@ def main():
         layer_types=observed_types,
         lora_target_count=len(target_names),
         trainable_parameters=sum(parameter.numel() for parameter in trainable),
+        model_revision=model_revision,
+        transformers_commit_hash=loaded_revision,
         retrieval_layers=retrieval,
         blocked_partial_teacher_layers=blocked_teacher,
     )
@@ -1690,11 +1730,23 @@ def main():
     def log_generation(epoch: int, selected: list[dict], scope: str,
                        include_teacher: bool, include_aligned: bool):
         nonlocal baseline_generation, baseline_generation_detail
+        expected_ids = [item["example_id"] for item in selected]
+
+        def require_coverage(result, label, expected=expected_ids):
+            observed = [row["example_id"] for row in result]
+            if observed != expected:
+                raise RuntimeError(
+                    f"METRIC GATE: {label} generation coverage differs "
+                    "from its selected items"
+                )
+
         rows, deployment = generate_rows(
             full, tokenizer, selected, device, stop_id,
             args.generation_batch, "censored_ids",
             "student_censored_natural",
         )
+        require_coverage(rows, "student sufficient")
+        require_coverage(deployment, "student budget96")
         for label, result in (
             (f"{scope}_natural_sufficient", rows),
             (f"{scope}_natural_budget96", deployment),
@@ -1743,6 +1795,8 @@ def main():
                     args.generation_batch, "prompt_ids",
                     "teacher_uncensored_exact_path",
                 )
+            require_coverage(teacher_rows, "teacher sufficient")
+            require_coverage(teacher_budget, "teacher budget96")
             for label, result in (
                 (f"{scope}_teacher_sufficient", teacher_rows),
                 (f"{scope}_teacher_budget96", teacher_budget),
@@ -1765,6 +1819,10 @@ def main():
             aligned, _unused_budget = generate_rows(
                 full, tokenizer, panel, device, stop_id, 1, "censored_ids",
                 "student_censored_aligned_diagnostic", aligned=True,
+            )
+            require_coverage(
+                aligned, "student aligned",
+                [item["example_id"] for item in panel],
             )
             artifact = write_item_artifact(
                 out_dir, epoch, f"{scope}_aligned_diagnostic", aligned
@@ -1888,6 +1946,26 @@ def main():
             destructive_intervals += 1
         else:
             destructive_intervals = 0
+        stop_due = destructive_intervals >= 2
+        if stop_due and not full_gate:
+            # A panel may trigger the stop review, but a terminal decision may
+            # never leave only panel evidence behind. Confirm flatness and
+            # emit the ordinary aligned diagnostics on the whole set first.
+            _generation, generation_delta, generation_rows = log_generation(
+                epoch, items, "whole_set",
+                include_teacher=False, include_aligned=True,
+            )
+            full_gate = True
+            flat = (
+                generation_delta["delta"] is not None
+                and generation_delta["delta"] < 0.01
+                and generation_delta["ci95"][0] <= 0
+                <= generation_delta["ci95"][1]
+            )
+            if not flat:
+                destructive_intervals = 0
+                stop_due = False
+        terminal = epoch == args.epochs or stop_due
         base_detail = baseline_generation_detail.get("sufficient", {})
         comparable_rows = [
             row for row in generation_rows
@@ -1933,14 +2011,18 @@ def main():
             criteria=promotion,
             new_recitation=new_recitation,
             mean_prefix_fraction_delta=prefix_delta,
+            decision_role=(
+                "confirmatory_terminal" if terminal
+                else "exploratory_intermediate"
+            ),
             eligible_this_run=(
-                full_gate
+                terminal and full_gate
                 and all(value for key, value in promotion.items()
                         if key != "replication")
             ),
             final_promotion=False,
         )
-        if destructive_intervals < 2:
+        if not stop_due:
             return False
         log(
             "aborted_stop_rule",
@@ -1972,9 +2054,17 @@ def main():
             ordered[first:first + args.micro_batch]
             for first in range(0, len(ordered), args.micro_batch)
         ]
+        attribution_batch_keys = {
+            tuple(item["example_id"] for item in batch)
+            for batch in batches
+            if any(item["example_id"] in attribution_probe_ids for item in batch)
+        }
         random.Random(args.seed * 1000 + epoch).shuffle(batches)
         layer_metrics = LayerMetricLedger(len(layers))
-        grad_attr = [None] * len(layers)
+        grad_attr_sums = [None] * len(layers)
+        grad_attr_batch_keys_seen = []
+        grad_attr_item_ids = set()
+        grad_attr_answer_tokens = 0
         grad_norm_sum, grad_steps = 0.0, 0
         optimizer.zero_grad(set_to_none=True)
         for batch_index, batch in enumerate(batches):
@@ -2018,9 +2108,10 @@ def main():
                 )
                 certify_middle(middle, cert_total)
 
+            batch_key = tuple(item["example_id"] for item in batch)
             attribute = (
-                batch_index == 0
-                and (epoch == 1 or epoch % args.attribution_every == 0)
+                (epoch == 1 or epoch % args.attribution_every == 0)
+                and batch_key in attribution_batch_keys
             )
             answer_rows_this_batch = sum(length for _start, length in answer_spans)
             anchor_rows_this_batch = sum(
@@ -2029,6 +2120,10 @@ def main():
             layer_metrics.count(
                 answer_rows_this_batch, anchor_rows_this_batch, len(batch)
             )
+            if attribute:
+                grad_attr_batch_keys_seen.append(batch_key)
+                grad_attr_item_ids.update(batch_key)
+                grad_attr_answer_tokens += answer_rows_this_batch
             for index in all_layers:
                 hidden, js, anchor, total = layer_loss(
                     index, outputs, inputs, targets, anchors,
@@ -2036,7 +2131,7 @@ def main():
                 )
                 if attribute:
                     parameters = trainable_by_layer[index]
-                    grad_attr[index] = objective_gradient_attribution(
+                    measured = objective_gradient_attribution(
                         {
                             "hidden": args.hidden_weight * hidden,
                             "lens_js": args.lens_js_weight * js,
@@ -2047,6 +2142,13 @@ def main():
                         parameters,
                         hidden.device,
                     )
+                    if grad_attr_sums[index] is None:
+                        grad_attr_sums[index] = measured
+                    else:
+                        grad_attr_sums[index] = {
+                            name: grad_attr_sums[index][name] + value
+                            for name, value in measured.items()
+                        }
                 (
                     total / (len(layers) * args.grad_accum)
                 ).backward()
@@ -2075,15 +2177,44 @@ def main():
                 optimizer.zero_grad(set_to_none=True)
             del outputs, inputs, calls, targets, anchors
 
-        profiles, profile_aggregation = layer_metrics.finish()
+        profiles, profile_aggregation, profile_denominators = (
+            layer_metrics.finish()
+        )
+        expected_profile_denominators = {
+            "answer_tokens": sum(len(item["answer_ids"]) for item in items),
+            "anchor_rows": sum(len(item["anchor_rows"]) for item in items),
+            "items": len(items),
+        }
+        if profile_denominators != expected_profile_denominators:
+            raise RuntimeError(
+                "METRIC GATE: layer-profile denominators "
+                f"{profile_denominators} != {expected_profile_denominators}"
+            )
         hidden_profile = profiles["hidden_huber_profile"]
         js_profile = profiles["lens_js_profile"]
         anchor_profile = profiles["anchor_profile"]
+        if grad_attr_batch_keys_seen and (
+                set(grad_attr_batch_keys_seen) != attribution_batch_keys):
+            raise RuntimeError("METRIC GATE: attribution panel coverage mismatch")
         grad_attr = [
-            ({name: float(value) for name, value in row.items()}
+            ({name: float(value / len(grad_attr_batch_keys_seen))
+              for name, value in row.items()}
              if row is not None else None)
-            for row in grad_attr
+            for row in grad_attr_sums
         ]
+        for row in (entry for entry in grad_attr if entry is not None):
+            if not all(math.isfinite(value) for value in row.values()):
+                raise RuntimeError("METRIC GATE: non-finite gradient attribution")
+            share = sum(
+                row[f"{name}_share"] for name in ("hidden", "lens_js", "anchor")
+            )
+            norm = sum(
+                row[f"{name}_norm"] for name in ("hidden", "lens_js", "anchor")
+            )
+            if norm > 0 and abs(share - 1.0) > 1e-4:
+                raise RuntimeError(
+                    f"METRIC GATE: objective gradient shares sum to {share}"
+                )
         deltas = [0.0] * len(layers)
         with torch.no_grad():
             for name, parameter in named_trainable:
@@ -2111,6 +2242,15 @@ def main():
             mean_local_loss=mean_local,
             **profiles,
             gradient_attribution=grad_attr,
+            gradient_attribution_scope={
+                "selection": "fixed_one_item_per_corpus_or_chapter_stratum",
+                "aggregation": "mean_of_fixed_batch_gradient_summaries",
+                "trigger_item_ids": attribution_probe_ids,
+                "evaluated_item_ids": sorted(grad_attr_item_ids),
+                "evaluated_item_count": len(grad_attr_item_ids),
+                "evaluated_batch_count": len(grad_attr_batch_keys_seen),
+                "evaluated_answer_token_count": grad_attr_answer_tokens,
+            },
             adapter_delta_l2_profile=deltas,
             mean_preclip_grad_norm=grad_norm_sum / max(1, grad_steps),
             objective_weights={
@@ -2119,6 +2259,7 @@ def main():
                 "anchor": args.anchor_weight,
             },
             profile_aggregation=profile_aggregation,
+            profile_denominators=profile_denominators,
             depth_uniform=True,
         )
         vocab_tripwire()
