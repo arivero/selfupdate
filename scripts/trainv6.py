@@ -703,10 +703,33 @@ class PassageBlocker:
             if hidden is None and args:
                 hidden = args[0]
             mask = kwargs.get("attention_mask")
+            mask_arg = None
             if mask is None:
-                raise RuntimeError(
-                    f"CENSOR GATE: layer {index} attention mask is absent"
+                candidates = [
+                    position for position, value in enumerate(args[1:], 1)
+                    if torch.is_tensor(value) and value.ndim == 4
+                ]
+                if len(candidates) > 1:
+                    raise RuntimeError(
+                        f"CENSOR GATE: layer {index} has ambiguous 4D inputs"
+                    )
+                if candidates:
+                    mask_arg = candidates[0]
+                    mask = args[mask_arg]
+            if mask is None:
+                if not torch.is_tensor(hidden) or hidden.ndim != 3:
+                    raise RuntimeError(
+                        f"CENSOR GATE: layer {index} cannot synthesize mask"
+                    )
+                batch, length = hidden.shape[:2]
+                invalid = torch.finfo(hidden.dtype).min
+                mask = torch.full(
+                    (length, length), invalid,
+                    dtype=hidden.dtype, device=hidden.device,
                 )
+                mask = torch.triu(mask, diagonal=1)[None, None].expand(
+                    batch, 1, length, length
+                ).clone()
             if mask.ndim != 4:
                 raise RuntimeError(
                     f"CENSOR GATE: layer {index} needs a 4D query/key mask, "
@@ -720,7 +743,12 @@ class PassageBlocker:
                     masked.dtype
                 ).min
                 masked[row, ..., stop:, start:stop] = value
-            kwargs["attention_mask"] = masked
+            if mask_arg is None:
+                kwargs["attention_mask"] = masked
+            else:
+                args = list(args)
+                args[mask_arg] = masked
+                args = tuple(args)
             self.fired[index] += 1
             return args, kwargs
         return hook
