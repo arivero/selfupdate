@@ -1054,7 +1054,7 @@ def output_eval(stack, lm_head, items, device, pad_id, softcap,
                     )
                     student_logp = functional.log_softmax(student_logits, -1)
                     teacher_logp = functional.log_softmax(teacher_logits, -1)
-                    target = ids[row:stop]
+                    target = ids[row:stop].to(student_logp.device)
                     ce += functional.nll_loss(
                         student_logp, target, reduction="sum"
                     ).double()
