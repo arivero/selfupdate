@@ -71,6 +71,16 @@ if [[ -n "${SELFUPDATE_V6_CODE_SHA256:-}" ]]; then
   [[ "$OBSERVED_SHA256" == "$SELFUPDATE_V6_CODE_SHA256" ]] \
     || fail "trainv6.py changed after submission: expected $SELFUPDATE_V6_CODE_SHA256 got $OBSERVED_SHA256"
 fi
+if [[ -n "${SELFUPDATE_V6_LAUNCH_SHA256:-}" ]]; then
+  OBSERVED_LAUNCH_SHA256="$({
+    sha256sum scripts/trainv6.sbatch scripts/job_tmp_runtime.sh \
+      scripts/stage_hf_cache.sh scripts/venv_setup.sh scripts/venv_check.sh \
+      requirements-cu128.txt
+  } | sha256sum)"
+  OBSERVED_LAUNCH_SHA256="${OBSERVED_LAUNCH_SHA256%% *}"
+  [[ "$OBSERVED_LAUNCH_SHA256" == "$SELFUPDATE_V6_LAUNCH_SHA256" ]] \
+    || fail "v6 launch stack changed after submission: expected $SELFUPDATE_V6_LAUNCH_SHA256 got $OBSERVED_LAUNCH_SHA256"
+fi
 
 scripts/venv_setup.sh || fail "venv setup"
 scripts/venv_check.sh || fail "venv check"
