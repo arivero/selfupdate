@@ -1,6 +1,19 @@
 # Experiment Plan & Status Board
 
-## Experimental v6 readiness (2026-08-24)
+## Campaign closed (2026-09-14)
+
+The [final project write-up](docs/project_final_writeup_2026_09.md) supersedes
+the readiness and queue snapshots below. All five v6 scientific runs are
+terminal; no user jobs remain queued. Qwen partial-teacher seed 43 (448709)
+completed e40 on 8 September, with whole-set primary content gain +0.020601
+(95% paired item interval +0.011062 to +0.030073), below the required +0.03.
+Gemma causal showed a smaller positive whole-set effect; no method satisfied
+the complete promotion and replication requirements. No further runs queued.
+
+## Historical experimental v6 readiness (2026-08-24)
+
+The following readiness, source-hash and queue statements are dated historical
+snapshots, not current operational status.
 
 `scripts/trainv6.py` is ready for preflight as a deliberately standalone
 monolith; it does not change the supported v4.6 runtime below. It pins the

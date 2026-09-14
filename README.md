@@ -1,5 +1,11 @@
 # selfupdate — v4.6 teacher-forced block distillation
 
+The [final project write-up (14 September 2026)](docs/project_final_writeup_2026_09.md)
+closes the experimental campaign, including Qwen seed 43's completed 40-epoch
+run. Local learning produced limited, task-dependent recall gains, but no v6
+method met the campaign's promotion criteria. The campaign queue is empty.
+The supported runtime described below remains available for reproduction.
+
 This checkout has one training law.  For every block `L`, the input and target
 are adjacent hidden states from the frozen teacher:
 
