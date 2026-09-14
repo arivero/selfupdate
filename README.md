@@ -6,6 +6,11 @@ run. Local learning produced limited, task-dependent recall gains, but no v6
 method met the campaign's promotion criteria. The campaign queue is empty.
 The supported runtime described below remains available for reproduction.
 
+[Astra Max's research proposal](docs/layerwise_runtime_learning_proposal_astra_max.md)
+sets out experiments on layerwise learning during concurrent inference, with
+explicit timing, memory, retention and evaluation criteria, including an
+applied program for literary expertise on Machado and Cervantes.
+
 This checkout has one training law.  For every block `L`, the input and target
 are adjacent hidden states from the frozen teacher:
 
