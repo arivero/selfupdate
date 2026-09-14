@@ -1,0 +1,38 @@
+I’d use them to make the model learn from the works while discussing them, then test what survives without reopening the text.
+
+  For example, a session about Machado would work like this:
+
+  1. A stanza is retrieved to answer a reader’s question. That immediate answer is retrieval-assisted—not evidence of memorization.
+  2. While conversation continues, the passage-informed teacher supplies local corrections to the student’s layers. The vocabulary head stays
+     frozen; gradients never cross layer boundaries.
+
+  3. Completed updates become available to subsequent answers. Later, we ask a differently phrased question without retrieving the stanza.
+  4. We repeat after discussing Cervantes, and again in a fresh session with only the saved learned weights. That tests both persistence and
+     interference.
+
+  The two proposals address different obstacles:
+
+  - Learning on the student’s actual prefixes: can the correction help when the model chooses its own words, rather than being supplied the
+    correct continuation?
+
+  - Fast layer-local memory: can useful information be written quickly enough to help during the ongoing conversation?
+
+  The hardest question is addressing: does learning under one question help answer another question about the same passage? A correction that
+  only works when given its original cue is insufficient for expertise.
+
+  We should measure three abilities separately:
+
+   Ability           What would count
+  ━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Quotation         Accurate wording and attribution, without invented quotations.
+  ────────────────  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Knowledge         Correct answers about characters, events and connections, including unfamiliar question formulations.
+  ────────────────  ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   Interpretation    Coherent readings supported by the text, acknowledging ambiguity; assessed independently of the teaching model.
+
+  Our current results support pursuing this, but don’t establish it: Qwen’s strongest gains were in cloze completion, not autonomous
+  continuation. And one Machado poem plus four Quijote chapters cannot establish expertise across both authors.
+
+  For practical use, I would retain retrieval for exact sourcing. Compare retrieval alone, learned memory alone, and their combination; fewer
+  lookups are only an improvement if accuracy survives.
+
