@@ -93,3 +93,11 @@ censored student full forward and predicts tokens. Both carry
 
 See [training_pipeline_v4.md](training_pipeline_v4.md) for teacher-context
 construction and [runtime.md](runtime.md) for the executable enforcement.
+
+### A sufficient margin for greedy prefix recovery
+
+Fix a natural passage-removed prompt and a canonical continuation $y_1,\ldots,y_T$. Compare teacher and full-student logits on the same prefix $y_{<t}$ with the deployment positions; the teacher's privileged information is part of the declared comparison. Write $\Delta z_t=z_t^S-z_t^T$ and $\gamma_t=z_t^T[y_t]-\max_{v\ne y_t}z_t^T[v]$. If
+$$
+\gamma_t>\max_v\Delta z_t[v]-\min_v\Delta z_t[v]
+$$
+for every $t\le k$, greedy generation from the student returns the first $k$ canonical tokens. Each pairwise margin can decrease by at most that logit range. The winning token therefore preserves the prefix used at the next step. A common logit shift cancels exactly. A failed sufficient inequality leaves the next token undecided. Distributional autoregressive KL requires information about the sampled prefixes. This is an evaluation result for the frozen readout. [Worked comparison](https://github.com/arivero/selfupdate/issues/4#issuecomment-7192996062)

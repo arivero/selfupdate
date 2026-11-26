@@ -165,6 +165,12 @@ ranking does not imply improved probability calibration or distributional
 agreement. Small standard-benchmark changes on 100-item tasks do not prove
 general capability preservation beyond these measured conditions.
 
+### Repeated passage-removed templates
+
+Grouping the 2,071 stored examples by the exact tuple of shared prefix, student stub and shared mid gives 2,066 distinct templates and five pairs. Each pair has different source-line spans. Three pairs have identical canonical target text and two have different targets, both in Machado next-continuation tasks. These are comparisons of the stored strings. The trainer obtains deployment token IDs by retokenizing its recorded prompt after passage removal.
+
+Even dropping all ten rows in the five pairs cannot raise the seed-43 whole-set primary gain to 0.03. An individual paired LCS difference lies in $[-1,1]$, so the remaining mean is at most $(2071\cdot0.020601+10)/2061=0.025553$ at the reported precision. This controls the influence of the duplicate templates without assigning them an exact-match scoring rule. [Pinned data](../data/combined/examples_v5rs_window.jsonl) · [Check and training preset](../scripts/trainv6.py)
+
 ## What the gradients establish
 
 The table reports the arithmetic mean of the logged per-layer gradient norm
